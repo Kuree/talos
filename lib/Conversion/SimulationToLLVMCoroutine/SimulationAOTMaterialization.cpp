@@ -731,7 +731,8 @@ FailureOr<bool> makeNativeEvalPlan(
     ArrayRef<NativePeriodicAlias> periodicAliases, bool enableDirectState,
     bool enableStaticNBA, bool enableStaticControl, bool enableStaticFanout,
     bool enableCleanSuperstep, bool fullyStatic, bool staticEvalIsland,
-    bool rootSlotZero, const analysis::SimulationVPIAnalysis &vpi) {
+    bool rootSlotZero, bool constantDPIQueryExports,
+    const analysis::SimulationVPIAnalysis &vpi) {
   if (actorCount == 0 || executableNodes.empty())
     return module.emitError("AOT schedule has no executable actor nodes"),
            failure();
@@ -7603,6 +7604,13 @@ FailureOr<bool> makeNativeEvalPlan(
                          : 0) |
                     (sharedPeriodic ? TALOS_RT_NATIVE_SCHEDULE_SHARED_PERIODIC
                                     : 0) |
+                    (constantDPIQueryExports && cleanSuperstepEnabled &&
+                             staticEvalIsland &&
+                             ::talos::schedule::has<
+                                 ::talos::schedule::Field::EvalRuntimeCalendar>(
+                                 module)
+                         ? TALOS_RT_NATIVE_SCHEDULE_CONSTANT_QUERY_EXPORTS
+                         : 0) |
                     (::talos::schedule::has<
                          ::talos::schedule::Field::EvalPostponedObservers>(
                          module)

@@ -2013,7 +2013,7 @@ LogicalResult NativePipelineAnalysis::materialize() {
           periodicClocks, periodicAliases, directStaticState, staticNBA,
           staticControl, staticFanout, cleanSuperstep,
           aotEligibility.isFullyEligible(), staticEvalIsland, rootSlotZero,
-          vpi);
+          constantDPIQueryExports, vpi);
       if (failed(evalPlan))
         return failure();
       if (!*evalPlan) {

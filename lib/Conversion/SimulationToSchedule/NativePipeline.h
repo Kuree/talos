@@ -134,6 +134,9 @@ struct NativePipelineAnalysis {
   mlir::FailureOr<analysis::SimulationScheduleAnalysis> scheduleRanks =
       mlir::failure();
   bool guardedAOTSpecialization = false, cleanWritableEval = false;
+  /// Captured before export/frame lowering. The body computes constants only;
+  /// this does not relax context-import or live VPI guards.
+  bool constantDPIQueryExports = false;
   llvm::DenseMap<std::pair<uint32_t, uint32_t>, uint32_t> preLowerFusionOwners;
   llvm::DenseMap<uint64_t, uint32_t> preLowerFusionSourceCodeUnits;
   llvm::DenseSet<uint64_t> preLowerGeneratedRegionCodeUnits;

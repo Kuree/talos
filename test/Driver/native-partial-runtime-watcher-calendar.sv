@@ -8,14 +8,15 @@
 
 // The always block waits at runtime (each change forks a process, so it runs
 // on the lower tier), and the generated body of `assign ptr_n` writes the
-// root it watches. A DPI export keeps the calendar in the generated loop,
+// root it watches. A stateful DPI export keeps the calendar in the generated loop,
 // which may advance time before a runtime-woken waiter runs; every event of
 // a time slot runs first (IEEE 1800-2023 4.5, 9.4.2). So that writer
 // publishes through a runtime checkpoint, not the runtime-calendar bridge.
 module native_partial_runtime_watcher_calendar;
+  int changes = 0;
   export "DPI-C" function host_period;
   function int host_period();
-    return 10;
+    return 10 + changes;
   endfunction
   logic clk = 0;
   logic reset = 1;
@@ -28,7 +29,6 @@ module native_partial_runtime_watcher_calendar;
     else ptr_r <= ptr_n;
   assign ptr_wrap = {1'b0, ptr_r} - 5 + add;
   assign ptr_n = ~ptr_wrap[3] ? ptr_wrap[2:0] : ptr_r + add;
-  int changes = 0;
   always @(ptr_n) begin
     fork changes = changes + 1; join_none
   end
@@ -40,6 +40,6 @@ module native_partial_runtime_watcher_calendar;
   end
 endmodule
 
-// TIER: checkpoint admission: {{.*}} reason=runtime-state-access {{.*}}:30:10
+// TIER: checkpoint admission: {{.*}} reason=runtime-state-access {{.*}}:31:10
 // TIER-NOT: error
 // CHECK: ptr_r=1 changes=7

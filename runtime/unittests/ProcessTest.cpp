@@ -5746,7 +5746,31 @@ TEST(Scheduler, AOTStaticEvalIslandIsDistinctFromFullyStatic) {
   execution.flags = TALOS_RT_EXECUTION_DPI_EXPORTS;
   EXPECT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan),
             TALOS_RT_INVALID_ARGUMENT);
+  plan.flags |= TALOS_RT_NATIVE_SCHEDULE_CONSTANT_QUERY_EXPORTS;
+  plan.flags &= ~TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL;
+  EXPECT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan),
+            TALOS_RT_INVALID_ARGUMENT);
+  plan.flags |= TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL;
+  execution.flags |= TALOS_RT_EXECUTION_COVERAGE_SCHEMA;
+  EXPECT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan),
+            TALOS_RT_INVALID_ARGUMENT);
   execution.flags = TALOS_RT_EXECUTION_VPI_READ | TALOS_RT_EXECUTION_VPI_WRITE;
+  EXPECT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan),
+            TALOS_RT_INVALID_ARGUMENT);
+  plan.flags &= ~TALOS_RT_NATIVE_SCHEDULE_CONSTANT_QUERY_EXPORTS;
+  ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
+  talos_rt_v1_context_destroy(context);
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 0, 1),
+            TALOS_RT_OK);
+  // The export certificate must not bypass the ordinary live VPI guards.
+  execution.flags |= TALOS_RT_EXECUTION_DPI_EXPORTS;
+  plan.flags |= TALOS_RT_NATIVE_SCHEDULE_CONSTANT_QUERY_EXPORTS;
+  execution.observer_count = 1;
+  EXPECT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan),
+            TALOS_RT_INVALID_ARGUMENT);
+  execution.observer_count = 0;
   ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
   EXPECT_FALSE(context->nativeStaticEvalIslandCertified);
   EXPECT_TRUE(canUseStaticAOTFanout(context));
@@ -5767,6 +5791,8 @@ TEST(Scheduler, AOTStaticEvalIslandIsDistinctFromFullyStatic) {
 
   // The island certifies only its residual eval closure. Claiming the
   // whole-design FULLY_STATIC invariant at the same time is rejected.
+  execution.flags = TALOS_RT_EXECUTION_VPI_READ | TALOS_RT_EXECUTION_VPI_WRITE;
+  plan.flags &= ~TALOS_RT_NATIVE_SCHEDULE_CONSTANT_QUERY_EXPORTS;
   plan.flags |= TALOS_RT_NATIVE_SCHEDULE_FULLY_STATIC;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
             TALOS_RT_OK);

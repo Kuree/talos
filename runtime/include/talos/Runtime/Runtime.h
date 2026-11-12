@@ -3646,7 +3646,8 @@ talos_rt_status talos_rt_v1_vpi_frame_unwind(talos_rt_context *context,
 // exact generated fanout and control execute between runtime handoff points.
 #define TALOS_RT_NATIVE_SCHEDULE_STATIC_EVAL_ISLAND UINT32_C(2048)
 // The compiler retained every runtime-observed writer at a checkpoint and
-// excluded Inactive delays, language observers, DPI exports, and coverage.
+// excluded Inactive delays, language observers, stateful DPI exports, and
+// coverage. Constant-query exports require their additional certificate below.
 // Live VPI observation or intervention revokes the runtime proof. Exact
 // generated fanout may run while the shared scheduler owns the calendar,
 // including periodic bootstrap. Its compiler-owned node table is immutable
@@ -3662,6 +3663,10 @@ talos_rt_status talos_rt_v1_vpi_frame_unwind(talos_rt_context *context,
 // `postponed_slot_hooks` is nonzero. An open value change dump then keeps the
 // loop (IEEE 1800-2023 21.7) instead of returning the calendar to the runtime.
 #define TALOS_RT_NATIVE_SCHEDULE_POSTPONED_HOOKS UINT32_C(16384)
+// Every DPI export is a function computing constants without calls or access
+// to design state. Requires RUNTIME_CALENDAR_EVAL and EXECUTION_DPI_EXPORTS.
+// Context import instrumentation and live VPI guards remain mandatory.
+#define TALOS_RT_NATIVE_SCHEDULE_CONSTANT_QUERY_EXPORTS UINT32_C(32768)
 
 typedef struct talos_rt_aot_deopt_actor {
   uint32_t slot;

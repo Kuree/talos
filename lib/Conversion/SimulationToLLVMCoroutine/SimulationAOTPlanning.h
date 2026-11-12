@@ -539,7 +539,8 @@ mlir::FailureOr<bool> makeNativeEvalPlan(
     mlir::ArrayRef<NativePeriodicAlias> periodicAliases, bool enableDirectState,
     bool enableStaticNBA, bool enableStaticControl, bool enableStaticFanout,
     bool enableCleanSuperstep, bool fullyStatic, bool staticEvalIsland,
-    bool rootSlotZero, const analysis::SimulationVPIAnalysis &vpi);
+    bool rootSlotZero, bool constantDPIQueryExports,
+    const analysis::SimulationVPIAnalysis &vpi);
 
 } // namespace talos::detail
 

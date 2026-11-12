@@ -6,13 +6,17 @@
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/SymbolTable.h"
+#include "mlir/Interfaces/CallInterfaces.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "talos/Analysis/LocalStorageAnalysis.h"
 #include "talos/Analysis/NativeWordAnalysis.h"
 #include "talos/Analysis/ParallelWalk.h"
 #include "talos/Analysis/SimulationAnalysis.h"
+#include "talos/Analysis/SimulationEffectAnalysis.h"
 #include "talos/Analysis/StaticSpecializationAnalysis.h"
 #include "talos/Analysis/StorageWriteAnalysis.h"
 #include "talos/Conversion/Passes.h"
+#include "talos/Dialect/DPI/DPIDialect.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleDialect.h"
@@ -26,6 +30,68 @@
 
 using namespace mlir;
 namespace talos::detail {
+namespace {
+/// Constant parameter queries cannot reach design state through an export
+/// (IEEE 1800-2023 35.5.1.3, 35.5.3). Keep the ordinary context/scope and VPI
+/// instrumentation: this proves only that the export body needs no publication
+/// of generated state. In particular, even an otherwise pure call is rejected
+/// rather than relying on an incomplete interprocedural effect summary.
+bool hasOnlyConstantDPIQueryExports(ModuleOp module) {
+  bool found = false, valid = true;
+  module.walk([&](sim::SimFuncOp function) {
+    if (!dpi::has<dpi::Export>(function))
+      return;
+    found = true;
+    // Export lowering moves the registration to a capture-free bridge. Admit
+    // only its exact forwarding shape; prove the actual body below rather
+    // than treating a call (or a bridge marker alone) as transparent.
+    if (dpi::has<dpi::ExportBridge>(function)) {
+      auto bodyName = dpi::get<dpi::ExportBodySymbol>(function);
+      if (!bodyName || !function.getBody().hasOneBlock() ||
+          function.getBody().front().getOperations().size() != 2) {
+        valid = false;
+        return;
+      }
+      Block &entry = function.getBody().front();
+      auto call = dyn_cast<sim::SimCallOp>(entry.front());
+      auto returned = dyn_cast<sim::SimReturnOp>(entry.back());
+      if (!call || !returned || call.getCallee() != bodyName.getValue() ||
+          !llvm::equal(call.getOperands(), entry.getArguments()) ||
+          !llvm::equal(returned.getOperands(), call.getResults())) {
+        valid = false;
+        return;
+      }
+      function = SymbolTable::lookupNearestSymbolFrom<sim::SimFuncOp>(
+          function, FlatSymbolRefAttr::get(bodyName));
+      if (!function || !dpi::has<dpi::ExportBody>(function)) {
+        valid = false;
+        return;
+      }
+    }
+    if (function.isExternal() ||
+        function.getEntryKind() != sim::EntryKind::Function ||
+        !llvm::all_of(
+            function.getBody().front().getArguments(),
+            [](BlockArgument argument) { return argument.use_empty(); })) {
+      valid = false;
+      return;
+    }
+    function.walk([&](Operation *operation) {
+      if (operation == function.getOperation())
+        return;
+      valid &=
+          operation->getNumRegions() == 0 &&
+          !isa<CallOpInterface, sim::SimDPICallOp>(operation) &&
+          isMemoryEffectFree(operation) &&
+          llvm::all_of(operation->getOperandTypes(),
+                       analysis::isPlainValueType) &&
+          llvm::all_of(operation->getResultTypes(), analysis::isPlainValueType);
+    });
+  });
+  return found && valid;
+}
+} // namespace
+
 LogicalResult NativePipelineAnalysis::planState() {
   if (bytecodeOnly)
     return success();
@@ -424,6 +490,10 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
       hasInactiveDelay |= !constant || constant.getValue() == 0;
     });
     runtime::ExecutionFlags flags = runtime::getExecutionFlags(module);
+    const bool hasDPIExports = runtime::bitEnumContainsAny(
+        flags, runtime::ExecutionFlags::DPIExports);
+    constantDPIQueryExports =
+        hasDPIExports && hasOnlyConstantDPIQueryExports(module);
     // IEEE 1800-2023 4.4, 4.6, 9.4.2: a runtime clock consumer prevents
     // exclusive calendar ownership, not execution of an independent closure.
     // The writer checkpoints below retain every required runtime publication;
@@ -434,9 +504,21 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
     bool runtimeCalendar =
         staticEvalIsland && staticFanoutPlan.exact && !hasObserver &&
         !hasInactiveDelay &&
-        !runtime::bitEnumContainsAny(
-            flags, runtime::ExecutionFlags::DPIExports |
-                       runtime::ExecutionFlags::CoverageSchema);
+        (!hasDPIExports || constantDPIQueryExports) &&
+        !runtime::bitEnumContainsAny(flags,
+                                    runtime::ExecutionFlags::CoverageSchema);
+    if (detailedTiming)
+      llvm::errs() << "talos eval runtime-calendar eligibility: island="
+                   << staticEvalIsland << " exact=" << staticFanoutPlan.exact
+                   << " observers=" << hasObserver
+                   << " inactive-delay=" << hasInactiveDelay
+                   << " dpi-exports="
+                   << hasDPIExports
+                   << " constant-query-exports=" << constantDPIQueryExports
+                   << " coverage="
+                   << runtime::bitEnumContainsAny(
+                          flags, runtime::ExecutionFlags::CoverageSchema)
+                   << " eligible=" << runtimeCalendar << '\n';
     DenseMap<Operation *, bool> runtimeStateFunctions;
     DenseMap<Operation *, Operation *> runtimeStateOperations;
     // Values with managed handles (strings, queues, mailboxes, semaphores,

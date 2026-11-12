@@ -2453,8 +2453,14 @@ talos_rt_v1_scheduler_install_aot(talos_rt_context *context,
       !(plan->flags & TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL) ||
       (staticEvalIsland && context->execution &&
        context->execution->observer_count == 0 &&
-       !(context->execution->flags & (TALOS_RT_EXECUTION_DPI_EXPORTS |
-                                      TALOS_RT_EXECUTION_COVERAGE_SCHEMA)));
+       !(context->execution->flags & TALOS_RT_EXECUTION_COVERAGE_SCHEMA) &&
+       (!(context->execution->flags & TALOS_RT_EXECUTION_DPI_EXPORTS) ||
+        (plan->flags & TALOS_RT_NATIVE_SCHEDULE_CONSTANT_QUERY_EXPORTS)));
+  runtimeCalendarEvalValid &=
+      !(plan->flags & TALOS_RT_NATIVE_SCHEDULE_CONSTANT_QUERY_EXPORTS) ||
+      ((plan->flags & TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL) &&
+       context->execution &&
+       (context->execution->flags & TALOS_RT_EXECUTION_DPI_EXPORTS));
   runtimeCalendarEvalValid &=
       !(plan->flags & TALOS_RT_NATIVE_SCHEDULE_SHARED_PERIODIC) ||
       (plan->flags & TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL);
@@ -2489,6 +2495,7 @@ talos_rt_v1_scheduler_install_aot(talos_rt_context *context,
                        TALOS_RT_NATIVE_SCHEDULE_STATIC_EVAL_ISLAND |
                        TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL |
                        TALOS_RT_NATIVE_SCHEDULE_SHARED_PERIODIC |
+                       TALOS_RT_NATIVE_SCHEDULE_CONSTANT_QUERY_EXPORTS |
                        TALOS_RT_NATIVE_SCHEDULE_POSTPONED_HOOKS)) != 0 ||
       !plan->bind || !plan->run || !plan->fallback_snapshot)
     return TALOS_RT_INVALID_ARGUMENT;
