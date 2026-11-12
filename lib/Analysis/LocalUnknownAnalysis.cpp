@@ -322,6 +322,10 @@ transferMayUnknown(Operation *op, unsigned width,
           return all;
         return unite({1, 2});
       })
+      // Per bit: an X/Z condition bit may merge to X, and a known one passes
+      // the selected operand's bit.
+      .Case<sim::SimLogicBitwiseMuxOp>(
+          [&](auto) -> std::optional<APInt> { return unite({0, 1, 2}); })
       .Case<SelectLikeOpInterface>([&](auto select) -> std::optional<APInt> {
         SmallVector<unsigned, 2> indices;
         for (auto [index, value] : llvm::enumerate(op->getOperands()))

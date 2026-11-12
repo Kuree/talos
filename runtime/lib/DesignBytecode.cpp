@@ -552,6 +552,7 @@ enum FastKind : uint8_t {
   kFastConcat,
   kFastCompare,
   kFastSelect,
+  kFastSelectBitwise,
   kFastLoadFrame,
   kFastStoreFrame,
   kFastLoadFrameHandle,
@@ -818,9 +819,11 @@ FastOp decodeFastOp(const Image &image, const Function &function,
     break;
   case TALOS_RT_DB_SELECT: {
     Scalar condition = scalar(instruction.source2);
+    bool bitwise = instruction.flags == TALOS_RT_DB_SELECT_BITWISE;
     if (same(destination, source0) && same(destination, source1) &&
-        condition.valid && condition.width == 1) {
-      binary(kFastSelect);
+        condition.valid &&
+        condition.width == (bitwise ? destination.width : 1)) {
+      binary(bitwise ? kFastSelectBitwise : kFastSelect);
       use(condition, op.source2, kFastSource2FourState);
     }
     break;
@@ -1312,6 +1315,18 @@ inline bool executeFastOp(const FastOp &op, uint8_t *data,
     fastRead(data, op.source1, source1FourState, op.width, rv, ru);
     uint64_t mismatch = lu | ru | (lv ^ rv);
     fastWrite(data, op, ~mismatch & lv, mismatch);
+    break;
+  }
+  case kFastSelectBitwise: {
+    uint64_t cv, cu, lv, lu, rv, ru;
+    fastRead(data, op.source2, (op.fourState & kFastSource2FourState) != 0,
+             op.width, cv, cu);
+    fastRead(data, op.source0, source0FourState, op.width, lv, lu);
+    fastRead(data, op.source1, source1FourState, op.width, rv, ru);
+    uint64_t mismatch = lu | ru | (lv ^ rv);
+    uint64_t pick = cv & ~cu, other = ~cv & ~cu;
+    fastWrite(data, op, (pick & lv) | (other & rv) | (cu & lv & ~mismatch),
+              (pick & lu) | (other & ru) | (cu & mismatch));
     break;
   }
   case kFastLoadFrame:
@@ -2341,6 +2356,31 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
     }
     case TALOS_RT_DB_SELECT: {
       Logic condition = read(instruction.source2);
+      if (instruction.flags == TALOS_RT_DB_SELECT_BITWISE) {
+        // Each known condition bit takes both planes of the selected
+        // operand's bit; an X/Z one keeps a common known bit, else X.
+        Logic left = read(instruction.source0);
+        Logic right = read(instruction.source1);
+        if (left.width != right.width || condition.width != left.width)
+          return TALOS_RT_INVALID_BYTECODE;
+        Logic result{left.width, true, LimbVector(limbCount(left.width)),
+                     LimbVector(limbCount(left.width))};
+        for (size_t index = 0; index != result.value.size(); ++index) {
+          uint64_t cv = condition.value[index], cu = condition.unknown[index];
+          uint64_t mismatch = left.unknown[index] | right.unknown[index] |
+                              (left.value[index] ^ right.value[index]);
+          uint64_t pick = cv & ~cu, other = ~cv & ~cu;
+          result.value[index] = (pick & left.value[index]) |
+                                (other & right.value[index]) |
+                                (cu & left.value[index] & ~mismatch);
+          result.unknown[index] = (pick & left.unknown[index]) |
+                                  (other & right.unknown[index]) |
+                                  (cu & mismatch);
+        }
+        mask(result);
+        write(instruction.destination, result);
+        break;
+      }
       if (anyUnknown(condition)) {
         if (instruction.flags == TALOS_RT_DB_SELECT_FOUR_STATE) {
           Logic left = read(instruction.source0);

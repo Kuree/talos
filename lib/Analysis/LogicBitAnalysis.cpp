@@ -195,6 +195,22 @@ SparseLogicBitAnalysis::visitOperation(Operation *op,
       if (mux.getTrueValue() == mux.getFalseValue())
         result.known |= yes.known;
     }
+  } else if (auto mux = value.getDefiningOp<sim::SimLogicBitwiseMuxOp>()) {
+    // logic.mux per bit: a known condition bit passes the selected operand's
+    // facts; otherwise only facts common to both survive, and an X/Z
+    // condition bit leaves known only a common known value (Table 11-20).
+    auto condition = operand(mux.getCondition());
+    auto yes = operand(mux.getTrueValue()), no = operand(mux.getFalseValue());
+    APInt other = ~(condition.one | condition.zero);
+    APInt both = other & yes.known & no.known;
+    if (mux.getTrueValue() != mux.getFalseValue())
+      both &= condition.known;
+    result.zero = (condition.one & yes.zero) | (condition.zero & no.zero) |
+                  (other & yes.zero & no.zero);
+    result.one = (condition.one & yes.one) | (condition.zero & no.one) |
+                 (other & yes.one & no.one);
+    result.known = (condition.one & yes.known) | (condition.zero & no.known) |
+                   both | result.zero | result.one;
   } else if (auto reduction = value.getDefiningOp<sim::SimLogicReductionOp>()) {
     auto input = operand(reduction.getInput());
     bool andKind = reduction.getKind() == sim::ReductionKind::And ||

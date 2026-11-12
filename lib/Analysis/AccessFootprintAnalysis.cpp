@@ -184,9 +184,10 @@ public:
                   sim::SimLogicBinaryOp, sim::SimLogicExtractOp,
                   sim::SimLogicUnaryOp, sim::SimLogicReductionOp,
                   sim::SimLogicConcatOp, sim::SimLogicReplicateOp,
-                  sim::SimLogicMuxOp, sim::SimLogicShiftOp,
-                  sim::SimRefArrayElementOp, sim::SimRefSubelementOp,
-                  sim::SimRefExtractOp, sim::SimRefDynExtractOp>(op))
+                  sim::SimLogicMuxOp, sim::SimLogicBitwiseMuxOp,
+                  sim::SimLogicShiftOp, sim::SimRefArrayElementOp,
+                  sim::SimRefSubelementOp, sim::SimRefExtractOp,
+                  sim::SimRefDynExtractOp>(op))
             llvm::append_range(pending, op->getOperands());
         }
       }
@@ -452,6 +453,14 @@ private:
         return std::nullopt;
       return get(condition->isZero() ? mux.getFalseValue() : mux.getTrueValue(),
                  path);
+    }
+    if (auto mux = dyn_cast<sim::SimLogicBitwiseMuxOp>(op)) {
+      auto condition = get(mux.getCondition(), path);
+      auto yes = condition ? get(mux.getTrueValue(), path) : std::nullopt;
+      auto no = yes ? get(mux.getFalseValue(), path) : std::nullopt;
+      if (!no)
+        return std::nullopt;
+      return (*condition & *yes) | (~*condition & *no);
     }
     auto lhs = get(op->getOperand(0), path);
     if (!lhs)

@@ -2477,10 +2477,15 @@ bool validateFunctionCode(const Image &image, uint32_t functionIndex) {
       break;
     }
     case TALOS_RT_DB_SELECT:
-      if (instruction.flags > TALOS_RT_DB_SELECT_FOUR_STATE ||
+      // A bitwise condition matches the destination's width; the others
+      // are one bit.
+      if (instruction.flags > TALOS_RT_DB_SELECT_BITWISE ||
           instruction.auxiliary || instruction.immediate || !binary() ||
           !numeric(instruction.source2) ||
-          layoutAt(image, function, instruction.source2).width != 1 ||
+          layoutAt(image, function, instruction.source2).width !=
+              (instruction.flags == TALOS_RT_DB_SELECT_BITWISE
+                   ? layoutAt(image, function, instruction.destination).width
+                   : 1) ||
           (instruction.flags == TALOS_RT_DB_SELECT_FOUR_STATE &&
            (layoutAt(image, function, instruction.destination).kind !=
                 TALOS_RT_DBREG_LOGIC ||

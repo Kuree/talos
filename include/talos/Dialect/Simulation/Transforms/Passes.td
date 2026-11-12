@@ -254,9 +254,9 @@ def TalosSimCoalesceContinuousDriversPass
     operation is pure and cannot trap or produce poison, so that evaluating
     the unchosen operand has no side effect or run-time error (11.3.5). The
     concatenated narrow slices become word operations when they are
-    isomorphic bit lanes:
-    contiguous reads, extracts or reads through one view, broadcasts,
-    constants, bitwise operations, two-state bit selects and transposed
+    isomorphic bit lanes: contiguous reads, extracts or reads through one
+    view, broadcasts, constants, bitwise operations, two-state bit selects,
+    four-state `?:` lanes (as one per-bit logic.bitwise_mux) and transposed
     reductions, in words of at most 64 bits. Requires no extended VCD
     ($dumpports) and an unscheduled design.
   }];

@@ -305,6 +305,72 @@ std::vector<uint8_t> makeMixedPathBytecode() {
   return bytes;
 }
 
+/// Three 64-bit four-state constants, one bitwise SELECT of them, and a
+/// canonical-frame store of the result: value plane at 0, unknown at 8.
+std::vector<uint8_t> makeBitwiseSelectBytecode(const uint64_t (&planes)[6]) {
+  constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
+  constexpr size_t layoutOffset = functionOffset + 96;
+  constexpr size_t codeOffset = layoutOffset + layoutTableSize(4);
+  constexpr size_t constantOffset = codeOffset + 6 * 32;
+  constexpr size_t continuationOffset = constantOffset + 48;
+  std::vector<uint8_t> bytes(continuationOffset + 24, 0);
+  std::memcpy(bytes.data(), "OBBCDS1\0", 8);
+  put32(bytes, 8, TALOS_RT_VERSION);
+  put32(bytes, 12, 0);
+  put32(bytes, 16, TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE);
+  put64(bytes, 24, bytes.size());
+  put64(bytes, 40, functionOffset);
+  put64(bytes, 48, 1);
+  put64(bytes, 56, layoutOffset);
+  put64(bytes, 64, 4);
+  put64(bytes, 72, codeOffset);
+  put64(bytes, 80, 6);
+  put64(bytes, 88, constantOffset);
+  put64(bytes, 96, 0);
+  put64(bytes, 104, constantOffset);
+  put64(bytes, 112, 48);
+  put64(bytes, 120, continuationOffset);
+  put64(bytes, 128, 1);
+  put64(bytes, 136, bytes.size());
+  put64(bytes, 152, bytes.size());
+  put64(bytes, 168, bytes.size());
+  put64(bytes, 184, bytes.size());
+
+  put64(bytes, functionOffset, 1);
+  put64(bytes, functionOffset + 16, 0);
+  put64(bytes, functionOffset + 24, 6);
+  put64(bytes, functionOffset + 32, 0);
+  put64(bytes, functionOffset + 40, 4);
+  put32(bytes, functionOffset + 48, 0);
+  put32(bytes, functionOffset + 52, 0);
+  put64(bytes, functionOffset + 56, 64);
+  put64(bytes, functionOffset + 64, 8);
+  put64(bytes, functionOffset + 72, 0);
+  put64(bytes, functionOffset + 80, 1);
+  put64(bytes, functionOffset + 88, 1);
+
+  putShapeTable(bytes, layoutOffset, 4);
+  for (uint32_t reg = 0; reg != 4; ++reg)
+    putLayout(bytes, layoutOffset, 4, reg, TALOS_RT_DBREG_LOGIC, 64, reg * 16,
+              16);
+  // r0 condition, r1 true operand, r2 false operand, r3 result.
+  instruction(bytes, codeOffset, 0, TALOS_RT_DB_CONSTANT, 0, 0, 0, 0, 0, 0, 0);
+  instruction(bytes, codeOffset, 1, TALOS_RT_DB_CONSTANT, 0, 1, 0, 0, 0, 0, 16);
+  instruction(bytes, codeOffset, 2, TALOS_RT_DB_CONSTANT, 0, 2, 0, 0, 0, 0, 32);
+  instruction(bytes, codeOffset, 3, TALOS_RT_DB_SELECT,
+              TALOS_RT_DB_SELECT_BITWISE, 3, 1, 2, 0);
+  instruction(bytes, codeOffset, 4, TALOS_RT_DB_STORE_FRAME, 0, 0, 3, 0, 0, 0,
+              0);
+  instruction(bytes, codeOffset, 5, TALOS_RT_DB_TERMINATE);
+  for (size_t plane = 0; plane != 6; ++plane)
+    put64(bytes, constantOffset + plane * 8, planes[plane]);
+  put32(bytes, continuationOffset, 0);
+  put32(bytes, continuationOffset + 4, 0);
+  put64(bytes, continuationOffset + 8, 0);
+  put64(bytes, 32, imageChecksum(bytes));
+  return bytes;
+}
+
 /// Wide constants and canonical-frame transfers (two-tier B3): a masked
 /// 65-bit four-state constant and a 384-bit two-state constant stored to the
 /// canonical frame and loaded back (the two-state load narrower than its
@@ -4318,6 +4384,61 @@ TEST(DesignBytecode, WideConstantsAndFrameTransfersMatchTheGeneralPath) {
   // The 384-bit store needs 80 canonical bytes.
   EXPECT_EQ(run(execution, 72, fast), TALOS_RT_INVALID_FRAME);
   EXPECT_EQ(run(other, 72, general), TALOS_RT_INVALID_FRAME);
+  talos_rt_v1_context_destroy(context);
+}
+
+TEST(DesignBytecode, BitwiseSelectFollowsTheConditionalOperatorPerBit) {
+  // IEEE 1800-2023 11.4.11 per bit. The 64 lanes enumerate every {0, 1, x, z}
+  // triple: lane i has condition code i / 16, true code (i / 4) % 4 and false
+  // code i % 4 (codes 0, 1, x, z; Z is a one value bit under an unknown bit).
+  // A known condition bit takes the operand bit, Z included; an X or Z one
+  // keeps a common known 0 or 1 and is X otherwise (Table 11-20). The
+  // context's own image runs the fast op, a copy the general path.
+  const uint64_t planes[6] = {
+      UINT64_C(0xffff0000ffff0000), UINT64_C(0xffffffff00000000),
+      UINT64_C(0xf0f0f0f0f0f0f0f0), UINT64_C(0xff00ff00ff00ff00),
+      UINT64_C(0xaaaaaaaaaaaaaaaa), UINT64_C(0xcccccccccccccccc)};
+  std::vector<uint8_t> bytecode = makeBitwiseSelectBytecode(planes);
+  std::vector<uint8_t> copy = bytecode;
+  talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
+                                             TALOS_RT_EXECUTION_HAS_BYTECODE,
+                                             0,
+                                             bytecode.data(),
+                                             bytecode.size(),
+                                             nullptr,
+                                             0,
+                                             1,
+                                             imageChecksum(bytecode),
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
+  talos_rt_execution_descriptor_v1 other = execution;
+  other.bytecode = copy.data();
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+            TALOS_RT_OK);
+  // 16 canonical bytes, then 64 scratch bytes.
+  using Frame = std::array<uint64_t, 10>;
+  auto run = [&](const talos_rt_execution_descriptor_v1 &descriptor,
+                 Frame &frame) {
+    frame.fill(UINT64_C(0xaaaaaaaaaaaaaaaa));
+    talos_rt_fragment_action_v1 action{};
+    talos_rt_design_bytecode_entry_v1 entry{&descriptor, 0, 0};
+    return talos_rt_execute_design_bytecode(
+        entry, context, reinterpret_cast<uint8_t *>(frame.data()), 80, 16, 64,
+        0, 0, &action);
+  };
+  Frame fast{}, general{};
+  ASSERT_EQ(run(execution, fast), TALOS_RT_OK);
+  ASSERT_EQ(run(other, general), TALOS_RT_OK);
+  EXPECT_EQ(fast, general);
+  EXPECT_EQ(fast[0], UINT64_C(0x00200020f0f0aaaa));
+  EXPECT_EQ(fast[1], UINT64_C(0xffdeffdeff00cccc));
   talos_rt_v1_context_destroy(context);
 }
 

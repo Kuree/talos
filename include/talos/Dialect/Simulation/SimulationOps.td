@@ -5918,6 +5918,29 @@ def SimLogicMuxOp : SimOp<"logic.mux", [
   let hasCanonicalizer = 1;
 }
 
+def SimLogicBitwiseMuxOp : SimOp<"logic.bitwise_mux", [
+    Pure,
+    AllTypesMatch<["condition", "true_value", "false_value", "result"]>
+  ]> {
+  let summary = "per-bit conditional-expression selection with IEEE X/Z merging";
+  let description = [{
+    Each result bit is the conditional operator applied to the same bit of
+    the condition and operands (IEEE 1800-2023 11.4.11): a known 1 selects
+    the true operand's bit and a known 0 the false operand's bit, X and Z
+    included. For an X or Z condition bit, the result bit is the operands'
+    common known 0 or 1, and X otherwise (Table 11-20). It is the word form
+    of one-bit `logic.mux` operations.
+  }];
+  let arguments = (ins SimLogicType:$condition, SimLogicType:$true_value,
+                       SimLogicType:$false_value);
+  let results = (outs SimLogicType:$result);
+  let assemblyFormat = [{
+    $condition `?` $true_value `:` $false_value attr-dict `:`
+    qualified(type($result))
+  }];
+  let hasFolder = 1;
+}
+
 def SimLogicCountBitsOp : SimOp<"logic.count_bits", [
     Pure, DeclareOpInterfaceMethods<InferIntRangeInterface,
                                    ["inferResultRangesFromOptional"]>]> {

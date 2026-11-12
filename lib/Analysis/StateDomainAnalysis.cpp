@@ -267,7 +267,8 @@ unsigned getUnknownPlaneWork(Operation *op) {
                ? 1
                : 5;
   return llvm::TypeSwitch<Operation *, unsigned>(op)
-      .Case<sim::SimLogicMuxOp>([](auto) { return 8; })
+      .Case<sim::SimLogicMuxOp, sim::SimLogicBitwiseMuxOp>(
+          [](auto) { return 8; })
       .Case<sim::SimLogicLogicalOp, sim::SimLogicPowerOp>(
           [](auto) { return 5; })
       .Case<sim::SimLogicReductionOp>([](auto) { return 4; })
@@ -436,7 +437,7 @@ transferStateDomain(Operation *op,
         return combineOperands(op, operandFact,
                                StateDomainReason::LogicReduction);
       })
-      .Case<sim::SimLogicMuxOp>([&](auto) {
+      .Case<sim::SimLogicMuxOp, sim::SimLogicBitwiseMuxOp>([&](auto) {
         return combineOperands(op, operandFact, StateDomainReason::LogicMux);
       })
       .Case<SelectLikeOpInterface>([&](auto select) {

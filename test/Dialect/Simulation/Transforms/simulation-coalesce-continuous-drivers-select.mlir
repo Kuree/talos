@@ -169,18 +169,22 @@ simulation.design @trapping_arm {
 
 // The four-state lowering of `n[i] = m[i] ? d[i] : e[i]` (11.4.11): a known
 // false condition takes e, a known true one d, and an X/Z condition merges
-// both through logic.mux. The merged process evaluates every path under its
-// predicate and selects the value of the path taken; the lanes stay scalar
-// (a four-state conditional merges X/Z per bit).
+// both through logic.mux. If-conversion selects the value of the path taken.
+// Folding a lane for m[i] = 0, 1, X and Z leaves e[i], d[i] and twice the
+// merge of both, so the lane is `m[i] ? d[i] : e[i]`, and the lanes become
+// one per-bit logic.bitwise_mux (Table 11-20 per bit).
 // CHECK-LABEL: simulation.design @logic_select
-// CHECK: simulation.func private @bit0.coalesced(
+// CHECK: simulation.func private @bit0.coalesced(%{{[^%]*}}%{{[^%]*}}%[[M:[^:]*]]:{{[^%]*}}%[[D:[^:]*]]:{{[^%]*}}%[[E:[^:]*]]:
 // CHECK-NOT: cf.cond_br
-// CHECK: simulation.logic.mux
-// CHECK: arith.select {{.*}} : !simulation.logic<1>
-// CHECK: simulation.logic.mux
-// CHECK: arith.select {{.*}} : !simulation.logic<1>
-// CHECK: simulation.logic.concat
-// CHECK: simulation.ref.store {{.*}} {simulation.continuous_store} : !simulation.logic<2>, !simulation.ref<!simulation.logic<2>>
+// CHECK-NOT: arith.select
+// CHECK-DAG: %[[MV:.*]] = simulation.net.extract %[[M]] from 0 {{.*}} -> !simulation.net<!simulation.logic<2>>
+// CHECK-DAG: %[[C:.*]] = simulation.net.read %[[MV]]
+// CHECK-DAG: %[[DV:.*]] = simulation.net.extract %[[D]] from 0 {{.*}} -> !simulation.net<!simulation.logic<2>>
+// CHECK-DAG: %[[A:.*]] = simulation.net.read %[[DV]]
+// CHECK-DAG: %[[EV:.*]] = simulation.net.extract %[[E]] from 0 {{.*}} -> !simulation.net<!simulation.logic<2>>
+// CHECK-DAG: %[[B:.*]] = simulation.net.read %[[EV]]
+// CHECK: %[[R:.*]] = simulation.logic.bitwise_mux %[[C]] ? %[[A]] : %[[B]] : !simulation.logic<2>
+// CHECK: simulation.ref.store %[[R]] to {{.*}} {simulation.continuous_store} : !simulation.logic<2>, !simulation.ref<!simulation.logic<2>>
 // CHECK-NOT: simulation.ref.store
 simulation.design @logic_select {
   simulation.scope.decl 0
@@ -269,5 +273,125 @@ simulation.design @logic_select {
     %dw = simulation.net.extract %d from 1 : !simulation.net<!simulation.packed_array<1 : 0 x !simulation.logic<1>>> -> !simulation.net<!simulation.logic<1>>
     %ew = simulation.net.extract %e from 1 : !simulation.net<!simulation.packed_array<1 : 0 x !simulation.logic<1>>> -> !simulation.net<!simulation.logic<1>>
     simulation.suspend.any %mv, %dw, %ew edges [0, 0, 0] to ^h : !simulation.net<!simulation.logic<1>>, !simulation.net<!simulation.logic<1>>, !simulation.net<!simulation.logic<1>>
+  }
+}
+
+// -----
+
+// One condition for every lane, `n[i] = s ? d[i] : 1'bz`: the lanes become
+// one logic.mux on the shared one-bit condition. A known condition passes the
+// Z of the false operand (11.4.11); an X one merges per Table 11-20.
+// CHECK-LABEL: simulation.design @shared_condition
+// CHECK: simulation.func private @bit0.coalesced(%{{[^%]*}}%{{[^%]*}}%[[S:[^:]*]]:{{[^%]*}}%[[D:[^:]*]]:
+// CHECK-DAG: %[[Z:.*]] = simulation.logic.constant -1 : i2, -1 : i2 : !simulation.logic<2>
+// CHECK-DAG: %[[C:.*]] = simulation.net.read %[[S]] : !simulation.net<!simulation.logic<1>> -> !simulation.logic<1>
+// CHECK-DAG: %[[DV:.*]] = simulation.net.extract %[[D]] from 0 {{.*}} -> !simulation.net<!simulation.logic<2>>
+// CHECK-DAG: %[[A:.*]] = simulation.net.read %[[DV]]
+// CHECK: %[[R:.*]] = simulation.logic.mux %[[C]] ? %[[A]] : %[[Z]] : (!simulation.logic<1>, !simulation.logic<2>, !simulation.logic<2>) -> !simulation.logic<2>
+// CHECK: simulation.ref.store %[[R]] to
+!pa = !simulation.packed_array<1 : 0 x !simulation.logic<1>>
+!l1 = !simulation.logic<1>
+simulation.design @shared_condition {
+  simulation.scope.decl 0
+  simulation.code_unit.decl 1 in 0 root_initializer hierarchy "root"
+  simulation.code_unit.decl 2 in 0 continuous hierarchy "bit0"
+  simulation.code_unit.decl 3 in 0 continuous hierarchy "bit1"
+  simulation.storage.decl 0 in 0 : !pa design
+  simulation.net.decl 0 in 0 : !l1 design
+  simulation.net.decl 1 in 0 : !pa design
+  simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 1 : i64} {
+    %n = simulation.context.storage %ctx[0] : !simulation.ref<!pa>
+    %m = simulation.context.net %ctx[0] : !simulation.net<!l1>
+    %d = simulation.context.net %ctx[1] : !simulation.net<!pa>
+    %p0 = simulation.spawn @bit0(%ctx, %n, %m, %d) : !simulation.context, !simulation.ref<!pa>, !simulation.net<!l1>, !simulation.net<!pa> -> !simulation.process
+    %p1 = simulation.spawn @bit1(%ctx, %n, %m, %d) : !simulation.context, !simulation.ref<!pa>, !simulation.net<!l1>, !simulation.net<!pa> -> !simulation.process
+    simulation.return
+  }
+  simulation.func private @bit0(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %n: !simulation.ref<!pa> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}, %m: !simulation.net<!l1> {simulation.capture_kind = 4 : i32, simulation.descriptor_id = 0 : i64}, %d: !simulation.net<!pa> {simulation.capture_kind = 4 : i32, simulation.descriptor_id = 1 : i64}) attributes {entry_kind = 7 : i32, code_unit_id = 2 : i64} {
+    cf.br ^h
+  ^h:
+    %c = simulation.net.read %m : !simulation.net<!l1> -> !l1
+    %dv = simulation.net.extract %d from 0 : !simulation.net<!pa> -> !simulation.net<!l1>
+    %a = simulation.net.read %dv : !simulation.net<!l1> -> !l1
+    %z = simulation.logic.constant true, true : !l1
+    %v = simulation.logic.mux %c ? %a : %z : (!l1, !l1, !l1) -> !l1
+    %tn = simulation.ref.subelement %n[[1]] : !simulation.ref<!pa> -> !simulation.ref<!l1>
+    simulation.ref.store %v to %tn {simulation.continuous_store} : !l1, !simulation.ref<!l1>
+    simulation.suspend.any %m, %dv edges [0, 0] to ^h : !simulation.net<!l1>, !simulation.net<!l1>
+  }
+  simulation.func private @bit1(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %n: !simulation.ref<!pa> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}, %m: !simulation.net<!l1> {simulation.capture_kind = 4 : i32, simulation.descriptor_id = 0 : i64}, %d: !simulation.net<!pa> {simulation.capture_kind = 4 : i32, simulation.descriptor_id = 1 : i64}) attributes {entry_kind = 7 : i32, code_unit_id = 3 : i64} {
+    cf.br ^h
+  ^h:
+    %c = simulation.net.read %m : !simulation.net<!l1> -> !l1
+    %dv = simulation.net.extract %d from 1 : !simulation.net<!pa> -> !simulation.net<!l1>
+    %a = simulation.net.read %dv : !simulation.net<!l1> -> !l1
+    %z = simulation.logic.constant true, true : !l1
+    %v = simulation.logic.mux %c ? %a : %z : (!l1, !l1, !l1) -> !l1
+    %tn = simulation.ref.subelement %n[[0]] : !simulation.ref<!pa> -> !simulation.ref<!l1>
+    simulation.ref.store %v to %tn {simulation.continuous_store} : !l1, !simulation.ref<!l1>
+    simulation.suspend.any %m, %dv edges [0, 0] to ^h : !simulation.net<!l1>, !simulation.net<!l1>
+  }
+}
+
+// -----
+
+// `n[i] = (m[i] & d[i]) | (~m[i] & 1'b1)` is no conditional: for m[i] = X and
+// d[i] = 1 it is X (Tables 11-11, 11-12, 11-15), where `m[i] ? d[i] : 1`
+// gives 1 (Table 11-20). The lanes stay bitwise operations.
+// CHECK-LABEL: simulation.design @and_or_lanes
+// CHECK: simulation.func private @bit0.coalesced(
+// CHECK-NOT: simulation.logic.bitwise_mux
+// CHECK-NOT: simulation.logic.mux
+// CHECK: simulation.logic.binary or {{.*}} : !simulation.logic<2>
+// CHECK: simulation.ref.store
+!pa = !simulation.packed_array<1 : 0 x !simulation.logic<1>>
+!l1 = !simulation.logic<1>
+simulation.design @and_or_lanes {
+  simulation.scope.decl 0
+  simulation.code_unit.decl 1 in 0 root_initializer hierarchy "root"
+  simulation.code_unit.decl 2 in 0 continuous hierarchy "bit0"
+  simulation.code_unit.decl 3 in 0 continuous hierarchy "bit1"
+  simulation.storage.decl 0 in 0 : !pa design
+  simulation.net.decl 0 in 0 : !pa design
+  simulation.net.decl 1 in 0 : !pa design
+  simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 1 : i64} {
+    %n = simulation.context.storage %ctx[0] : !simulation.ref<!pa>
+    %m = simulation.context.net %ctx[0] : !simulation.net<!pa>
+    %d = simulation.context.net %ctx[1] : !simulation.net<!pa>
+    %p0 = simulation.spawn @bit0(%ctx, %n, %m, %d) : !simulation.context, !simulation.ref<!pa>, !simulation.net<!pa>, !simulation.net<!pa> -> !simulation.process
+    %p1 = simulation.spawn @bit1(%ctx, %n, %m, %d) : !simulation.context, !simulation.ref<!pa>, !simulation.net<!pa>, !simulation.net<!pa> -> !simulation.process
+    simulation.return
+  }
+  simulation.func private @bit0(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %n: !simulation.ref<!pa> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}, %m: !simulation.net<!pa> {simulation.capture_kind = 4 : i32, simulation.descriptor_id = 0 : i64}, %d: !simulation.net<!pa> {simulation.capture_kind = 4 : i32, simulation.descriptor_id = 1 : i64}) attributes {entry_kind = 7 : i32, code_unit_id = 2 : i64} {
+    cf.br ^h
+  ^h:
+    %mv = simulation.net.extract %m from 0 : !simulation.net<!pa> -> !simulation.net<!l1>
+    %c = simulation.net.read %mv : !simulation.net<!l1> -> !l1
+    %dv = simulation.net.extract %d from 0 : !simulation.net<!pa> -> !simulation.net<!l1>
+    %a = simulation.net.read %dv : !simulation.net<!l1> -> !l1
+    %one = simulation.logic.constant true, false : !l1
+    %t = simulation.logic.binary and %c, %a : !l1
+    %nc = simulation.logic.unary bit_not %c : (!l1) -> !l1
+    %f = simulation.logic.binary and %nc, %one : !l1
+    %v = simulation.logic.binary or %t, %f : !l1
+    %tn = simulation.ref.subelement %n[[1]] : !simulation.ref<!pa> -> !simulation.ref<!l1>
+    simulation.ref.store %v to %tn {simulation.continuous_store} : !l1, !simulation.ref<!l1>
+    simulation.suspend.any %mv, %dv edges [0, 0] to ^h : !simulation.net<!l1>, !simulation.net<!l1>
+  }
+  simulation.func private @bit1(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %n: !simulation.ref<!pa> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}, %m: !simulation.net<!pa> {simulation.capture_kind = 4 : i32, simulation.descriptor_id = 0 : i64}, %d: !simulation.net<!pa> {simulation.capture_kind = 4 : i32, simulation.descriptor_id = 1 : i64}) attributes {entry_kind = 7 : i32, code_unit_id = 3 : i64} {
+    cf.br ^h
+  ^h:
+    %mv = simulation.net.extract %m from 1 : !simulation.net<!pa> -> !simulation.net<!l1>
+    %c = simulation.net.read %mv : !simulation.net<!l1> -> !l1
+    %dv = simulation.net.extract %d from 1 : !simulation.net<!pa> -> !simulation.net<!l1>
+    %a = simulation.net.read %dv : !simulation.net<!l1> -> !l1
+    %one = simulation.logic.constant true, false : !l1
+    %t = simulation.logic.binary and %c, %a : !l1
+    %nc = simulation.logic.unary bit_not %c : (!l1) -> !l1
+    %f = simulation.logic.binary and %nc, %one : !l1
+    %v = simulation.logic.binary or %t, %f : !l1
+    %tn = simulation.ref.subelement %n[[0]] : !simulation.ref<!pa> -> !simulation.ref<!l1>
+    simulation.ref.store %v to %tn {simulation.continuous_store} : !l1, !simulation.ref<!l1>
+    simulation.suspend.any %mv, %dv edges [0, 0] to ^h : !simulation.net<!l1>, !simulation.net<!l1>
   }
 }

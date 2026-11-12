@@ -865,6 +865,48 @@ public:
   }
 };
 
+class BitwiseMuxConversion final
+    : public LogicOpConversion<sim::SimLogicBitwiseMuxOp> {
+public:
+  using LogicOpConversion::LogicOpConversion;
+
+  LogicalResult
+  matchAndRewrite(sim::SimLogicBitwiseMuxOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    ArrayRef<ValueRange> operands = adaptor.getOperands();
+    Location loc = op.getLoc();
+    LogicValue condition = getLogic(operands, 0);
+    LogicValue trueValue = getLogic(operands, 1);
+    LogicValue falseValue = getLogic(operands, 2);
+    auto bitAnd = [&](Value lhs, Value rhs) {
+      return rewriter.createOrFold<arith::AndIOp>(loc, lhs, rhs);
+    };
+    auto bitOr = [&](Value lhs, Value rhs) {
+      return rewriter.createOrFold<arith::OrIOp>(loc, lhs, rhs);
+    };
+    // A bit whose condition is known takes both planes of the selected
+    // operand's bit, Z included; an X/Z condition bit keeps only a common
+    // known 0 or 1 (11.4.11, Table 11-20).
+    Value pickFalse = bitNot(rewriter, loc, condition.value);
+    auto selectBits = [&](Value onTrue, Value onFalse) {
+      return bitOr(bitAnd(condition.value, onTrue), bitAnd(pickFalse, onFalse));
+    };
+    Value mismatch = bitOr(rewriter.createOrFold<arith::XOrIOp>(
+                               loc, trueValue.value, falseValue.value),
+                           bitOr(trueValue.unknown, falseValue.unknown));
+    Value known = bitNot(rewriter, loc, condition.unknown);
+    Value value =
+        bitOr(bitAnd(known, selectBits(trueValue.value, falseValue.value)),
+              bitAnd(condition.unknown,
+                     bitAnd(trueValue.value, bitNot(rewriter, loc, mismatch))));
+    Value unknown =
+        bitOr(bitAnd(known, selectBits(trueValue.unknown, falseValue.unknown)),
+              bitAnd(condition.unknown, mismatch));
+    replaceLogic(op, {value, unknown}, rewriter);
+    return success();
+  }
+};
+
 class CountBitsConversion final
     : public LogicOpConversion<sim::SimLogicCountBitsOp> {
 public:
@@ -1836,12 +1878,12 @@ public:
                         schedule::NativeWordResizeLanesOp>();
     target.addIllegalOp<
         sim::SimLogicConstantOp, sim::SimLogicFromBitsOp, sim::SimLogicToBitsOp,
-        sim::SimLogicIsTrueOp, sim::SimLogicMuxOp, sim::SimLogicCountBitsOp,
-        sim::SimLogicClog2Op, sim::SimLogicResizeOp, sim::SimLogicUnaryOp,
-        sim::SimLogicReductionOp, sim::SimLogicBinaryOp, sim::SimLogicPowerOp,
-        sim::SimLogicLogicalOp, sim::SimLogicShiftOp, sim::SimLogicCompareOp,
-        sim::SimLogicCaseDifferenceMaskOp, sim::SimLogicConcatOp,
-        sim::SimLogicReplicateOp, sim::SimLogicExtractOp,
+        sim::SimLogicIsTrueOp, sim::SimLogicMuxOp, sim::SimLogicBitwiseMuxOp,
+        sim::SimLogicCountBitsOp, sim::SimLogicClog2Op, sim::SimLogicResizeOp,
+        sim::SimLogicUnaryOp, sim::SimLogicReductionOp, sim::SimLogicBinaryOp,
+        sim::SimLogicPowerOp, sim::SimLogicLogicalOp, sim::SimLogicShiftOp,
+        sim::SimLogicCompareOp, sim::SimLogicCaseDifferenceMaskOp,
+        sim::SimLogicConcatOp, sim::SimLogicReplicateOp, sim::SimLogicExtractOp,
         sim::SimLogicDynExtractOp, sim::SimBitsDynExtractOp,
         sim::SimLogicDynInsertOp, sim::SimBitsDynInsertOp,
         sim::SimLogicInsertOp>();
@@ -1873,11 +1915,12 @@ static void populateSimulationToStandardPatternsImpl(
   populateNativeWordValuePatterns(converter, patterns);
   patterns.add<
       ConstantConversion, FromBitsConversion, ToBitsConversion,
-      IsTrueConversion, MuxConversion, CountBitsConversion, Clog2Conversion,
-      ResizeConversion, UnaryConversion, ReductionConversion, BinaryConversion,
-      PowerConversion, LogicalConversion, ShiftConversion, CompareConversion,
-      CaseDifferenceMaskConversion, ConcatConversion, ReplicateConversion,
-      ExtractConversion, DynamicExtractConversion, BitsDynamicExtractConversion,
+      IsTrueConversion, MuxConversion, BitwiseMuxConversion,
+      CountBitsConversion, Clog2Conversion, ResizeConversion, UnaryConversion,
+      ReductionConversion, BinaryConversion, PowerConversion, LogicalConversion,
+      ShiftConversion, CompareConversion, CaseDifferenceMaskConversion,
+      ConcatConversion, ReplicateConversion, ExtractConversion,
+      DynamicExtractConversion, BitsDynamicExtractConversion,
       DynamicInsertConversion, BitsDynamicInsertConversion, InsertConversion>(
       converter, patterns.getContext(), provenTwoStateOperations);
   patterns.add<BranchConversion, CondBranchConversion, SwitchConversion,

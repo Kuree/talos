@@ -448,6 +448,31 @@ OpFoldResult SimLogicMuxOp::fold(FoldAdaptor adaptor) {
   return getLogicAttribute(getContext(), std::move(result));
 }
 
+OpFoldResult SimLogicBitwiseMuxOp::fold(FoldAdaptor adaptor) {
+  auto condition = getLogicPlanes(adaptor.getCondition());
+  if (!condition)
+    return {};
+  if (condition->unknown.isZero() && condition->value.isAllOnes())
+    return getTrueValue();
+  if (condition->unknown.isZero() && condition->value.isZero())
+    return getFalseValue();
+  auto trueValue = getLogicPlanes(adaptor.getTrueValue());
+  auto falseValue = getLogicPlanes(adaptor.getFalseValue());
+  if (!trueValue || !falseValue)
+    return {};
+  // Known condition bits select an operand bit; X/Z ones merge (Table 11-20).
+  APInt pickTrue = condition->value & ~condition->unknown;
+  APInt pickFalse = ~condition->value & ~condition->unknown;
+  APInt mismatch = (trueValue->value ^ falseValue->value) | trueValue->unknown |
+                   falseValue->unknown;
+  LogicPlanes result{
+      (pickTrue & trueValue->value) | (pickFalse & falseValue->value) |
+          (condition->unknown & trueValue->value & ~mismatch),
+      (pickTrue & trueValue->unknown) | (pickFalse & falseValue->unknown) |
+          (condition->unknown & mismatch)};
+  return getLogicAttribute(getContext(), std::move(result));
+}
+
 OpFoldResult SimLogicResizeOp::fold(FoldAdaptor adaptor) {
   if (getInput().getType() == getResult().getType())
     return getInput();

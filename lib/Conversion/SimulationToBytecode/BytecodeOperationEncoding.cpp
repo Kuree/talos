@@ -866,6 +866,14 @@ LogicalResult Encoder::encodeOperation(FunctionPlan &plan,
           reg(plan, op.getCondition())});
     return success();
   }
+  if (auto op = dyn_cast<sim::SimLogicBitwiseMuxOp>(operation)) {
+    // Per-bit selection; X/Z condition bits merge the operand bits as an
+    // unknown logic.mux condition does (Table 11-20).
+    emit({Select, TALOS_RT_DB_SELECT_BITWISE, reg(plan, op.getResult()),
+          reg(plan, op.getTrueValue()), reg(plan, op.getFalseValue()),
+          reg(plan, op.getCondition())});
+    return success();
+  }
   if (auto op = dyn_cast<sim::SimLogicUnaryOp>(operation)) {
     switch (op.getKind()) {
     case sim::UnaryKind::Plus:

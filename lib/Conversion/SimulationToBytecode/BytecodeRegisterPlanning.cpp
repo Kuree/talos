@@ -126,6 +126,12 @@ planTwoStateRegisters(sim::SimDesignOp design) {
           constrain(op.getResult(), op.getTrueValue());
           constrain(op.getResult(), op.getFalseValue());
           force(op.getCondition());
+        } else if (auto op = dyn_cast<sim::SimLogicBitwiseMuxOp>(operation)) {
+          // One layout for all four, as for a bitwise operator: a per-bit
+          // condition is data, not a branch predicate.
+          constrain(op.getResult(), op.getTrueValue());
+          constrain(op.getResult(), op.getFalseValue());
+          constrain(op.getResult(), op.getCondition());
         } else if (auto op = dyn_cast<sim::SimLogicShiftOp>(operation)) {
           constrain(op.getResult(), op.getInput());
         } else if (auto op = dyn_cast<sim::SimLogicCompareOp>(operation)) {

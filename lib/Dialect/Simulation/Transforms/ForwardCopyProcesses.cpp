@@ -1285,6 +1285,10 @@ private:
       } else if (auto mux = dyn_cast_or_null<sim::SimLogicMuxOp>(op)) {
         if (merge(mux.getTrueValue()) && merge(mux.getFalseValue()))
           result = std::move(dependencies);
+      } else if (auto mux = dyn_cast_or_null<sim::SimLogicBitwiseMuxOp>(op)) {
+        // Z passes only from an operand; an X/Z condition bit yields X.
+        if (merge(mux.getTrueValue()) && merge(mux.getFalseValue()))
+          result = std::move(dependencies);
       } else if (auto select = dyn_cast_or_null<arith::SelectOp>(op)) {
         if (merge(select.getTrueValue()) && merge(select.getFalseValue()))
           result = std::move(dependencies);
@@ -1299,8 +1303,7 @@ private:
                      sim::SimLogicDynInsertOp, sim::SimPackedFlattenOp,
                      sim::SimPackedUnflattenOp, sim::SimAggregateConstructOp,
                      sim::SimAggregateSplatOp, sim::SimAggregateExtractOp,
-                     sim::SimAggregateInsertOp,
-                     sim::SimArrayDynInsertOp>(op)) {
+                     sim::SimAggregateInsertOp, sim::SimArrayDynInsertOp>(op)) {
         if (llvm::all_of(op->getOperands(), merge))
           result = std::move(dependencies);
       } else if (auto argument = dyn_cast<BlockArgument>(value)) {

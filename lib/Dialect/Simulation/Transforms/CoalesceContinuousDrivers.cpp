@@ -30,6 +30,12 @@
 // taken. Exactly one path runs per activation, so the selected values are
 // those the branching member computes.
 //
+// A four-state `c ? a : b` lane with a one-bit `c` becomes a bit of one
+// logic.bitwise_mux (logic.mux when every lane has the same `c`). A lane is
+// such a conditional when folding it for each of c's four values leaves `a`
+// for 1, `b` for 0 and the Table 11-20 merge of `a` and `b` for X and Z,
+// which is the value of `c ? a : b` (11.4.11) in each case.
+//
 // Semantics. Each continuous assignment re-evaluates when an operand changes
 // (10.3.2). The merged process re-evaluates every member when any operand
 // changes; a member whose operands did not change recomputes its old value,
@@ -255,6 +261,7 @@ struct Plan {
     Reduce,    // transposed reduction of gathered bits
     Select,    // two-state one-bit selects: (c & a) | (~c & b)
     ViewLeaf,  // reads at contiguous constant offsets of one view
+    Mux,       // four-state `c ? a : b` in every lane
   } kind;
   unsigned width = 0; // total width
   // Leaf
@@ -484,6 +491,161 @@ private:
     return true;
   }
 
+  /// The value of a lane once its condition bit is a constant: a constant,
+  /// an unchanged SSA value, or the X merge of two unchanged values.
+  struct Residue {
+    Attribute constant;
+    Value value;
+    Value left, right;
+  };
+
+  /// Folds `v` with every use of `condition` replaced by `constant`. Values
+  /// that do not fold stay as they are, which is their actual value when the
+  /// condition has that constant; every folded constant is so too.
+  std::optional<Residue> residue(Value v, Value condition, Attribute constant,
+                                 DenseMap<Value, Residue> &memo,
+                                 unsigned depth) {
+    if (auto found = memo.find(v); found != memo.end())
+      return found->second;
+    auto remember = [&](Residue r) -> std::optional<Residue> {
+      memo[v] = r;
+      return r;
+    };
+    if (sameValue(v, condition))
+      return remember(Residue{constant, {}, {}, {}});
+    Attribute literal;
+    if (matchPattern(v, m_Constant(&literal)))
+      return remember(Residue{literal, v, {}, {}});
+    Operation *op = v.getDefiningOp();
+    if (!op || !depth || op->getNumResults() != 1 || op->getNumRegions() ||
+        !isMemoryEffectFree(op))
+      return remember(Residue{{}, v, {}, {}});
+    SmallVector<Residue> operands;
+    bool changed = false;
+    for (Value operand : op->getOperands()) {
+      std::optional<Residue> r =
+          residue(operand, condition, constant, memo, depth - 1);
+      if (!r)
+        return std::nullopt;
+      changed |= r->value != operand;
+      operands.push_back(*r);
+    }
+    if (!changed)
+      return remember(Residue{{}, v, {}, {}});
+    // A select on a folded predicate is the chosen operand's residue.
+    if (auto select = dyn_cast<arith::SelectOp>(op))
+      if (auto predicate = dyn_cast_or_null<IntegerAttr>(operands[0].constant))
+        return remember(operands[predicate.getValue().isZero() ? 2 : 1]);
+    // A known logic.mux condition selects an operand; an X/Z one merges
+    // them (Table 11-20).
+    if (isa<sim::SimLogicMuxOp>(op)) {
+      auto planes = dyn_cast_or_null<ArrayAttr>(operands[0].constant);
+      auto value = planes && planes.size() == 2
+                       ? dyn_cast<IntegerAttr>(planes[0])
+                       : IntegerAttr();
+      auto unknown = planes && planes.size() == 2
+                         ? dyn_cast<IntegerAttr>(planes[1])
+                         : IntegerAttr();
+      if (value && unknown && unknown.getValue().isZero())
+        return remember(operands[value.getValue().isZero() ? 2 : 1]);
+      if (unknown && operands[1].value && operands[2].value)
+        return remember(Residue{{}, {}, operands[1].value, operands[2].value});
+    }
+    SmallVector<Attribute> attributes;
+    for (Residue &r : operands) {
+      if (r.left)
+        return std::nullopt;
+      attributes.push_back(r.constant);
+    }
+    // The folders read operand values only where no constant is given, so
+    // they see the operation's own operands: those must be unchanged.
+    for (auto [r, operand] : llvm::zip(operands, op->getOperands()))
+      if (!r.constant && r.value != operand)
+        return std::nullopt;
+    // Fold a detached copy: Operation::fold also applies trait folds, which
+    // may reorder a commutative operation's operands in place.
+    Operation *copy = op->clone();
+    SmallVector<OpFoldResult> results;
+    bool folds = succeeded(copy->fold(attributes, results)) &&
+                 results.size() == 1 &&
+                 (isa<Attribute>(results.front()) ||
+                  cast<Value>(results.front()) != copy->getResult(0));
+    copy->destroy();
+    if (!folds)
+      return std::nullopt;
+    if (auto folded = dyn_cast<Attribute>(results.front()))
+      return remember(Residue{folded, {}, {}, {}});
+    Value folded = cast<Value>(results.front());
+    std::optional<Residue> r =
+        residue(folded, condition, constant, memo, depth - 1);
+    if (r)
+      memo[v] = *r;
+    return r;
+  }
+
+  /// A four-state lane that computes `c ? a : b` (11.4.11) for a one-bit
+  /// `c`. The frontend branches on `c`, so that the unchosen operand is not
+  /// evaluated (11.3.5), and if-conversion turns the branches into selects
+  /// on predicates of `c`. Folding the lane for each of c's values 0, 1, X
+  /// and Z must leave `a`, `b` and twice the merge of `a` and `b`: those are
+  /// the values of logic.mux(c, a, b), and c has no other value.
+  struct Conditional {
+    Value condition, onTrue, onFalse;
+  };
+  std::optional<Conditional> conditional(Value lane) {
+    // Candidate conditions: one-bit four-state reads in the lane.
+    SmallVector<Value> candidates;
+    SmallVector<std::pair<Value, unsigned>> work{{lane, 0}};
+    DenseSet<Value> seen;
+    while (!work.empty() && seen.size() < 64) {
+      auto [v, depth] = work.pop_back_val();
+      if (!seen.insert(v).second)
+        continue;
+      Operation *op = v.getDefiningOp();
+      if (isa_and_nonnull<sim::SimNetReadOp, sim::SimRefLoadOp>(op)) {
+        auto type = dyn_cast<sim::LogicType>(v.getType());
+        Value read = v;
+        if (type && type.getWidth() == 1 &&
+            llvm::none_of(candidates,
+                          [&](Value c) { return sameValue(c, read); }))
+          candidates.push_back(read);
+        continue;
+      }
+      if (!op || depth == 12 || !isMemoryEffectFree(op))
+        continue;
+      for (Value operand : op->getOperands())
+        work.push_back({operand, depth + 1});
+    }
+    MLIRContext *context = builder.getContext();
+    Type bit = builder.getIntegerType(1);
+    auto planes = [&](bool value, bool unknown) -> Attribute {
+      return ArrayAttr::get(context, {IntegerAttr::get(bit, value),
+                                      IntegerAttr::get(bit, unknown)});
+    };
+    for (Value c : ArrayRef(candidates).take_front(4)) {
+      std::optional<Residue> results[4];
+      bool ok = true;
+      for (unsigned k = 0; k < 4 && ok; ++k) {
+        // 0, 1, X (unknown, value 0) and Z (unknown, value 1).
+        DenseMap<Value, Residue> memo;
+        results[k] = residue(lane, c, planes(k & 1, k >= 2), memo, 16);
+        ok = results[k].has_value();
+      }
+      if (!ok)
+        continue;
+      Value onFalse = results[0]->left ? Value() : results[0]->value;
+      Value onTrue = results[1]->left ? Value() : results[1]->value;
+      auto merges = [&](const Residue &r) {
+        return r.left &&
+               ((sameValue(r.left, onTrue) && sameValue(r.right, onFalse)) ||
+                (sameValue(r.left, onFalse) && sameValue(r.right, onTrue)));
+      };
+      if (onTrue && onFalse && merges(*results[2]) && merges(*results[3]))
+        return Conditional{c, onTrue, onFalse};
+    }
+    return std::nullopt;
+  }
+
   std::unique_ptr<Plan> make(Plan::Kind kind, unsigned width) {
     ++nodes;
     auto plan = std::make_unique<Plan>();
@@ -596,6 +758,37 @@ private:
         plan->value = first->first;
         plan->offset = first->second;
         return plan;
+      }
+    }
+    // Four-state `?:` lanes: one logic.mux for a common condition, else a
+    // per-bit one.
+    if (fourState) {
+      SmallVector<Value> conditions, trues, falses;
+      for (Value lane : lanes) {
+        std::optional<Conditional> parts = conditional(lane);
+        if (!parts)
+          break;
+        conditions.push_back(parts->condition);
+        trues.push_back(parts->onTrue);
+        falses.push_back(parts->onFalse);
+      }
+      if (conditions.size() == n) {
+        unsigned before = nodes;
+        auto condition = match(conditions, 1, fourState);
+        bool common = condition && condition->kind == Plan::Broadcast;
+        auto onTrue = condition && (common || w == 1)
+                          ? match(trues, w, fourState)
+                          : nullptr;
+        auto onFalse = onTrue ? match(falses, w, fourState) : nullptr;
+        // The and/or lowering evaluates both operands.
+        if (onFalse && poisonFreePlan(*onTrue) && poisonFreePlan(*onFalse)) {
+          auto plan = make(Plan::Mux, n * w);
+          plan->children.push_back(std::move(condition));
+          plan->children.push_back(std::move(onTrue));
+          plan->children.push_back(std::move(onFalse));
+          return plan;
+        }
+        nodes = before;
       }
     }
     Operation *head = lanes.front().getDefiningOp();
@@ -874,6 +1067,16 @@ private:
       return sim::SimLogicUnaryOp::create(builder, loc, type,
                                           sim::UnaryKind::BitNot,
                                           emit(*plan.children[0], fourState));
+    case Plan::Mux: {
+      Value onTrue = emit(*plan.children[1], fourState);
+      Value onFalse = emit(*plan.children[2], fourState);
+      if (plan.children[0]->kind == Plan::Broadcast)
+        return sim::SimLogicMuxOp::create(
+            builder, loc, type, plan.children[0]->value, onTrue, onFalse);
+      return sim::SimLogicBitwiseMuxOp::create(
+          builder, loc, type, emit(*plan.children[0], fourState), onTrue,
+          onFalse);
+    }
     case Plan::Select: {
       Value condition = emit(*plan.children[0], fourState);
       Value onTrue = emit(*plan.children[1], fourState);

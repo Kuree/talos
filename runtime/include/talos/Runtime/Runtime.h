@@ -1085,8 +1085,15 @@ enum {
 // follow IEEE 1800 packed-selection assignment semantics.
 #define TALOS_RT_DB_INSERT_DYNAMIC UINT16_C(1)
 
+// SELECT takes a one-bit condition in source2, except BITWISE, whose condition
+// has the destination's width and selects each bit separately. FOUR_STATE and
+// BITWISE merge the operands for an X/Z condition bit (IEEE 1800 Table 11-20).
 typedef uint16_t talos_rt_design_select_kind;
-enum { TALOS_RT_DB_SELECT_BINARY = 0, TALOS_RT_DB_SELECT_FOUR_STATE = 1 };
+enum {
+  TALOS_RT_DB_SELECT_BINARY = 0,
+  TALOS_RT_DB_SELECT_FOUR_STATE = 1,
+  TALOS_RT_DB_SELECT_BITWISE = 2
+};
 
 typedef uint16_t talos_rt_design_reduction_kind;
 enum {

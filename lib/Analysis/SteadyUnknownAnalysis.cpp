@@ -900,7 +900,8 @@ public:
         .Case<sim::SimRefLoadOp>([&](auto load) { return visitLoad(load); })
         // An X/Z condition keeps a bit only where both operands hold the
         // same known value (IEEE 1800-2023 11.4.11, Table 11-20).
-        .Case<sim::SimLogicMuxOp>([&](auto) { return unite({1, 2}); })
+        .Case<sim::SimLogicMuxOp, sim::SimLogicBitwiseMuxOp>(
+            [&](auto) { return unite({1, 2}); })
         // Bitwise operators work per bit (11.4.8, Tables 11-11 to 11-15): a
         // known 0 decides an AND and a known 1 an OR, while XOR needs both
         // bits. An arithmetic result is all X for any X/Z operand bit
