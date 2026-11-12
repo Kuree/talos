@@ -368,6 +368,7 @@ public:
                   : next;
     };
     Value activation = function.getBody().front().getArgument(0);
+    SmallVector<Value> liveIns = checkedLiveIns(blocks.getArrayRef(), segment);
     if (!segment.gate.empty()) {
       SmallVector<Value> references;
       for (uint64_t root : segment.gate)
@@ -376,14 +377,34 @@ public:
             sim::RefType::get(function.getContext(),
                               inputs.storageTypes.lookup(root)),
             activation, root));
-      conjoin(schedule::NativeKnownRootsOp::create(
-          builder, loc, builder.getI1Type(), references));
+      Value roots = schedule::NativeKnownRootsOp::create(
+          builder, loc, builder.getI1Type(), references);
+      if (segment.netGate.empty() && segment.slotChecks.empty() &&
+          liveIns.empty()) {
+        conjoin(roots);
+      } else {
+        // Branch on the root summary alone, then test the rest. Its lowering
+        // merges the cached, backed-off and refreshed answers in one block,
+        // which then holds only this branch and folds into each answer's
+        // edge; a conjunction would keep the merged flag live across the
+        // other probes. A failed summary skips them: either way the
+        // four-state body runs (IEEE 1800-2023 6.3.1).
+        Block *rest = builder.createBlock(entry);
+        builder.setInsertionPoint(enter);
+        auto branch = cf::CondBranchOp::create(
+            builder, loc, roots, rest, ValueRange(), entry, ValueRange());
+        branch.setBranchWeights(
+            ArrayRef<int32_t>{likelyWeight, unlikelyWeight});
+        enter->moveBefore(rest, rest->end());
+        builder.setInsertionPoint(enter);
+      }
     }
     // Read only the demanded net ranges still coming from entry state.
-    // These probes always execute at this activation's entry: unlike cached
-    // root summaries they need no invalidation protocol. They read no value
-    // plane after lowering and cannot turn an undriven Z hole into zero
-    // (IEEE 1800-2023 6.3.1, 6.7.1). The copy retains X-producing effects.
+    // These probes read entry state each time this activation's check runs:
+    // unlike cached root summaries they need no invalidation protocol. They
+    // read no value plane after lowering and cannot turn an undriven Z hole
+    // into zero (IEEE 1800-2023 6.3.1, 6.7.1). The copy retains X-producing
+    // effects.
     for (const auto &range : segment.netGate) {
       Value net = sim::SimContextNetOp::create(
           builder, loc,
@@ -411,7 +432,6 @@ public:
       conjoin(schedule::NativeKnownValueOp::create(
           builder, loc, builder.getI1Type(), contents));
     }
-    SmallVector<Value> liveIns = checkedLiveIns(blocks.getArrayRef(), segment);
     for (Value liveIn : liveIns)
       conjoin(schedule::NativeKnownValueOp::create(
           builder, loc, builder.getI1Type(), liveIn));

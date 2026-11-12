@@ -287,11 +287,14 @@ module attributes {native.optimization_level = 3 : i32} {
     simulation.storage.decl 3 in 0 : !l16 design
     simulation.code_unit.decl 1 in 0 function hierarchy "top.f"
     // SEGMENTS-LABEL: simulation.func @slots
+    // The root summary branches on its own; the slot is tested only after
+    // it passes, and either failure enters the four-state body.
     // SEGMENTS: %[[ROOTS:.*]] = schedule.known.roots %{{.*}}, %{{.*}}, %{{.*}} : !simulation.ref<!simulation.logic<8>>, !simulation.ref<!simulation.logic<8>>, !simulation.ref<!simulation.logic<16>>{{$}}
+    // SEGMENTS-NEXT: cf.cond_br %[[ROOTS]] weights([1048575, 1]), ^[[REST:bb[0-9]+]], ^[[FOUR:bb[0-9]+]]
+    // SEGMENTS: ^[[REST]]:
     // SEGMENTS-NEXT: %[[SLOT:.*]] = simulation.ref.load %[[TMP:.*]] :
     // SEGMENTS-NEXT: %[[FILLED:.*]] = schedule.known.value %[[SLOT]]
-    // SEGMENTS-NEXT: %[[OK:.*]] = arith.andi %[[ROOTS]], %[[FILLED]]
-    // SEGMENTS-NEXT: cf.cond_br %[[OK]] weights([1048575, 1]), ^[[COPY:bb[0-9]+]], ^
+    // SEGMENTS-NEXT: cf.cond_br %[[FILLED]] weights([1048575, 1]), ^[[COPY:bb[0-9]+]], ^[[FOUR]]
     // SEGMENTS: ^[[COPY]]:
     // SEGMENTS-NEXT: %[[Q:.*]] = simulation.ref.load %[[TMP]] :
     // SEGMENTS-NEXT: %[[QB:.*]] = simulation.logic.to_bits %[[Q]]
@@ -351,11 +354,12 @@ module attributes {native.optimization_level = 3 : i32} {
     // SEGMENTS-LABEL: simulation.func @crossing
     // SEGMENTS: ^[[NEXT:bb[0-9]+]](%[[X:[0-9]+]]: !simulation.logic<8>, %[[E:[0-9]+]]: !simulation.logic<8>, %[[P:[0-9]+]]: !simulation.logic<8>):
     // SEGMENTS: %[[ROOTS:.*]] = schedule.known.roots
+    // SEGMENTS-NEXT: cf.cond_br %[[ROOTS]] weights([1048575, 1]), ^[[REST:bb[0-9]+]], ^[[FOUR:bb[0-9]+]]
+    // SEGMENTS: ^[[REST]]:
     // SEGMENTS-NEXT: %[[KP:.*]] = schedule.known.value %[[P]]
-    // SEGMENTS-NEXT: %[[BOTH:.*]] = arith.andi %[[ROOTS]], %[[KP]]
     // SEGMENTS-NEXT: %[[KX:.*]] = schedule.known.value %[[X]]
-    // SEGMENTS-NEXT: %[[OK:.*]] = arith.andi %[[BOTH]], %[[KX]]
-    // SEGMENTS-NEXT: cf.cond_br %[[OK]] weights([1048575, 1]), ^[[COPY:bb[0-9]+]], ^
+    // SEGMENTS-NEXT: %[[OK:.*]] = arith.andi %[[KP]], %[[KX]]
+    // SEGMENTS-NEXT: cf.cond_br %[[OK]] weights([1048575, 1]), ^[[COPY:bb[0-9]+]], ^[[FOUR]]
     // SEGMENTS: ^[[COPY]]:
     // SEGMENTS: simulation.logic.binary xor %{{.*}}, %[[E]]
     simulation.func @crossing(%ctx: !c {simulation.capture_kind = 0 : i32})
