@@ -41,7 +41,21 @@
 // NBAKNOWN: ^[[NEXT]]:
 // NBAKNOWN-NEXT: llvm.br
 // NBAKNOWN: llvm.mlir.addressof @__talos_aot_nba_accumulator_
+// The two-state commit compares value planes only, so a staged or overwritten
+// X/Z bit must select the exact four-state commit: the update keeps all four
+// values (IEEE 1800-2023 4.9.4, 6.3.1) and x->0 is a negedge (9.4.2, Table
+// 9-2).
+// NBAKNOWN: %[[STAGED_LOAD:.*]] = llvm.load
+// NBAKNOWN: %[[STAGED:.*]] = llvm.select %arg2, %[[STAGED_LOAD]], %{{.*}} : i1, i64
 // NBAKNOWN: llvm.mlir.addressof @__talos_state_unknown
+// NBAKNOWN: %[[OLD:.*]] = llvm.zext
+// NBAKNOWN: %[[EITHER:.*]] = llvm.or %[[STAGED]], %[[OLD]] : i64
+// NBAKNOWN: %[[WRITTEN:.*]] = llvm.and %[[EITHER]], %{{.*}} : i64
+// NBAKNOWN: %[[HAS_X:.*]] = llvm.icmp "ne" %[[WRITTEN]], %{{.*}} : i64
+// NBAKNOWN: llvm.cond_br %[[HAS_X]], ^[[UNKNOWN:bb[0-9]+]], ^{{bb[0-9]+}}
+// NBAKNOWN: ^[[UNKNOWN]]:
+// NBAKNOWN-NEXT: %[[NO:.*]] = llvm.mlir.constant(false) : i1
+// NBAKNOWN-NEXT: llvm.return %[[NO]] : i1
 
 // A fixed-only design skips the NBA barrier when its bitmap is empty, then
 // checks for dirty local route proofs at the coordinator boundary.
