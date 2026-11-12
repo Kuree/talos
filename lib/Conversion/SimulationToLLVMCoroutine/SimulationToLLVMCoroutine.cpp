@@ -4503,8 +4503,16 @@ public:
     if (schedule::remove<schedule::Field::EvalClosureRetryAllowed>(module)) {
       LogicalResult closure = success();
       {
-        ScopedDiagnosticHandler silent(module.getContext(),
-                                       [](Diagnostic &) { return success(); });
+        const bool detailedTiming = native::has<native::DebugTiming>(module);
+        ScopedDiagnosticHandler silent(
+            module.getContext(), [&](Diagnostic &diagnostic) {
+              if (detailedTiming) {
+                llvm::errs() << "talos native eval closure rejection: ";
+                diagnostic.print(llvm::errs());
+                llvm::errs() << '\n';
+              }
+              return success();
+            });
         closure = verifyGeneratedEvalCallClosures(module);
       }
       if (failed(closure)) {

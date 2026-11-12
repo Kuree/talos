@@ -1,5 +1,7 @@
 // RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-compute-fusion))' | FileCheck %s
 // RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-compute-fusion))' | FileCheck %s --check-prefix=CONTROL
+// RUN: talos-opt %s --emit-bytecode -o %t.bc
+// RUN: talos-opt %t.bc --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-compute-fusion))' | FileCheck %s
 
 // IEEE 1800-2023 9.2.2.2/9.2.2.3: keep the implicit sensitivity and the
 // activation's ordered, conditional stores. A combinational/latch process
@@ -62,7 +64,9 @@ module attributes {schedule.native_scheduler = 3 : i32} {
       simulation.suspend.any %data, %enable edges [0, 0] to ^body : !simulation.ref<i8>, !simulation.ref<i1>
     }
     // CHECK-LABEL: simulation.func @latch(
-    // CHECK-SAME: schedule.eval.body = @[[LATCH:latch.__talos_eval_body_[0-9]+]]
+    // CHECK-SAME: schedule.eval.body = @[[LATCH:latch.__talos_eval_body_0]]
+    // CHECK: simulation.control.enter 11
+    // CHECK: simulation.control.leave
     simulation.func @latch(
         %ctx: !simulation.context {simulation.capture_kind = 0 : i32},
         %data: !simulation.ref<i8> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64},
@@ -112,22 +116,25 @@ module attributes {schedule.native_scheduler = 3 : i32} {
     // CHECK: arith.constant -1 : i8
     // CHECK: simulation.ref.store
     // CHECK: simulation.func private @[[LATCH]](
-    // CHECK: cf.cond_br %{{.*}}, ^[[ASSIGN:bb[0-9]+]], ^[[WAIT:bb[0-9]+]]
-    // CHECK: ^[[WAIT]]:
-    // CHECK-NEXT: simulation.control.leave
-    // CHECK-NEXT: simulation.return
-    // CHECK: ^[[ASSIGN]]:
-    // CHECK: simulation.ref.store
-    // CHECK: cf.br ^[[WAIT]]
+    // CHECK-SAME: schedule.eval.checkpoint_only
+    // CHECK: simulation.control.enter 11
+    // CHECK: simulation.control.leave
     // Canonical scopes remain intact. Only the unaddressable eval-only scope
     // is erased; an exported hierarchical disable pins target 11. Merely
-    // exporting the callable must not pin the unrelated target 10.
+    // exporting the callable must not pin the unrelated target 10. The pinned
+    // latch retains an exact checkpoint continuation. Its canonical runtime
+    // activation coexists with unrelated generated eval owners.
     // CONTROL-LABEL: simulation.func @comb(
     // CONTROL: simulation.control.enter 10
+    // CONTROL: simulation.control.leave
+    // CONTROL-LABEL: simulation.func @latch(
+    // CONTROL-SAME: schedule.eval.body = @latch.__talos_eval_body_0
+    // CONTROL: simulation.control.enter 11
     // CONTROL: simulation.control.leave
     // CONTROL-LABEL: simulation.func private @comb.__talos_eval_body_1(
     // CONTROL-NOT: simulation.control.
     // CONTROL-LABEL: simulation.func private @latch.__talos_eval_body_0(
+    // CONTROL-SAME: schedule.eval.checkpoint_only
     // CONTROL: simulation.control.enter 11
     // CONTROL: simulation.control.leave
   }

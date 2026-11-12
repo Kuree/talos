@@ -745,6 +745,16 @@ materializeStandaloneEvalBody(sim::SimDesignOp design, SymbolTable &symbols,
       enter.erase();
     }
   }
+  // A retained activation needs the canonical process identity and control
+  // stack (IEEE 1800-2023 9.6.2). Preserve the exact continuation as a runtime
+  // checkpoint, so its complete activation runs canonically while unrelated
+  // owners remain in the generated eval loop.
+  if (evalBody
+          .walk([](sim::SimControlEnterOp) { return WalkResult::interrupt(); })
+          .wasInterrupted()) {
+    schedule::set<schedule::Field::EvalCheckpointOnly>(evalBody,
+                                                       builder.getUnitAttr());
+  }
   analysis::propagateActivationValueRoots(evalBody);
   analysis::LocalStorageAnalysis locals(evalBody);
   if (!locals.areResetBeforeReads(recreated)) {
