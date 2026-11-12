@@ -6930,9 +6930,11 @@ bool validateDatabaseImpl(const Database &database) {
       }
     }
     uint64_t semanticWidth = 0;
-    if ((isEnum ? semanticPackedBitWidth(database, semanticRoot,
-                                         &semanticWidth) != TALOS_RT_OK
-                : !semanticBitWidth(database, semanticRoot, semanticWidth)) ||
+    // Packed parameters occupy the complete vector, not just the outer
+    // dimension (IEEE 1800-2023 7.4.1). Enum-typed parameters also need their
+    // base width even though their object kind is not EnumConst.
+    if (semanticPackedBitWidth(database, semanticRoot, &semanticWidth) !=
+            TALOS_RT_OK ||
         semanticWidth != read64(record + 8) ||
         ((semanticFlags & TALOS_RT_DESIGN_SEMANTIC_SIGNED) != 0) !=
             ((kindAndFlags & talos::reflection::frozenValueSigned) != 0) ||

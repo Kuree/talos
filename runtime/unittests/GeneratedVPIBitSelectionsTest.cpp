@@ -426,4 +426,97 @@ TEST(GeneratedDesignDatabase, SourceBitSelections) {
   for (auto handle : handles)
     EXPECT_EQ(vpi_release_handle(handle), 1);
 }
+
+TEST(GeneratedDesignDatabase, FrozenPackedParameters) {
+  const char *input = std::getenv("TALOS_TEST_INPUT");
+  ASSERT_NE(input, nullptr);
+  mlir::DialectRegistry registry;
+  registry.insert<mlir::arith::ArithDialect, mlir::cf::ControlFlowDialect,
+                  talos::sim::TalosSimulationDialect>();
+  mlir::MLIRContext context(registry);
+  auto module = mlir::parseSourceFile<mlir::ModuleOp>(input, &context);
+  ASSERT_TRUE(module);
+  auto design = *module->getOps<talos::sim::SimDesignOp>().begin();
+  for (const char *mode : {"read", "full"}) {
+    SCOPED_TRACE(mode);
+    talos::SimulationBytecodeOptions options;
+    options.vpi = mode;
+    auto encoded = talos::encodeSimulationDesign(design, options);
+    ASSERT_TRUE(mlir::succeeded(encoded));
+    talos_rt_execution_descriptor_v1 execution{};
+    execution.version = TALOS_RT_VERSION;
+    execution.flags = encoded->executionFlags;
+    execution.bytecode = encoded->bytecode.data();
+    execution.bytecode_size = encoded->bytecode.size();
+    execution.design_database = encoded->designDatabase.data();
+    execution.design_database_size = encoded->designDatabase.size();
+    execution.state_bit_count = encoded->stateBitCount;
+    for (unsigned byte = 0; byte != 8; ++byte)
+      execution.checksum |= uint64_t{encoded->bytecode[32 + byte]}
+                            << (byte * 8);
+    ASSERT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_OK);
+    talos_rt_context *raw = nullptr;
+    ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &raw),
+              TALOS_RT_OK);
+    {
+      std::unique_ptr<talos_rt_context, decltype(&talos_rt_v1_context_destroy)>
+          runtime(raw, talos_rt_v1_context_destroy);
+      ASSERT_EQ(talos_rt_v1_vpi_startup(raw, nullptr, 0), TALOS_RT_OK);
+      ASSERT_EQ(talos_rt_v1_vpi_end_compile(raw), TALOS_RT_OK);
+      ASSERT_EQ(talos_rt_v1_vpi_start_simulation(raw), TALOS_RT_OK);
+      struct Parameter {
+        const char *name;
+        unsigned width;
+        uint32_t value;
+        bool isSigned;
+      };
+      for (const auto &parameter :
+           {Parameter{"pkg::Packed", 18, 174762, false},
+            Parameter{"pkg::Cube", 24, 11259375, false},
+            Parameter{"pkg::Enum", 9, 421, false},
+            Parameter{"pkg::Signed", 18, 262141, true}}) {
+        SCOPED_TRACE(parameter.name);
+        auto handle =
+            vpi_handle_by_name(const_cast<char *>(parameter.name), nullptr);
+        ASSERT_NE(handle, nullptr);
+        EXPECT_EQ(vpi_get(vpiSize, handle), parameter.width);
+        EXPECT_EQ(vpi_get(vpiSigned, handle), parameter.isSigned);
+        s_vpi_value value{};
+        value.format = vpiVectorVal;
+        vpi_get_value(handle, &value);
+        EXPECT_EQ(vpi_chk_error(nullptr), 0);
+        ASSERT_NE(value.value.vector, nullptr);
+        EXPECT_EQ(value.value.vector[0].aval &
+                      ((uint32_t{1} << parameter.width) - 1),
+                  parameter.value);
+        EXPECT_EQ(value.value.vector[0].bval, 0u);
+        EXPECT_EQ(vpi_release_handle(handle), 1);
+      }
+    }
+    // A mismatched width remains invalid even when it uses the same number
+    // of payload bytes and all unused bits stay zero.
+    using namespace talos::reflection;
+    auto bytes = encoded->designDatabase;
+    HeaderView header(bytes.data());
+    SemanticDirectoryView directory(bytes.data() + header.getReserved());
+    ASSERT_EQ(directory.getFrozenValueBindingCount(), 4u);
+    bool changed = false;
+    for (uint32_t index = 0; index != directory.getFrozenValueCount();
+         ++index) {
+      uint64_t offset = directory.getFrozenValueOffset() +
+                        uint64_t{index} * FrozenValueLayout.size;
+      if (FrozenValueView(bytes.data() + offset).getBitWidth() == 18) {
+        FrozenValueWriter(bytes.data() + offset).setBitWidth(19);
+        changed = true;
+        break;
+      }
+    }
+    ASSERT_TRUE(changed);
+    HeaderWriter(bytes.data())
+        .setChecksum(talos_stable_image_checksum(bytes.data(), bytes.size(),
+                                                 field::HeaderChecksum));
+    execution.design_database = bytes.data();
+    EXPECT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_INVALID_DESIGN);
+  }
+}
 } // namespace
