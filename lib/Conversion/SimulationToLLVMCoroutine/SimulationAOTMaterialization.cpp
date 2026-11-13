@@ -25,6 +25,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/StringMap.h"
@@ -5577,17 +5578,46 @@ FailureOr<bool> makeNativeEvalPlan(
   if (vpi.allowsWrite()) {
     ownerStaticStates.resize(mergedFragments.size());
     ownerFineIngress.assign(mergedFragments.size(), APInt(ownerCount, 0));
+    // Index certificates once. Full VPI needs the same exact dependency
+    // sets as read-only VPI, but scanning the entire design for every owner
+    // makes preparation quadratic even when no foreign write ever occurs.
+    llvm::DenseMap<uint32_t, SmallVector<uint32_t, 1>> staticStatesByActor;
+    for (const auto &dependency : actorRoots)
+      if (dependency.static_state)
+        staticStatesByActor[dependency.actor_slot].push_back(
+            dependency.static_state);
+    SmallVector<SmallVector<uint32_t, 1>> actorsByBit(ownerCount);
+    SmallVector<SmallVector<unsigned, 1>> ownersByBit(ownerCount);
+    for (auto [owner, record] : llvm::enumerate(mergedFragments)) {
+      actorsByBit[record.bit].push_back(record.actor_slot);
+      ownersByBit[record.bit].push_back(owner);
+    }
+    llvm::DenseSet<uint32_t> unscopedActors(writableVPIUnscopedActors.begin(),
+                                            writableVPIUnscopedActors.end());
+    for (auto [index, entry] : llvm::enumerate(indexedFanoutEntries))
+      if (index < periodicOwnerBits.size() && entry.merged_bit < ownerCount) {
+        uint32_t bit = periodicOwnerBits[index];
+        if (bit < ownersByBit.size())
+          for (unsigned owner : ownersByBit[bit])
+            ownerFineIngress[owner].setBit(entry.merged_bit);
+      }
     for (auto [owner, record] : llvm::enumerate(mergedFragments)) {
       llvm::SmallDenseSet<uint32_t, 8> actors;
       actors.insert(record.actor_slot);
-      for (auto [member, exact] : llvm::enumerate(mergedFragments))
-        if (ownerSubsumptionMasks[owner][exact.bit])
-          actors.insert(exact.actor_slot);
-      for (const auto &dependency : actorRoots)
-        if (dependency.static_state && actors.contains(dependency.actor_slot))
-          ownerStaticStates[owner].push_back(dependency.static_state);
-      if (llvm::any_of(writableVPIUnscopedActors,
-                       [&](uint32_t actor) { return actors.contains(actor); }))
+      const APInt &members = ownerSubsumptionMasks[owner];
+      for (unsigned word = 0; word != members.getNumWords(); ++word)
+        for (uint64_t bits = members.getRawData()[word]; bits; bits &= bits - 1)
+          for (uint32_t actor :
+               actorsByBit[word * 64 + llvm::countr_zero(bits)])
+            actors.insert(actor);
+      bool unscoped = false;
+      for (uint32_t actor : actors) {
+        auto states = staticStatesByActor.find(actor);
+        if (states != staticStatesByActor.end())
+          llvm::append_range(ownerStaticStates[owner], states->second);
+        unscoped |= unscopedActors.contains(actor);
+      }
+      if (unscoped)
         // The dirty-path query on an unmapped root rejects this owner;
         // no whole-model root scan is needed for an incomplete certificate.
         ownerStaticStates[owner].push_back(UINT32_MAX);
@@ -5596,11 +5626,6 @@ FailureOr<bool> makeNativeEvalPlan(
           std::unique(ownerStaticStates[owner].begin(),
                       ownerStaticStates[owner].end()),
           ownerStaticStates[owner].end());
-      for (auto [index, entry] : llvm::enumerate(indexedFanoutEntries))
-        if (index < periodicOwnerBits.size() &&
-            periodicOwnerBits[index] == record.bit &&
-            entry.merged_bit < ownerCount)
-          ownerFineIngress[owner].setBit(entry.merged_bit);
     }
     coordinatorPlan.writableVPI = true;
     coordinatorPlan.ownerStaticStates = ownerStaticStates;
