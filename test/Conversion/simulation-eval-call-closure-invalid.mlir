@@ -266,3 +266,39 @@ module attributes {
     llvm.return
   }
 }
+
+// -----
+
+// Each function in the closure reports its first violation. A callee reached
+// before a violation is in the closure; one after it, or a function no root
+// reaches, is not checked.
+module attributes {
+  llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128",
+  llvm.target_triple = "x86_64-unknown-linux-gnu",
+  schedule.eval.generated
+} {
+  llvm.func @talos_rt_forbidden()
+  llvm.func @talos_rt_other()
+  llvm.func @__talos_eval_fast_coordinator_bad() attributes {
+      schedule.eval.call_closure_root
+  } {
+    llvm.call @helper() : () -> ()
+    // expected-error @+1 {{generated eval hot closure calls runtime symbol talos_rt_forbidden in __talos_eval_fast_coordinator_bad}}
+    llvm.call @talos_rt_forbidden() : () -> ()
+    llvm.call @after() : () -> ()
+    llvm.return
+  }
+  llvm.func @helper() {
+    // expected-error @+1 {{generated eval hot closure calls runtime symbol talos_rt_other in helper}}
+    llvm.call @talos_rt_other() : () -> ()
+    llvm.return
+  }
+  llvm.func @after() {
+    llvm.call @talos_rt_other() : () -> ()
+    llvm.return
+  }
+  llvm.func @unreachable() {
+    llvm.call @talos_rt_forbidden() : () -> ()
+    llvm.return
+  }
+}

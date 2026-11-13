@@ -330,22 +330,43 @@ LogicalResult verifyGeneratedEvalCallClosures(ModuleOp module) {
       module.getOps<LLVM::LLVMFuncOp>(), [](LLVM::LLVMFuncOp function) {
         return function.getSymName().starts_with("__talos_eval_write_guard_");
       });
+  bool runtimeCalendar =
+      schedule::has<schedule::Field::EvalRuntimeCalendar>(module);
   constexpr auto allowedCalleesAttr =
       ::talos::schedule::Field::EvalAllowedCallees;
+  // Whether a call is admitted depends only on the call and its function;
+  // only membership in the closure is global. Check every definition on its
+  // own, concurrently, then follow the edges each check found from the
+  // closure roots.
+  struct CallSummary {
+    // The first call the closure does not admit, and why.
+    Operation *violation = nullptr;
+    std::string message;
+    // The defined and intrinsic callees of the calls before it.
+    SmallVector<LLVM::LLVMFuncOp> callees;
+  };
+  SmallVector<LLVM::LLVMFuncOp> definitions;
+  DenseMap<Operation *, unsigned> definitionIndex;
   SmallVector<LLVM::LLVMFuncOp> pending;
-  llvm::SmallPtrSet<Operation *, 32> visited;
-  bool verified = true;
   for (LLVM::LLVMFuncOp function : module.getOps<LLVM::LLVMFuncOp>()) {
-    if (!::talos::schedule::has<schedule::metadata::evalCallClosureRoot>(
+    if (function.isExternal())
+      continue;
+    definitionIndex.try_emplace(function, definitions.size());
+    definitions.push_back(function);
+    if (::talos::schedule::has<schedule::metadata::evalCallClosureRoot>(
             function))
-      continue;
-    pending.push_back(function);
+      pending.push_back(function);
   }
-  while (!pending.empty()) {
-    LLVM::LLVMFuncOp function = pending.pop_back_val();
-    if (!visited.insert(function.getOperation()).second)
-      continue;
-    WalkResult result = function.walk([&](LLVM::CallOp call) {
+  SmallVector<CallSummary> summaries(definitions.size());
+  auto summarize = [&](size_t index) {
+    LLVM::LLVMFuncOp function = definitions[index];
+    CallSummary &summary = summaries[index];
+    auto reject = [&](LLVM::CallOp call, const Twine &message) {
+      summary.violation = call;
+      summary.message = message.str();
+      return WalkResult::interrupt();
+    };
+    function.walk([&](LLVM::CallOp call) {
       SmallVector<FlatSymbolRefAttr> targets;
       if (std::optional<StringRef> callee = call.getCallee()) {
         // Owner code may sit in a coordinator segment function.
@@ -361,7 +382,7 @@ LogicalResult verifyGeneratedEvalCallClosures(ModuleOp module) {
         // compiled NBA prefix is a barrier executor, whose runtime publication
         // contract is distinct from the non-suspending Active call closure.
         if (function.getSymName() == detail::evalDispatchName &&
-            schedule::has<schedule::Field::EvalRuntimeCalendar>(module)) {
+            runtimeCalendar) {
           if ((*callee == "talos_rt_v1_scheduler_prepare_eval_nba" &&
                call.getArgOperands().size() == 2) ||
               (*callee == "talos_rt_v1_scheduler_complete_eval_nba" &&
@@ -377,9 +398,9 @@ LogicalResult verifyGeneratedEvalCallClosures(ModuleOp module) {
         if (callee->starts_with("talos_rt_")) {
           if (isEvalClosureRuntimeCall(call, function, module))
             return WalkResult::advance();
-          call.emitError("generated eval hot closure calls runtime symbol ")
-              << *callee << " in " << function.getSymName();
-          return WalkResult::interrupt();
+          return reject(call, "generated eval hot closure calls runtime "
+                              "symbol " +
+                                  *callee + " in " + function.getSymName());
         }
         // Starting an epoch-armed report's evaluator only queues that
         // Observed-region process (IEEE 1800-2023 16.4.1); its spawn helper
@@ -388,54 +409,63 @@ LogicalResult verifyGeneratedEvalCallClosures(ModuleOp module) {
             ::talos::schedule::has<::talos::schedule::Field::EvalDirectOutput>(
                 call))
           return WalkResult::advance();
-        targets.push_back(FlatSymbolRefAttr::get(module.getContext(), *callee));
+        targets.push_back(call.getCalleeAttr());
       } else if (auto allowed =
                      ::talos::schedule::get<allowedCalleesAttr>(call)) {
         for (Attribute attribute : allowed) {
           auto target = dyn_cast<FlatSymbolRefAttr>(attribute);
-          if (!target) {
-            call.emitError("generated eval indirect call has malformed "
-                           "allowed-callee metadata");
-            return WalkResult::interrupt();
-          }
+          if (!target)
+            return reject(call, "generated eval indirect call has malformed "
+                                "allowed-callee metadata");
           targets.push_back(target);
         }
       } else {
-        call.emitError(
-            "generated eval indirect call has no closed target set in ")
-            << function.getSymName();
-        return WalkResult::interrupt();
+        return reject(call,
+                      "generated eval indirect call has no closed target set "
+                      "in " +
+                          function.getSymName());
       }
       for (FlatSymbolRefAttr target : targets) {
-        if (target.getValue().starts_with("talos_rt_")) {
-          call.emitError("generated eval indirect route targets runtime "
-                         "symbol ")
-              << target.getValue();
-          return WalkResult::interrupt();
-        }
+        if (target.getValue().starts_with("talos_rt_"))
+          return reject(call, "generated eval indirect route targets runtime "
+                              "symbol " +
+                                  target.getValue());
         LLVM::LLVMFuncOp callee =
-            symbols.lookup<LLVM::LLVMFuncOp>(target.getValue());
+            symbols.lookup<LLVM::LLVMFuncOp>(target.getAttr());
         if (!callee) {
-          if (!target.getValue().starts_with("llvm.")) {
-            call.emitError("generated eval hot closure calls unresolved "
-                           "external symbol ")
-                << target.getValue();
-            return WalkResult::interrupt();
-          }
+          if (!target.getValue().starts_with("llvm."))
+            return reject(call, "generated eval hot closure calls unresolved "
+                                "external symbol " +
+                                    target.getValue());
           continue;
         }
-        if (callee.isExternal() && !callee.getSymName().starts_with("llvm.")) {
-          call.emitError("generated eval hot closure calls external symbol ")
-              << callee.getSymName();
-          return WalkResult::interrupt();
-        }
-        pending.push_back(callee);
+        if (callee.isExternal() && !callee.getSymName().starts_with("llvm."))
+          return reject(call,
+                        "generated eval hot closure calls external symbol " +
+                            callee.getSymName());
+        summary.callees.push_back(callee);
       }
       return WalkResult::advance();
     });
-    // Report the first violation of every function in the closure, not only
-    // of the first one.
-    verified &= !result.wasInterrupted();
+  };
+  parallelFor(module.getContext(), 0, definitions.size(), summarize);
+  // Report the first violation of every function in the closure, not only
+  // of the first one.
+  bool verified = true;
+  llvm::SmallPtrSet<Operation *, 32> visited;
+  while (!pending.empty()) {
+    LLVM::LLVMFuncOp function = pending.pop_back_val();
+    if (!visited.insert(function.getOperation()).second)
+      continue;
+    auto index = definitionIndex.find(function);
+    if (index == definitionIndex.end())
+      continue;
+    const CallSummary &summary = summaries[index->second];
+    if (summary.violation) {
+      summary.violation->emitError(summary.message);
+      verified = false;
+    }
+    llvm::append_range(pending, summary.callees);
   }
   return success(verified);
 }
@@ -4284,6 +4314,7 @@ public:
                                         std::move(shellPatterns))))
         return signalPassFailure();
     }
+    markTiming("function shell conversion");
     // Calls and returns must change with their function shells: func.return
     // has a func.func parent constraint, and func.call verifies a func.func
     // callee. Leave a verifiable module at this public stage boundary. Every
