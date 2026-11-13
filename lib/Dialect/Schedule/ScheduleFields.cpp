@@ -13,6 +13,10 @@ void set(mlir::Operation *operation, Field field, mlir::Attribute value) {
   operation->setAttr(getFieldName(field), value);
 }
 mlir::Attribute remove(mlir::Operation *operation, Field field) {
+  // Most removals find nothing. Looking the name up searches the attribute
+  // dictionary; removing interns the name and copies the attribute list.
+  if (!operation->getAttr(getFieldName(field)))
+    return {};
   return operation->removeAttr(getFieldName(field));
 }
 } // namespace talos::schedule

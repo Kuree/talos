@@ -53,6 +53,10 @@ template <typename Attr> void mark(mlir::Operation *operation) {
 
 /// Remove the attribute and return its previous value, if any.
 template <typename Attr> mlir::Attribute remove(mlir::Operation *operation) {
+  // Most removals find nothing. Looking the name up searches the attribute
+  // dictionary; removing interns the name and copies the attribute list.
+  if (!operation->getAttr(Attr::getNameStr()))
+    return {};
   return operation->removeAttr(Attr::getNameStr());
 }
 
