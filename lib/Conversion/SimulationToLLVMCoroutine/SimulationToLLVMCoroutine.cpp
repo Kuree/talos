@@ -4346,11 +4346,19 @@ public:
     target.markUnknownOpDynamicallyLegal(
         [](Operation *operation) { return isa<LLVM::LLVMFuncOp>(operation); });
     FrozenRewritePatternSet frozenPatterns(std::move(patterns));
-    if (failed(applyFullConversion(module, target, frozenPatterns))) {
+    // Function bodies are already LLVM IR. Visit only the module children
+    // that still hold an illegal operation instead of legalizing every
+    // operation of the design serially.
+    SmallVector<Operation *> wrapperRoots =
+        analysis::childrenContaining(module, [&](Operation *operation) {
+          return !target.isLegal(operation);
+        });
+    if (!wrapperRoots.empty() &&
+        failed(applyFullConversion(wrapperRoots, target, frozenPatterns))) {
       signalPassFailure();
       return;
     }
-    markTiming("serial wrapper conversion");
+    markTiming("wrapper conversion");
     SmallVector<UnrealizedConversionCastOp> unrealizedCasts =
         analysis::collectInWalkOrder<UnrealizedConversionCastOp>(module);
     SmallVector<UnrealizedConversionCastOp> remainingCasts;
