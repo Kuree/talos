@@ -4,17 +4,21 @@
 // The NBA producer stays outside the sweep. Independent ready consumers
 // share one group, keeping their individual activation predicates.
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_0(
+// PLAN-SAME: schedule.eval.control_flow_dataflow
 // PLAN-SAME: schedule.eval.ranked_members = array<i32: 1, 2, 3, 4>
-// step4 never receives an activation: its output store selects between the
-// new and old value by its own bit (8) of the shared ready word.
-// PLAN: %[[OUTPUT:.*]] = llvm.getelementptr %{{.*}}[4] : (!llvm.ptr) -> !llvm.ptr, i8
-// PLAN-NEXT: %[[OLD:.*]] = llvm.load %[[OUTPUT]] {{.*}} -> i8
+// step4 never receives an activation: its output store stays on the arm
+// taken only when its own bit (8) of the shared ready word is set.
 // PLAN: %[[BIT:.*]] = llvm.mlir.constant(8 : i64) : i64
+// PLAN-NEXT: llvm.load {{.*}}schedule.eval.activation_entry = 3 : i32
 // PLAN: %[[MINE:.*]] = llvm.and %{{.*}}, %[[BIT]] : i64
 // PLAN-NEXT: %[[ZERO:.*]] = llvm.mlir.constant(0 : i64) : i64
 // PLAN-NEXT: %[[ACTIVE:.*]] = llvm.icmp "ne" %[[MINE]], %[[ZERO]] : i64
-// PLAN: %[[KEEP:.*]] = llvm.select %[[ACTIVE]], %{{.*}}, %[[OLD]] : i1, i8
-// PLAN: llvm.store %[[KEEP]], %[[OUTPUT]]
+// PLAN-NEXT: llvm.cond_br %[[ACTIVE]], ^[[ARM:bb[0-9]+]], ^[[JOIN:bb[0-9]+]](
+// PLAN-NEXT: ^[[ARM]]:
+// PLAN-NOT: llvm.store
+// PLAN: llvm.store {{.*}}schedule.eval.group_owner = 3 : i32
+// PLAN-NOT: llvm.store
+// PLAN: ^[[JOIN]](
 // PLAN-LABEL: llvm.func @__talos_eval_dispatch_v1(
 // PLAN: llvm.call @__talos_eval_ranked_group_0
 

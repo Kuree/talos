@@ -1,19 +1,23 @@
 // RUN: talos-opt %s --talos-materialize-native-eval-groups -o %t.mlir
 // RUN: FileCheck %s < %t.mlir
 // RUN: talos-opt %s --mlir-disable-threading --talos-materialize-native-eval-groups | diff %t.mlir -
-// RUN: talos-opt %s '--test-talos-edit-attributes=has=schedule.eval.refresh_group_proofs remove=schedule.eval.refresh_group_proofs' --talos-materialize-native-eval-groups | FileCheck %s --check-prefix=CACHED
+// RUN: talos-opt %s '--test-talos-edit-attributes=has=schedule.eval.refresh_group_proofs remove=schedule.eval.refresh_group_proofs' --talos-materialize-native-eval-groups | diff %t.mlir -
 
 // Owner 65 is inactive but its cached proof is initially pending. Query it
-// before entering the dataflow body. Only the group's pending bits are read;
-// an actual X/Z result must take the fallback and retain pending status.
+// before entering the control-flow dataflow body. Only the group's pending
+// bits are read; an actual X/Z result must take the fallback and retain
+// pending status.
 // Later knownness recovery must retry the proof without executing the inactive
 // source owner (LRM 4.3, 6.3.1, 6.11.2). Runtime checks cover both words,
 // the first failed proof, cached success, and unknown/known recovery.
-// CACHED-LABEL: llvm.func @group()
-// CACHED-NOT: llvm.call @__talos_eval_kernel_promotion_ready_v1
-// CACHED-LABEL: llvm.func @group.fallback()
+// The input need not request the refresh: without an independent group
+// certificate the control-flow form always refreshes pending member proofs
+// before falling back, so removing the request changes nothing.
+// simulation-native-group-proof-domain-cfg.mlir covers a certified group,
+// which does not refresh.
 // CHECK-LABEL: llvm.func @group()
-// CHECK-SAME: schedule.eval.predicated_dataflow
+// CHECK-SAME: schedule.eval.control_flow_dataflow
+// CHECK-SAME: schedule.eval.refresh_group_proofs
 // CHECK: llvm.cond_br
 // CHECK: llvm.call @group.fallback()
 // CHECK: llvm.intr.cttz

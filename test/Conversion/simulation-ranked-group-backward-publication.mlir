@@ -11,9 +11,12 @@
 // publication to the member that still runs later may disappear.
 // TRACE: talos unconditional member publications elided: 1
 // CHECK-LABEL: llvm.func @feedback()
-// CHECK-SAME: schedule.eval.predicated_dataflow
-// CHECK: llvm.icmp "ne"
-// CHECK: llvm.select
+// CHECK-SAME: schedule.eval.control_flow_dataflow
+// CHECK: %[[CHANGED:.*]] = llvm.icmp "ne"
+// CHECK: %[[BACKWARD:.*]] = llvm.select %[[CHANGED]]
+// CHECK: %[[PUBLISHED:.*]] = llvm.or %{{.*}}, %[[BACKWARD]]
+// CHECK: %[[READY:.*]] = llvm.or %{{.*}}, %[[PUBLISHED]]
+// CHECK-NEXT: llvm.store %[[READY]]
 // CHECK-LABEL: llvm.func @feedback.fallback()
 
 module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", native.debug_timing} {

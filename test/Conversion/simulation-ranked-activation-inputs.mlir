@@ -12,6 +12,10 @@
 // TRACE: talos eval dependency: owner=2 island={{[0-9]+}} body=temporary.__talos_eval_body_0 successors=
 // GROUP-LABEL: llvm.func @__talos_eval_ranked_group_0(
 // GROUP-SAME: schedule.eval.ranked_members = array<i32: 2>
+// Its one member, although repeatable, gets no dataflow candidate: a
+// candidate forwards state and readiness between members.
+// GROUP-NOT: dataflow_fallback
+// GROUP-NOT: @__talos_eval_ranked_group_0.dataflow
 
 // Source-ordered temporaries and true activation state must have distinct
 // activation-boundary summaries.

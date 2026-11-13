@@ -13,16 +13,27 @@
 // distinct (6.3.1). The paired runtime test checks both O0 and O3.
 // TRACE: talos ranked groups: candidates=3 groups=1 segments=0 members=3
 // GROUP-LABEL: llvm.func @__talos_eval_ranked_group_0(
-// GROUP-SAME: schedule.eval.predicated_dataflow
+// GROUP-SAME: schedule.eval.control_flow_dataflow
 // GROUP-SAME: schedule.eval.ranked_members = array<i32: 0, 1, 2>
-// One input-group certificate gate; the known body has no per-drive probe,
-// branch, or unknown-plane publication helper. Driver contributions remain
-// canonical for force/release (10.6.2); the certificate covers the net planes.
+// One input-group certificate gate; the known body keeps each copy's arm and
+// publications, with no per-drive probe or unknown-plane publication helper.
+// Driver contributions remain canonical for force/release (10.6.2); the
+// certificate covers the net planes.
 // GROUP: llvm.mlir.addressof @__talos_eval_promotion_pending_mask_v1
 // GROUP: llvm.cond_br
 // GROUP-NOT: llvm.call
-// GROUP-NOT: llvm.cond_br
-// GROUP-NOT: llvm.br
+// GROUP-NOT: llvm.switch
+// GROUP-NOT: @__talos_state_unknown
+// GROUP: llvm.store {{.*}}schedule.eval.group_owner = 0 : i32
+// GROUP-NOT: llvm.call
+// GROUP-NOT: llvm.switch
+// GROUP-NOT: @__talos_state_unknown
+// GROUP: llvm.store {{.*}}schedule.eval.group_owner = 1 : i32
+// GROUP-NOT: llvm.call
+// GROUP-NOT: llvm.switch
+// GROUP-NOT: @__talos_state_unknown
+// GROUP: llvm.store {{.*}}schedule.eval.group_owner = 2 : i32
+// GROUP-NOT: llvm.call
 // GROUP-NOT: llvm.switch
 // GROUP-NOT: @__talos_state_unknown
 // GROUP: llvm.return

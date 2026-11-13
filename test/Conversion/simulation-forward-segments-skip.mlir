@@ -2,20 +2,21 @@
 // RUN: FileCheck %s --check-prefix=PLAN < %t.llvm.mlir
 
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_0(
+// PLAN-SAME: schedule.eval.control_flow_dataflow
 // PLAN-SAME: schedule.eval.ranked_members = array<i32: 0, 1, 2, 3>
-// step3 publishes only when its input is not 2. Its output and step4's ready
-// bit (8) are both selected by that publish predicate.
+// step3 publishes only when its input is not 2. Its output store and step4's
+// ready bit (8) are both on that publish arm; the skip edge carries the
+// incoming ready words past them.
 // PLAN: %[[TWO:.*]] = llvm.mlir.constant(2 : i8) : i8
 // PLAN-NEXT: %[[SKIP:.*]] = llvm.icmp "eq" %{{.*}}, %[[TWO]] : i8
-// PLAN-NEXT: %[[PUBLISH:.*]] = llvm.xor %[[SKIP]], %{{.*}} : i1
-// PLAN-NEXT: llvm.select %{{.*}}, %[[SKIP]], %{{.*}} : i1, i1
-// PLAN-NEXT: %[[PUBLISHED:.*]] = llvm.select %{{.*}}, %[[PUBLISH]], %{{.*}} : i1, i1
-// PLAN: llvm.select %[[PUBLISHED]], %{{.*}}, %{{.*}} : i1, i1
+// PLAN-NEXT: llvm.cond_br %[[SKIP]], ^[[JOIN:bb[0-9]+]](%{{[0-9]+}}, %[[WAKES:[0-9]+]] : i64, i64), ^[[PUBLISH:bb[0-9]+]]
+// PLAN-NEXT: ^[[PUBLISH]]:
+// PLAN: llvm.store {{.*}}schedule.eval.group_owner = 2 : i32
 // PLAN: %[[STEP4:.*]] = llvm.mlir.constant(8 : i64) : i64
 // PLAN: %[[WAKE:.*]] = llvm.select %{{.*}}, %[[STEP4]], %{{.*}} : i1, i64
-// PLAN-NEXT: %[[WOKEN:.*]] = llvm.or %{{.*}}, %[[WAKE]] : i64
-// PLAN: llvm.select %{{.*}}, %[[WOKEN]], %{{.*}} : i1, i64
-// PLAN: llvm.select %[[PUBLISHED]], %{{.*}}, %{{.*}} : i1, i8
+// PLAN-NEXT: llvm.or %[[WAKES]], %[[WAKE]] : i64
+// PLAN: ^[[JOIN]](
+// PLAN: llvm.load {{.*}}schedule.eval.activation_entry = 3 : i32
 // PLAN-LABEL: llvm.func @__talos_eval_dispatch_v1(
 // PLAN: llvm.call @__talos_eval_ranked_group_0
 

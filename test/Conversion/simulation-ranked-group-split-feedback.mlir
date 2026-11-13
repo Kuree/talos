@@ -4,7 +4,7 @@
 
 // A configured routing SCC crosses a native size-budget split. The shared
 // dispatcher selects one finite segment. Its direct calls retain the bounded
-// helpers and their predicated dataflow; backward publications remain pending
+// helpers and their control-flow dataflow; backward publications remain pending
 // for another segment activation, without a global dispatch at the size split.
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_1(
 // PLAN-SAME: schedule.eval.ranked_members = array<i32: 1>

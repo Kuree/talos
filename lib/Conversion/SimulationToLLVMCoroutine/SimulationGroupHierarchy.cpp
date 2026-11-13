@@ -259,10 +259,9 @@ SmallVector<LLVM::LLVMFuncOp> splitNativeEvalGroup(LLVM::LLVMFuncOp original,
           store.getVolatile_() ||
           store.getOrdering() != LLVM::AtomicOrdering::not_atomic;
   });
-  // A memory representation or analysis-budget failure is not a new execution
-  // boundary. Splitting solely to bypass that failure trades existing local
-  // SSA for extra state publications and helper calls. Keep the original
-  // group until its memory proof can be improved directly.
+  // Only an execution boundary is a reason to split. A candidate rejected for
+  // its size, CFG or a volatile access stays whole: splitting it only trades
+  // local SSA for extra state publications and helper calls.
   if (!executionBoundary)
     return {};
   uint64_t cost = 0;

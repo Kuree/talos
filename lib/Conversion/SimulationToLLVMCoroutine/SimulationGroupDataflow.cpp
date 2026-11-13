@@ -1,49 +1,35 @@
-//===- SimulationGroupDataflow.cpp - Predicated native computation --------===//
+//===- SimulationGroupDataflow.cpp - Group dataflow candidates ------------===//
 
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 
 #include "mlir/IR/Dominance.h"
-#include "mlir/IR/IRMapping.h"
-#include "mlir/IR/Matchers.h"
-#include "mlir/IR/SymbolTable.h"
-#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Transforms/Mem2Reg.h"
 #include "mlir/Transforms/RegionUtils.h"
-#include "llvm/IR/DataLayout.h"
-#include "llvm/Support/Error.h"
-
-#include <map>
 
 using namespace mlir;
 
 namespace talos::detail {
 
-/// Prove a finite computation, using dense predicated dataflow when its
-/// overlapping physical windows fit bounded SSA slots, or retaining its CFG.
-/// The lattice at each CFG edge is (reachable, block arguments, memory slots).
-/// Joins select the state of the actual predecessor, including pending bits.
-/// Untaken branches retain their old outputs, even after a foreign deposit.
-/// This conversion infers no idempotence or latch/always_comb invariant: any
-/// source-certified redundant evaluation is already explicit in the CFG.
+/// Prove a finite computation for a dataflow candidate and keep its CFG.
 ///
-/// Only nontrapping pure expressions may execute speculatively. Exact static
-/// loads/stores in the dense form become SSA and publish at return. Calls,
-/// opaque effects, loops and unproved memory accesses reject the candidate.
-/// Overlapping exact byte windows share one canonical SSA slot using the
-/// target's byte order. The original ranked executor remains authoritative on
-/// rejection.
+/// A member body runs only when one of its inputs changed, and its update and
+/// X/Z arms are rare in a well-behaved design. Predicating every member and
+/// every arm into straight-line selects would execute those rare paths on
+/// each activation, so the candidate keeps the members' branches. Every
+/// memory access, branch and publication stays where the member body has it,
+/// including untouched X/Z bits in neighboring bytes (IEEE 1800-2023 4.3,
+/// 4.6, 6.3.1, 9.4.2). The caller installs the group's two-state certificate
+/// guard and keeps the ordinary per-member executor when that certificate
+/// fails.
 bool materializeNativeGroupDataflow(LLVM::LLVMFuncOp function,
-                                    SymbolTable &symbols, uint64_t budget) {
-  // Publication lowering can leave unused context loads. Remove dead code
-  // before the effect inventory; it is not part of the executable proof.
+                                    uint64_t budget) {
+  // Publication lowering can leave unused context loads, and native lowering
+  // private integer temporaries in stack slots. Promote only allocations
+  // whose complete use/alias proof the standard memory-slot interfaces
+  // establish; an escaping pointer stays a boundary.
   IRRewriter rewriter(function.getContext());
-  // Native lowering may leave private integer temporaries in stack slots.
-  // Promote only allocations whose complete use/alias proof the standard
-  // memory-slot interfaces establish. An escaping pointer stays a boundary.
-  // Doing this before the effect inventory exposes the actual computation
-  // without creating runtime children for a lowering artifact.
   SmallVector<PromotableAllocationOpInterface> allocations;
   function.walk([&](LLVM::AllocaOp allocation) {
     allocations.push_back(
@@ -67,78 +53,12 @@ bool materializeNativeGroupDataflow(LLVM::LLVMFuncOp function,
     }
     return false;
   };
-  auto ingress =
-      ::talos::schedule::get<::talos::schedule::Field::EvalGroupIngress>(
-          function);
-  if (!ingress || function.empty())
+  if (!::talos::schedule::has<::talos::schedule::Field::EvalGroupIngress>(
+          function) ||
+      function.empty())
     return false;
-  // With an independent group certificate the candidate keeps its CFG: no
-  // operation is speculated, so cold helper calls, private allocations and
-  // accesses the slot model cannot name are executed exactly where the member
-  // bodies execute them. Only the dense predicated form below needs every
-  // operation speculatable and every access an exact slot.
-  const bool preserveReadyCFG =
-      schedule::has<schedule::Field::EvalGroupProofDomain>(function);
-  // An access or effect the slot model cannot name only rules out the dense
-  // form. The CFG form executes it exactly where the member body does, under
-  // the member certificates, and keeps the four-state bodies out of line.
-  bool denseCandidate = !preserveReadyCFG;
-  struct Slot {
-    std::string global;
-    uint64_t offset;
-    IntegerType type;
-    bool written = false;
-  };
-  SmallVector<Slot> slots;
-  std::map<std::tuple<std::string, uint64_t, unsigned>, unsigned> rangeIndex;
-  DenseMap<Operation *, unsigned> accesses;
-  auto identify = [&](Value pointer,
-                      IntegerType type) -> std::optional<unsigned> {
-    if (!type || type.getWidth() % 8 || type.getWidth() > 256)
-      return {};
-    uint64_t offset = 0;
-    while (auto gep = pointer.getDefiningOp<LLVM::GEPOp>()) {
-      if (!gep.getElemType().isInteger(8) || gep.getIndices().size() != 1)
-        return {};
-      APInt index;
-      auto raw = gep.getIndices()[0];
-      if (auto integer = dyn_cast<IntegerAttr>(raw))
-        index = integer.getValue();
-      else if (!matchPattern(cast<Value>(raw), m_ConstantInt(&index)))
-        return {};
-      if (index.isNegative() || index.getActiveBits() > 64 ||
-          index.getZExtValue() > UINT64_MAX - offset)
-        return {};
-      offset += index.getZExtValue();
-      pointer = gep.getBase();
-    }
-    auto address = pointer.getDefiningOp<LLVM::AddressOfOp>();
-    if (!address || (address.getGlobalName() != ingress.getValue() &&
-                     address.getGlobalName() != "__talos_state_value" &&
-                     address.getGlobalName() != "__talos_state_unknown"))
-      return {};
-    auto global = symbols.lookup<LLVM::GlobalOp>(address.getGlobalName());
-    auto array = global ? dyn_cast<LLVM::LLVMArrayType>(global.getGlobalType())
-                        : LLVM::LLVMArrayType{};
-    auto element =
-        array ? dyn_cast<IntegerType>(array.getElementType()) : IntegerType{};
-    if (!element || element.getWidth() % 8)
-      return {};
-    if (array.getNumElements() > UINT64_MAX / (element.getWidth() / 8))
-      return {};
-    uint64_t bytes = array.getNumElements() * (element.getWidth() / 8);
-    if (offset > bytes || type.getWidth() / 8 > bytes - offset)
-      return {};
-    auto [it, inserted] = rangeIndex.try_emplace(
-        std::tuple{address.getGlobalName().str(), offset, type.getWidth()},
-        slots.size());
-    if (inserted)
-      slots.push_back({address.getGlobalName().str(), offset, type});
-    return it->second;
-  };
 
   DenseMap<Block *, unsigned> indegree;
-  SmallVector<Block *> order;
   uint64_t originalOperations = 0;
   for (Block &block : function.getBody()) {
     indegree.try_emplace(&block, 0);
@@ -154,311 +74,42 @@ bool materializeNativeGroupDataflow(LLVM::LLVMFuncOp function,
         if (load.getVolatile_() ||
             load.getOrdering() != LLVM::AtomicOrdering::not_atomic)
           return false;
-        auto slot =
-            identify(load.getAddr(), dyn_cast<IntegerType>(load.getType()));
-        if (!slot) {
-          denseCandidate = false;
-          continue;
-        }
-        accesses[load] = *slot;
       } else if (auto store = dyn_cast<LLVM::StoreOp>(operation)) {
         if (store.getVolatile_() ||
             store.getOrdering() != LLVM::AtomicOrdering::not_atomic)
           return false;
-        auto slot = identify(store.getAddr(),
-                             dyn_cast<IntegerType>(store.getValue().getType()));
-        if (!slot) {
-          denseCandidate = false;
-          continue;
-        }
-        accesses[store] = *slot;
-        slots[*slot].written = true;
-      } else if (isa<LLVM::BrOp, LLVM::CondBrOp, LLVM::ReturnOp>(operation)) {
-        if (isa<LLVM::ReturnOp>(operation) && operation.getNumOperands())
-          return reject("effect or unsafe speculation", &operation);
-      } else if (!isa<LLVM::AddressOfOp, LLVM::GEPOp>(operation)) {
-        if (isa<LLVM::InvokeOp, LLVM::InlineAsmOp>(operation) ||
-            operation.hasTrait<OpTrait::IsTerminator>())
-          return reject("effect or unsafe speculation", &operation);
-        // Pure is insufficient: e.g. division by zero has immediate UB.
-        // Speculatability also excludes potentially trapping instructions.
-        if (isa<LLVM::CallOp, LLVM::UDivOp, LLVM::SDivOp, LLVM::URemOp,
-                LLVM::SRemOp>(operation) ||
-            !isMemoryEffectFree(&operation) || !isSpeculatable(&operation))
-          denseCandidate = false;
+      } else if (isa<LLVM::ReturnOp>(operation)) {
+        if (operation.getNumOperands())
+          return reject("returned value", &operation);
+      } else if (isa<LLVM::InvokeOp, LLVM::InlineAsmOp>(operation) ||
+                 (operation.hasTrait<OpTrait::IsTerminator>() &&
+                  !isa<LLVM::BrOp, LLVM::CondBrOp>(operation))) {
+        return reject("unsupported control or effect", &operation);
       }
     }
     for (Block *next : block.getSuccessors())
       ++indegree[next];
   }
-  if ((slots.empty() && denseCandidate) || originalOperations > budget)
-    return reject("empty memory or operation budget");
+  if (originalOperations > budget)
+    return reject("operation budget");
   if (indegree[&function.getBody().front()] != 0)
     return false;
-  order.push_back(&function.getBody().front());
+  SmallVector<Block *> order{&function.getBody().front()};
   for (size_t i = 0; i < order.size(); ++i)
     for (Block *next : order[i]->getSuccessors())
       if (--indegree[next] == 0)
         order.push_back(next);
   if (order.size() != function.getBody().getBlocks().size())
     return reject("cyclic/unreachable CFG");
-  if (preserveReadyCFG) {
-    // The independent exact-input certificate selects this already-proved
-    // two-state computation without per-member cache refresh. Keep the
-    // original ready branches and ordered accesses instead of eagerly
-    // evaluating inactive paths. This preserves source/event ordering and
-    // canonical X/Z storage (IEEE 1800-2023 4.6, 9.4.2, 6.3.1). The finite
-    // CFG and the operation budget were checked above; the dense alias,
-    // speculation and slot proofs below apply only to the predicated form.
-    Builder builder(function.getContext());
-    schedule::set<schedule::Field::EvalControlFlowDataflow>(
-        function, builder.getUnitAttr());
-    schedule::set<schedule::Field::EvalDataflowSlots>(
-        function, builder.getI64IntegerAttr(slots.size()));
-    return true;
-  }
-  // A transitive alias window can be much wider than any individual access.
-  // Keep the proved CFG for these groups, and for those with an access the
-  // slot model cannot name, instead of expanding narrow stores into wide
-  // read/modify/write operations. Every original memory operation,
-  // branch and publication remains at its original point (IEEE 1800-2023 4.3
-  // and 4.6), including the untouched X/Z bits in neighboring bytes (6.3.1).
-  // The caller installs the same complete two-state certificate guard and
-  // retains the ordinary per-member executor when that certificate fails.
-  StringRef windowGlobal;
-  uint64_t windowBegin = 0, windowEnd = 0;
-  bool wideAliases = false;
-  for (const auto &[key, id] : rangeIndex) {
-    const Slot &slot = slots[id];
-    uint64_t end = slot.offset + slot.type.getWidth() / 8;
-    if (windowGlobal == slot.global && windowEnd > slot.offset) {
-      windowEnd = std::max(windowEnd, end);
-      wideAliases |= windowEnd - windowBegin > 32;
-    } else {
-      windowGlobal = slot.global;
-      windowBegin = slot.offset;
-      windowEnd = end;
-    }
-  }
-  if (wideAliases || !denseCandidate) {
-    Builder builder(function.getContext());
-    schedule::set<schedule::Field::EvalControlFlowDataflow>(
-        function, builder.getUnitAttr());
+
+  // With an independent group certificate the candidate selects an already
+  // proved two-state computation without refreshing member proofs.
+  Builder builder(function.getContext());
+  schedule::set<schedule::Field::EvalControlFlowDataflow>(
+      function, builder.getUnitAttr());
+  if (!schedule::has<schedule::Field::EvalGroupProofDomain>(function))
     schedule::set<schedule::Field::EvalRefreshGroupProofs>(
         function, builder.getUnitAttr());
-    schedule::set<schedule::Field::EvalDataflowSlots>(
-        function, builder.getI64IntegerAttr(slots.size()));
-    return true;
-  }
-  // Canonicalize proven physical aliases with a sorted interval sweep. This
-  // never unions copy-connected descriptors: both accesses must resolve to
-  // literal overlapping bytes of the same authoritative global. Preserve the
-  // other bytes of a partial store, including canonical X/Z in the mask plane.
-  std::optional<bool> littleEndian;
-  if (auto layout =
-          function->getParentOfType<ModuleOp>()->getAttrOfType<StringAttr>(
-              "llvm.data_layout")) {
-    auto parsed = llvm::DataLayout::parse(layout.getValue());
-    if (!parsed) {
-      llvm::consumeError(parsed.takeError());
-      return reject("invalid target layout");
-    }
-    littleEndian = parsed->isLittleEndian();
-  }
-  struct Access {
-    unsigned slot, byteOffset, width;
-  };
-  SmallVector<Access> canonical(slots.size());
-  SmallVector<Slot> merged;
-  for (auto [key, id] : rangeIndex) {
-    const Slot &slot = slots[id];
-    if (!merged.empty() && merged.back().global == slot.global &&
-        merged.back().offset + merged.back().type.getWidth() / 8 >
-            slot.offset) {
-      Slot &previous = merged.back();
-      uint64_t end = std::max(previous.offset + previous.type.getWidth() / 8,
-                              slot.offset + slot.type.getWidth() / 8);
-      if (!littleEndian || end - previous.offset > 32)
-        return reject("unproved or oversized overlapping physical ranges");
-      previous.type =
-          IntegerType::get(function.getContext(), (end - previous.offset) * 8);
-      previous.written |= slot.written;
-    } else
-      merged.push_back(slot);
-    canonical[id] = {unsigned(merged.size() - 1),
-                     unsigned(slot.offset - merged.back().offset),
-                     slot.type.getWidth()};
-  }
-  unsigned mergedRanges = slots.size() - merged.size();
-  if (mergedRanges)
-    slots = std::move(merged);
-  else
-    for (auto [id, slot] : llvm::enumerate(slots))
-      canonical[id] = {unsigned(id), 0, slot.type.getWidth()};
-  std::map<std::pair<std::string, uint64_t>, unsigned> slotIndex;
-  for (auto [id, slot] : llvm::enumerate(slots))
-    slotIndex.try_emplace(std::pair{slot.global, slot.offset}, id);
-  // Copying lattice values is much cheaper than emitting instructions. Do
-  // not reject a small computation merely because its exact memory inventory
-  // crosses many blocks. Bound analysis work separately; the original and
-  // final operation counts still obey the unchanged code-growth budget.
-  uint64_t analysisBudget = budget > UINT64_MAX / 64 ? UINT64_MAX : budget * 64;
-  if (order.size() > analysisBudget / slots.size())
-    return reject("analysis budget");
-
-  // At a complete reconvergence, reachability equals that of the controlling
-  // dominator. This structural proof also holds when an inactive branch's
-  // expressions would produce poison. Reconstructing it as Boolean algebra
-  // leaves large select/OR trees that ordinary constant folding cannot safely
-  // reduce without the original control-flow fact.
-  DominanceInfo dominance(function);
-  PostDominanceInfo postDominance(function);
-  DenseMap<Block *, Block *> reconvergence;
-  for (Block *block : llvm::drop_begin(order)) {
-    auto *parent = dominance.getNode(block)->getIDom();
-    if (parent && postDominance.postDominates(block, parent->getBlock()))
-      reconvergence[block] = parent->getBlock();
-  }
-
-  Region replacement;
-  auto *entry = new Block;
-  replacement.push_back(entry);
-  OpBuilder builder(function.getContext());
-  builder.setInsertionPointToStart(entry);
-  Location loc = function.getLoc();
-  IRMapping mapping;
-  for (BlockArgument arg : function.getBody().front().getArguments())
-    mapping.map(arg, entry->addArgument(arg.getType(), arg.getLoc()));
-  Value yes = llvmConstant(builder, loc, builder.getI1Type(), 1);
-  Value no = llvmConstant(builder, loc, builder.getI1Type(), 0);
-  auto select = [&](Value predicate, Value lhs, Value rhs) -> Value {
-    if (lhs == rhs)
-      return lhs;
-    APInt constant;
-    if (matchPattern(predicate, m_ConstantInt(&constant)))
-      return constant.isZero() ? rhs : lhs;
-    return LLVM::SelectOp::create(builder, loc, predicate, lhs, rhs);
-  };
-  SmallVector<Value> initial, addresses;
-  for (const Slot &slot : slots) {
-    Value base = LLVM::AddressOfOp::create(
-        builder, loc, LLVM::LLVMPointerType::get(function.getContext()),
-        slot.global);
-    Value address = byteGEP(builder, loc, base, slot.offset);
-    addresses.push_back(address);
-    initial.push_back(
-        LLVM::LoadOp::create(builder, loc, slot.type, address, 1));
-  }
-  struct Edge {
-    Value predicate;
-    SmallVector<Value> arguments, memory;
-  };
-  DenseMap<Block *, SmallVector<Edge, 2>> incoming;
-  DenseMap<Block *, Value> reachability;
-  SmallVector<Edge> returns;
-  for (Block *block : order) {
-    auto &edges = incoming[block];
-    Value active = yes;
-    SmallVector<Value> memory = initial;
-    if (block != order.front()) {
-      active = edges.front().predicate;
-      memory = edges.front().memory;
-      SmallVector<Value> arguments = edges.front().arguments;
-      for (const Edge &edge : llvm::drop_begin(edges)) {
-        active = LLVM::OrOp::create(builder, loc, active, edge.predicate);
-        for (size_t i = 0; i < memory.size(); ++i)
-          memory[i] = select(edge.predicate, edge.memory[i], memory[i]);
-        for (size_t i = 0; i < arguments.size(); ++i)
-          arguments[i] =
-              select(edge.predicate, edge.arguments[i], arguments[i]);
-      }
-      for (auto [arg, value] : llvm::zip(block->getArguments(), arguments))
-        mapping.map(arg, value);
-    }
-    if (Block *parent = reconvergence.lookup(block))
-      active = reachability.lookup(parent);
-    reachability[block] = active;
-    auto edge = [&](Block *target, Value predicate, ValueRange args) {
-      Edge next{predicate, {}, memory};
-      for (Value value : args)
-        next.arguments.push_back(mapping.lookup(value));
-      incoming[target].push_back(std::move(next));
-    };
-    for (Operation &operation : *block) {
-      if (auto load = dyn_cast<LLVM::LoadOp>(operation)) {
-        Access access = canonical[accesses.lookup(load)];
-        Value value = memory[access.slot];
-        auto type = slots[access.slot].type;
-        unsigned shift =
-            littleEndian.value_or(true)
-                ? access.byteOffset * 8
-                : type.getWidth() - access.byteOffset * 8 - access.width;
-        if (shift)
-          value = LLVM::LShrOp::create(builder, loc, value,
-                                       llvmConstant(builder, loc, type, shift));
-        if (access.width != type.getWidth())
-          value = LLVM::TruncOp::create(builder, loc, load.getType(), value);
-        mapping.map(load.getResult(), value);
-      } else if (auto store = dyn_cast<LLVM::StoreOp>(operation)) {
-        Access access = canonical[accesses.lookup(store)];
-        Value value = mapping.lookup(store.getValue());
-        auto type = slots[access.slot].type;
-        if (access.width != type.getWidth()) {
-          unsigned shift =
-              littleEndian.value_or(true)
-                  ? access.byteOffset * 8
-                  : type.getWidth() - access.byteOffset * 8 - access.width;
-          value = LLVM::ZExtOp::create(builder, loc, type, value);
-          if (shift)
-            value = LLVM::ShlOp::create(
-                builder, loc, value, llvmConstant(builder, loc, type, shift));
-          APInt keep =
-              ~APInt::getBitsSet(type.getWidth(), shift, shift + access.width);
-          Value preserved = LLVM::AndOp::create(
-              builder, loc, memory[access.slot],
-              LLVM::ConstantOp::create(builder, loc, type, keep));
-          value = LLVM::OrOp::create(builder, loc, preserved, value);
-        }
-        memory[access.slot] = value;
-      } else if (auto branch = dyn_cast<LLVM::BrOp>(operation))
-        edge(branch.getDest(), active, branch.getDestOperands());
-      else if (auto branch = dyn_cast<LLVM::CondBrOp>(operation)) {
-        Value condition = mapping.lookup(branch.getCondition());
-        Value inverse = LLVM::XOrOp::create(builder, loc, condition, yes);
-        // Select (not AND) prevents an inactive path's poison condition from
-        // poisoning the reachable-state predicate.
-        edge(branch.getTrueDest(), select(active, condition, no),
-             branch.getTrueDestOperands());
-        edge(branch.getFalseDest(), select(active, inverse, no),
-             branch.getFalseDestOperands());
-      } else if (isa<LLVM::ReturnOp>(operation))
-        returns.push_back({active, {}, memory});
-      else
-        builder.clone(operation, mapping);
-    }
-  }
-  // A finite, fully covered CFG reaches exactly one return. The first return
-  // is the default arm; no additional whole-function activation guard exists.
-  SmallVector<Value> final = returns.front().memory;
-  for (const Edge &edge : llvm::drop_begin(returns))
-    for (size_t i = 0; i < final.size(); ++i)
-      final[i] = select(edge.predicate, edge.memory[i], final[i]);
-  for (size_t i = 0; i < slots.size(); ++i)
-    if (slots[i].written)
-      LLVM::StoreOp::create(builder, loc, final[i], addresses[i], 1);
-  LLVM::ReturnOp::create(builder, loc, ValueRange{});
-  // Bound materialized growth as well as the analysis work. Failed candidates
-  // are discarded before connecting any call site to this representation.
-  if (entry->getOperations().size() > budget)
-    return reject("materialization budget");
-  function.getBody().takeBody(replacement);
-  ::talos::schedule::set<::talos::schedule::Field::EvalPredicatedDataflow>(
-      function, builder.getUnitAttr());
-  if (mergedRanges)
-    ::talos::schedule::set<::talos::schedule::Field::EvalCoalescedSlots>(
-        function, builder.getI64IntegerAttr(mergedRanges));
-  ::talos::schedule::set<::talos::schedule::Field::EvalDataflowSlots>(
-      function, builder.getI64IntegerAttr(slots.size()));
   return true;
 }
 

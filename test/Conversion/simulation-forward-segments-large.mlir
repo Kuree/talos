@@ -5,7 +5,7 @@
 // into a 70-member chain (storage 1 ... 70); the checker observes the first.
 
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_0(
-// PLAN-SAME: schedule.eval.predicated_dataflow
+// PLAN-SAME: schedule.eval.control_flow_dataflow
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_0.fallback(
 // PLAN-SAME: schedule.eval.ranked_members = array<i32: 0, 1, {{.*}}28, 29>
 // Deferred readiness is charged before expansion; the remaining helper
@@ -14,7 +14,7 @@
 // Readiness itself already uses region SSA.
 // PLAN-SAME: schedule.eval.ssa_value_ranges = 29 : i64
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_2(
-// PLAN-SAME: schedule.eval.predicated_dataflow
+// PLAN-SAME: schedule.eval.control_flow_dataflow
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_2.fallback(
 // PLAN-NOT: schedule.ready.
 // The chain spans two ready words, so the coordinator's word sweep calls the

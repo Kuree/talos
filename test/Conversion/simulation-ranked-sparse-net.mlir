@@ -20,7 +20,7 @@
 // TRACE: talos eval dependency: owner=1 island=0 body=source_high.__talos_eval_body_0 successors=2
 // TRACE: talos eval dependency: owner=2 island=0 body=copy.__talos_eval_body_0 successors=3
 // TRACE: talos eval dependency: owner=3 island=0 body=sink.__talos_eval_body_0 successors=
-// Its opaque net accesses rule out the dense form, so the group keeps its CFG.
+// Its group keeps its CFG and executes the opaque net accesses in place.
 // TRACE: talos group dataflow: __talos_eval_ranked_group_0.dataflow accepted=1
 // Sparse scheduling must not supply the stronger complete-coverage fact used
 // to elide driver unknown-plane accesses, even in a selected two-state body.

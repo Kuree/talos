@@ -1,5 +1,5 @@
 // RUN: talos-opt %s --talos-materialize-native-eval-groups -o %t.mlir
-// RUN: FileCheck %s --implicit-check-not=predicated_dataflow --implicit-check-not=refresh_group_proofs --implicit-check-not=coalesced_slots < %t.mlir
+// RUN: FileCheck %s --implicit-check-not=refresh_group_proofs < %t.mlir
 // RUN: talos-opt %s --mlir-disable-threading --talos-materialize-native-eval-groups | diff %t.mlir -
 // RUN: talos-opt %t.mlir --talos-materialize-native-eval-groups | diff %t.mlir -
 // RUN: talos-opt %s '--test-talos-set-module-attributes=attrs="{schedule.native.max_inline_ops = 60 : i64}"' --talos-materialize-native-eval-groups | FileCheck %s --check-prefix=BUDGET
@@ -14,7 +14,6 @@
 // CHECK: llvm.cond_br
 // CHECK: llvm.store
 // CHECK: llvm.return
-// The original CFG fits this budget, but dense materialization would not.
 // The certified CFG representation adds no operations, so only the original
 // size is charged against the admission limit and the candidate is accepted.
 // BUDGET-LABEL: llvm.func @group()
@@ -130,7 +129,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %n34 = llvm.mlir.constant(34 : i8) : i8
     llvm.call @group() : () -> ()
     // CFG retains the original stale-low minimum hint and preserves the
-    // external pending actor. It must not inherit dense-only cache metadata.
+    // external pending actor.
     %hint = llvm.load %cache : !llvm.ptr -> i64
     %hintok = llvm.icmp "eq" %hint, %zero64 : i64
     %mid1 = llvm.load %middle : !llvm.ptr -> i8

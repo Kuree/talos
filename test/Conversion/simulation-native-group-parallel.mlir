@@ -76,8 +76,9 @@ module {
     llvm.return
   }
   // CHECK-LABEL: llvm.func @original()
+  // CHECK-SAME: schedule.eval.control_flow_dataflow
   // CHECK-SAME: schedule.eval.dataflow_fallback = @original.fallback
-  // CHECK-SAME: schedule.eval.predicated_dataflow
+  // CHECK: llvm.store
   // CHECK: llvm.call @original.fallback()
   llvm.func @original() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready} {
     llvm.call @leaf() {schedule.eval.group_member = 0 : i32} : () -> ()

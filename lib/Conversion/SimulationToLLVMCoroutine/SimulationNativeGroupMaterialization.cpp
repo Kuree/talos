@@ -1614,8 +1614,7 @@ inlineGroupBody(LLVM::LLVMFuncOp function, const SymbolTable &symbols,
   // member's reads. A group calling one member has nothing to forward; the
   // member's own reads already see its writes as values
   // (talos-sim-forward-activation-state). Inlining would only copy its
-  // bodies into the group, and a dataflow candidate's dense form would then
-  // predicate them, evaluating every arm.
+  // two- and four-state bodies into the group.
   if (members.size() < 2)
     return {operationLimit, 0};
   std::reverse(pending.begin(), pending.end());
@@ -2046,7 +2045,7 @@ materializeNativeEvalGroupBodies(ModuleOp module, AnalysisManager manager) {
     report->elidedUnconditionalPublications +=
         elideUnconditionalMemberPublications(function);
     // Member effects are now visible in one CFG. Combine semantic readiness
-    // reads/updates before expanding indexes or predicating the computation.
+    // reads/updates before expanding indexes.
     if (failed(lowerNativeScheduleActionsToLLVM(function, &symbolTables)))
       return failure();
     uint64_t remaining = body.remaining;
@@ -2093,8 +2092,8 @@ materializeNativeEvalGroupBodies(ModuleOp module, AnalysisManager manager) {
               owner >= 0 &&
               uint32_t(owner) / 64 < pendingType.getNumElements() &&
               identities.insert(owner).second;
-      bool accepted = identitiesValid && materializeNativeGroupDataflow(
-                                             function, symbols, operationLimit);
+      bool accepted = identitiesValid &&
+                      materializeNativeGroupDataflow(function, operationLimit);
       if (native::has<native::DebugTiming>(module))
         llvm::errs() << "talos group dataflow: " << function.getSymName()
                      << " accepted=" << accepted << '\n';
@@ -2119,7 +2118,7 @@ materializeNativeEvalGroupBodies(ModuleOp module, AnalysisManager manager) {
         symbols.erase(function);
         continue;
       }
-      // One value-domain check for the whole predicated computation. Refresh
+      // One value-domain check for the whole computation. Refresh
       // unqueried certificates before treating a pending bit as unknown. A
       // failed proof retains the ordinary per-member path, allowing the
       // unaffected members to remain two-state. Activation predicates are
@@ -2169,10 +2168,7 @@ materializeNativeEvalGroupBodies(ModuleOp module, AnalysisManager manager) {
                         ::talos::schedule::Field::EvalSsaReadyWords,
                         ::talos::schedule::Field::EvalSsaValueRanges,
                         ::talos::schedule::Field::EvalSsaUnknownRanges,
-                        ::talos::schedule::Field::EvalPredicatedDataflow,
                         ::talos::schedule::Field::EvalControlFlowDataflow,
-                        ::talos::schedule::Field::EvalDataflowSlots,
-                        ::talos::schedule::Field::EvalCoalescedSlots,
                         ::talos::schedule::Field::EvalUnconditionalMembers}) {
         Attribute slow = schedule::get<Attribute>(original, name),
                   fast = schedule::get<Attribute>(function, name);
@@ -2262,8 +2258,8 @@ materializeNativeEvalGroupBodies(ModuleOp module, AnalysisManager manager) {
     SmallVector<Attribute> references;
     for (auto child : refinement.children) {
       references.push_back(FlatSymbolRefAttr::get(child));
-      // Predication removes internal branches but may still compute inactive
-      // expressions. Pay for a collapsed child only when it owns pending work.
+      // Enter a collapsed child only when it owns pending work: its guard and
+      // proof refresh cost more than skipping an inactive child.
       // Reacquire after each child: an earlier child can publish a later one.
       std::map<unsigned, uint64_t> masks;
       for (int32_t owner :
@@ -2332,7 +2328,7 @@ materializeNativeEvalGroupBodies(ModuleOp module, AnalysisManager manager) {
   // contents in SSA during a native activation. Transition/knownness actions
   // have already been materialized; their ordered notifications are retained.
   // The access inventory flushes at every opaque alias, observer call and exit
-  // (LRM 4.3, 4.6, 9.4.2). Unlike group predication, this retains
+  // (LRM 4.3, 4.6, 9.4.2). Like group dataflow candidates, this retains
   // loops/branches.
   for (auto function : module.getOps<LLVM::LLVMFuncOp>())
     if (!function.isExternal() &&

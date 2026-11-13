@@ -18,28 +18,45 @@
 // TRACE: talos repeatable ranked members: 4 unconditional=4
 // TRACE: talos group dataflow: __talos_eval_ranked_group_0.dataflow accepted=1
 // GROUP-LABEL: llvm.func @__talos_eval_ranked_group_0(
-// GROUP-SAME: schedule.eval.predicated_dataflow
+// GROUP-SAME: schedule.eval.control_flow_dataflow
 // GROUP-SAME: schedule.eval.ranked_members = array<i32: 0, 1, 2, 3>
 // One certificate gate covers the entire input group, including the net's
 // previous value. The certified path has no per-drive unknown publication.
-// GROUP: %[[STATE:.*]] = llvm.mlir.addressof @__talos_state_value
+// GROUP-DAG: %[[LOW:.*]] = llvm.mlir.constant(15 : i8) : i8
+// GROUP-DAG: %[[HIGH:.*]] = llvm.mlir.constant(-16 : i8) : i8
+// GROUP-DAG: %[[STATE:.*]] = llvm.mlir.addressof @__talos_state_value
 // GROUP: llvm.mlir.addressof @__talos_eval_promotion_pending_mask_v1
 // GROUP: llvm.cond_br
-// No member needs an inactive-value select or a ready predicate: the
-// contribution, resolved net and output receive the same SSA value, and the
-// group consumes its pending bits once before returning.
-// GROUP-DAG: %[[DRIVER:.*]] = llvm.getelementptr %[[STATE]][7]
-// GROUP-DAG: %[[NET:.*]] = llvm.getelementptr %[[STATE]][5]
-// GROUP-DAG: %[[OUTPUT:.*]] = llvm.getelementptr %[[STATE]][2]
+// Each driver merges only its own nibble into the resolved net: the high
+// driver keeps the low nibble and the low driver keeps the high nibble. The
+// copy and the sink then publish the net, and the group consumes its pending
+// bits once before returning.
 // GROUP-NOT: llvm.call
-// GROUP-NOT: llvm.cond_br
-// GROUP-NOT: llvm.br
 // GROUP-NOT: llvm.switch
 // GROUP-NOT: @__talos_state_unknown
-// GROUP: llvm.store %[[VALUE:[a-zA-Z0-9_]+]], %[[DRIVER]]
-// GROUP-NEXT: llvm.store %[[VALUE]], %[[NET]]
-// GROUP-NEXT: llvm.store %[[VALUE]], %[[OUTPUT]]
-// GROUP-NEXT: llvm.store %{{.*}}, %{{.*}} {alignment = 1 : i64} : i64, !llvm.ptr
+// GROUP: %[[NET0:.*]] = llvm.getelementptr %[[STATE]][4]
+// GROUP-NEXT: %[[OLD0:.*]] = llvm.load %[[NET0]] {{.*}}schedule.eval.group_owner = 0 : i32
+// GROUP: %[[KEPT0:.*]] = llvm.and %[[OLD0]], %[[LOW]] : i8
+// GROUP-NEXT: %[[MERGED0:.*]] = llvm.or %[[KEPT0]], %{{.*}} : i8
+// GROUP-NEXT: llvm.store %[[MERGED0]], %[[NET0]]
+// GROUP-NOT: llvm.call
+// GROUP-NOT: llvm.switch
+// GROUP-NOT: @__talos_state_unknown
+// GROUP: %[[NET1:.*]] = llvm.getelementptr %[[STATE]][4]
+// GROUP-NEXT: %[[OLD1:.*]] = llvm.load %[[NET1]] {{.*}}schedule.eval.group_owner = 1 : i32
+// GROUP: %[[KEPT1:.*]] = llvm.and %[[OLD1]], %[[HIGH]] : i8
+// GROUP-NEXT: %[[MERGED1:.*]] = llvm.or %[[KEPT1]], %{{.*}} : i8
+// GROUP-NEXT: llvm.store %[[MERGED1]], %[[NET1]]
+// GROUP-NOT: llvm.call
+// GROUP-NOT: llvm.switch
+// GROUP-NOT: @__talos_state_unknown
+// GROUP: llvm.store {{.*}}schedule.eval.group_owner = 2 : i32
+// GROUP: llvm.store {{.*}}schedule.eval.group_owner = 2 : i32
+// GROUP: llvm.store {{.*}}schedule.eval.group_owner = 3 : i32
+// GROUP-NOT: llvm.call
+// GROUP-NOT: llvm.switch
+// GROUP-NOT: @__talos_state_unknown
+// GROUP: llvm.store %{{.*}}, %{{.*}} {alignment = 8 : i64} : i64, !llvm.ptr
 // GROUP-NEXT: llvm.return
 // GROUP: llvm.call @__talos_eval_ranked_group_0.fallback
 // GROUP-LABEL: llvm.func @__talos_eval_ranked_group_0.fallback(

@@ -1,12 +1,12 @@
 // RUN: talos-opt %s --talos-materialize-native-eval-groups -o %t.mlir
 // RUN: FileCheck %s < %t.mlir
-// RUN: FileCheck %s --check-prefix=SSA < %t.mlir
+// RUN: FileCheck %s --check-prefix=CFG < %t.mlir
 // RUN: talos-opt %s '--test-talos-set-module-attributes=attrs="{schedule.native.max_inline_ops = 1 : i64}"' --talos-materialize-native-eval-groups | FileCheck %s --check-prefix=BUDGET --implicit-check-not=group_children --implicit-check-not=dataflow_executor --implicit-check-not=dataflow_candidate
 
 // Runtime behavior is checked in ../Runtime/simulation-native-group-hierarchy.test.
 
-// A boundary in the middle refines only its child. Its volatile access fits
-// neither the dense form nor the CFG form. Pure siblings collapse to SSA and
+// A boundary in the middle refines only its child. Its volatile access does
+// not fit the control-flow form. Pure siblings keep their members' CFG and
 // select their own domain. Source owner identities and backward work survive
 // the two-level hierarchy; an inactive child holds deposited state.
 // The slow counters distinguish the selected paths, independently of values.
@@ -22,21 +22,25 @@
 // CHECK-DAG: llvm.func @group.child0() attributes {{.*}}schedule.eval.dataflow_executor = @group.child0.dataflow
 // CHECK-DAG: llvm.func @group.child2() attributes {{.*}}schedule.eval.group_children = [@group.child2.child0, @group.child2.child1]
 // CHECK-DAG: llvm.func @group.child2.child1() attributes {{.*}}schedule.eval.dataflow_executor = @group.child2.child1.dataflow
-// CHECK-DAG: llvm.func @group.child0.dataflow() attributes {{.*}}schedule.eval.predicated_dataflow
-// CHECK-DAG: llvm.func @group.child2.child1.dataflow() attributes {{.*}}schedule.eval.predicated_dataflow
-// SSA-LABEL: llvm.func @group.child0.dataflow()
-// SSA-SAME: schedule.eval.ranked_members = array<i32: 0, 3>
-// SSA-COUNT-3: llvm.load
-// SSA-NOT: llvm.load
-// SSA-NOT: llvm.call
-// SSA-NOT: llvm.cond_br
-// SSA-NOT: llvm.br
-// SSA-COUNT-3: llvm.store
-// SSA-NOT: llvm.load
-// SSA-NOT: llvm.call
-// SSA-NOT: llvm.cond_br
-// SSA-NOT: llvm.br
-// SSA: llvm.return
+// CHECK-DAG: llvm.func @group.child0.dataflow() attributes {{.*}}schedule.eval.control_flow_dataflow
+// CHECK-DAG: llvm.func @group.child2.child1.dataflow() attributes {{.*}}schedule.eval.control_flow_dataflow
+// Each member of the pure sibling keeps its activation test and runs its
+// consume and update only on its own taken arm.
+// CFG-LABEL: llvm.func @group.child0.dataflow()
+// CFG-SAME: schedule.eval.ranked_members = array<i32: 0, 3>
+// CFG: llvm.load {{.*}}schedule.eval.activation_entry = 0
+// CFG: llvm.cond_br %{{.*}}, ^[[RUN0:bb[0-9]+]], ^[[CHECK3:bb[0-9]+]]
+// CFG: ^[[RUN0]]:
+// CFG-COUNT-2: llvm.store
+// CFG: llvm.br ^[[CHECK3]]
+// CFG: ^[[CHECK3]]:
+// CFG-NEXT: llvm.load {{.*}}schedule.eval.activation_entry = 3
+// CFG: llvm.cond_br %{{.*}}, ^[[RUN3:bb[0-9]+]], ^[[DONE:bb[0-9]+]]
+// CFG: ^[[RUN3]]:
+// CFG-COUNT-2: llvm.store
+// CFG: llvm.br ^[[DONE]]
+// CFG: ^[[DONE]]:
+// CFG-NEXT: llvm.return
 // BUDGET: llvm.func @group()
 
 module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu"} {

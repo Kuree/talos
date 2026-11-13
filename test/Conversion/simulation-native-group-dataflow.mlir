@@ -6,23 +6,34 @@
 // A deposit at a real boundary need not satisfy a combinational invariant.
 // With only consumer activation, the producer must retain its deposited value.
 // A conditionally assigned output must also hold when its branch is closed.
-// For input 7 the inactive assignment's shift produces poison. Its branch
-// condition must not poison the enclosing reconvergence or retained state.
-// The publication also sets the ready set's dirty bit (word 2), conditionally,
-// like any other predicated store.
+// The candidate keeps the members' CFG: each member's activation test, its
+// inactive assignment (whose shift for input 7 would produce poison) and its
+// publication stay on their own arms, so a closed branch executes none of
+// them. The publication also sets the ready set's dirty bit (word 2) on the
+// same arm. A failed group certificate selects the ordinary executor.
 // CHECK-LABEL: llvm.func @group()
+// CHECK-SAME: schedule.eval.control_flow_dataflow
 // CHECK-SAME: schedule.eval.dataflow_fallback = @group.fallback
-// CHECK-SAME: schedule.eval.predicated_dataflow
+// CHECK-SAME: schedule.eval.refresh_group_proofs
+// CHECK: llvm.cond_br %{{.*}}, ^bb1, ^[[SLOW:bb[0-9]+]]
+// CHECK: llvm.cond_br %{{.*}}, ^[[PRODUCER:bb[0-9]+]], ^[[CONSUMER:bb[0-9]+]]
+// CHECK: ^[[PRODUCER]]:
+// CHECK: llvm.shl
+// CHECK: llvm.cond_br %{{.*}}, ^[[ASSIGN:bb[0-9]+]], ^[[CONSUMER]]
+// CHECK: ^[[ASSIGN]]:
+// CHECK-NEXT: llvm.store
+// CHECK-NEXT: %[[PUBLISHED:.*]] = llvm.or
+// CHECK-NEXT: llvm.store %[[PUBLISHED]]
+// CHECK-NEXT: %[[MARKS:.*]] = llvm.load
+// CHECK-NEXT: %[[MARKED:.*]] = llvm.or %[[MARKS]]
+// CHECK-NEXT: llvm.store %[[MARKED]]
+// CHECK-NEXT: llvm.br ^[[CONSUMER]]
+// CHECK: ^[[CONSUMER]]:
 // CHECK: llvm.cond_br
-// CHECK-NOT: llvm.cond_br
-// CHECK-NOT: llvm.br
-// CHECK-NOT: llvm.call
-// CHECK: llvm.select
-// CHECK-NOT: llvm.cond_br
-// CHECK-NOT: llvm.br
 // CHECK-NOT: llvm.call
 // CHECK: llvm.return
-// CHECK: llvm.call @group.fallback()
+// CHECK: ^[[SLOW]]:
+// CHECK-NEXT: llvm.call @group.fallback()
 // CHECK-LABEL: llvm.func @group.fallback()
 module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu"} {
   llvm.mlir.global internal @__talos_state_value(dense<[7, 99, 0]> : tensor<3xi8>) : !llvm.array<3 x i8>

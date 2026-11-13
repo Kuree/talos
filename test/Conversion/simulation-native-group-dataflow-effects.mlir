@@ -1,10 +1,10 @@
-// RUN: talos-opt %s --split-input-file --talos-materialize-native-eval-groups | FileCheck %s --implicit-check-not=predicated_dataflow --implicit-check-not=dataflow_executor
+// RUN: talos-opt %s --split-input-file --talos-materialize-native-eval-groups | FileCheck %s --implicit-check-not=dataflow_executor
 
-// A candidate with an effect or an access the slot model cannot name has no
-// dense form. Its CFG executes each operation where the member bodies do, and
-// speculates nothing (IEEE 1800-2023 4.3, 4.6, 6.3.1), so the group still gets
-// a single entry: it refreshes unqueried proofs there, and a failed proof falls
-// back to the ordinary per-member body.
+// Calls, trapping arithmetic and opaque accesses do not keep a candidate from
+// its group's single entry. The candidate keeps its members' CFG and executes
+// each operation where the member bodies do, speculating nothing (IEEE
+// 1800-2023 4.3, 4.6, 6.3.1). It refreshes unqueried proofs at the entry, and
+// a failed proof falls back to the ordinary per-member body.
 
 // CHECK-LABEL: llvm.func @call_group()
 // CHECK-SAME: schedule.eval.control_flow_dataflow
@@ -30,7 +30,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
 
 // -----
 
-// Division can trap, so the dense form may not compute it on an inactive path.
+// Division can trap; the CFG computes it only on its member's active path.
 // CHECK-LABEL: llvm.func @divide_group()
 // CHECK-SAME: schedule.eval.control_flow_dataflow
 // CHECK-SAME: schedule.eval.refresh_group_proofs

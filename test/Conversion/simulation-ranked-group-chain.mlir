@@ -3,24 +3,35 @@
 // RUN: FileCheck %s --check-prefix=TRACE < %t.trace
 
 // A periodic source feeds continuous copies. The copies share one ranked
-// computation body under the shared dispatcher.
+// computation body under the shared dispatcher, with no indirect call or
+// dispatch switch; each copy runs in rank order on its own arm.
 // TRACE: talos eval owner: bit=0 actor=6 continuation=9 compute_node=15 group=__talos_eval_ranked_group_0 executor=__talos_direct_fragment_6_9.__talos_execute
 // TRACE: talos eval owner: bit=1 actor=2 continuation=12 compute_node=1 group=__talos_eval_ranked_group_0 executor=__talos_direct_fragment_2_12.__talos_execute
 // TRACE: talos eval dependency: owner=0 island=0 body=step1.__talos_eval_body_0 successors=1
 // TRACE: talos eval dependency: owner=1 island=0 body=step2.__talos_eval_body_0 successors=2
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_0(
+// PLAN-SAME: schedule.eval.control_flow_dataflow
 // PLAN-SAME: schedule.eval.dataflow_fallback = @__talos_eval_ranked_group_0.fallback
 // PLAN-SAME: schedule.eval.materialized_group_calls = 5 : i64
-// PLAN-SAME: schedule.eval.predicated_dataflow
 // PLAN-SAME: schedule.eval.ranked_members = array<i32: 0, 1, 2, 3, 4>
 // PLAN: llvm.cond_br
 // PLAN-NOT: llvm.switch
-// PLAN-NOT: llvm.call %
+// PLAN-NOT: llvm.call
 // PLAN: llvm.add
+// PLAN: llvm.store {{.*}}schedule.eval.group_owner = 0 : i32
+// PLAN-NOT: llvm.call
+// PLAN: llvm.add
+// PLAN: llvm.store {{.*}}schedule.eval.group_owner = 1 : i32
+// PLAN-NOT: llvm.call
+// PLAN: llvm.add
+// PLAN: llvm.store {{.*}}schedule.eval.group_owner = 2 : i32
+// PLAN-NOT: llvm.call
+// PLAN: llvm.add
+// PLAN: llvm.store {{.*}}schedule.eval.group_owner = 3 : i32
+// PLAN-NOT: llvm.call
+// PLAN: llvm.add
+// PLAN: llvm.store {{.*}}schedule.eval.group_owner = 4 : i32
 // PLAN-NOT: llvm.switch
-// PLAN-NOT: llvm.call %
-// PLAN-NOT: llvm.cond_br
-// PLAN-NOT: llvm.br
 // PLAN-NOT: llvm.call
 // PLAN: llvm.return
 // PLAN: llvm.call @__talos_eval_ranked_group_0.fallback

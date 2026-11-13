@@ -9,17 +9,19 @@
 // PLAN-SAME: schedule.eval.ranked_members = array<i32: 0, 1, 2, 3, 4>
 // PLAN-LABEL: llvm.func @__talos_eval_dispatch_v1(
 // PLAN: llvm.call @__talos_eval_ranked_group_0
+// The group inlines all five members into one control-flow body; each keeps
+// its own activation and change arms, with no dispatch switch.
 // GROUP-LABEL: llvm.func @__talos_eval_ranked_group_0(
+// GROUP-SAME: schedule.eval.control_flow_dataflow
 // GROUP-SAME: schedule.eval.dataflow_fallback = @__talos_eval_ranked_group_0.fallback
 // GROUP-SAME: schedule.eval.materialized_group_calls = 5 : i64
-// GROUP-SAME: schedule.eval.predicated_dataflow
 // GROUP-NOT: llvm.switch
 // GROUP-NOT: llvm.call %
 // GROUP: llvm.return
 // GROUP-LABEL: llvm.func @__talos_eval_ranked_group_0.fallback(
 // GROUP-SAME: schedule.eval.ssa_ready_words = 1 : i64
 // STATE-LABEL: llvm.func @__talos_eval_ranked_group_0(
-// STATE-SAME: schedule.eval.predicated_dataflow
+// STATE-SAME: schedule.eval.control_flow_dataflow
 // STATE: llvm.add
 // STATE: llvm.add
 // STATE: llvm.add

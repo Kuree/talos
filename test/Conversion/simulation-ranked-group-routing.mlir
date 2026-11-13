@@ -12,11 +12,22 @@
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_0(
 // PLAN-SAME: schedule.eval.ranked_members = array<i32: 0>
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_1(
+// PLAN-SAME: schedule.eval.control_flow_dataflow
 // PLAN-SAME: schedule.eval.materialized_group_calls = 4 : i64
-// PLAN-SAME: schedule.eval.predicated_dataflow
 // PLAN-SAME: schedule.eval.ranked_members = array<i32: 1, 2, 3, 4>
 // PLAN-NOT: llvm.switch
 // PLAN-NOT: llvm.call %
+// step3 (owner 2) republishes step2 (bit 2), which already ran, on the arm
+// where its output changes; the later members clear only their own bits.
+// PLAN: llvm.store {{.*}}schedule.eval.group_owner = 2 : i32
+// PLAN: %[[STEP2:.*]] = llvm.mlir.constant(2 : i64) : i64
+// PLAN: %[[BACKWARD:.*]] = llvm.select %{{.*}}, %[[STEP2]], %{{.*}} : i1, i64
+// PLAN-NEXT: llvm.or %{{.*}}, %[[BACKWARD]] : i64
+// PLAN-NOT: llvm.switch
+// PLAN-NOT: llvm.call %
+// PLAN: llvm.store {{.*}}schedule.eval.group_owner = 4 : i32
+// PLAN: llvm.store %{{.*}}, %{{.*}} {alignment = 8 : i64} : i64, !llvm.ptr
+// PLAN-NEXT: llvm.return
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_1.fallback(
 // PLAN-SAME: schedule.eval.ssa_ready_words = 1 : i64
 // PLAN-SAME: schedule.eval.ssa_value_ranges = 3 : i64

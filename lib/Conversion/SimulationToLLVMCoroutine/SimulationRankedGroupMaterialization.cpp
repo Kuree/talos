@@ -494,10 +494,11 @@ materializeNativeRankedGroups(ModuleOp module,
       builder.setInsertionPointToStart(next);
     }
     LLVM::ReturnOp::create(builder, loc, ValueRange{});
-    // This is only a candidate. After lowering, dense memory/control-flow
-    // analysis must prove that its computation can be predicated without
-    // speculative effects. Until then the ordinary ranked helper owns entry.
-    if ((members.size() > 1 || members.front()->repeatable) &&
+    // This is only a candidate. After lowering, control-flow analysis must
+    // prove that its computation is finite. Until then the ordinary ranked
+    // helper owns entry. A candidate forwards state and readiness between
+    // members, so a lone member, even a repeatable one, gets none.
+    if (members.size() > 1 &&
         llvm::all_of(members, [&](const auto *node) {
           return !node->clocked && !node->twoStateBody.empty() &&
                  !plan.twoStateExecutors[node->owner].empty();

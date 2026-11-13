@@ -1,19 +1,18 @@
 // RUN: talos-opt %s --talos-materialize-native-eval-groups -o %t.mlir
-// RUN: FileCheck %s < %t.mlir
-// RUN: FileCheck %s --check-prefix=LE < %t.mlir
-// RUN: talos-opt %s '--test-talos-set-module-attributes=attrs="{llvm.data_layout = \"E-m:e-p:64:64-i64:64-n8:16:32:64-S128\"}"' --talos-materialize-native-eval-groups | FileCheck %s --check-prefix=BE
+// RUN: FileCheck %s --implicit-check-not=llvm.alloca < %t.mlir
 // RUN: talos-opt %s --mlir-disable-threading --talos-materialize-native-eval-groups | diff %t.mlir -
 // RUN: talos-opt %s '--test-talos-set-module-attributes=attrs="{schedule.native.max_inline_ops = 24 : i64}"' --talos-materialize-native-eval-groups | FileCheck %s --check-prefix=BUDGET
 
 // Three overlapping reads span 80 bytes. The group keeps the original CFG
 // and exact memory operations, including before/after snapshots, inactive
-// assignments and two stores crossing 32-byte boundaries. The second group
-// covers X/Z storage, an entry argument and multiple return paths. The runtime
-// companion compares all bytes, including untouched neighbors, at O0 and O3.
-// IEEE 1800-2023 4.3, 4.6 and 6.3.1 require the same ordered four-state updates.
+// assignments and two stores crossing 32-byte boundaries. Only a private
+// stack temporary, whose every use the memory-slot interfaces prove, becomes
+// SSA. The second group covers X/Z storage, an entry argument and multiple
+// return paths. The runtime companion compares all bytes, including untouched
+// neighbors, at O0 and O3. IEEE 1800-2023 4.3, 4.6 and 6.3.1 require the same
+// ordered four-state updates.
 // CHECK-LABEL: llvm.func @wide()
 // CHECK-SAME: schedule.eval.control_flow_dataflow
-// CHECK-SAME: schedule.eval.dataflow_slots = 10 : i64
 // CHECK-SAME: schedule.eval.refresh_group_proofs
 // CHECK: llvm.cond_br
 // CHECK: %[[CROSS1:.*]] = llvm.getelementptr {{.*}}[31]
@@ -25,23 +24,14 @@
 // CHECK: llvm.store {{.*}}, %[[CROSS2]] : i16, !llvm.ptr
 // CHECK-LABEL: llvm.func @small(
 // CHECK-SAME: schedule.eval.control_flow_dataflow
-// CHECK-SAME: schedule.eval.dataflow_slots = 2 : i64
 // CHECK-SAME: schedule.eval.refresh_group_proofs
-// LE-LABEL: llvm.func @small(
-// LE: %[[CROSS:.*]] = llvm.getelementptr {{.*}}[31]
-// LE: %[[OLD:.*]] = llvm.load {{.*}} : !llvm.ptr -> i256
-// LE: llvm.cond_br
-// LE: %[[LOW:.*]] = llvm.trunc %[[OLD]] : i256 to i16
-// LE-NEXT: llvm.store %[[LOW]], %[[CROSS]] : i16, !llvm.ptr
-// LE: llvm.return
-// LE: llvm.return
-// BE-LABEL: llvm.func @small(
-// BE-SAME: schedule.eval.control_flow_dataflow
-// BE: %[[CROSS:.*]] = llvm.getelementptr {{.*}}[31]
-// BE: %[[OLD:.*]] = llvm.load {{.*}} : !llvm.ptr -> i256
-// BE: llvm.cond_br
-// BE: %[[LOW:.*]] = llvm.trunc %[[OLD]] : i256 to i16
-// BE-NEXT: llvm.store %[[LOW]], %[[CROSS]] : i16, !llvm.ptr
+// CHECK: %[[CROSS:.*]] = llvm.getelementptr {{.*}}[31]
+// CHECK: %[[OLD:.*]] = llvm.load {{.*}} : !llvm.ptr -> i256
+// CHECK: llvm.cond_br
+// CHECK: %[[LOW:.*]] = llvm.trunc %[[OLD]] : i256 to i16
+// CHECK-NEXT: llvm.store %[[LOW]], %[[CROSS]] : i16, !llvm.ptr
+// CHECK: llvm.return
+// CHECK: llvm.return
 // The unchanged CFG must still fit the group operation budget.
 // BUDGET-LABEL: llvm.func @wide()
 // BUDGET-NOT: schedule.eval.control_flow_dataflow
@@ -71,13 +61,17 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %snapshot3 = llvm.getelementptr %base[160] : (!llvm.ptr) -> !llvm.ptr, i8
     %snapshot4 = llvm.getelementptr %base[192] : (!llvm.ptr) -> !llvm.ptr, i8
     %ready = llvm.mlir.addressof @ready : !llvm.ptr
+    %count = llvm.mlir.constant(1 : i64) : i64
+    %temporary = llvm.alloca %count x i256 : (i64) -> !llvm.ptr
     %pending = llvm.load %ready : !llvm.ptr -> i64
     %zero = llvm.mlir.constant(0 : i64) : i64
     %active = llvm.icmp "ne" %pending, %zero : i64
     llvm.cond_br %active, ^run, ^done
   ^run:
     %a = llvm.load %base : !llvm.ptr -> i256
-    llvm.store %a, %snapshot1 : i256, !llvm.ptr
+    llvm.store %a, %temporary : i256, !llvm.ptr
+    %spilled = llvm.load %temporary : !llvm.ptr -> i256
+    llvm.store %spilled, %snapshot1 : i256, !llvm.ptr
     %b = llvm.load %middle : !llvm.ptr -> i256
     llvm.store %b, %snapshot2 : i256, !llvm.ptr
     %first = llvm.mlir.constant(4660 : i16) : i16

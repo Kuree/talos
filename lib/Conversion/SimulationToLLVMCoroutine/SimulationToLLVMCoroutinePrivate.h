@@ -315,7 +315,6 @@ materializeNativePromotionRangeIndex(mlir::ModuleOp module,
                                      uint64_t bucketMinEntries = 4096);
 mlir::LogicalResult materializeNativePromotionWrites(mlir::ModuleOp module);
 bool materializeNativeGroupDataflow(mlir::LLVM::LLVMFuncOp function,
-                                    mlir::SymbolTable &symbols,
                                     uint64_t budget);
 /// Refine a rejected collapsed group into ordered children. Leaves keep their
 /// source activation identities; parents own no additional ready/proof state.

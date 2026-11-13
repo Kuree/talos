@@ -21,8 +21,6 @@ def EvalCheckpointRoutes : ScheduleField<"EvalCheckpointRoutes", "schedule.eval.
     "::mlir::ArrayAttr">;
 def EvalCheckpointSafe : ScheduleField<"EvalCheckpointSafe", "schedule.eval.checkpoint_safe",
     "::mlir::UnitAttr">;
-def EvalCoalescedSlots : ScheduleField<"EvalCoalescedSlots", "schedule.eval.coalesced_slots",
-    "::mlir::IntegerAttr">;
 // The driver can still recompile with the generic scheduler, so a failed eval
 // call closure check marks the module instead of reporting an error.
 def EvalClosureRetryAllowed : ScheduleField<"EvalClosureRetryAllowed", "schedule.eval.closure_retry_allowed",
@@ -45,8 +43,6 @@ def EvalDataflowExecutor : ScheduleField<"EvalDataflowExecutor", "schedule.eval.
     "::mlir::FlatSymbolRefAttr">;
 def EvalDataflowFallback : ScheduleField<"EvalDataflowFallback", "schedule.eval.dataflow_fallback",
     "::mlir::FlatSymbolRefAttr">;
-def EvalDataflowSlots : ScheduleField<"EvalDataflowSlots", "schedule.eval.dataflow_slots",
-    "::mlir::IntegerAttr">;
 def EvalDirectCall : ScheduleField<"EvalDirectCall", "schedule.eval.direct_call",
     "::mlir::UnitAttr">;
 def EvalDirectFragment : ScheduleField<"EvalDirectFragment", "schedule.eval.direct_fragment",
@@ -133,8 +129,6 @@ def EvalPathProbeRoutes : ScheduleField<"EvalPathProbeRoutes", "schedule.eval.pa
 // generated periodic loop runs the runtime's end-of-slot dump hook whenever a
 // dump file is open.
 def EvalPostponedObservers : ScheduleField<"EvalPostponedObservers", "schedule.eval.postponed_observers",
-    "::mlir::UnitAttr">;
-def EvalPredicatedDataflow : ScheduleField<"EvalPredicatedDataflow", "schedule.eval.predicated_dataflow",
     "::mlir::UnitAttr">;
 // A closed group retaining its proved control flow and exact memory accesses.
 def EvalControlFlowDataflow : ScheduleField<"EvalControlFlowDataflow", "schedule.eval.control_flow_dataflow",

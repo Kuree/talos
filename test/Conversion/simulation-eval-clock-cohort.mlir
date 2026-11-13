@@ -2,7 +2,7 @@
 // RUN: talos-opt %s --mlir-disable-threading --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-suspension),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),convert-talos-sim-processes-to-llvm-coroutines)' -o %t.serial 2> %t.serial.trace
 // RUN: diff %t.mlir %t.serial
 // RUN: FileCheck %s --check-prefix=TRACE < %t.trace
-// RUN: FileCheck %s --check-prefix=GROUP --implicit-check-not=schedule.eval.predicated_dataflow < %t.mlir
+// RUN: FileCheck %s --check-prefix=GROUP < %t.mlir
 
 // Exact physical edge identity determines cohorts. Each member still tests its
 // own ready bit; opposite edges, other clocks, and async resets cannot cause
