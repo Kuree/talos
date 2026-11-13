@@ -239,8 +239,11 @@ void assignUnknownSummary(ModuleOp module, NativeStateLayout &layout) {
       pattern.push_back({uint64_t(ranges[index]), uint64_t(ranges[index + 1])});
   });
   // One summary bit per four-state root a known.roots gate tests, numbered by
-  // first test. A reference without a fixed root gets none; its gate fails.
-  // Each gate gets its own backoff state.
+  // first test. A two-state root cannot hold x or z and needs none (IEEE
+  // 1800-2023 6.11.2). A reference without a fixed whole root gets none; its
+  // gate never holds, so the four-state body, exact for x and z, runs (6.3.1).
+  // Each gate gets its own backoff state and records the summary words it
+  // tests, which its lowering reads.
   llvm::DenseMap<uint32_t, bool> fourState;
   for (const auto &bound : layout.bounds)
     fourState[bound.handleID] = bound.fourState;
@@ -248,6 +251,8 @@ void assignUnknownSummary(ModuleOp module, NativeStateLayout &layout) {
   module.walk([&](schedule::NativeKnownRootsOp gate) {
     schedule::set<schedule::Field::NativeKnownGate>(
         gate, builder.getI64IntegerAttr(layout.unknownSummaryGates++));
+    std::map<uint64_t, uint64_t> words;
+    bool tracked = true;
     for (Value reference : gate.getReferences()) {
       auto storage = reference.getDefiningOp<sim::SimContextStorageOp>();
       auto handle =
@@ -255,18 +260,33 @@ void assignUnknownSummary(ModuleOp module, NativeStateLayout &layout) {
       talos_rt_stable_handle_v1 decoded{};
       if (handle == layout.storage.end() ||
           !talos_rt_stable_handle_decode(handle->second, &decoded) ||
-          decoded.kind != TALOS_RT_STABLE_HANDLE_STATIC)
+          decoded.kind != TALOS_RT_STABLE_HANDLE_STATIC) {
+        tracked = false;
         continue;
+      }
+      tracked &= decoded.offset == 0;
       if (!fourState.lookup(decoded.id)) {
         layout.unknownSummaryBits.try_emplace(decoded.id,
                                               NativeStateLayout::twoStateRoot);
         continue;
       }
-      if (layout.unknownSummaryBits
-              .try_emplace(decoded.id, layout.unknownSummaryRoots.size())
-              .second)
+      auto [bit, inserted] = layout.unknownSummaryBits.try_emplace(
+          decoded.id, layout.unknownSummaryRoots.size());
+      if (inserted)
         layout.unknownSummaryRoots.push_back(decoded.id);
+      if (bit->second != NativeStateLayout::twoStateRoot)
+        words[bit->second / 64] |= uint64_t{1} << (bit->second % 64);
     }
+    if (!tracked) {
+      schedule::remove<schedule::Field::NativeKnownSummaryWords>(gate);
+      return;
+    }
+    SmallVector<int64_t> pairs;
+    for (auto [word, mask] : words)
+      llvm::append_range(pairs,
+                         ArrayRef<int64_t>{int64_t(word), int64_t(mask)});
+    schedule::set<schedule::Field::NativeKnownSummaryWords>(
+        gate, builder.getDenseI64ArrayAttr(pairs));
   });
   // Patterns hold absolute plane ranges, clipped to their root.
   llvm::DenseMap<uint32_t, const NativeStateLayout::Bound *> bounds;

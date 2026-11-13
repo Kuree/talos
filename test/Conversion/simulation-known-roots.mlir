@@ -7,9 +7,10 @@
 // check's three roots share word 0 (mask 7). A set bit sends the check to the
 // runtime, which rescans the gate's dirty roots before answering, unless the
 // gate's backoff state still counts failed tests to answer without calling.
-// The cached and backed-off answers are constants: their edges branch
-// straight to the copy and to the original body (talos-thread-constant-
-// branches); only the runtime's answer is tested at the merge.
+// The check branches on the test alone, so the test lowers as branches: the
+// cached and backed-off answers go straight to the copy and to the original
+// body, and the runtime's answer branches to one of them; no block merges
+// the answers.
 // The generated main binds the summary, its root records and patterns.
 // Every generated store into the unknown plane of a summarized root sets the
 // root's bit when it writes X/Z, out of line: here the original body's store
@@ -48,9 +49,7 @@
 // DIRECT: llvm.store %[[MASK]], %{{.*}}
 // DIRECT: %[[R:.*]] = llvm.call @talos_rt_v1_native_state_refresh_unknown_summary(%{{.*}}, %[[PAIRS]], %{{.*}}, %[[BACKOFF]])
 // DIRECT-NEXT: %[[OK:.*]] = llvm.icmp "ne" %[[R]], %{{.*}} : i32
-// DIRECT-NEXT: llvm.br ^[[DECIDE:bb[0-9]+]](%[[OK]] : i1)
-// DIRECT: ^[[DECIDE]](%[[KNOWN:.*]]: i1):
-// DIRECT-NEXT: llvm.cond_br %[[KNOWN]] weights([1048575, 1]), ^[[COPY]], ^[[BODY]]
+// DIRECT-NEXT: llvm.cond_br %[[OK]] weights([1048575, 1]), ^[[COPY]], ^[[BODY]]
 // DIRECT: %[[OUT:.*]] = llvm.getelementptr %[[PLANE]][14]
 // DIRECT-NEXT: llvm.store %[[X:.*]], %[[OUT]] {alignment = 1 : i64} : i8, !llvm.ptr
 // DIRECT-NEXT: %[[HASX:.*]] = llvm.icmp "ne" %[[X]], %{{.*}} : i8

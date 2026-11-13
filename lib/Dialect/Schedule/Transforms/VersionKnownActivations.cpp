@@ -383,12 +383,12 @@ public:
           liveIns.empty()) {
         conjoin(roots);
       } else {
-        // Branch on the root summary alone, then test the rest. Its lowering
-        // merges the cached, backed-off and refreshed answers in one block,
-        // which then holds only this branch and folds into each answer's
-        // edge; a conjunction would keep the merged flag live across the
-        // other probes. A failed summary skips them: either way the
-        // four-state body runs (IEEE 1800-2023 6.3.1).
+        // Branch on the root summary alone, then test the rest. A test that
+        // only feeds the branch right after it lowers as branches: each of
+        // its cached, backed-off and refreshed answers goes straight to the
+        // rest or to the four-state body, while a conjunction would keep a
+        // merged flag live across the other probes. A failed summary skips
+        // them: either way the four-state body runs (IEEE 1800-2023 6.3.1).
         Block *rest = builder.createBlock(entry);
         builder.setInsertionPoint(enter);
         auto branch = cf::CondBranchOp::create(

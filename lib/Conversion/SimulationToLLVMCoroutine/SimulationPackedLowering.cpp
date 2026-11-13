@@ -1253,8 +1253,16 @@ LogicalResult lowerPackedSimulationOperations(
     target.addLegalDialect<runtime::TalosRuntimeDialect>();
     target.addLegalOp<sim::SimContextRuntimeOp, sim::SimStatusCheckOp>();
     target.addLegalDialect<schedule::ScheduleDialect>();
-    target.addIllegalOp<schedule::NativeKnownValueOp,
-                        schedule::NativeKnownRootsOp>();
+    target.addIllegalOp<schedule::NativeKnownValueOp>();
+    // A test feeding only its block's branch lowers with that branch.
+    target.addDynamicallyLegalOp<schedule::NativeKnownRootsOp>(
+        [](schedule::NativeKnownRootsOp gate) {
+          if (!gate->hasOneUse())
+            return false;
+          auto branch = dyn_cast<cf::CondBranchOp>(*gate->user_begin());
+          return branch && branch.getCondition() == gate.getKnown() &&
+                 branchesOnKnownRoots(branch);
+        });
     target.addDynamicallyLegalOp<sim::SimFuncOp>([&](sim::SimFuncOp function) {
       return c.isSignatureLegal(function.getFunctionType()) &&
              c.isLegal(&function.getBody());
@@ -1278,8 +1286,12 @@ LogicalResult lowerPackedSimulationOperations(
         cf::ControlFlowDialect, func::FuncDialect>([&](Operation *operation) {
       return hasNoLogic(operation) && c.isLegal(operation);
     });
-    target.addDynamicallyLegalOp<cf::BranchOp, cf::CondBranchOp>(
+    target.addDynamicallyLegalOp<cf::BranchOp>(
         [&](Operation *operation) { return c.isLegal(operation); });
+    target.addDynamicallyLegalOp<cf::CondBranchOp>(
+        [&](cf::CondBranchOp branch) {
+          return c.isLegal(branch) && !branchesOnKnownRoots(branch);
+        });
     target.addIllegalOp<
         sim::SimSuspendDelayOp, sim::SimSuspendChangeOp, sim::SimSuspendEdgeOp,
         sim::SimSuspendEdgeIffOp, sim::SimSuspendLevelOp, sim::SimSuspendAnyOp,

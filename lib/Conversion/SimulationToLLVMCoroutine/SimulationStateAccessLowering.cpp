@@ -3,6 +3,7 @@
 #include "SimulationLocalStorageLowering.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Analysis/NativeStorageLayout.h"
+#include "talos/Conversion/SimulationToStandard.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleEnums.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
@@ -336,18 +337,141 @@ public:
   }
 };
 
+} // namespace
+
+bool branchesOnKnownRoots(cf::CondBranchOp branch) {
+  auto gate =
+      branch.getCondition().getDefiningOp<schedule::NativeKnownRootsOp>();
+  return gate && gate->hasOneUse() && gate->getNextNode() == branch;
+}
+
+namespace {
+/// The (word, mask) pairs of the unknown summary `gate` tests, as planning
+/// recorded them (assignUnknownSummary): empty when every root is two-state
+/// and cannot hold x or z (IEEE 1800-2023 6.11.2), so the test holds;
+/// failure when the test never holds and the four-state body always runs.
+FailureOr<SmallVector<std::pair<uint64_t, uint64_t>>>
+knownRootsSummaryWords(schedule::NativeKnownRootsOp gate) {
+  auto pairs = schedule::get<schedule::Field::NativeKnownSummaryWords>(gate);
+  if (!pairs || pairs.size() % 2)
+    return failure();
+  SmallVector<std::pair<uint64_t, uint64_t>> words;
+  for (size_t index = 0; index != size_t(pairs.size()); index += 2)
+    words.emplace_back(pairs[index], pairs[index + 1]);
+  return words;
+}
+
+/// The gate's backoff slot, when planning allotted one.
+IntegerAttr knownRootsBackoff(schedule::NativeKnownRootsOp gate,
+                              const NativeStateLayout &layout) {
+  auto slot = schedule::get<schedule::Field::NativeKnownGate>(gate);
+  return slot && slot.getValue().ult(layout.unknownSummaryGates)
+             ? slot
+             : IntegerAttr{};
+}
+
+/// Where each answer of a summary test goes. A constant answer takes the
+/// edge `edge` returns; `dynamic` terminates the refresh block with the
+/// runtime's answer.
+struct KnownRootsExits {
+  function_ref<std::pair<Block *, SmallVector<Value>>(bool)> edge;
+  function_ref<void(Value)> dynamic;
+};
+
 /// Test the unknown summary bits of whole storage roots, one summary word at
-/// a time. A set bit may be stale after the root became known again: the
-/// runtime then rescans the gate's dirty roots before answering. After a
+/// a time, at the insertion point, which then ends its block. New blocks go
+/// before `blocks`. A set bit may be stale after the root became known again:
+/// the runtime then rescans the gate's dirty roots before answering. After a
 /// failed rescan the gate fails the number of tests its backoff state counts
-/// without calling. A root the summary does not track fails the test.
+/// without calling. A stale bit or a backoff only fails the test, and a
+/// failed test runs the four-state body, which is exact for x and z (IEEE
+/// 1800-2023 6.3.1). The test reads and writes only compiler-owned summary
+/// and backoff state: it schedules no event and changes no design value
+/// (4.4.2, 4.5).
 ///
 ///   head:     %dirty = or(summary[w] & mask_w ...)
-///             cond_br %dirty == 0, ^done(true), ^refresh
+///             cond_br %dirty == 0, <true edge>, ^refresh
 ///   ^refresh: %state = backoff[g]
 ///             cond_br trunc(%state) != 0, ^wait, ^call
-///   ^wait:    backoff[g] = %state - 1; br ^done(false)
-///   ^call:    br ^done(refresh_unknown_summary(ctx, pairs, &backoff[g]) != 0)
+///   ^wait:    backoff[g] = %state - 1; <false edge>
+///   ^call:    <refresh_unknown_summary(ctx, pairs, &backoff[g]) != 0>
+void emitKnownRootsTest(ConversionPatternRewriter &rewriter, Location location,
+                        ArrayRef<std::pair<uint64_t, uint64_t>> words,
+                        IntegerAttr backoffSlot, Region::iterator blocks,
+                        KnownRootsExits exits) {
+  Type i64 = rewriter.getI64Type();
+  Type pointer = LLVM::LLVMPointerType::get(rewriter.getContext());
+  Value summary = LLVM::AddressOfOp::create(rewriter, location, pointer,
+                                            unknownSummaryName);
+  Value dirty;
+  for (auto [word, mask] : words) {
+    Value bits =
+        LLVM::LoadOp::create(rewriter, location, i64,
+                             byteGEP(rewriter, location, summary, 8 * word), 8);
+    bits = LLVM::AndOp::create(rewriter, location, bits,
+                               llvmConstant(rewriter, location, i64, mask));
+    dirty =
+        dirty ? LLVM::OrOp::create(rewriter, location, dirty, bits).getResult()
+              : bits;
+  }
+  Value clean =
+      LLVM::ICmpOp::create(rewriter, location, LLVM::ICmpPredicate::eq, dirty,
+                           llvmConstant(rewriter, location, i64, 0));
+
+  Block *head = rewriter.getInsertionBlock();
+  Block::iterator headPoint = rewriter.getInsertionPoint();
+  Region *region = head->getParent();
+  Block *refresh = rewriter.createBlock(region, blocks);
+  Block *wait = rewriter.createBlock(region, blocks);
+  Block *call = rewriter.createBlock(region, blocks);
+  recordStaticSpecializationCFGBlocks(rewriter, head, 3);
+  rewriter.setInsertionPoint(head, headPoint);
+  auto [known, knownOperands] = exits.edge(true);
+  markLikelyTrue(cf::CondBranchOp::create(
+      rewriter, location, clean, known, knownOperands, refresh, ValueRange{}));
+  rewriter.setInsertionPointToEnd(refresh);
+  Value backoff = byteGEP(rewriter, location,
+                          LLVM::AddressOfOp::create(rewriter, location, pointer,
+                                                    unknownSummaryBackoffName),
+                          8 * backoffSlot.getValue().getZExtValue());
+  Value state = LLVM::LoadOp::create(rewriter, location, i64, backoff, 8);
+  Value waiting = LLVM::ICmpOp::create(
+      rewriter, location, LLVM::ICmpPredicate::ne,
+      LLVM::TruncOp::create(rewriter, location, rewriter.getI32Type(), state),
+      llvmConstant(rewriter, location, rewriter.getI32Type(), 0));
+  markLikelyTrue(cf::CondBranchOp::create(rewriter, location, waiting, wait,
+                                          ValueRange{}, call, ValueRange{}));
+  rewriter.setInsertionPointToEnd(wait);
+  LLVM::StoreOp::create(
+      rewriter, location,
+      LLVM::SubOp::create(rewriter, location, state,
+                          llvmConstant(rewriter, location, i64, 1)),
+      backoff, 8);
+  auto [unknown, unknownOperands] = exits.edge(false);
+  cf::BranchOp::create(rewriter, location, unknown, unknownOperands);
+  rewriter.setInsertionPointToEnd(call);
+  // The (word, mask) pairs the runtime rescans; this path is cold.
+  Value pairs = entryAlloca(rewriter, location, i64, 2 * words.size(), 8);
+  unsigned index = 0;
+  for (auto [word, mask] : words)
+    for (uint64_t element : {word, mask})
+      LLVM::StoreOp::create(rewriter, location,
+                            llvmConstant(rewriter, location, i64, element),
+                            byteGEP(rewriter, location, pairs, 8 * index++), 8);
+  Value refreshed =
+      LLVM::CallOp::create(
+          rewriter, location, TypeRange{rewriter.getI32Type()},
+          "talos_rt_v1_native_state_refresh_unknown_summary",
+          ValueRange{loadCurrentRuntimeContext(rewriter, location), pairs,
+                     llvmConstant(rewriter, location, i64, words.size()),
+                     backoff})
+          .getResult();
+  exits.dynamic(LLVM::ICmpOp::create(
+      rewriter, location, LLVM::ICmpPredicate::ne, refreshed,
+      llvmConstant(rewriter, location, rewriter.getI32Type(), 0)));
+}
+
+/// A summary test used as a value merges its answers in one block argument.
 class KnownRootsConversion final
     : public OpConversionPattern<schedule::NativeKnownRootsOp> {
 public:
@@ -358,119 +482,114 @@ public:
   LogicalResult
   matchAndRewrite(schedule::NativeKnownRootsOp op, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (llvm::any_of(adaptor.getReferences(),
-                     [](ValueRange handles) { return handles.size() != 1; }))
-      return failure();
     Location location = op.getLoc();
     Type i1 = rewriter.getI1Type();
-    Type i64 = rewriter.getI64Type();
-    Type pointer = LLVM::LLVMPointerType::get(rewriter.getContext());
-    std::map<uint64_t, uint64_t> words;
-    for (ValueRange handles : adaptor.getReferences()) {
-      std::optional<uint64_t> handle =
-          resolveCFGConstantInteger(handles.front());
-      talos_rt_stable_handle_v1 decoded{};
-      auto bit = layout.unknownSummaryBits.end();
-      if (handle && talos_rt_stable_handle_decode(*handle, &decoded) &&
-          decoded.kind == TALOS_RT_STABLE_HANDLE_STATIC && decoded.offset == 0)
-        bit = layout.unknownSummaryBits.find(decoded.id);
-      if (bit != layout.unknownSummaryBits.end() &&
-          bit->second == NativeStateLayout::twoStateRoot)
-        continue;
-      if (bit == layout.unknownSummaryBits.end()) {
-        rewriter.replaceOpWithNewOp<arith::ConstantOp>(
-            op, i1, rewriter.getBoolAttr(false));
-        return success();
-      }
-      words[bit->second / 64] |= uint64_t{1} << (bit->second % 64);
-    }
-    if (words.empty()) {
+    auto words = knownRootsSummaryWords(op);
+    if (failed(words) || words->empty()) {
       rewriter.replaceOpWithNewOp<arith::ConstantOp>(
-          op, i1, rewriter.getBoolAttr(true));
+          op, i1, rewriter.getBoolAttr(succeeded(words)));
       return success();
     }
-    auto gate = schedule::get<schedule::Field::NativeKnownGate>(op);
-    if (!gate || gate.getValue().uge(layout.unknownSummaryGates))
+    IntegerAttr backoffSlot = knownRootsBackoff(op, layout);
+    if (!backoffSlot)
       return rewriter.notifyMatchFailure(op, "gate without backoff state");
-    Value summary = LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                              unknownSummaryName);
-    Value dirty;
-    for (auto [word, mask] : words) {
-      Value bits = LLVM::LoadOp::create(
-          rewriter, location, i64,
-          byteGEP(rewriter, location, summary, 8 * word), 8);
-      bits = LLVM::AndOp::create(rewriter, location, bits,
-                                 llvmConstant(rewriter, location, i64, mask));
-      dirty =
-          dirty
-              ? LLVM::OrOp::create(rewriter, location, dirty, bits).getResult()
-              : bits;
-    }
-    Value clean =
-        LLVM::ICmpOp::create(rewriter, location, LLVM::ICmpPredicate::eq, dirty,
-                             llvmConstant(rewriter, location, i64, 0));
-
     Block *head = rewriter.getInsertionBlock();
     Block *done = rewriter.splitBlock(head, rewriter.getInsertionPoint());
     BlockArgument known = done->addArgument(i1, location);
-    Block *refresh =
-        rewriter.createBlock(head->getParent(), done->getIterator());
-    Block *wait = rewriter.createBlock(head->getParent(), done->getIterator());
-    Block *call = rewriter.createBlock(head->getParent(), done->getIterator());
-    recordStaticSpecializationCFGBlocks(rewriter, head, 4);
+    recordStaticSpecializationCFGBlocks(rewriter, head, 1);
     rewriter.setInsertionPointToEnd(head);
-    markLikelyTrue(cf::CondBranchOp::create(
-        rewriter, location, clean, done,
-        ValueRange{arith::ConstantOp::create(rewriter, location, i1,
-                                             rewriter.getBoolAttr(true))
-                       .getResult()},
-        refresh, ValueRange{}));
-    rewriter.setInsertionPointToEnd(refresh);
-    Value backoff =
-        byteGEP(rewriter, location,
-                LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                          unknownSummaryBackoffName),
-                8 * gate.getValue().getZExtValue());
-    Value state = LLVM::LoadOp::create(rewriter, location, i64, backoff, 8);
-    Value waiting = LLVM::ICmpOp::create(
-        rewriter, location, LLVM::ICmpPredicate::ne,
-        LLVM::TruncOp::create(rewriter, location, rewriter.getI32Type(), state),
-        llvmConstant(rewriter, location, rewriter.getI32Type(), 0));
-    markLikelyTrue(cf::CondBranchOp::create(rewriter, location, waiting, wait,
-                                            ValueRange{}, call, ValueRange{}));
-    rewriter.setInsertionPointToEnd(wait);
-    LLVM::StoreOp::create(
-        rewriter, location,
-        LLVM::SubOp::create(rewriter, location, state,
-                            llvmConstant(rewriter, location, i64, 1)),
-        backoff, 8);
-    cf::BranchOp::create(
-        rewriter, location, done,
-        ValueRange{arith::ConstantOp::create(rewriter, location, i1,
-                                             rewriter.getBoolAttr(false))
-                       .getResult()});
-    rewriter.setInsertionPointToEnd(call);
-    // The (word, mask) pairs the runtime rescans; this path is cold.
-    Value pairs = entryAlloca(rewriter, location, i64, 2 * words.size(), 8);
-    unsigned index = 0;
-    for (auto [word, mask] : words)
-      for (uint64_t element : {word, mask})
-        LLVM::StoreOp::create(
-            rewriter, location, llvmConstant(rewriter, location, i64, element),
-            byteGEP(rewriter, location, pairs, 8 * index++), 8);
-    Value refreshed =
-        LLVM::CallOp::create(
-            rewriter, location, TypeRange{rewriter.getI32Type()},
-            "talos_rt_v1_native_state_refresh_unknown_summary",
-            ValueRange{loadCurrentRuntimeContext(rewriter, location), pairs,
-                       llvmConstant(rewriter, location, i64, words.size()),
-                       backoff})
-            .getResult();
-    Value nonzero = LLVM::ICmpOp::create(
-        rewriter, location, LLVM::ICmpPredicate::ne, refreshed,
-        llvmConstant(rewriter, location, rewriter.getI32Type(), 0));
-    cf::BranchOp::create(rewriter, location, done, ValueRange{nonzero});
+    auto edge = [&](bool answer) -> std::pair<Block *, SmallVector<Value>> {
+      return {done,
+              {arith::ConstantOp::create(rewriter, location, i1,
+                                         rewriter.getBoolAttr(answer))
+                   .getResult()}};
+    };
+    auto dynamic = [&](Value answer) {
+      cf::BranchOp::create(rewriter, location, done, ValueRange{answer});
+    };
+    emitKnownRootsTest(rewriter, location, *words, backoffSlot,
+                       done->getIterator(), {edge, dynamic});
     rewriter.replaceOp(op, known);
+    return success();
+  }
+
+private:
+  const NativeStateLayout &layout;
+};
+
+/// A branch on a summary test takes each answer's edge straight to the
+/// successor it selects. Merging the answers first would leave a block that
+/// only tests a constant argument on two of its three incoming edges.
+///
+/// Only control flow changes: each answer selects the same successor as the
+/// merged form. The two-state copy runs only when every gated root holds no x
+/// or z beyond its steady pattern, where 0/1 evaluation is exact (IEEE
+/// 1800-2023 6.3.1, 6.11.2); otherwise the four-state body runs. Either body
+/// executes the activation's statements and nonblocking assignments in source
+/// order (4.6 a, b).
+class KnownRootsBranchConversion final
+    : public OpConversionPattern<cf::CondBranchOp> {
+public:
+  KnownRootsBranchConversion(const TypeConverter &converter,
+                             MLIRContext *context,
+                             const NativeStateLayout &layout)
+      // Above the generic branch conversion, which would keep the test as a
+      // value.
+      : OpConversionPattern(converter, context, /*benefit=*/3), layout(layout) {
+  }
+
+  LogicalResult
+  matchAndRewrite(cf::CondBranchOp branch, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!branchesOnKnownRoots(branch))
+      return failure();
+    auto gate =
+        branch.getCondition().getDefiningOp<schedule::NativeKnownRootsOp>();
+    auto words = knownRootsSummaryWords(gate);
+    IntegerAttr backoffSlot = knownRootsBackoff(gate, layout);
+    // Fail before any change: the test then stays legal with nothing to
+    // lower it, and conversion reports it.
+    if (succeeded(words) && !words->empty() && !backoffSlot)
+      return gate.emitOpError("has no unknown summary backoff state");
+    FailureOr<Block *> trueDest = convertDestinationBlockArguments(
+        branch.getTrueDest(), *getTypeConverter(), rewriter);
+    if (failed(trueDest))
+      return failure();
+    FailureOr<Block *> falseDest =
+        branch.getFalseDest() == branch.getTrueDest()
+            ? trueDest
+            : convertDestinationBlockArguments(branch.getFalseDest(),
+                                               *getTypeConverter(), rewriter);
+    if (failed(falseDest))
+      return failure();
+    SmallVector<Value> trueOperands = flatten(adaptor.getTrueDestOperands());
+    SmallVector<Value> falseOperands = flatten(adaptor.getFalseDestOperands());
+    ArrayRef<int32_t> weights =
+        branch.getBranchWeights().value_or(ArrayRef<int32_t>{});
+    Location location = branch.getLoc();
+    auto select = [&](Value condition) {
+      auto selected = cf::CondBranchOp::create(
+          rewriter, location, condition, *trueDest, trueOperands, *falseDest,
+          falseOperands, weights);
+      selected->setDiscardableAttrs(branch->getDiscardableAttrDictionary());
+    };
+    rewriter.setInsertionPoint(branch);
+    if (failed(words) || words->empty()) {
+      // Keep both edges: the other successor may have no other predecessor,
+      // and region simplification removes it with the constant branch.
+      select(arith::ConstantOp::create(rewriter, location, rewriter.getI1Type(),
+                                       rewriter.getBoolAttr(succeeded(words))));
+    } else {
+      auto edge = [&](bool answer) -> std::pair<Block *, SmallVector<Value>> {
+        return answer ? std::pair(*trueDest, trueOperands)
+                      : std::pair(*falseDest, falseOperands);
+      };
+      emitKnownRootsTest(rewriter, gate.getLoc(), *words, backoffSlot,
+                         std::next(branch->getBlock()->getIterator()),
+                         {edge, select});
+    }
+    rewriter.eraseOp(branch);
+    rewriter.eraseOp(gate);
     return success();
   }
 
@@ -1338,7 +1457,8 @@ public:
 void populateKnownRootsToLLVMConversionPatterns(
     RewritePatternSet &patterns, TypeConverter &converter,
     const NativeStateLayout &layout) {
-  patterns.add<KnownRootsConversion>(converter, patterns.getContext(), layout);
+  patterns.add<KnownRootsConversion, KnownRootsBranchConversion>(
+      converter, patterns.getContext(), layout);
 }
 
 void populateStateReadWriteToLLVMConversionPatterns(

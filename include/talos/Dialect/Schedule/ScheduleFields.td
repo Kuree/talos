@@ -311,6 +311,10 @@ def NativeKnownRead : ScheduleField<"NativeKnownRead", "schedule.native.known_re
 def NativeKnownStore : ScheduleField<"NativeKnownStore", "schedule.native.known_store", "::mlir::UnitAttr">;
 // The index of a schedule.known.roots gate's rescan backoff state.
 def NativeKnownGate : ScheduleField<"NativeKnownGate", "schedule.native.known_gate", "::mlir::IntegerAttr">;
+// The (word, mask) pairs of the unknown summary a schedule.known.roots gate
+// tests, by ascending word; empty when every root is two-state, so the test
+// holds. Absent when some reference has no summary bit: the test never holds.
+def NativeKnownSummaryWords : ScheduleField<"NativeKnownSummaryWords", "schedule.native.known_summary_words", "::mlir::DenseI64ArrayAttr">;
 // A function containing two-state copies of known-state versioned regions.
 def NativeKnownVersioned : ScheduleField<"NativeKnownVersioned", "schedule.native.known_versioned", "::mlir::UnitAttr">;
 // An activation whose entry selects a copy with value-only gated reads.

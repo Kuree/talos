@@ -581,9 +581,11 @@ public:
   }
 };
 
-static FailureOr<Block *>
-convertBlockArguments(Block *block, const TypeConverter &converter,
-                      ConversionPatternRewriter &rewriter) {
+} // namespace
+
+FailureOr<Block *>
+convertDestinationBlockArguments(Block *block, const TypeConverter &converter,
+                                 ConversionPatternRewriter &rewriter) {
   if (llvm::all_of(block->getArguments(),
                    [&](Value argument) { return converter.isLegal(argument); }))
     return block;
@@ -593,6 +595,8 @@ convertBlockArguments(Block *block, const TypeConverter &converter,
     return failure();
   return rewriter.applySignatureConversion(block, *conversion, &converter);
 }
+
+namespace {
 
 /// The upstream branch adaptor flattens converted operands but intentionally
 /// does not own successor block signature conversion. These patterns keep the
@@ -606,8 +610,8 @@ public:
   LogicalResult
   matchAndRewrite(cf::BranchOp op, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    FailureOr<Block *> destination =
-        convertBlockArguments(op.getDest(), *getTypeConverter(), rewriter);
+    FailureOr<Block *> destination = convertDestinationBlockArguments(
+        op.getDest(), *getTypeConverter(), rewriter);
     if (failed(destination))
       return failure();
     SmallVector<Value> operands = flattenConverted(adaptor.getDestOperands());
@@ -660,15 +664,15 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     Block *originalTrue = op.getTrueDest();
     Block *originalFalse = op.getFalseDest();
-    FailureOr<Block *> trueDestination =
-        convertBlockArguments(originalTrue, *getTypeConverter(), rewriter);
+    FailureOr<Block *> trueDestination = convertDestinationBlockArguments(
+        originalTrue, *getTypeConverter(), rewriter);
     if (failed(trueDestination))
       return failure();
     FailureOr<Block *> falseDestination =
         originalFalse == originalTrue
             ? trueDestination
-            : convertBlockArguments(originalFalse, *getTypeConverter(),
-                                    rewriter);
+            : convertDestinationBlockArguments(originalFalse,
+                                               *getTypeConverter(), rewriter);
     if (failed(falseDestination))
       return failure();
     SmallVector<Value> trueOperands =
@@ -699,8 +703,8 @@ public:
       if (auto found = convertedBlocks.find(destination);
           found != convertedBlocks.end())
         return found->second;
-      FailureOr<Block *> converted =
-          convertBlockArguments(destination, *getTypeConverter(), rewriter);
+      FailureOr<Block *> converted = convertDestinationBlockArguments(
+          destination, *getTypeConverter(), rewriter);
       if (succeeded(converted))
         convertedBlocks.try_emplace(destination, *converted);
       return converted;

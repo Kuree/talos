@@ -581,6 +581,10 @@ void populateDriverToLLVMConversionPatterns(
     bool directState);
 void materializeNativeSchedulerGlobals(mlir::ModuleOp module);
 void markLikelyTrue(mlir::cf::CondBranchOp branch);
+/// Whether `branch` directly follows the `schedule.known.roots` test that is
+/// its condition and the test's only use, so the test lowers as branches to
+/// the two successors.
+bool branchesOnKnownRoots(mlir::cf::CondBranchOp branch);
 void recordStaticSpecializationCFGBlocks(
     mlir::ConversionPatternRewriter &rewriter, mlir::Block *head,
     unsigned newBlockCount);

@@ -54,6 +54,15 @@ void populateSimulationToStandardPatterns(
     const mlir::TypeConverter &converter, mlir::RewritePatternSet &patterns,
     const llvm::DenseSet<mlir::Operation *> &provenTwoStateOperations);
 
+/// Converts the argument types of branch destination `block` with
+/// `converter`, in the same rewrite as the branch that targets it, so 1:N
+/// converted values flow through the CFG without a materialization. Returns
+/// `block` itself when its arguments are already legal.
+mlir::FailureOr<mlir::Block *>
+convertDestinationBlockArguments(mlir::Block *block,
+                                 const mlir::TypeConverter &converter,
+                                 mlir::ConversionPatternRewriter &rewriter);
+
 } // namespace talos
 
 #endif // TALOS_CONVERSION_SIMULATIONTOSTANDARD_H
