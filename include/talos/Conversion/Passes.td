@@ -340,6 +340,22 @@ def FoldNativeScalarValuesPass
                           "mlir::arith::ArithDialect"];
 }
 
+def CleanupNativeFunctionPass
+    : Pass<"talos-native-cleanup-function", "mlir::func::FuncOp"> {
+  let summary = "Canonicalize a lowered native function before LLVM conversion";
+  let description = [{
+    Packed lowering materializes each constant at its use and leaves foldable
+    casts, shifts and repeated address computations; on large designs about
+    half of its operations fold away. Canonicalizes and CSEs each lowered
+    function where that IR is produced, so LLVM conversion and the module-wide
+    native finalization steps work on the reduced IR. Runs only in optimized
+    modules (`native.optimization_level` above zero), like the final LLVM
+    cleanup. None of these functions suspends: suspending processes are
+    already llvm.func coroutine ramps with planned frames. Identical blocks are
+    not merged, so lifetime markers keep naming their allocation.
+  }];
+}
+
 def PrepareNativeLLVMFunctionsPass
     : Pass<"prepare-native-llvm-functions", "mlir::ModuleOp"> {
   let summary = "Publish native LLVM function ABIs and shared runtime symbols";

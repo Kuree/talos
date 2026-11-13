@@ -152,14 +152,17 @@ module attributes {
 // NO-NARROWING-SAME: runtime.bytecode_two_state_logic_registers = 0 : i32
 
 // Function-owned IPO/SCEV facts remain available when the optional whole-
-// design state-domain analysis is skipped by its compile-time budget.
+// design state-domain analysis is skipped by its compile-time budget: the
+// only caller passes a known 41, so the optimized body returns a known 42
+// with no X/Z test.
 // BUDGET-NOT: native.max_state_domain_functions
 // BUDGET-NOT: native.optimization_level
 // BUDGET-LABEL: llvm.func @add_known(
-// BUDGET-SAME: %[[VALUE:[a-zA-Z0-9_]+]]: i64, %[[UNKNOWN:[a-zA-Z0-9_]+]]: i64)
+// BUDGET-SAME: %{{[a-zA-Z0-9_]+}}: i64, %{{[a-zA-Z0-9_]+}}: i64)
+// BUDGET-DAG: %[[SUM:.*]] = llvm.mlir.constant(42 : i64) : i64
+// BUDGET-DAG: %[[KNOWN:.*]] = llvm.mlir.constant(0 : i64) : i64
 // BUDGET-NOT: llvm.icmp "ne"
-// BUDGET: llvm.br ^bb1
-// BUDGET: ^bb1:
-// BUDGET-NOT: llvm.icmp "ne"
-// BUDGET: llvm.return
+// BUDGET: llvm.insertvalue %[[SUM]], %{{.*}}[0]
+// BUDGET-NEXT: llvm.insertvalue %[[KNOWN]], %{{.*}}[1]
+// BUDGET-NEXT: llvm.return
 // BUDGET-LABEL: llvm.func @public_truth(

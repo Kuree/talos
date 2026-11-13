@@ -32,6 +32,9 @@ def NativeDialect : Dialect {
     "::mlir::IntegerAttr":$nba_field,
     // Print native planning and timing diagnostics to stderr.
     "::mlir::UnitAttr":$debug_timing,
+    // Module: native processes are materialized as functions, so LLVM
+    // function preparation may begin; native LLVM finalization removes it.
+    "::mlir::UnitAttr":$processes_materialized,
     // The driver lowers a complete executable and may omit unreferenced
     // implementation helpers. Object and IR emission keep public helpers.
     "::mlir::UnitAttr":$closed_executable,

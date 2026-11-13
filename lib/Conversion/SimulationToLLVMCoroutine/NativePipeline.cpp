@@ -1,3 +1,4 @@
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Pass/PassManager.h"
 #include "talos/Conversion/Passes.h"
@@ -57,6 +58,9 @@ void buildSimulationToLLVMCoroutinePipeline(mlir::OpPassManager &manager,
   manager.addPass(createMaterializeNativeProcessesPass());
   manager.addPass(createThinNativeGCCollectionsPass());
   manager.addPass(createLowerNativeGCCollectionsPass());
+  // Clean packed lowering's output where it was produced, one function at a
+  // time, so conversion and the module-wide finalization see the reduced IR.
+  manager.nest<mlir::func::FuncOp>().addPass(createCleanupNativeFunctionPass());
   manager.addPass(createPrepareNativeLLVMFunctionsPass());
   manager.nest<mlir::LLVM::LLVMFuncOp>().addPass(
       createConvertNativeFunctionBodyPass());

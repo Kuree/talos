@@ -33,23 +33,23 @@ NativeDialect::verifyOperationAttribute(Operation *operation,
   if (failed(discardable::verify<
              OptimizationLevel, MaxStateDomainFunctions,
              DisableTwoStateSpecialization, TwoState, NBAField, DebugTiming,
-             ClosedExecutable, Partition, PartitionManifest, PartitionManifests,
-             ElementDefaults, PhysicalPartitionManifest, Frame, FrameInputs,
-             FrameCheckpoint, EntryKind, ScratchSize, ObserverWidth,
-             ObserverFourState, SpawnCaptureOffsets, SpawnCaptureSize,
-             VirtualOwner, InitializationScope, MethodArgumentSizes,
-             MethodArgumentRoots, TableWait, Unmanaged, SharedCallback,
-             RuntimePublicationCertified, OwnerReleaseInstrumented,
-             TwoStateBlockUnknowns, DriverId, DriverLow, NetId,
-             ExactDriverRange, WholeDriver, MirrorContribution,
-             GuardedBulkDrive, CleanBulkDrive, BulkCopySourceAssumeClean,
-             GuardedRefStore, InBoundsHandleOffset, ManagedRootRangeRecord,
-             ManagedRootRangePushCheck, ManagedRootActivationPrologue,
-             TransferredReferences, NoTransitionRoots, StringGlobal,
-             ScanPrefixGlobal, FileScanPrefixGlobal,
-             AggregateBitstreamPlanGlobal, ContainerPatternPlanGlobal,
-             ContainerPatternPlanSize, BoxTypeId, VpiCallId, VpiLocalId>(
-          operation, attribute)))
+             ProcessesMaterialized, ClosedExecutable, Partition,
+             PartitionManifest, PartitionManifests, ElementDefaults,
+             PhysicalPartitionManifest, Frame, FrameInputs, FrameCheckpoint,
+             EntryKind, ScratchSize, ObserverWidth, ObserverFourState,
+             SpawnCaptureOffsets, SpawnCaptureSize, VirtualOwner,
+             InitializationScope, MethodArgumentSizes, MethodArgumentRoots,
+             TableWait, Unmanaged, SharedCallback, RuntimePublicationCertified,
+             OwnerReleaseInstrumented, TwoStateBlockUnknowns, DriverId,
+             DriverLow, NetId, ExactDriverRange, WholeDriver,
+             MirrorContribution, GuardedBulkDrive, CleanBulkDrive,
+             BulkCopySourceAssumeClean, GuardedRefStore, InBoundsHandleOffset,
+             ManagedRootRangeRecord, ManagedRootRangePushCheck,
+             ManagedRootActivationPrologue, TransferredReferences,
+             NoTransitionRoots, StringGlobal, ScanPrefixGlobal,
+             FileScanPrefixGlobal, AggregateBitstreamPlanGlobal,
+             ContainerPatternPlanGlobal, ContainerPatternPlanSize, BoxTypeId,
+             VpiCallId, VpiLocalId>(operation, attribute)))
     return failure();
   StringRef name = attribute.getName().strref();
   Attribute value = attribute.getValue();
@@ -61,6 +61,7 @@ NativeDialect::verifyOperationAttribute(Operation *operation,
                       name == DisableTwoStateSpecialization::getNameStr() ||
                       name == TwoState::getNameStr() ||
                       name == DebugTiming::getNameStr() ||
+                      name == ProcessesMaterialized::getNameStr() ||
                       name == ClosedExecutable::getNameStr() ||
                       name == PartitionManifests::getNameStr() ||
                       name == ElementDefaults::getNameStr() ||

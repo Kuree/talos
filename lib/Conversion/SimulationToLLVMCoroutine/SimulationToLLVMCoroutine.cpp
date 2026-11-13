@@ -4166,22 +4166,32 @@ class PrepareNativeLLVMFunctionsPass final
 public:
   void runOnOperation() override {
     ModuleOp module = getOperation();
-    auto cached = getCachedAnalysis<detail::NativePipelineAnalysis>();
-    if (!cached || cached->get().stage !=
-                       detail::NativePipelineAnalysis::Stage::Materialized) {
+    // The preparation pipeline's analysis ends with materialization, and
+    // function passes may run in between, so take the stage, target and
+    // timing facts from the module.
+    if (!native::has<native::ProcessesMaterialized>(module)) {
       module.emitError(
           "LLVM coroutine conversion requires the native preparation pipeline");
       return signalPassFailure();
     }
-    // Nested finalization pipelines invalidate the outer analysis cache.
-    // Own the target facts and timing state needed by this terminal pass.
-    llvm::DataLayout targetLayout = cached->get().dataLayout;
+    auto layoutAttr = module->getAttrOfType<StringAttr>("llvm.data_layout");
+    if (!layoutAttr) {
+      module.emitError("LLVM coroutine conversion requires a target layout");
+      return signalPassFailure();
+    }
+    llvm::Expected<llvm::DataLayout> targetLayout =
+        llvm::DataLayout::parse(layoutAttr.getValue());
+    if (!targetLayout) {
+      module.emitError() << "invalid LLVM data layout: "
+                         << llvm::toString(targetLayout.takeError());
+      return signalPassFailure();
+    }
     // Keep readiness semantic until generated member calls have been inlined.
     // Otherwise each call/leaf inspection prematurely flushes its region.
     materializeNativeScheduleActions(module, /*coalesce=*/false,
                                      /*preserveReadiness=*/true);
-    const llvm::DataLayout *parsed = &targetLayout;
-    bool detailedTiming = cached->get().detailedTiming;
+    const llvm::DataLayout *parsed = &*targetLayout;
+    bool detailedTiming = native::has<native::DebugTiming>(module);
     auto lastTiming = std::chrono::steady_clock::now();
     auto markTiming = [&](StringRef name) {
       if (!detailedTiming)
@@ -4492,6 +4502,7 @@ public:
     if (*partitionInventory && failed(detail::publishNativePartitionManifest(
                                    module, **partitionInventory)))
       return signalPassFailure();
+    native::remove<native::ProcessesMaterialized>(module);
     native::remove<native::OptimizationLevel>(module);
     ::talos::schedule::remove<::talos::schedule::Field::MaxInlineOps>(module);
     native::remove<native::MaxStateDomainFunctions>(module);
@@ -4816,6 +4827,9 @@ class MaterializeNativeProcessesPass final
     if (failed(state.materialize()))
       return signalPassFailure();
     state.stage = Analysis::Stage::Materialized;
+    // Function passes may run before LLVM function preparation and end this
+    // analysis; the module carries the stage instead.
+    native::mark<native::ProcessesMaterialized>(getOperation());
     markAnalysesPreserved<Analysis>();
   }
 };
