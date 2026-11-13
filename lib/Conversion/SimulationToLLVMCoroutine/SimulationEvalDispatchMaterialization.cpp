@@ -37,6 +37,8 @@ constexpr StringLiteral evalFourStateNBAHandoffName =
     "__talos_eval_four_state_nba_handoff_v1";
 constexpr StringLiteral writeRootsGuardName =
     "talos_rt_v1_static_specialization_guard_roots";
+constexpr StringLiteral evalWriteRootsGuardName =
+    "__talos_eval_write_guard_roots_v1";
 
 } // namespace
 
@@ -293,65 +295,38 @@ materializeNativeEvalDispatch(ModuleOp module,
   // part of this lookup snapshot, and no executor is added, renamed or erased.
   SymbolTable executorSymbols(module);
   builder.setInsertionPointToEnd(module.getBody());
-  SmallVector<std::string> writeGuards;
   if (plan.writableVPI) {
     // IEEE 1800-2023 38.34 and 10.6: a deposit/force invalidates only the
     // affected source dependencies. Keep scheduling and knownness separate;
     // a known forced value still requires override-aware fine execution.
-    for (unsigned owner = 0; owner != mergedFragments.size(); ++owner) {
-      std::string name =
-          "__talos_eval_write_guard_" + std::to_string(owner) + "_v1";
-      auto guard = LLVM::LLVMFuncOp::create(
-          builder, location, name,
-          LLVM::LLVMFunctionType::get(builder.getI1Type(), {pointer}, false));
-      writeGuards.push_back(name);
-      Block *entry = guard.addEntryBlock(builder), *check = new Block,
-            *clean = new Block;
-      guard.getBody().push_back(check);
-      guard.getBody().push_back(clean);
-      builder.setInsertionPointToStart(entry);
-      Value fast = LLVM::LoadOp::create(
-          builder, location, i32,
-          LLVM::AddressOfOp::create(builder, location, pointer,
-                                    "__talos_static_specialization_fast_v1"),
-          4);
-      Value isClean =
-          arith::CmpIOp::create(builder, location, arith::CmpIPredicate::ne,
-                                fast, llvmConstant(builder, location, i32, 0));
-      cf::CondBranchOp::create(builder, location, isClean, clean, ValueRange{},
-                               check, ValueRange{});
-      builder.setInsertionPointToStart(clean);
-      LLVM::ReturnOp::create(
-          builder, location,
-          llvmConstant(builder, location, builder.getI1Type(), 1));
-      builder.setInsertionPointToStart(check);
-      Value allowed;
-      const auto &states = plan.ownerStaticStates[owner];
-      if (!states.empty()) {
-        std::string rootsName =
-            "__talos_eval_write_guard_states_" + std::to_string(owner) + "_v1";
-        auto array = LLVM::LLVMArrayType::get(i32, states.size());
-        auto values = DenseElementsAttr::get(
-            RankedTensorType::get({static_cast<int64_t>(states.size())}, i32),
-            ArrayRef<uint32_t>(states));
-        makeConstantGlobal(module, location, array, rootsName,
-                           LLVM::Linkage::Internal, 4, values);
-        Value checked =
-            LLVM::CallOp::create(
-                builder, location, TypeRange{i32}, writeRootsGuardName,
-                ValueRange{entry->getArgument(0),
-                           LLVM::AddressOfOp::create(builder, location, pointer,
-                                                     rootsName),
-                           llvmConstant(builder, location, builder.getI64Type(),
-                                        states.size())})
-                .getResult();
-        allowed = arith::CmpIOp::create(
-            builder, location, arith::CmpIPredicate::ne, checked,
-            llvmConstant(builder, location, i32, 0));
-      } else
-        allowed = llvmConstant(builder, location, builder.getI1Type(), 1);
-      LLVM::ReturnOp::create(builder, location, allowed);
-      builder.setInsertionPointAfter(guard);
+    // One shared cold roots query: native partitions cannot inline
+    // thousands of per-owner helpers.
+    auto guard = LLVM::LLVMFuncOp::create(
+        builder, location, evalWriteRootsGuardName,
+        LLVM::LLVMFunctionType::get(builder.getI1Type(),
+                                    {pointer, pointer, i64}, false));
+    Block *entry = guard.addEntryBlock(builder);
+    builder.setInsertionPointToStart(entry);
+    Value checked =
+        LLVM::CallOp::create(builder, location, TypeRange{i32},
+                             writeRootsGuardName, entry->getArguments())
+            .getResult();
+    Value allowed = arith::CmpIOp::create(
+        builder, location, arith::CmpIPredicate::ne, checked,
+        llvmConstant(builder, location, i32, 0));
+    LLVM::ReturnOp::create(builder, location, allowed);
+    builder.setInsertionPointAfter(guard);
+    for (auto [owner, states] : llvm::enumerate(plan.ownerStaticStates)) {
+      if (states.empty())
+        continue;
+      std::string rootsName =
+          "__talos_eval_write_guard_states_" + std::to_string(owner) + "_v1";
+      auto array = LLVM::LLVMArrayType::get(i32, states.size());
+      auto values = DenseElementsAttr::get(
+          RankedTensorType::get({static_cast<int64_t>(states.size())}, i32),
+          ArrayRef<uint32_t>(states));
+      makeConstantGlobal(module, location, array, rootsName,
+                         LLVM::Linkage::Internal, 4, values);
     }
   }
   SmallVector<Type> coordinatorArguments{pointer, pointer};
@@ -489,10 +464,43 @@ materializeNativeEvalDispatch(ModuleOp module,
     return maskedOwnerWords(builder, location, ingressAddress(), allOwners);
   };
   auto ownerWritableClean = [&](unsigned owner, Value context) -> Value {
-    return LLVM::CallOp::create(builder, location,
-                                TypeRange{builder.getI1Type()},
-                                writeGuards[owner], ValueRange{context})
-        .getResult();
+    Value clean = llvmConstant(builder, location, builder.getI1Type(), 1);
+    if (plan.writableVPI && !plan.ownerStaticStates[owner].empty()) {
+      // Recheck at every owner: an intervening runtime/foreign callback can
+      // deposit or force a value and invalidate the fast flag mid-dispatch.
+      Region *body = builder.getInsertionBlock()->getParent();
+      Block *check = new Block, *join = new Block;
+      join->addArgument(builder.getI1Type(), location);
+      body->push_back(check);
+      body->push_back(join);
+      Value fast = LLVM::LoadOp::create(
+          builder, location, i32,
+          LLVM::AddressOfOp::create(builder, location, pointer,
+                                    "__talos_static_specialization_fast_v1"),
+          4);
+      Value isClean =
+          arith::CmpIOp::create(builder, location, arith::CmpIPredicate::ne,
+                                fast, llvmConstant(builder, location, i32, 0));
+      cf::CondBranchOp::create(builder, location, isClean, join,
+                               ValueRange{clean}, check, ValueRange{});
+      builder.setInsertionPointToStart(check);
+      std::string rootsName =
+          "__talos_eval_write_guard_states_" + std::to_string(owner) + "_v1";
+      Value allowed =
+          LLVM::CallOp::create(
+              builder, location, TypeRange{builder.getI1Type()},
+              evalWriteRootsGuardName,
+              ValueRange{context,
+                         LLVM::AddressOfOp::create(builder, location, pointer,
+                                                   rootsName),
+                         llvmConstant(builder, location, i64,
+                                      plan.ownerStaticStates[owner].size())})
+              .getResult();
+      cf::BranchOp::create(builder, location, join, ValueRange{allowed});
+      builder.setInsertionPointToStart(join);
+      clean = join->getArgument(0);
+    }
+    return clean;
   };
   auto clearIngressMask = [&](const APInt &mask, Value condition = Value{}) {
     updateOwnerMask(builder, location, ingressAddress(), mask,

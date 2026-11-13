@@ -4,15 +4,23 @@
 // RUN: talos-translate --mlir-to-llvmir %t.mlirbc | opt -passes=verify -disable-output
 
 // LRM 38.34/10.6.2: keep each owner's exact root dependencies and clean
-// fast-flag test. Use the shared runtime scan instead of generating a call
-// sequence per owner. The scan still visits every root for diagnostics.
+// fast-flag test. Share the cold query across all owners and keep the flag
+// branch at its call sites. The scan still visits every root for diagnostics.
 // CHECK-DAG: llvm.mlir.global internal constant @__talos_eval_write_guard_states_0_v1(dense<[1, 2]> : tensor<2xi32>)
 // CHECK-DAG: llvm.mlir.global internal constant @__talos_eval_write_guard_states_1_v1(dense<[2, 3]> : tensor<2xi32>)
 // CHECK-DAG: llvm.mlir.global internal constant @__talos_eval_write_guard_states_2_v1(dense<[3, 4]> : tensor<2xi32>)
-// CHECK-LABEL: llvm.func @__talos_eval_write_guard_0_v1(
-// CHECK: llvm.mlir.addressof @__talos_static_specialization_fast_v1
-// CHECK: llvm.cond_br
-// CHECK: llvm.mlir.addressof @__talos_eval_write_guard_states_0_v1
+// CHECK-LABEL: llvm.func @__talos_eval_write_guard_roots_v1(
 // CHECK: llvm.call @talos_rt_v1_static_specialization_guard_roots
 // CHECK-NOT: llvm.call @talos_rt_v1_static_specialization_guard(
 // CHECK: llvm.return
+// CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1(
+// CHECK: %[[ADDR:.*]] = llvm.mlir.addressof @__talos_static_specialization_fast_v1
+// CHECK: %[[FAST:.*]] = llvm.load %[[ADDR]]
+// CHECK: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
+// CHECK: %[[CLEAN:.*]] = llvm.icmp "ne" %[[FAST]], %[[ZERO]]
+// CHECK: llvm.cond_br %[[CLEAN]], ^[[JOIN:bb[0-9]+]]({{.*}}), ^[[SLOW:bb[0-9]+]]
+// CHECK: ^[[SLOW]]:
+// CHECK: %[[ROOTS:.*]] = llvm.mlir.addressof @__talos_eval_write_guard_states_0_v1
+// CHECK: %[[COUNT:.*]] = llvm.mlir.constant(2 : i64)
+// CHECK: %[[ALLOWED:.*]] = llvm.call @__talos_eval_write_guard_roots_v1({{.*}}, %[[ROOTS]], %[[COUNT]])
+// CHECK: llvm.br ^[[JOIN]](%[[ALLOWED]] : i1)

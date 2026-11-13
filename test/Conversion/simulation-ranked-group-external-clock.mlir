@@ -4,7 +4,7 @@
 // The NBA counter feeds a two-actor native group before VPI observes count.
 // The model has no internal clock process. Every edge is a VPI deposit.
 // Full VPI retains exact owner entry points for local mutation handoff.
-// PLAN-LABEL: llvm.func @__talos_eval_write_guard_0_v1(
+// PLAN-LABEL: llvm.func @__talos_eval_write_guard_roots_v1(
 // PLAN: llvm.call @talos_rt_v1_static_specialization_guard_roots
 // PLAN-LABEL: llvm.func @__talos_eval_dispatch_v1(
 // PLAN: llvm.call @__talos_eval_write_guard_
