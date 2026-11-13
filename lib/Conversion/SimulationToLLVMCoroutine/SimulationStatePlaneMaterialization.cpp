@@ -265,7 +265,14 @@ void assignUnknownSummary(ModuleOp module, NativeStateLayout &layout) {
         continue;
       }
       tracked &= decoded.offset == 0;
-      if (!fourState.lookup(decoded.id)) {
+      // A root without a layout bound has no known value domain: fail closed
+      // instead of assuming it cannot hold x or z (IEEE 1800-2023 6.3.1).
+      auto domain = fourState.find(decoded.id);
+      if (domain == fourState.end()) {
+        tracked = false;
+        continue;
+      }
+      if (!domain->second) {
         layout.unknownSummaryBits.try_emplace(decoded.id,
                                               NativeStateLayout::twoStateRoot);
         continue;
