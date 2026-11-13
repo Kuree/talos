@@ -536,9 +536,13 @@ void populateAggregateToLLVMConversionPatterns(
     mlir::RewritePatternSet &patterns, mlir::TypeConverter &converter);
 void populateControlToLLVMConversionPatterns(mlir::RewritePatternSet &patterns,
                                              mlir::TypeConverter &converter);
+/// Function signature conversion appends to `zeroUnknownPlanes` the
+/// converted block arguments that carry the unknown plane of a value proven
+/// two-state; they are zero once conversion has remapped every use.
 void populateFunctionTypeConversionPatterns(
     mlir::RewritePatternSet &patterns, mlir::TypeConverter &converter,
-    const llvm::DenseSet<mlir::Value> &twoStateValues);
+    const llvm::DenseSet<mlir::Value> &twoStateValues,
+    llvm::SmallVectorImpl<mlir::Value> *zeroUnknownPlanes);
 void populateEventToLLVMConversionPatterns(mlir::RewritePatternSet &patterns,
                                            mlir::TypeConverter &converter);
 void populateSuspensionTypeConversionPatterns(mlir::RewritePatternSet &patterns,
@@ -584,9 +588,6 @@ void markLikelyTrue(mlir::cf::CondBranchOp branch);
 /// its condition and the test's only use, so the test lowers as branches to
 /// the two successors.
 bool branchesOnKnownRoots(mlir::cf::CondBranchOp branch);
-void recordStaticSpecializationCFGBlocks(
-    mlir::ConversionPatternRewriter &rewriter, mlir::Block *head,
-    unsigned newBlockCount);
 mlir::Value staticSpecializationGuard(mlir::ConversionPatternRewriter &rewriter,
                                       mlir::Location location,
                                       uint32_t staticID, uint32_t flags);

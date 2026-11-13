@@ -1058,18 +1058,13 @@ LogicalResult lowerPackedSimulationOperations(
   if (lifetimeInputs.wasInterrupted())
     return failure();
   markTiming("managed lifetime inventory");
-  // This is transaction-local metadata produced only by the AOT signature
-  // pattern below. Never consume a same-named source attribute.
-  ::talos::detail::walkNativeFunctions<sim::SimFuncOp>(
-      module, [](sim::SimFuncOp function) {
-        native::remove<native::TwoStateBlockUnknowns>(function);
-      });
   NativeStateLayout cleanEvalLayout = makeCleanEvalStateLayout(stateLayout);
   auto classLowering = collectNativeClassLowering(module);
   if (failed(classLowering))
     return failure();
   auto populatePackedPatterns = [&](SimulationToStandardTypeConverter &c,
                                     RewritePatternSet &patterns,
+                                    SmallVectorImpl<Value> &zeroUnknownPlanes,
                                     bool cleanEval = false,
                                     const LocalStorageLowering *locals =
                                         nullptr) {
@@ -1078,7 +1073,8 @@ LogicalResult lowerPackedSimulationOperations(
     populateSimulationToStandardPatterns(c, patterns, nativeTwoStateOperations);
     populateSimulationPackedAggregateViewPatterns(c, patterns);
     populateSimulationToRuntimePatterns(c, patterns);
-    populateFunctionTypeConversionPatterns(patterns, c, nativeTwoStateValues);
+    populateFunctionTypeConversionPatterns(patterns, c, nativeTwoStateValues,
+                                           &zeroUnknownPlanes);
     populateAggregateToLLVMConversionPatterns(patterns, c);
     populateControlToLLVMConversionPatterns(patterns, c);
     populateEventToLLVMConversionPatterns(patterns, c);
@@ -1106,8 +1102,11 @@ LogicalResult lowerPackedSimulationOperations(
         staticNBAPlan != nullptr, vpiAllowsWrite && !cleanEval,
         experimentalTwoState, completePackedSliceNBAs);
   };
+  // Each conversion collects the unknown planes it proved zero; see below.
+  SmallVector<Value> moduleZeroUnknownPlanes;
   RewritePatternSet packedPatterns(context);
-  populatePackedPatterns(packedConverter, packedPatterns);
+  populatePackedPatterns(packedConverter, packedPatterns,
+                         moduleZeroUnknownPlanes);
   auto configurePackedTarget = [&](ConversionTarget &target,
                                    SimulationToStandardTypeConverter &c) {
     target.addIllegalOp<
@@ -1337,6 +1336,7 @@ LogicalResult lowerPackedSimulationOperations(
     double conversionSeconds = 0;
   };
   std::vector<ChunkTiming> chunkTimings(functionChunks.size());
+  std::vector<SmallVector<Value>> chunkZeroUnknownPlanes(functionChunks.size());
   if (failed(failableParallelForEach(
           context, llvm::seq<size_t>(0, functionChunks.size()),
           [&](size_t index) {
@@ -1357,9 +1357,9 @@ LogicalResult lowerPackedSimulationOperations(
               }
             }
             // Access guards can split blocks. Expose CFG before reference
-            // lowering and before signature conversion records block-indexed
-            // two-state metadata. Keep access operations themselves intact so
-            // the frozen selector proofs still describe those same accesses.
+            // lowering and signature conversion. Keep access operations
+            // themselves intact so the frozen selector proofs still describe
+            // those same accesses.
             RewritePatternSet controlPatterns(context);
             populateSCFToControlFlowConversionPatterns(controlPatterns);
             ConversionTarget controlTarget(*context);
@@ -1378,7 +1378,7 @@ LogicalResult lowerPackedSimulationOperations(
             locals.addValueConversions(workerConverter);
             RewritePatternSet workerPatterns(context);
             populatePackedPatterns(
-                workerConverter, workerPatterns,
+                workerConverter, workerPatterns, chunkZeroUnknownPlanes[index],
                 ::talos::schedule::has<cleanEvalBodyAttr>(functions.front()),
                 &locals);
             FrozenRewritePatternSet workerFrozen(std::move(workerPatterns));
@@ -1434,54 +1434,28 @@ LogicalResult lowerPackedSimulationOperations(
   // after dialect conversion has finished remapping every original logic use;
   // doing this inside the signature pattern would not update future one-to-N
   // operand adaptors owned by the conversion driver.
-  WalkResult specializedBlockArguments =
-      ::talos::detail::walkNativeFunctions<sim::SimFuncOp>(
-          module, [&](sim::SimFuncOp function) {
-            auto mappings =
-                native::get<native::TwoStateBlockUnknowns>(function);
-            if (!mappings)
-              return WalkResult::advance();
-            if (mappings.size() != function.getBody().getBlocks().size()) {
-              function.emitOpError(
-                  "has invalid native two-state block-argument metadata");
-              return WalkResult::interrupt();
-            }
-            OpBuilder builder(context);
-            for (auto [block, mapping] :
-                 llvm::zip_equal(function.getBody(), mappings)) {
-              auto indices = dyn_cast<DenseI64ArrayAttr>(mapping);
-              if (!indices) {
-                function.emitOpError(
-                    "has malformed native two-state block-argument metadata");
-                return WalkResult::interrupt();
-              }
-              builder.setInsertionPointToStart(&block);
-              for (int64_t index : indices.asArrayRef()) {
-                if (index < 0 ||
-                    static_cast<uint64_t>(index) >= block.getNumArguments()) {
-                  function.emitOpError(
-                      "has out-of-range native two-state block argument");
-                  return WalkResult::interrupt();
-                }
-                BlockArgument argument =
-                    block.getArgument(static_cast<unsigned>(index));
-                auto type = dyn_cast<IntegerType>(argument.getType());
-                if (!type) {
-                  function.emitOpError(
-                      "has non-integer native two-state unknown plane");
-                  return WalkResult::interrupt();
-                }
-                Value zero = arith::ConstantOp::create(
-                    builder, function.getLoc(), type,
-                    builder.getIntegerAttr(type,
-                                           APInt::getZero(type.getWidth())));
-                argument.replaceAllUsesWith(zero);
-              }
-            }
-            native::remove<native::TwoStateBlockUnknowns>(function);
-            return WalkResult::advance();
-          });
-  if (specializedBlockArguments.wasInterrupted())
+  auto zeroUnknownPlanes = [&](ArrayRef<Value> planes) -> LogicalResult {
+    // Each zero goes to the start of its block; visiting the planes in
+    // reverse keeps a block's zeros in argument order.
+    for (Value plane : llvm::reverse(planes)) {
+      auto argument = cast<BlockArgument>(plane);
+      Operation *function = argument.getOwner()->getParentOp();
+      auto type = dyn_cast<IntegerType>(argument.getType());
+      if (!type)
+        return function->emitOpError(
+            "has non-integer native two-state unknown plane");
+      OpBuilder builder = OpBuilder::atBlockBegin(argument.getOwner());
+      Value zero = arith::ConstantOp::create(
+          builder, function->getLoc(), type,
+          builder.getIntegerAttr(type, APInt::getZero(type.getWidth())));
+      argument.replaceAllUsesWith(zero);
+    }
+    return success();
+  };
+  for (ArrayRef<Value> planes : chunkZeroUnknownPlanes)
+    if (failed(zeroUnknownPlanes(planes)))
+      return failure();
+  if (failed(zeroUnknownPlanes(moduleZeroUnknownPlanes)))
     return failure();
   // These summaries describe semantic scalar arguments and results. Packed
   // conversion has changed their ABI and indices; no later pass may reuse

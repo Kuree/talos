@@ -22,7 +22,6 @@ module attributes {
   // CHECK-SAME: native.frame = #native.frame<size = 16, alignment = 8, checksum = 7, continuations = [0, 1], fields = [#native.frame_field<kind = 1, flags = 0, offset = 0, size = 8, alignment = 8, reserved = 0>]>
   // CHECK-SAME: native.frame_inputs = #native.frame_inputs<signature = (i32) -> (), identity = [1, 2, 0], abi = [16, 8, 7, 0], continuations = [#native.frame_site<identity = [1, 1, 0, 8], types = [i32]>]>
   // CHECK-SAME: native.partition = "primary"
-  // CHECK-SAME: native.two_state_block_unknowns = [array<i64: 0>, array<i64>]
   func.func private @process(i32) attributes {
     native.partition = "primary",
     native.frame = #native.frame<size = 16, alignment = 8, checksum = 7,
@@ -32,6 +31,5 @@ module attributes {
     native.frame_inputs = #native.frame_inputs<signature = (i32) -> (),
         identity = [1, 2, 0], abi = [16, 8, 7, 0],
         continuations = [#native.frame_site<identity = [1, 1, 0, 8],
-                                            types = [i32]>]>,
-    native.two_state_block_unknowns = [array<i64: 0>, array<i64>]}
+                                            types = [i32]>]>}
 }

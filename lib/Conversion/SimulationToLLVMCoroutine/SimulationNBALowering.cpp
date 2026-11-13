@@ -1107,7 +1107,6 @@ public:
           rewriter.createBlock(region, guardContinuation->getIterator());
       Block *fallback =
           rewriter.createBlock(region, guardContinuation->getIterator());
-      recordStaticSpecializationCFGBlocks(rewriter, head, 3);
       rewriter.setInsertionPointToEnd(head);
       markLikelyTrue(cf::CondBranchOp::create(rewriter, location, useDirect,
                                               direct, ValueRange{}, fallback,
@@ -1355,7 +1354,6 @@ public:
             rewriter.splitBlock(head, rewriter.getInsertionPoint());
         Block *staged = rewriter.createBlock(head->getParent(),
                                              continuation->getIterator());
-        recordStaticSpecializationCFGBlocks(rewriter, head, 2);
         rewriter.setInsertionPointToEnd(head);
         Value hasUnknown = arith::CmpIOp::create(
             rewriter, location, arith::CmpIPredicate::ne, unknown,
@@ -1459,7 +1457,6 @@ public:
               rewriter.splitBlock(head, rewriter.getInsertionPoint());
           Block *stage = rewriter.createBlock(
               head->getParent(), unchangedContinuation->getIterator());
-          recordStaticSpecializationCFGBlocks(rewriter, head, 2);
           rewriter.setInsertionPointToEnd(head);
           cf::CondBranchOp::create(rewriter, location, needed, stage,
                                    ValueRange{}, unchangedContinuation,
@@ -1693,7 +1690,6 @@ public:
             rewriter.createBlock(region, continuation->getIterator());
         Block *claimBlock =
             rewriter.createBlock(region, continuation->getIterator());
-        recordStaticSpecializationCFGBlocks(rewriter, head, 3);
 
         rewriter.setInsertionPointToEnd(head);
         markLikelyTrue(cf::CondBranchOp::create(rewriter, location, useDirect,

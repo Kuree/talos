@@ -2,7 +2,6 @@
 
 #include "SimulationToLLVMCoroutinePrivate.h"
 
-#include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -39,25 +38,6 @@ void markLikelyTrue(cf::CondBranchOp branch) {
       ArrayRef<int32_t>{likelyBranchWeight, unlikelyBranchWeight});
 }
 
-void recordStaticSpecializationCFGBlocks(ConversionPatternRewriter &rewriter,
-                                         Block *head, unsigned newBlockCount) {
-  auto function = dyn_cast<sim::SimFuncOp>(head->getParentOp());
-  if (!function)
-    return;
-  auto metadata = native::get<native::TwoStateBlockUnknowns>(function);
-  if (!metadata)
-    return;
-  unsigned headIndex = static_cast<unsigned>(
-      std::distance(function.getBody().begin(), head->getIterator()));
-  SmallVector<Attribute> entries(metadata.begin(), metadata.end());
-  entries.insert(entries.begin() + headIndex + 1, newBlockCount,
-                 rewriter.getDenseI64ArrayAttr({}));
-  rewriter.modifyOpInPlace(function, [&] {
-    native::set<native::TwoStateBlockUnknowns>(function,
-                                               rewriter.getArrayAttr(entries));
-  });
-}
-
 Value staticSpecializationGuard(ConversionPatternRewriter &rewriter,
                                 Location location, uint32_t staticID,
                                 uint32_t flags) {
@@ -69,7 +49,6 @@ Value staticSpecializationGuard(ConversionPatternRewriter &rewriter,
       continuation->addArgument(rewriter.getI1Type(), location);
   Region *region = head->getParent();
   Block *slowBlock = rewriter.createBlock(region, continuation->getIterator());
-  recordStaticSpecializationCFGBlocks(rewriter, head, 2);
 
   rewriter.setInsertionPointToEnd(head);
   Value useFast = loadStaticSpecializationFast(rewriter, location);
@@ -113,7 +92,6 @@ Value staticNBASpecializationGuard(ConversionPatternRewriter &rewriter,
       continuation->addArgument(rewriter.getI1Type(), location);
   Region *region = head->getParent();
   Block *slowBlock = rewriter.createBlock(region, continuation->getIterator());
-  recordStaticSpecializationCFGBlocks(rewriter, head, 2);
 
   rewriter.setInsertionPointToEnd(head);
   Value useFast =

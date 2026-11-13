@@ -1,7 +1,6 @@
 //===- SimulationFunctionTypeLowering.cpp - Function type rewrites -------===//
 
 #include "SimulationToLLVMCoroutinePrivate.h"
-#include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleOps.h"
 
 #include "talos/Dialect/Simulation/SimulationOps.h"
@@ -38,9 +37,10 @@ class FuncSignatureConversion final
     : public OpConversionPattern<sim::SimFuncOp> {
 public:
   FuncSignatureConversion(const TypeConverter &converter, MLIRContext *context,
-                          const llvm::DenseSet<Value> &twoStateValues)
+                          const llvm::DenseSet<Value> &twoStateValues,
+                          SmallVectorImpl<Value> *zeroUnknownPlanes)
       : OpConversionPattern(converter, context),
-        twoStateValues(&twoStateValues) {}
+        twoStateValues(&twoStateValues), zeroUnknownPlanes(zeroUnknownPlanes) {}
 
   LogicalResult
   matchAndRewrite(sim::SimFuncOp function, OneToNOpAdaptor,
@@ -54,9 +54,13 @@ public:
       SmallVector<int64_t> unknowns;
       unsigned physical = 0;
       for (BlockArgument argument : block.getArguments()) {
+        // Count planes as region conversion below does: the entry block by
+        // the function type, every other block by its argument values.
         SmallVector<Type> converted;
-        if (failed(
-                getTypeConverter()->convertType(argument.getType(), converted)))
+        if (failed(block.isEntryBlock() ? getTypeConverter()->convertType(
+                                              argument.getType(), converted)
+                                        : getTypeConverter()->convertType(
+                                              Value(argument), converted)))
           return failure();
         if (isa<sim::LogicType>(argument.getType()) &&
             twoStateValues->contains(argument) && converted.size() == 2)
@@ -72,10 +76,17 @@ public:
          failed(rewriter.convertRegionTypes(&function.getBody(),
                                             *getTypeConverter(), &entry))))
       return failure();
-    SmallVector<Attribute> zeroUnknownAttr;
-    zeroUnknownAttr.reserve(zeroUnknownArguments.size());
-    for (ArrayRef<int64_t> indices : zeroUnknownArguments)
-      zeroUnknownAttr.push_back(rewriter.getDenseI64ArrayAttr(indices));
+    // Region conversion replaces each block in place. Name the converted
+    // unknown planes by value: later patterns split and add blocks, which
+    // leaves a block's own arguments alone. This pattern is the only one for
+    // a function, and its result is legal, so the driver never rolls it back
+    // and leaves a recorded plane dangling.
+    for (auto [block, indices] :
+         llvm::zip_equal(function.getBody(), zeroUnknownArguments))
+      for (int64_t index : indices) {
+        assert(index < block.getNumArguments() && "plane out of range");
+        zeroUnknownPlanes->push_back(block.getArgument(index));
+      }
     SmallVector<Attribute> argAttrs(entry.getConvertedTypes().size(),
                                     rewriter.getDictionaryAttr({}));
     // A packed signature carries physical values, not descriptor-typed
@@ -99,14 +110,13 @@ public:
       sim::remove<sim::metadata::Bindings>(function);
       if (!resultAttrs.empty())
         function.setResAttrsAttr(rewriter.getArrayAttr(resultAttrs));
-      native::set<native::TwoStateBlockUnknowns>(
-          function, rewriter.getArrayAttr(zeroUnknownAttr));
     });
     return success();
   }
 
 private:
   const llvm::DenseSet<Value> *twoStateValues;
+  SmallVectorImpl<Value> *zeroUnknownPlanes;
 };
 
 class ReturnTypeConversion final
@@ -311,10 +321,12 @@ public:
 
 void populateFunctionTypeConversionPatterns(
     RewritePatternSet &patterns, TypeConverter &converter,
-    const llvm::DenseSet<Value> &twoStateValues) {
+    const llvm::DenseSet<Value> &twoStateValues,
+    SmallVectorImpl<Value> *zeroUnknownPlanes) {
   MLIRContext *context = patterns.getContext();
-  patterns.add<FuncSignatureConversion, CallTypeConversion>(converter, context,
-                                                            twoStateValues);
+  patterns.add<FuncSignatureConversion>(converter, context, twoStateValues,
+                                        zeroUnknownPlanes);
+  patterns.add<CallTypeConversion>(converter, context, twoStateValues);
   patterns
       .add<ReturnTypeConversion, SelectTypeConversion, TaskCallTypeConversion,
            ClassVirtualTaskCallTypeConversion, DPICallTypeConversion>(converter,

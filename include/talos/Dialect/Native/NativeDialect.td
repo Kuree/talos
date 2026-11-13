@@ -79,8 +79,6 @@ def NativeDialect : Dialect {
     "::mlir::UnitAttr":$shared_callback,
     "::mlir::UnitAttr":$runtime_publication_certified,
     "::mlir::UnitAttr":$owner_release_instrumented,
-    // Per block, the argument indices whose unknown planes are zero.
-    "::mlir::ArrayAttr":$two_state_block_unknowns,
 
     // Driver lowering certificates.
     "::mlir::IntegerAttr":$driver_id,

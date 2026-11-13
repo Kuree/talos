@@ -424,7 +424,6 @@ void emitKnownRootsTest(ConversionPatternRewriter &rewriter, Location location,
   Block *refresh = rewriter.createBlock(region, blocks);
   Block *wait = rewriter.createBlock(region, blocks);
   Block *call = rewriter.createBlock(region, blocks);
-  recordStaticSpecializationCFGBlocks(rewriter, head, 3);
   rewriter.setInsertionPoint(head, headPoint);
   auto [known, knownOperands] = exits.edge(true);
   markLikelyTrue(cf::CondBranchOp::create(
@@ -496,7 +495,6 @@ public:
     Block *head = rewriter.getInsertionBlock();
     Block *done = rewriter.splitBlock(head, rewriter.getInsertionPoint());
     BlockArgument known = done->addArgument(i1, location);
-    recordStaticSpecializationCFGBlocks(rewriter, head, 1);
     rewriter.setInsertionPointToEnd(head);
     auto edge = [&](bool answer) -> std::pair<Block *, SmallVector<Value>> {
       return {done,
@@ -817,7 +815,6 @@ public:
       Region *region = head->getParent();
       Block *fast = rewriter.createBlock(region, tail->getIterator());
       Block *slow = rewriter.createBlock(region, tail->getIterator());
-      recordStaticSpecializationCFGBlocks(rewriter, head, 3);
       for (auto [block, clean] :
            {std::pair{fast, true}, std::pair{slow, false}}) {
         rewriter.setInsertionPointToEnd(block);

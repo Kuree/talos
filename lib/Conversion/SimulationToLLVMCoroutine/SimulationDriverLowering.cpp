@@ -318,7 +318,6 @@ public:
           SmallVector<Value> results;
           for (Type type : op->getResultTypes())
             results.push_back(tail->addArgument(type, op.getLoc()));
-          recordStaticSpecializationCFGBlocks(rewriter, head, 3);
           for (auto [block, useClean] :
                {std::pair{fast, true}, std::pair{slow, false}}) {
             rewriter.setInsertionPointToEnd(block);

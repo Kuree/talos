@@ -20,12 +20,6 @@ module attributes {native.physical_partition_manifest = [{id = "primary"}]} {}
 
 // -----
 
-// expected-error @+1 {{attribute 'native.two_state_block_unknowns' must contain one index array per block}}
-func.func private @blocks() attributes {
-  native.two_state_block_unknowns = [[0]]}
-
-// -----
-
 func.func private @partition() attributes {
   // expected-error @+1 {{native partition members, imports and exports must be symbols}}
   native.partition_manifest = [#native.partition<id = "p", members = ["f"],

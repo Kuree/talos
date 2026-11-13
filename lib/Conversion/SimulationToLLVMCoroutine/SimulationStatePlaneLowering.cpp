@@ -61,7 +61,6 @@ void notifySignal(ConversionPatternRewriter &builder, Location location,
     Block *continuation = builder.splitBlock(head, builder.getInsertionPoint());
     Region *region = head->getParent();
     Block *publish = builder.createBlock(region, continuation->getIterator());
-    recordStaticSpecializationCFGBlocks(builder, head, 2);
     builder.setInsertionPointToEnd(head);
     cf::CondBranchOp::create(builder, location, unchanged, continuation,
                              ValueRange{}, publish, ValueRange{});
@@ -373,7 +372,6 @@ Value loadDynamicPackedWindow(ConversionPatternRewriter &rewriter,
     Block *continuation =
         rewriter.splitBlock(load, rewriter.getInsertionPoint());
     Region *region = load->getParent();
-    recordStaticSpecializationCFGBlocks(rewriter, load, 3);
     Block *narrow = rewriter.createBlock(region, continuation->getIterator());
     Block *wide = rewriter.createBlock(region, continuation->getIterator());
     Block *loadedJoin = continuation;
@@ -414,7 +412,6 @@ Value loadDirectDynamicPackedPlane(ConversionPatternRewriter &rewriter,
     Block *load = rewriter.createBlock(head->getParent(), join->getIterator());
     Block *fallback =
         rewriter.createBlock(head->getParent(), join->getIterator());
-    recordStaticSpecializationCFGBlocks(rewriter, head, 3);
     rewriter.setInsertionPointToEnd(head);
     cf::CondBranchOp::create(rewriter, location, range.valid, load, fallback);
     rewriter.setInsertionPointToEnd(load);
@@ -527,7 +524,6 @@ Value loadDirectDynamicPackedPlane(ConversionPatternRewriter &rewriter,
   Region *region = head->getParent();
   Block *load = rewriter.createBlock(region, continuation->getIterator());
   Block *fallback = rewriter.createBlock(region, continuation->getIterator());
-  recordStaticSpecializationCFGBlocks(rewriter, head, 3);
   rewriter.setInsertionPointToEnd(head);
   cf::CondBranchOp::create(rewriter, location, valid, load, ValueRange{},
                            fallback, ValueRange{});
@@ -926,7 +922,6 @@ Value loadStatePlane(ConversionPatternRewriter &rewriter, Location location,
       rewriter.createBlock(region, continuation->getIterator());
   Block *genericBlock =
       rewriter.createBlock(region, continuation->getIterator());
-  recordStaticSpecializationCFGBlocks(rewriter, head, 3);
 
   rewriter.setInsertionPointToEnd(head);
   Value useDirect = guardedPermission
@@ -1052,7 +1047,6 @@ Value storeStatePlane(ConversionPatternRewriter &rewriter, Location location,
       rewriter.createBlock(region, continuation->getIterator());
   Block *genericBlock =
       rewriter.createBlock(region, continuation->getIterator());
-  recordStaticSpecializationCFGBlocks(rewriter, head, 3);
 
   rewriter.setInsertionPointToEnd(head);
   Value useDirect =
@@ -1112,7 +1106,6 @@ bool emitDirectDynamicPackedStore(
           rewriter.splitBlock(head, rewriter.getInsertionPoint());
       Block *body = rewriter.createBlock(head->getParent(),
                                          guardContinuation->getIterator());
-      recordStaticSpecializationCFGBlocks(rewriter, head, 2);
       rewriter.setInsertionPointToEnd(head);
       cf::CondBranchOp::create(rewriter, location, range->valid, body,
                                guardContinuation);
@@ -1278,7 +1271,6 @@ bool emitDirectDynamicPackedStore(
           rewriter.createBlock(head->getParent(), join->getIterator());
       Block *wide =
           rewriter.createBlock(head->getParent(), join->getIterator());
-      recordStaticSpecializationCFGBlocks(rewriter, head, 3);
       rewriter.setInsertionPointToEnd(head);
       Value needsWide = arith::CmpIOp::create(
           rewriter, location, arith::CmpIPredicate::ugt, bit,

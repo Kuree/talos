@@ -54,7 +54,6 @@ using RuntimePublicationCertified =
     NativeDialect::RuntimePublicationCertifiedAttrHelper;
 using OwnerReleaseInstrumented =
     NativeDialect::OwnerReleaseInstrumentedAttrHelper;
-using TwoStateBlockUnknowns = NativeDialect::TwoStateBlockUnknownsAttrHelper;
 using DriverId = NativeDialect::DriverIdAttrHelper;
 using DriverLow = NativeDialect::DriverLowAttrHelper;
 using NetId = NativeDialect::NetIdAttrHelper;

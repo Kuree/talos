@@ -40,16 +40,16 @@ NativeDialect::verifyOperationAttribute(Operation *operation,
              SpawnCaptureOffsets, SpawnCaptureSize, VirtualOwner,
              InitializationScope, MethodArgumentSizes, MethodArgumentRoots,
              TableWait, Unmanaged, SharedCallback, RuntimePublicationCertified,
-             OwnerReleaseInstrumented, TwoStateBlockUnknowns, DriverId,
-             DriverLow, NetId, ExactDriverRange, WholeDriver,
-             MirrorContribution, GuardedBulkDrive, CleanBulkDrive,
-             BulkCopySourceAssumeClean, GuardedRefStore, InBoundsHandleOffset,
-             ManagedRootRangeRecord, ManagedRootRangePushCheck,
-             ManagedRootActivationPrologue, TransferredReferences,
-             NoTransitionRoots, StringGlobal, ScanPrefixGlobal,
-             FileScanPrefixGlobal, AggregateBitstreamPlanGlobal,
-             ContainerPatternPlanGlobal, ContainerPatternPlanSize, BoxTypeId,
-             VpiCallId, VpiLocalId>(operation, attribute)))
+             OwnerReleaseInstrumented, DriverId, DriverLow, NetId,
+             ExactDriverRange, WholeDriver, MirrorContribution,
+             GuardedBulkDrive, CleanBulkDrive, BulkCopySourceAssumeClean,
+             GuardedRefStore, InBoundsHandleOffset, ManagedRootRangeRecord,
+             ManagedRootRangePushCheck, ManagedRootActivationPrologue,
+             TransferredReferences, NoTransitionRoots, StringGlobal,
+             ScanPrefixGlobal, FileScanPrefixGlobal,
+             AggregateBitstreamPlanGlobal, ContainerPatternPlanGlobal,
+             ContainerPatternPlanSize, BoxTypeId, VpiCallId, VpiLocalId>(
+          operation, attribute)))
     return failure();
   StringRef name = attribute.getName().strref();
   Attribute value = attribute.getValue();
@@ -79,9 +79,6 @@ NativeDialect::verifyOperationAttribute(Operation *operation,
   if (name == ElementDefaults::getNameStr() &&
       !allOf<ElementDefaultAttr>(cast<ArrayAttr>(value)))
     return error() << "must contain only #native.element_default entries";
-  if (name == TwoStateBlockUnknowns::getNameStr() &&
-      !allOf<DenseI64ArrayAttr>(cast<ArrayAttr>(value)))
-    return error() << "must contain one index array per block";
   return success();
 }
 
