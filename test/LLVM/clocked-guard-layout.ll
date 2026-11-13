@@ -1,10 +1,12 @@
 ; REQUIRES: llvm-pass-plugin
 ; RUN: %llvm_dist/bin/opt -load-pass-plugin=%pass_plugin -passes=talos-clocked-guard-layout -S %s | FileCheck %s
 
-; One-armed guards in a clocked kernel body get an unlikely arm edge in either
-; orientation, including an arm with internal control flow. A diamond, an
-; existing weight, an arm with a second predecessor, an arm that leaves the
-; function, and every function outside a clocked kernel keep their layout.
+; In a clocked kernel body, the successor of a branch that is not its join (its
+; immediate post-dominator) is an arm and gets the unlikely edge, in either
+; orientation, with internal control flow, and when arms share a tail. A
+; diamond, an existing weight, branches whose paths only meet at a return,
+; loop back edges and exit tests, and every function outside a clocked kernel
+; keep their layout.
 
 ; CHECK-LABEL: define i32 @__talos_clocked_3_1_0.__talos_eval_body_0
 define i32 @__talos_clocked_3_1_0.__talos_eval_body_0(ptr %state, i1 %c0, i1 %c1, i1 %c2, i1 %c3, i1 %c4, i1 %c5, i1 %c6, i1 %c7) {
@@ -49,23 +51,51 @@ arm5:
   store i8 7, ptr %state
   br label %join5
 join5:
-  ; %shared has a second predecessor, and %tail can leave to %done without
-  ; passing %shared: neither successor is an arm.
+  ; Both paths of %c6 meet only at %done, so neither successor is an arm. From
+  ; %tail, %shared is an arm that shares its tail with the %c6 path.
   ; CHECK: br i1 %c6, label %shared, label %tail{{$}}
   br i1 %c6, label %shared, label %tail
 tail:
   store i8 8, ptr %state
+  ; CHECK: br i1 %c0, label %shared, label %done, !prof ![[UNLIKELY_TRUE]]
   br i1 %c0, label %shared, label %done
 shared:
   store i8 9, ptr %state
   br label %done
 done:
-  ; The arm returns instead of rejoining.
-  ; CHECK: br i1 %c7, label %leave, label %exit{{$}}
-  br i1 %c7, label %leave, label %exit
+  ; A loop's back edge keeps its layout.
+  ; CHECK: br i1 %c1, label %done, label %header{{$}}
+  store i8 10, ptr %state
+  br i1 %c1, label %done, label %header
+header:
+  ; The header's exit test joins at %last, outside the loop: the body
+  ; continues the loop and is not an arm. Inside the body, a guard whose join
+  ; is in the loop is one.
+  ; CHECK: br i1 %c3, label %body, label %last{{$}}
+  br i1 %c3, label %body, label %last
+body:
+  ; CHECK: br i1 %c4, label %inner, label %latch, !prof ![[UNLIKELY_TRUE]]
+  br i1 %c4, label %inner, label %latch
+inner:
+  store i8 12, ptr %state
+  br label %latch
+latch:
+  br label %header
+last:
+  ; The paths of %c7 meet only after both return.
+  ; CHECK: br i1 %c7, label %leave, label %mid{{$}}
+  br i1 %c7, label %leave, label %mid
 leave:
   ret i32 1
-exit:
+mid:
+  ; Joining only at the return, the other successor is the rest of the
+  ; function rather than an arm.
+  ; CHECK: br i1 %c2, label %rest, label %out{{$}}
+  br i1 %c2, label %rest, label %out
+rest:
+  store i8 11, ptr %state
+  br label %out
+out:
   ret i32 0
 }
 

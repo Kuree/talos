@@ -6,9 +6,10 @@
 #include "talos/LLVM/ClockedKernelOutlining.h"
 #include "talos/LLVM/WideIntegerVectorization.h"
 
-#include "llvm/ADT/SmallPtrSet.h"
-#include "llvm/ADT/SmallVector.h"
+#include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/PostDominators.h"
 #include "llvm/IR/CFG.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/MDBuilder.h"
@@ -19,35 +20,13 @@ using namespace llvm;
 
 namespace talos {
 
-// `if (c) { arm }` with no else: the arm is every block reached from one
-// successor of the guard without passing the other successor (the join). It
-// is an arm when this guard is the only edge into it from outside, so every
-// path through it rejoins the fall-through. Nested guards and loops inside the
-// arm belong to it; an arm that can leave the function is not one.
-static bool isGuardArm(BasicBlock &guard, BasicBlock *entry, BasicBlock *join) {
-  if (entry == join || entry->getSinglePredecessor() != &guard)
-    return false;
-  SmallPtrSet<BasicBlock *, 16> arm;
-  SmallVector<BasicBlock *> work{entry};
-  while (!work.empty()) {
-    BasicBlock *current = work.pop_back_val();
-    if (current == join || !arm.insert(current).second)
-      continue;
-    if (succ_empty(current))
-      return false;
-    llvm::append_range(work, successors(current));
-  }
-  for (BasicBlock *member : arm)
-    for (BasicBlock *predecessor : predecessors(member))
-      if (!arm.contains(predecessor) &&
-          (member != entry || predecessor != &guard))
-        return false;
-  return true;
-}
-
 bool ClockedGuardLayoutPass::runOnFunction(Function &function) {
-  if (!function.getName().contains(schedule::clockedKernelPrefix))
+  if (function.isDeclaration() ||
+      !function.getName().contains(schedule::clockedKernelPrefix))
     return false;
+  DominatorTree dominance(function);
+  PostDominatorTree postDominance(function);
+  LoopInfo loops(dominance);
   MDBuilder metadata(function.getContext());
   bool changed = false;
   for (BasicBlock &block : function) {
@@ -55,11 +34,27 @@ bool ClockedGuardLayoutPass::runOnFunction(Function &function) {
     if (!branch || !branch->isConditional() ||
         branch->getMetadata(LLVMContext::MD_prof))
       continue;
-    if (isGuardArm(block, branch->getSuccessor(0), branch->getSuccessor(1)))
+    BasicBlock *first = branch->getSuccessor(0);
+    BasicBlock *second = branch->getSuccessor(1);
+    // A loop's back edge is taken on every iteration but the last.
+    if (first == second || dominance.dominates(first, &block) ||
+        dominance.dominates(second, &block))
+      continue;
+    // The join is where both paths meet again. When it only returns, the
+    // other successor is the rest of the function, not an arm.
+    DomTreeNode *node = postDominance.getNode(&block);
+    BasicBlock *join =
+        node && node->getIDom() ? node->getIDom()->getBlock() : nullptr;
+    if (!join || succ_empty(join))
+      continue;
+    // A join outside the branch's loop makes the branch the loop's exit test:
+    // the other successor continues the loop, which is not an arm.
+    if (Loop *loop = loops.getLoopFor(&block); loop && !loop->contains(join))
+      continue;
+    if (join == second)
       branch->setMetadata(LLVMContext::MD_prof,
                           metadata.createBranchWeights(1, 1000));
-    else if (isGuardArm(block, branch->getSuccessor(1),
-                        branch->getSuccessor(0)))
+    else if (join == first)
       branch->setMetadata(LLVMContext::MD_prof,
                           metadata.createBranchWeights(1000, 1));
     else
@@ -73,7 +68,8 @@ PreservedAnalyses ClockedGuardLayoutPass::run(Module &module,
                                               ModuleAnalysisManager &) {
   for (Function &function : module)
     runOnFunction(function);
-  // Metadata only: the CFG and every value are unchanged.
+  // Metadata only: the CFG and every value are unchanged. Branch probability
+  // and frequency analyses read the weights; codegen computes its own.
   return PreservedAnalyses::all();
 }
 
