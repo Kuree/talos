@@ -1600,10 +1600,24 @@ inlineGroupBody(LLVM::LLVMFuncOp function, const SymbolTable &symbols,
                 uint64_t operationLimit) {
   InlinerInterface interface(function.getContext());
   SmallVector<LLVM::CallOp> pending;
+  llvm::SmallDenseSet<uint64_t, 4> members;
   function.walk([&](LLVM::CallOp call) {
-    if (::talos::schedule::has<::talos::schedule::Field::EvalGroupMember>(call))
+    if (auto owner =
+            ::talos::schedule::get<::talos::schedule::Field::EvalGroupMember>(
+                call)) {
       pending.push_back(call);
+      members.insert(owner.getValue().getZExtValue());
+    }
   });
+  // A group body forwards state and readiness between its members: the
+  // promotions that follow defer one member's publications to another
+  // member's reads. A group calling one member has nothing to forward; the
+  // member's own reads already see its writes as values
+  // (talos-sim-forward-activation-state). Inlining would only copy its
+  // bodies into the group, and a dataflow candidate's dense form would then
+  // predicate them, evaluating every arm.
+  if (members.size() < 2)
+    return {operationLimit, 0};
   std::reverse(pending.begin(), pending.end());
   // The existing native helper-size budget also caps total additional IR
   // per coordinator. Oversized computation stays in direct helpers; helper

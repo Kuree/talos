@@ -6,26 +6,32 @@
 // Group callees are mutable. Both direct and transitive callers must see the
 // callee after its ordered materialization, including the changed inline cost.
 // Inlining a pre-materialization copy would exhaust the budget before @leaf.
-module attributes {schedule.native.max_inline_ops = 4 : i64} {
+// Each group has two members: a body only forwards between members.
+module attributes {schedule.native.max_inline_ops = 5 : i64} {
   llvm.func @leaf() -> i32 attributes {schedule.eval.infallible} {
     %one = llvm.mlir.constant(1 : i32) : i32
     %two = llvm.mlir.constant(2 : i32) : i32
     %value = llvm.add %one, %two : i32
     llvm.return %value : i32
   }
+  llvm.func @other() attributes {schedule.eval.infallible} {
+    llvm.return
+  }
   // CHECK-LABEL: llvm.func @producer()
-  // CHECK-SAME: schedule.eval.materialized_group_calls = 1 : i64
+  // CHECK-SAME: schedule.eval.materialized_group_calls = 2 : i64
   // CHECK-NOT: llvm.call
   // CHECK: llvm.return
-  llvm.func @producer() -> i32 attributes {schedule.eval.infallible, schedule.eval.ranked_members = array<i32: 0>} {
+  llvm.func @producer() -> i32 attributes {schedule.eval.infallible, schedule.eval.ranked_members = array<i32: 0, 1>} {
     %value = llvm.call @leaf() {schedule.eval.group_member = 0 : i32} : () -> i32
+    llvm.call @other() {schedule.eval.group_member = 1 : i32} : () -> ()
     llvm.return %value : i32
   }
   // CHECK-LABEL: llvm.func @direct()
   // CHECK-NOT: llvm.call
   // CHECK: llvm.return
-  llvm.func @direct() -> i32 attributes {schedule.eval.ranked_members = array<i32: 0>} {
+  llvm.func @direct() -> i32 attributes {schedule.eval.ranked_members = array<i32: 0, 1>} {
     %value = llvm.call @producer() {schedule.eval.group_member = 0 : i32} : () -> i32
+    llvm.call @other() {schedule.eval.group_member = 1 : i32} : () -> ()
     llvm.return %value : i32
   }
   llvm.func @bridge() -> i32 attributes {schedule.eval.infallible} {
@@ -37,8 +43,9 @@ module attributes {schedule.native.max_inline_ops = 4 : i64} {
   // CHECK-NOT: llvm.call @bridge
   // CHECK-NOT: llvm.call @leaf
   // CHECK: llvm.return
-  llvm.func @transitive() -> i32 attributes {schedule.eval.ranked_members = array<i32: 0>} {
+  llvm.func @transitive() -> i32 attributes {schedule.eval.ranked_members = array<i32: 0, 1>} {
     %value = llvm.call @bridge() {schedule.eval.group_member = 0 : i32} : () -> i32
+    llvm.call @other() {schedule.eval.group_member = 1 : i32} : () -> ()
     llvm.return %value : i32
   }
 }
@@ -55,10 +62,14 @@ module {
   llvm.func @leaf() attributes {schedule.eval.infallible} {
     llvm.return
   }
+  llvm.func @other() attributes {schedule.eval.infallible} {
+    llvm.return
+  }
   // CHECK-LABEL: llvm.func @original.fallback()
   // CHECK: llvm.call @leaf()
+  // CHECK: llvm.call @other()
   // CHECK: llvm.return
-  llvm.func @candidate() attributes {schedule.eval.ranked_members = array<i32: 0>, schedule.eval.group_ingress = @ready, schedule.eval.dataflow_candidate = @original} {
+  llvm.func @candidate() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready, schedule.eval.dataflow_candidate = @original} {
     %base = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
     %one = llvm.mlir.constant(1 : i8) : i8
     llvm.store %one, %base : i8, !llvm.ptr
@@ -68,8 +79,9 @@ module {
   // CHECK-SAME: schedule.eval.dataflow_fallback = @original.fallback
   // CHECK-SAME: schedule.eval.predicated_dataflow
   // CHECK: llvm.call @original.fallback()
-  llvm.func @original() attributes {schedule.eval.ranked_members = array<i32: 0>, schedule.eval.group_ingress = @ready} {
+  llvm.func @original() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready} {
     llvm.call @leaf() {schedule.eval.group_member = 0 : i32} : () -> ()
+    llvm.call @other() {schedule.eval.group_member = 1 : i32} : () -> ()
     llvm.return
   }
 }
@@ -82,12 +94,16 @@ module {
   llvm.func @leaf() attributes {schedule.eval.infallible} {
     llvm.return
   }
+  llvm.func @other() attributes {schedule.eval.infallible} {
+    llvm.return
+  }
   // CHECK-LABEL: llvm.func @group()
-  // CHECK-SAME: schedule.eval.materialized_group_calls = 1 : i64
+  // CHECK-SAME: schedule.eval.materialized_group_calls = 2 : i64
   // CHECK-NOT: llvm.call
   // CHECK: llvm.return
-  llvm.func @group() attributes {schedule.eval.ranked_members = array<i32: 0>} {
+  llvm.func @group() attributes {schedule.eval.ranked_members = array<i32: 0, 1>} {
     llvm.call @leaf() {schedule.eval.group_member = 0 : i32} : () -> ()
+    llvm.call @other() {schedule.eval.group_member = 1 : i32} : () -> ()
     llvm.return
   }
   // CHECK-LABEL: llvm.func @candidate()
@@ -130,5 +146,23 @@ module {
       llvm.call @shadowed() : () -> ()
       llvm.return
     }
+  }
+}
+
+// -----
+
+// A group of one member forwards nothing between members: its body stays a
+// call, whatever the budget.
+module {
+  llvm.func @leaf() attributes {schedule.eval.infallible} {
+    llvm.return
+  }
+  // CHECK-LABEL: llvm.func @single()
+  // CHECK-NOT: materialized_group_calls
+  // CHECK: llvm.call @leaf()
+  // CHECK: llvm.return
+  llvm.func @single() attributes {schedule.eval.ranked_members = array<i32: 0>} {
+    llvm.call @leaf() {schedule.eval.group_member = 0 : i32} : () -> ()
+    llvm.return
   }
 }
