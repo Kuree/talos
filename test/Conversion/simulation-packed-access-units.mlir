@@ -98,9 +98,11 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
 // CHECK: llvm.load {{.*}} -> i96
 // CHECK: llvm.return
 // Fold the field masks and share each storage-unit load before LLVM export.
-// Publication is a memory barrier: the second field and final return still
-// need fresh loads, and neither write may be removed or reordered.
+// Publication is a memory barrier: the second field still needs a fresh load,
+// and neither write may be removed or reordered. The final read takes the
+// value this activation stored (IEEE 1800-2023 4.7, 4.9.3).
 // COMPACT-LABEL: llvm.func @state_fields(
+// COMPACT-SAME: %[[A:[a-z0-9]+]]: i32
 // COMPACT: llvm.mlir.constant(-8589934591 : i96)
 // COMPACT: %[[STATE:.*]] = llvm.mlir.addressof @__talos_state_value
 // COMPACT: llvm.load %[[STATE]] {{.*}} -> i96
@@ -113,8 +115,8 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
 // COMPACT-NOT: llvm.xor
 // COMPACT: llvm.store {{.*}}, %[[STATE]] {{.*}} : i96, !llvm.ptr
 // COMPACT: llvm.call @talos_rt_v1_scheduler_signal_transition
-// COMPACT: llvm.load %[[STATE]] {{.*}} -> i96
-// COMPACT: llvm.return
+// COMPACT-NOT: llvm.load {{.*}} -> i96
+// COMPACT: llvm.return %[[A]] : i32
 // Whole words use i32 accesses even when the index needs a validity guard.
 // CHECK-LABEL: llvm.func @word_elements(
 // CHECK-NOT: !llvm.ptr -> i64

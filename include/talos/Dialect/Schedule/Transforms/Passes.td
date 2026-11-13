@@ -276,6 +276,41 @@ def TalosSimOptimizeNativeRegionsPass
   ];
 }
 
+def TalosSimForwardActivationStatePass
+    : Pass<"talos-sim-forward-activation-state", "mlir::ModuleOp"> {
+  let summary = "Forward state an activation wrote or read to its later reads";
+  let description = [{
+    Within one activation, a read of state bits that the activation itself
+    wrote or read earlier takes that SSA value instead of loading again. The
+    statements of an activation run in order (IEEE 1800-2023 4.6) with no
+    other process interleaved (4.7 lets the simulator choose), and blocking
+    updates take effect at once (4.9.3). The writes stay unchanged, so update
+    events, change detection and observers see the same values. A
+    must-dataflow over each function tracks, per root bit range, the value it
+    currently holds; a suspension ends the activation and forgets everything.
+
+    Net bits are known from a drive only for contribution mirrors, whose lone
+    strong driver determines the net (6.6.1 Table 6-2); other drives and
+    direct net writes forget the bits they may change. Connected nets
+    (23.3.3.7) and, in a design with pass switches (28.8), all nets are never
+    known. Variable bits are known from stores and loads. Calls, context
+    imports (35.5.3) and operations with unmodeled effects forget everything.
+    Nothing is forwarded below optimization level 1, in a design without a
+    compute graph or with writable VPI (38.34), or in a module with
+    procedural assign, force or release (10.6.1, 10.6.2).
+
+    Computes the design facts once, then forwards each function of the design
+    in a nested function pipeline. Runs in the native pipeline after
+    known-state versioning, so each two-state copy and four-state body
+    forwards its own values; the native pipeline state stays valid. The
+    forwarded value is the one the read would load, so native bodies stay
+    equivalent to the frozen bytecode image.
+  }];
+  let dependentDialects = [
+    "talos::sim::TalosSimulationDialect", "mlir::arith::ArithDialect"
+  ];
+}
+
 def OptimizeNativeWordsPass
     : Pass<"schedule-optimize-native-words", "mlir::ModuleOp"> {
   let summary = "Prove independent packed lanes and form native word regions";

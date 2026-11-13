@@ -43,6 +43,9 @@ void buildSimulationToLLVMCoroutinePipeline(mlir::OpPassManager &manager,
   // region versioning leaves those activations alone.
   manager.addPass(createVersionKnownActivationsPass());
   manager.addPass(createVersionKnownRegionsPass());
+  // Each version forwards its own values: reads of state an activation
+  // already wrote or read take that SSA value; the writes stay.
+  manager.addPass(createTalosSimForwardActivationStatePass());
   manager.addPass(createPrepareNativeTransferKernelsPass());
   manager.addPass(createAnnotateCompactNativeNBAPass());
   manager.addPass(createPrepareNativeFragmentsPass());

@@ -42,6 +42,7 @@ add_mlir_library(TalosScheduleNativeTransforms
   CachePureCones.cpp
   VersionKnownActivations.cpp
   VersionKnownRegions.cpp
+  ForwardActivationState.cpp
   NativeGCCollections.cpp
   DEPENDS
   TalosSchedulePassIncGen
