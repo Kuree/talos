@@ -1,5 +1,6 @@
 //===- SimulationToLLVMCoroutineUtils.cpp - Shared lowering support -----===//
 
+#include "NativeStateAccess.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 
 #include "talos/Analysis/SimulationAnalysis.h"
@@ -290,6 +291,9 @@ void endTemporary(OpBuilder &builder, Location location, Value storage) {
 
 Value byteGEP(OpBuilder &builder, Location location, Value base,
               uint64_t offset) {
+  // Past a state plane's base or a window of it is another window.
+  if (isTypedStatePointer(base))
+    return createAddressAt(builder, location, base, Value(), offset);
   Type pointer = LLVM::LLVMPointerType::get(builder.getContext());
   Type i8 = builder.getI8Type();
   constexpr uint64_t maxConstantIndex =
@@ -305,15 +309,13 @@ Value byteGEP(OpBuilder &builder, Location location, Value base,
 
 Value loadAt(OpBuilder &builder, Location location, Value base, uint64_t offset,
              Type type, unsigned alignment) {
-  return LLVM::LoadOp::create(builder, location, type,
-                              byteGEP(builder, location, base, offset),
-                              alignment);
+  return createLoadAt(builder, location, type, base, Value(), offset,
+                      alignment);
 }
 
 void storeAt(OpBuilder &builder, Location location, Value base, uint64_t offset,
              Value value, unsigned alignment) {
-  LLVM::StoreOp::create(builder, location, value,
-                        byteGEP(builder, location, base, offset), alignment);
+  createStoreAt(builder, location, value, base, Value(), offset, alignment);
 }
 
 Value elementGEP(OpBuilder &builder, Location location, Value base,

@@ -138,8 +138,8 @@ module attributes {
 // CHECK-SAME: passthrough = ["noinline", "cold"]
 // CHECK: llvm.mlir.addressof @__talos_eval_kernel_promotion_owners_v1
 // CHECK: llvm.mlir.addressof @__talos_eval_kernel_promotion_ranges_v1
-// CHECK: llvm.mlir.addressof @__talos_state_unknown
 // CHECK: llvm.mlir.addressof @__talos_eval_kernel_promotion_hints_v1
+// CHECK: llvm.mlir.addressof @__talos_state_unknown
 // CHECK: llvm.load {{.*}} : !llvm.ptr -> i64
 // CHECK: llvm.and {{.*}} : i64
 // CHECK: llvm.mlir.addressof @__talos_eval_promotion_pending_mask_v1

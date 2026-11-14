@@ -30,7 +30,6 @@ using namespace mlir;
 namespace talos::detail {
 namespace {
 
-constexpr StringLiteral unknownPlaneName = "__talos_state_unknown";
 // A copy of at most this many words compares each source word with the
 // patterns it lands on; a longer one, such as a memory's, reports its roots
 // unconditionally.
@@ -120,18 +119,24 @@ std::optional<uint64_t> constantByteOffset(Value pointer) {
 /// static, and how to compute its byte offset when it is not.
 struct PlaneWrite {
   std::optional<uint64_t> bytes;
-  /// The address of an LLVM write; null for a typed store.
+  /// The address of a write through a pointer that is no typed plane
+  /// pointer, such as a select of window addresses; null when the offsets
+  /// are known.
   Value pointer;
-  /// The offsets of a typed store.
+  /// The offsets of a typed store or a typed window address.
   Value dynamicOffset;
   uint64_t staticOffset = 0;
   /// The bits a dynamic write may change, when its producer declared them.
   DenseI64ArrayAttr writtenBits;
 
-  /// An LLVM write of `pointer`.
+  /// A copy or fill of `pointer`.
   static PlaneWrite of(Operation *write, Value pointer) {
-    return {constantByteOffset(pointer), pointer, {}, 0,
-            schedule::get<schedule::Field::EvalUnknownWriteRange>(write)};
+    auto writtenBits =
+        schedule::get<schedule::Field::EvalUnknownWriteRange>(write);
+    if (std::optional<StateWindow> window = getStateWindow(pointer))
+      return {constantByteOffset(pointer), Value(), window->dynamicOffset,
+              window->staticOffset, writtenBits};
+    return {constantByteOffset(pointer), pointer, {}, 0, writtenBits};
   }
 };
 
@@ -173,9 +178,10 @@ public:
       } else if (auto plane = dyn_cast<schedule::NativeStateAddressOp>(operation)) {
         if (plane.getPlane() == schedule::StatePlane::Unknown)
           pending.push_back(plane.getResult());
-      } else if (auto address = dyn_cast<LLVM::AddressOfOp>(operation)) {
-        if (address.getGlobalName() == unknownPlaneName)
-          pending.push_back(address.getResult());
+      } else if (auto window = dyn_cast<schedule::NativeStateWindowAddressOp>(
+                     operation)) {
+        if (window.getPlane() == schedule::StatePlane::Unknown)
+          pending.push_back(window.getResult());
       }
     });
     while (!pending.empty()) {
@@ -496,9 +502,8 @@ private:
                   : APInt::getZero(64);
         if (!keep.isZero()) {
           Type type = builder.getIntegerType(8 * chunk);
-          Value word = LLVM::LoadOp::create(
-              builder, location, type,
-              byteGEP(builder, location, source, offset), 1);
+          Value word =
+              createLoadAt(builder, location, type, source, Value(), offset, 1);
           if (chunk != 8)
             word = LLVM::ZExtOp::create(builder, location, i64, word);
           if (!expected.isZero())

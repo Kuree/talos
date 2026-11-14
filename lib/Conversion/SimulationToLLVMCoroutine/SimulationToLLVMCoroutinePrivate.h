@@ -349,6 +349,8 @@ mlir::Value beginTemporary(mlir::OpBuilder &builder, mlir::Location location,
                            mlir::Type elementType, unsigned alignment);
 void endTemporary(mlir::OpBuilder &builder, mlir::Location location,
                   mlir::Value storage);
+/// The address `offset` bytes past `base`: a byte GEP, or a state window
+/// address past a typed state-plane pointer.
 mlir::Value byteGEP(mlir::OpBuilder &builder, mlir::Location location,
                     mlir::Value base, uint64_t offset);
 mlir::Value elementGEP(mlir::OpBuilder &builder, mlir::Location location,

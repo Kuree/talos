@@ -132,7 +132,7 @@ static LogicalResult verifyStatePlaneUse(Operation *op,
 template <typename AccessOp>
 static bool foldConstantOffset(AccessOp access, Attribute dynamicOffset) {
   auto constant = dyn_cast_or_null<IntegerAttr>(dynamicOffset);
-  if (!constant)
+  if (!constant || constant.getValue().isNegative())
     return false;
   uint64_t base = access.getStaticOffset();
   uint64_t added = constant.getValue().getZExtValue();
@@ -160,6 +160,32 @@ NativeStateAddressOp::verifySymbolUses(SymbolTableCollection &tables) {
 }
 OpFoldResult NativeStateAddressOp::fold(FoldAdaptor) {
   return StatePlaneAttr::get(getContext(), getPlane());
+}
+
+void NativeStateWindowAddressOp::build(OpBuilder &builder,
+                                       OperationState &state, StatePlane plane,
+                                       Value dynamicOffset,
+                                       uint64_t staticOffset) {
+  build(builder, state, LLVM::LLVMPointerType::get(builder.getContext()),
+        getStatePlaneSymbol(builder.getContext(), plane), dynamicOffset,
+        builder.getI64IntegerAttr(staticOffset));
+}
+std::optional<uint64_t> NativeStateWindowAddressOp::getConstantOffset() {
+  return getConstantOffsetOf(*this);
+}
+StatePlane NativeStateWindowAddressOp::getPlane() {
+  return *getStatePlaneOfGlobal(getGlobal());
+}
+LogicalResult NativeStateWindowAddressOp::verify() {
+  return verifyStateAccess(*this, getGlobal());
+}
+LogicalResult
+NativeStateWindowAddressOp::verifySymbolUses(SymbolTableCollection &tables) {
+  return verifyStatePlaneUse(*this, getGlobalAttr(), tables);
+}
+OpFoldResult NativeStateWindowAddressOp::fold(FoldAdaptor adaptor) {
+  return foldConstantOffset(*this, adaptor.getDynamicOffset()) ? getResult()
+                                                               : nullptr;
 }
 
 void NativeStateLoadOp::build(OpBuilder &builder, OperationState &state,

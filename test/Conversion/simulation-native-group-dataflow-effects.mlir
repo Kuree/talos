@@ -40,10 +40,9 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
   llvm.mlir.global internal @ready(dense<0> : tensor<1xi64>) : !llvm.array<1 x i64>
   llvm.mlir.global internal @__talos_eval_promotion_pending_mask_v1(dense<0> : tensor<1xi64>) : !llvm.array<1 x i64>
   llvm.func @divide_candidate() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready, schedule.eval.dataflow_candidate = @divide_group} {
-    %base = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %value = llvm.load %base : !llvm.ptr -> i8
+    %value = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
     %result = llvm.udiv %value, %value : i8
-    llvm.store %result, %base : i8, !llvm.ptr
+    schedule.state.store %result, @__talos_state_value[0] {alignment = 1 : i64} : i8
     llvm.return
   }
   llvm.func @divide_group() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready} {
@@ -62,10 +61,8 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
   llvm.mlir.global internal @ready(dense<0> : tensor<1xi64>) : !llvm.array<1 x i64>
   llvm.mlir.global internal @__talos_eval_promotion_pending_mask_v1(dense<0> : tensor<1xi64>) : !llvm.array<1 x i64>
   llvm.func @range_candidate() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready, schedule.eval.dataflow_candidate = @range_group} {
-    %base = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %byte = llvm.getelementptr %base[63] : (!llvm.ptr) -> !llvm.ptr, i8
-    %value = llvm.load %byte : !llvm.ptr -> i16
-    llvm.store %value, %base : i16, !llvm.ptr
+    %value = schedule.state.load @__talos_state_value[63] {alignment = 1 : i64} : i16
+    schedule.state.store %value, @__talos_state_value[0] {alignment = 1 : i64} : i16
     llvm.return
   }
   llvm.func @range_group() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready} {
@@ -106,10 +103,9 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
   llvm.mlir.global internal @ready(dense<0> : tensor<1xi64>) : !llvm.array<1 x i64>
   llvm.mlir.global internal @__talos_eval_promotion_pending_mask_v1(dense<0> : tensor<1xi64>) : !llvm.array<1 x i64>
   llvm.func @cyclic_candidate() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready, schedule.eval.dataflow_candidate = @cyclic_group} {
-    %base = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
     llvm.br ^body
   ^body:
-    %value = llvm.load %base : !llvm.ptr -> i8
+    %value = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
     %again = llvm.trunc %value : i8 to i1
     llvm.cond_br %again, ^body, ^done
   ^done:

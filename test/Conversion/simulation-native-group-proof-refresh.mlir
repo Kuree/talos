@@ -44,9 +44,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     llvm.store %owner, %last : i64, !llvm.ptr
     %six = llvm.mlir.constant(6 : i64) : i64
     %word = llvm.lshr %owner, %six : i64
-    %unknown = llvm.mlir.addressof @__talos_state_unknown : !llvm.ptr
-    %flag = llvm.getelementptr %unknown[%word] : (!llvm.ptr, i64) -> !llvm.ptr, i8
-    %bits = llvm.load %flag : !llvm.ptr -> i8
+    %bits = schedule.state.load @__talos_state_unknown[%word] {alignment = 1 : i64} : i8
     %zero8 = llvm.mlir.constant(0 : i8) : i8
     %known = llvm.icmp "eq" %bits, %zero8 : i8
     llvm.cond_br %known, ^publish, ^done
@@ -75,27 +73,23 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     llvm.return
   }
   llvm.func @candidate() attributes {schedule.eval.refresh_group_proofs, schedule.eval.ranked_members = array<i32: 0, 65>, schedule.eval.group_ingress = @ready, schedule.eval.dataflow_candidate = @group} {
-    %base = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %output = llvm.getelementptr %base[1] : (!llvm.ptr) -> !llvm.ptr, i8
     %ready = llvm.mlir.addressof @ready : !llvm.ptr
     %pending = llvm.load %ready : !llvm.ptr -> i64
     %zero = llvm.mlir.constant(0 : i64) : i64
     %active = llvm.icmp "ne" %pending, %zero : i64
     llvm.cond_br %active, ^run, ^done
   ^run:
-    %input = llvm.load %base : !llvm.ptr -> i8
+    %input = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
     %one = llvm.mlir.constant(1 : i8) : i8
     %next = llvm.add %input, %one : i8
-    llvm.store %next, %output : i8, !llvm.ptr
+    schedule.state.store %next, @__talos_state_value[1] {alignment = 1 : i64} : i8
     llvm.store %zero, %ready : i64, !llvm.ptr
     llvm.br ^done
   ^done:
     llvm.return
   }
   llvm.func @expect(%value: i8, %queries: i32, %fallbacks: i32, %p0: i64, %p1: i64, %owner: i64) -> i1 {
-    %base = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %out = llvm.getelementptr %base[1] : (!llvm.ptr) -> !llvm.ptr, i8
-    %v = llvm.load %out : !llvm.ptr -> i8
+    %v = schedule.state.load @__talos_state_value[1] {alignment = 1 : i64} : i8
     %a = llvm.icmp "eq" %v, %value : i8
     %calls = llvm.mlir.addressof @calls : !llvm.ptr
     %c = llvm.load %calls : !llvm.ptr -> i32
@@ -120,18 +114,15 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     llvm.return %ok : i1
   }
   llvm.func @main() -> i32 {
-    %base = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %unknown = llvm.mlir.addressof @__talos_state_unknown : !llvm.ptr
-    %unknown1 = llvm.getelementptr %unknown[1] : (!llvm.ptr) -> !llvm.ptr, i8
     %ready = llvm.mlir.addressof @ready : !llvm.ptr
     %pending0 = llvm.mlir.addressof @__talos_eval_promotion_pending_mask_v1 : !llvm.ptr
     %pending1 = llvm.getelementptr %pending0[8] : (!llvm.ptr) -> !llvm.ptr, i8
     %input0 = llvm.mlir.constant(7 : i8) : i8
-    llvm.store %input0, %base : i8, !llvm.ptr
+    schedule.state.store %input0, @__talos_state_value[0] {alignment = 1 : i64} : i8
     %u00 = llvm.mlir.constant(0 : i8) : i8
-    llvm.store %u00, %unknown : i8, !llvm.ptr
+    schedule.state.store %u00, @__talos_state_unknown[0] {alignment = 1 : i64} : i8
     %u10 = llvm.mlir.constant(0 : i8) : i8
-    llvm.store %u10, %unknown1 : i8, !llvm.ptr
+    schedule.state.store %u10, @__talos_state_unknown[1] {alignment = 1 : i64} : i8
     %p00 = llvm.mlir.constant(0 : i64) : i64
     llvm.store %p00, %pending0 : i64, !llvm.ptr
     %p10 = llvm.mlir.constant(6 : i64) : i64
@@ -147,11 +138,11 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %expected0_5 = llvm.mlir.constant(65 : i64) : i64
     %ok0 = llvm.call @expect(%expected0_0, %expected0_1, %expected0_2, %expected0_3, %expected0_4, %expected0_5) : (i8, i32, i32, i64, i64, i64) -> i1
     %input1 = llvm.mlir.constant(8 : i8) : i8
-    llvm.store %input1, %base : i8, !llvm.ptr
+    schedule.state.store %input1, @__talos_state_value[0] {alignment = 1 : i64} : i8
     %u01 = llvm.mlir.constant(0 : i8) : i8
-    llvm.store %u01, %unknown : i8, !llvm.ptr
+    schedule.state.store %u01, @__talos_state_unknown[0] {alignment = 1 : i64} : i8
     %u11 = llvm.mlir.constant(0 : i8) : i8
-    llvm.store %u11, %unknown1 : i8, !llvm.ptr
+    schedule.state.store %u11, @__talos_state_unknown[1] {alignment = 1 : i64} : i8
     %p01 = llvm.mlir.constant(0 : i64) : i64
     llvm.store %p01, %pending0 : i64, !llvm.ptr
     %p11 = llvm.mlir.constant(4 : i64) : i64
@@ -168,11 +159,11 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %ok1 = llvm.call @expect(%expected1_0, %expected1_1, %expected1_2, %expected1_3, %expected1_4, %expected1_5) : (i8, i32, i32, i64, i64, i64) -> i1
     %all1 = llvm.and %ok0, %ok1 : i1
     %input2 = llvm.mlir.constant(9 : i8) : i8
-    llvm.store %input2, %base : i8, !llvm.ptr
+    schedule.state.store %input2, @__talos_state_value[0] {alignment = 1 : i64} : i8
     %u02 = llvm.mlir.constant(1 : i8) : i8
-    llvm.store %u02, %unknown : i8, !llvm.ptr
+    schedule.state.store %u02, @__talos_state_unknown[0] {alignment = 1 : i64} : i8
     %u12 = llvm.mlir.constant(0 : i8) : i8
-    llvm.store %u12, %unknown1 : i8, !llvm.ptr
+    schedule.state.store %u12, @__talos_state_unknown[1] {alignment = 1 : i64} : i8
     %p02 = llvm.mlir.constant(1 : i64) : i64
     llvm.store %p02, %pending0 : i64, !llvm.ptr
     %p12 = llvm.mlir.constant(6 : i64) : i64
@@ -189,11 +180,11 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %ok2 = llvm.call @expect(%expected2_0, %expected2_1, %expected2_2, %expected2_3, %expected2_4, %expected2_5) : (i8, i32, i32, i64, i64, i64) -> i1
     %all2 = llvm.and %all1, %ok2 : i1
     %input3 = llvm.mlir.constant(10 : i8) : i8
-    llvm.store %input3, %base : i8, !llvm.ptr
+    schedule.state.store %input3, @__talos_state_value[0] {alignment = 1 : i64} : i8
     %u03 = llvm.mlir.constant(0 : i8) : i8
-    llvm.store %u03, %unknown : i8, !llvm.ptr
+    schedule.state.store %u03, @__talos_state_unknown[0] {alignment = 1 : i64} : i8
     %u13 = llvm.mlir.constant(0 : i8) : i8
-    llvm.store %u13, %unknown1 : i8, !llvm.ptr
+    schedule.state.store %u13, @__talos_state_unknown[1] {alignment = 1 : i64} : i8
     %p03 = llvm.mlir.constant(1 : i64) : i64
     llvm.store %p03, %pending0 : i64, !llvm.ptr
     %p13 = llvm.mlir.constant(6 : i64) : i64
@@ -210,11 +201,11 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %ok3 = llvm.call @expect(%expected3_0, %expected3_1, %expected3_2, %expected3_3, %expected3_4, %expected3_5) : (i8, i32, i32, i64, i64, i64) -> i1
     %all3 = llvm.and %all2, %ok3 : i1
     %input4 = llvm.mlir.constant(11 : i8) : i8
-    llvm.store %input4, %base : i8, !llvm.ptr
+    schedule.state.store %input4, @__talos_state_value[0] {alignment = 1 : i64} : i8
     %u04 = llvm.mlir.constant(0 : i8) : i8
-    llvm.store %u04, %unknown : i8, !llvm.ptr
+    schedule.state.store %u04, @__talos_state_unknown[0] {alignment = 1 : i64} : i8
     %u14 = llvm.mlir.constant(1 : i8) : i8
-    llvm.store %u14, %unknown1 : i8, !llvm.ptr
+    schedule.state.store %u14, @__talos_state_unknown[1] {alignment = 1 : i64} : i8
     %p04 = llvm.mlir.constant(0 : i64) : i64
     llvm.store %p04, %pending0 : i64, !llvm.ptr
     %p14 = llvm.mlir.constant(6 : i64) : i64
@@ -231,11 +222,11 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %ok4 = llvm.call @expect(%expected4_0, %expected4_1, %expected4_2, %expected4_3, %expected4_4, %expected4_5) : (i8, i32, i32, i64, i64, i64) -> i1
     %all4 = llvm.and %all3, %ok4 : i1
     %input5 = llvm.mlir.constant(12 : i8) : i8
-    llvm.store %input5, %base : i8, !llvm.ptr
+    schedule.state.store %input5, @__talos_state_value[0] {alignment = 1 : i64} : i8
     %u05 = llvm.mlir.constant(0 : i8) : i8
-    llvm.store %u05, %unknown : i8, !llvm.ptr
+    schedule.state.store %u05, @__talos_state_unknown[0] {alignment = 1 : i64} : i8
     %u15 = llvm.mlir.constant(0 : i8) : i8
-    llvm.store %u15, %unknown1 : i8, !llvm.ptr
+    schedule.state.store %u15, @__talos_state_unknown[1] {alignment = 1 : i64} : i8
     %p05 = llvm.mlir.constant(0 : i64) : i64
     llvm.store %p05, %pending0 : i64, !llvm.ptr
     %p15 = llvm.mlir.constant(6 : i64) : i64

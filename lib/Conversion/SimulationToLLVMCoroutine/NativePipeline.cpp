@@ -68,12 +68,8 @@ void buildSimulationToLLVMCoroutinePipeline(mlir::OpPassManager &manager,
 }
 void buildNativeLLVMFinalizationPipeline(mlir::OpPassManager &manager) {
   manager.addPass(createFinalizeNativeLLVMWrappersPass());
-  // The finalization stages see state accesses as typed operations where the
-  // typed operations can express them; the rest, and accesses the stages
-  // themselves still emit, stay in LLVM form. The last stage lowers the typed
-  // accesses to LLVM memory accesses again.
-  manager.nest<mlir::LLVM::LLVMFuncOp>().addPass(
-      createRaiseNativeStateAccessPass());
+  // Producers emit state-plane accesses as typed operations; the last stage
+  // lowers them to LLVM memory accesses.
   manager.addPass(createMaterializeNativeEvalRoutesPass());
   manager.addPass(createPublishNativeProofsPass());
   manager.addPass(createMaterializeNativeEvalGroupBodiesPass());

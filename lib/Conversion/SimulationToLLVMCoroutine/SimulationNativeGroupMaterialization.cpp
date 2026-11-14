@@ -288,21 +288,23 @@ buildNativeStateFootprints(ModuleOp module,
                           std::optional<uint64_t> bytes) {
           if (access.isLocal())
             return;
-          if (access.global.empty() || !globalTypes.contains(access.global)) {
-            result.exact = false;
+          if (!access.plane) {
+            // Another global's bytes are no state; an address of unknown
+            // origin may be.
+            if (access.global.empty() || !globalTypes.contains(access.global))
+              result.exact = false;
             return;
           }
-          StringRef global = access.global;
-          if (global != "__talos_state_value" &&
-              global != "__talos_state_unknown")
-            return;
+          NativeByteFootprint &footprint =
+              *access.plane == schedule::StatePlane::Value ? result.value
+                                                           : result.unknown;
           if (!bytes) {
             result.exact = false;
             return;
           }
           auto offset = access.offset;
-          auto array =
-              dyn_cast<LLVM::LLVMArrayType>(globalTypes.lookup(global));
+          auto array = dyn_cast<LLVM::LLVMArrayType>(globalTypes.lookup(
+              schedule::getStatePlaneGlobalName(*access.plane)));
           DenseI64ArrayAttr interval = access.window;
           if (array && interval && interval.size() == 2 && interval[0] >= 0 &&
               interval[1] > interval[0]) {
@@ -310,8 +312,7 @@ buildNativeStateFootprints(ModuleOp module,
             uint64_t end =
                 std::min(uint64_t(interval[1]), array.getNumElements());
             if (begin < end) {
-              (global == "__talos_state_value" ? result.value : result.unknown)
-                  .emplace_back(begin, end);
+              footprint.emplace_back(begin, end);
               return;
             }
           }
@@ -321,8 +322,7 @@ buildNativeStateFootprints(ModuleOp module,
             return;
           }
           if (*bytes)
-            (global == "__talos_state_value" ? result.value : result.unknown)
-                .emplace_back(*offset, *offset + *bytes);
+            footprint.emplace_back(*offset, *offset + *bytes);
         };
         function.walk([&](Operation *operation) {
           if (!result.exact || operation == function.getOperation())
@@ -543,10 +543,12 @@ LogicalResult promoteGroupReadyWords(LLVM::LLVMFuncOp function,
 /// both planes so VPI reads/writes (38.15, 38.34) observe coherent state.
 LogicalResult
 promoteGroupState(LLVM::LLVMFuncOp function,
-                  const llvm::StringMap<Type> &globalTypes, StringRef name,
-                  uint64_t &budget, const llvm::StringSet<> &metadataOnly,
+                  const llvm::StringMap<Type> &globalTypes,
+                  schedule::StatePlane plane, uint64_t &budget,
+                  const llvm::StringSet<> &metadataOnly,
                   const llvm::StringMap<NativeStateFootprint> &callFootprints) {
-  auto array = dyn_cast_or_null<LLVM::LLVMArrayType>(globalTypes.lookup(name));
+  auto array = dyn_cast_or_null<LLVM::LLVMArrayType>(
+      globalTypes.lookup(schedule::getStatePlaneGlobalName(plane)));
   if (!array || !array.getElementType().isInteger(8))
     return success();
   struct Range {
@@ -568,9 +570,11 @@ promoteGroupState(LLVM::LLVMFuncOp function,
                              Footprint &footprint) {
     if (access.isLocal())
       return true;
-    if (access.global.empty() || !globalTypes.contains(access.global))
-      return false;
-    if (access.global != name)
+    // Other globals have no footprint in this plane; an address of unknown
+    // origin may alias it.
+    if (!access.plane)
+      return !access.global.empty() && globalTypes.contains(access.global);
+    if (*access.plane != plane)
       return true;
     auto offset = access.offset;
     if (!offset || *offset > array.getNumElements() ||
@@ -591,7 +595,7 @@ promoteGroupState(LLVM::LLVMFuncOp function,
       if (call.getCallee())
         if (auto found = callFootprints.find(*call.getCallee());
             found != callFootprints.end() && found->second.exact) {
-          auto &footprint = name == "__talos_state_value"
+          auto &footprint = plane == schedule::StatePlane::Value
                                 ? found->second.value
                                 : found->second.unknown;
           if (!footprint.empty()) {
@@ -650,14 +654,15 @@ promoteGroupState(LLVM::LLVMFuncOp function,
       }
       return;
     }
-    if (access->global.empty() || !globalTypes.contains(access->global)) {
+    if (!access->plane) {
       // A returned pointer or an indirect context access may alias canonical
-      // state. Local allocation addresses are the only non-global exception.
-      if (!access->isLocal())
+      // state. Local allocation addresses and other globals cannot.
+      if (!access->isLocal() &&
+          (access->global.empty() || !globalTypes.contains(access->global)))
         boundaries.insert(operation);
       return;
     }
-    if (access->global != name)
+    if (*access->plane != plane)
       return;
     IntegerAttr owner = access->owner;
     auto type = dyn_cast<IntegerType>(access->type);
@@ -693,7 +698,7 @@ promoteGroupState(LLVM::LLVMFuncOp function,
     range.written |= store;
     range.stores += store;
   });
-  // The global address must never escape into an opaque memory operation.
+  // The plane's address must never escape into an opaque memory operation.
   // Calls are handled at boundaries, but storing the pointer or passing it
   // through control flow would hide later aliases from the access inventory.
   // Ptr-to-int arithmetic only observes the address (including the explicit
@@ -702,10 +707,10 @@ promoteGroupState(LLVM::LLVMFuncOp function,
   SmallVector<Value> pending;
   llvm::DenseSet<Value> seen;
   function.walk([&](Operation *operation) {
-    if (isa<LLVM::AddressOfOp, schedule::NativeStateAddressOp>(operation))
-      if (FlatSymbolRefAttr global = getAddressedGlobal(operation);
-          global.getValue() == name)
-        pending.push_back(operation->getResult(0));
+    if (isa<schedule::NativeStateAddressOp,
+            schedule::NativeStateWindowAddressOp>(operation) &&
+        getStatePlaneRoot(operation->getResult(0)) == plane)
+      pending.push_back(operation->getResult(0));
   });
   while (!pending.empty() && supported) {
     Value pointer = pending.pop_back_val();
@@ -846,21 +851,27 @@ promoteGroupState(LLVM::LLVMFuncOp function,
     return success();
   OpBuilder builder(function.getContext());
   builder.setInsertionPointToStart(&function.getBody().front());
+  OpBuilder::InsertPoint entry = builder.saveInsertionPoint();
   Location location = function.getLoc();
-  Value base = LLVM::AddressOfOp::create(
-      builder, location, LLVM::LLVMPointerType::get(function.getContext()),
-      name);
   struct Slot {
-    Value address;
+    uint64_t offset;
     Value local;
     Type type;
     Window *window;
+  };
+  // Acquisition and publication are typed accesses of the plane's windows.
+  auto acquire = [&](Location at, const Slot &slot) -> Value {
+    return schedule::NativeStateLoadOp::create(builder, at, slot.type, plane,
+                                               Value(), slot.offset, 1);
+  };
+  auto publish = [&](Location at, const Slot &slot, Value value) {
+    schedule::NativeStateStoreOp::create(builder, at, value, plane, Value(),
+                                         slot.offset, 1);
   };
   SmallVector<Slot> slots;
   SmallVector<PromotableAllocationOpInterface> allocations;
   for (Window *window : selected) {
     auto type = builder.getIntegerType((window->end - window->offset) * 8);
-    Value address = byteGEP(builder, location, base, window->offset);
     Value local = entryAlloca(builder, location, type, 1, 1);
     allocations.push_back(
         cast<PromotableAllocationOpInterface>(local.getDefiningOp()));
@@ -870,10 +881,9 @@ promoteGroupState(LLVM::LLVMFuncOp function,
     // branch. Intervening observers still flush/reacquire below (38.15/38.34).
     if (window->scope)
       builder.setInsertionPoint(window->first);
-    LLVM::StoreOp::create(
-        builder, location,
-        LLVM::LoadOp::create(builder, location, type, address, 1), local, 1);
-    slots.push_back({address, local, type, window});
+    Slot slot{window->offset, local, type, window};
+    LLVM::StoreOp::create(builder, location, acquire(location, slot), local, 1);
+    slots.push_back(slot);
     for (Range *range : window->ranges)
       for (Operation *operation : range->operations) {
         builder.setInsertionPoint(operation);
@@ -918,24 +928,21 @@ promoteGroupState(LLVM::LLVMFuncOp function,
           LLVM::StoreOp::create(builder, operation->getLoc(), value, local, 1);
         }
         if (window->scope && operation == window->last)
-          LLVM::StoreOp::create(builder, operation->getLoc(),
-                                LLVM::LoadOp::create(builder,
-                                                     operation->getLoc(), type,
-                                                     local, 1),
-                                address, 1);
+          publish(operation->getLoc(), slot,
+                  LLVM::LoadOp::create(builder, operation->getLoc(), type,
+                                       local, 1));
         operation->erase();
       }
-    builder.setInsertionPointAfter(base.getDefiningOp());
+    builder.restoreInsertionPoint(entry);
   }
   for (Operation *boundary : boundaries) {
     builder.setInsertionPoint(boundary);
     for (const Slot &slot : slots) {
       if (!intersects(boundary, *slot.window))
         continue;
-      LLVM::StoreOp::create(builder, boundary->getLoc(),
-                            LLVM::LoadOp::create(builder, boundary->getLoc(),
-                                                 slot.type, slot.local, 1),
-                            slot.address, 1);
+      publish(boundary->getLoc(), slot,
+              LLVM::LoadOp::create(builder, boundary->getLoc(), slot.type,
+                                   slot.local, 1));
     }
     if (isa<LLVM::ReturnOp>(boundary))
       continue;
@@ -944,15 +951,13 @@ promoteGroupState(LLVM::LLVMFuncOp function,
       if (!intersects(boundary, *slot.window))
         continue;
       LLVM::StoreOp::create(builder, boundary->getLoc(),
-                            LLVM::LoadOp::create(builder, boundary->getLoc(),
-                                                 slot.type, slot.address, 1),
-                            slot.local, 1);
+                            acquire(boundary->getLoc(), slot), slot.local, 1);
     }
   }
   if (failed(promoteScalarSlots(allocations, builder,
                                 DataLayout::closest(function), dominance)))
     return function.emitError("could not materialize group state in SSA");
-  auto attribute = name == "__talos_state_value"
+  auto attribute = plane == schedule::StatePlane::Value
                        ? ::talos::schedule::Field::EvalSsaValueRanges
                        : ::talos::schedule::Field::EvalSsaUnknownRanges;
   schedule::set(function, attribute, builder.getI64IntegerAttr(slots.size()));
@@ -960,7 +965,7 @@ promoteGroupState(LLVM::LLVMFuncOp function,
 }
 
 struct NativeEvalValueLane {
-  StringRef plane;
+  schedule::StatePlane plane;
   uint64_t begin, end;
   bool written = false;
   SmallVector<Operation *> accesses;
@@ -1016,7 +1021,7 @@ materializeNativeEvalValueInterface(LLVM::LLVMFuncOp function,
     arguments.push_back(type);
     if (lane.written)
       results.push_back(type);
-    description.append({int64_t(lane.plane == "__talos_state_unknown"),
+    description.append({int64_t(lane.plane == schedule::StatePlane::Unknown),
                         int64_t(lane.begin), int64_t(lane.end - lane.begin),
                         int64_t(lane.written)});
   }
@@ -1127,30 +1132,24 @@ materializeNativeEvalValueInterface(LLVM::LLVMFuncOp function,
   // caller's SSA lifetime (IEEE 1800-2023 4.3, 38.15 and 38.34).
   Block *wrapper = function.addEntryBlock(builder);
   builder.setInsertionPointToStart(wrapper);
-  SmallVector<Value> inputs(wrapper->getArguments()), addresses;
-  for (const auto &lane : lanes) {
-    Value base = LLVM::AddressOfOp::create(
-        builder, location, LLVM::LLVMPointerType::get(function.getContext()),
-        lane.plane);
-    Value address = byteGEP(builder, location, base, lane.begin);
-    addresses.push_back(address);
-    inputs.push_back(LLVM::LoadOp::create(
+  SmallVector<Value> inputs(wrapper->getArguments());
+  for (const auto &lane : lanes)
+    inputs.push_back(schedule::NativeStateLoadOp::create(
         builder, location, builder.getIntegerType((lane.end - lane.begin) * 8),
-        address, 1));
-  }
+        lane.plane, Value(), lane.begin, 1));
   auto call = LLVM::CallOp::create(
       builder, location, results.empty() ? TypeRange{} : TypeRange{result},
       body.getSymName(), inputs);
   if (auto attrs = body.getArgAttrsAttr())
     call.setArgAttrsAttr(attrs);
   unsigned field = status;
-  for (auto [i, lane] : llvm::enumerate(lanes))
+  for (const auto &lane : lanes)
     if (lane.written)
-      LLVM::StoreOp::create(
+      schedule::NativeStateStoreOp::create(
           builder, location,
           LLVM::ExtractValueOp::create(builder, location, call.getResult(),
                                        ArrayRef<int64_t>{field++}),
-          addresses[i], 1);
+          lane.plane, Value(), lane.begin, 1);
   if (status)
     LLVM::ReturnOp::create(builder, location,
                            LLVM::ExtractValueOp::create(builder, location,
@@ -1238,16 +1237,21 @@ LogicalResult materializeNativeEvalValueCalls(
         }
         SmallVector<NativeEvalValueLane> ranges;
         NativeStateFootprint cuts{true, {}, {}};
-        auto cutPlane = [&](StringRef plane) -> NativeByteFootprint & {
-          return plane == "__talos_state_value" ? cuts.value : cuts.unknown;
+        auto planeArray = [&](schedule::StatePlane plane) {
+          return dyn_cast_or_null<LLVM::LLVMArrayType>(
+              globalTypes.lookup(schedule::getStatePlaneGlobalName(plane)));
         };
-        auto cutWholePlane = [&](StringRef plane) {
-          auto array = cast<LLVM::LLVMArrayType>(globalTypes.lookup(plane));
-          cutPlane(plane).emplace_back(0, array.getNumElements());
+        auto cutPlane =
+            [&](schedule::StatePlane plane) -> NativeByteFootprint & {
+          return plane == schedule::StatePlane::Value ? cuts.value
+                                                      : cuts.unknown;
+        };
+        auto cutWholePlane = [&](schedule::StatePlane plane) {
+          cutPlane(plane).emplace_back(0, planeArray(plane).getNumElements());
         };
         auto cutPointer = [&](Value pointer) {
           if (auto plane = getStatePlaneRoot(pointer))
-            cutWholePlane(schedule::getStatePlaneGlobalName(*plane));
+            cutWholePlane(*plane);
         };
         // Freeze cuts once, rather than rescanning the complete body for every
         // lane. Nested readers, intrinsics and dynamic/atomic accesses cannot
@@ -1272,13 +1276,12 @@ LogicalResult materializeNativeEvalValueCalls(
             return;
           }
           auto access = getNativeMemoryAccess(operation);
-          if (!access || !getStatePlaneOfAccess(*access))
+          if (!access || !access->plane)
             return;
-          StringRef plane = access->global;
+          schedule::StatePlane plane = *access->plane;
           auto offset = access->offset;
           auto type = dyn_cast<IntegerType>(access->type);
-          auto array = dyn_cast_or_null<LLVM::LLVMArrayType>(
-              globalTypes.lookup(plane));
+          auto array = planeArray(plane);
           if (!offset || !access->plain) {
             DenseI64ArrayAttr bytes = access->window;
             if (bytes && bytes.size() == 2 && bytes[0] >= 0 &&
@@ -1318,7 +1321,7 @@ LogicalResult materializeNativeEvalValueCalls(
         }
         auto overlaps = [](const NativeEvalValueLane &lane,
                            const NativeStateFootprint &footprint) {
-          const auto &ranges = lane.plane == "__talos_state_value"
+          const auto &ranges = lane.plane == schedule::StatePlane::Value
                                    ? footprint.value
                                    : footprint.unknown;
           auto first = llvm::lower_bound(
@@ -1383,19 +1386,15 @@ LogicalResult materializeNativeEvalValueCalls(
         continue;
       budget -= cost;
       OpBuilder builder(call);
-      SmallVector<Value> arguments(call.getOperands()), addresses;
+      SmallVector<Value> arguments(call.getOperands());
       auto owner = schedule::get<schedule::Field::EvalGroupMember>(call);
       for (const auto &lane : interface.lanes) {
-        Value base = LLVM::AddressOfOp::create(
+        auto load = schedule::NativeStateLoadOp::create(
             builder, call.getLoc(),
-            LLVM::LLVMPointerType::get(module.getContext()), lane.plane);
-        Value address = byteGEP(builder, call.getLoc(), base, lane.begin);
-        addresses.push_back(address);
-        auto load = LLVM::LoadOp::create(
-            builder, call.getLoc(),
-            builder.getIntegerType((lane.end - lane.begin) * 8), address, 1);
+            builder.getIntegerType((lane.end - lane.begin) * 8), lane.plane,
+            Value(), lane.begin, 1);
         if (owner)
-          schedule::set<schedule::Field::EvalGroupOwner>(load, owner);
+          load.setOwnerAttr(owner);
         arguments.push_back(load);
       }
       bool result = !isa<LLVM::LLVMVoidType>(interface.result);
@@ -1410,16 +1409,16 @@ LogicalResult materializeNativeEvalValueCalls(
         if (attr.getName().strref().starts_with("schedule.eval."))
           replacement->setAttr(attr.getName(), attr.getValue());
       unsigned field = interface.returnsStatus;
-      for (auto [i, lane] : llvm::enumerate(interface.lanes))
+      for (const auto &lane : interface.lanes)
         if (lane.written) {
-          auto store = LLVM::StoreOp::create(
+          auto store = schedule::NativeStateStoreOp::create(
               builder, call.getLoc(),
               LLVM::ExtractValueOp::create(builder, call.getLoc(),
                                            replacement.getResult(),
                                            ArrayRef<int64_t>{field++}),
-              addresses[i], 1);
+              lane.plane, Value(), lane.begin, 1);
           if (owner)
-            schedule::set<schedule::Field::EvalGroupOwner>(store, owner);
+            store.setOwnerAttr(owner);
         }
       if (interface.returnsStatus)
         call.getResult().replaceAllUsesWith(LLVM::ExtractValueOp::create(
@@ -1463,6 +1462,10 @@ public:
   StringRef getArgument() const final {
     return "promote-native-group-function";
   }
+  // Promotion acquires and publishes state windows with typed accesses.
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<LLVM::LLVMDialect, schedule::ScheduleDialect>();
+  }
   void runOnOperation() override {
     auto function = getOperation();
     auto cached = getCachedParentAnalysis<NativeGroupPromotionInputs>(
@@ -1482,10 +1485,10 @@ public:
     if (failed(
             promoteGroupReadyWords(function, inputs.globalTypes, remaining)) ||
         failed(promoteGroupState(function, inputs.globalTypes,
-                                 "__talos_state_value", remaining,
+                                 schedule::StatePlane::Value, remaining,
                                  inputs.metadataOnly, inputs.callFootprints)) ||
         failed(promoteGroupState(function, inputs.globalTypes,
-                                 "__talos_state_unknown", remaining,
+                                 schedule::StatePlane::Unknown, remaining,
                                  inputs.metadataOnly, inputs.callFootprints)))
       return signalPassFailure();
     if (remaining == budget) {
@@ -2196,11 +2199,11 @@ LogicalResult GroupMaterializer::acceptCandidate(LLVM::LLVMFuncOp function,
     if (failed(promoteGroupReadyWords(original, inputs.globalTypes,
                                       remaining->second)) ||
         failed(promoteGroupState(original, inputs.globalTypes,
-                                 "__talos_state_value", remaining->second,
+                                 schedule::StatePlane::Value, remaining->second,
                                  inputs.metadataOnly, inputs.callFootprints)) ||
-        failed(promoteGroupState(original, inputs.globalTypes,
-                                 "__talos_state_unknown", remaining->second,
-                                 inputs.metadataOnly, inputs.callFootprints)))
+        failed(promoteGroupState(
+            original, inputs.globalTypes, schedule::StatePlane::Unknown,
+            remaining->second, inputs.metadataOnly, inputs.callFootprints)))
       return failure();
     finalized.insert(original);
   }

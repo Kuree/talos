@@ -80,6 +80,20 @@ Value allocateBulkPlane(ConversionPatternRewriter &rewriter, Location location,
                      1);
 }
 
+/// The address `bytes` into the global `name`: a window address of a state
+/// plane, or a byte GEP of another global.
+Value globalWindowAddress(OpBuilder &builder, Location location, StringRef name,
+                          uint64_t bytes) {
+  if (auto plane = schedule::getStatePlaneOfGlobal(name))
+    return schedule::NativeStateWindowAddressOp::create(builder, location,
+                                                        *plane, Value(), bytes);
+  return byteGEP(builder, location,
+                 LLVM::AddressOfOp::create(
+                     builder, location,
+                     LLVM::LLVMPointerType::get(builder.getContext()), name),
+                 bytes);
+}
+
 Value loadBulkStatePlane(ConversionPatternRewriter &rewriter, Location location,
                          Value handle, uint64_t width, StringRef globalName,
                          bool unknownFallback, uint64_t stateBitCount,
@@ -91,10 +105,9 @@ Value loadBulkStatePlane(ConversionPatternRewriter &rewriter, Location location,
   std::optional<DirectStaticStateRange> range =
       resolveDirectStaticStateRange(handle, width, directLayout);
   if (range && (!range->guarded || assumeClean) && range->offset % 8 == 0) {
-    Value base = detail::createGlobalAddress(rewriter, location, globalName);
     LLVM::MemcpyOp::create(
         rewriter, location, output,
-        byteGEP(rewriter, location, base, range->offset / 8),
+        globalWindowAddress(rewriter, location, globalName, range->offset / 8),
         llvmConstant(rewriter, location, i64, (width + 7) / 8), false);
     return output;
   }
@@ -149,10 +162,17 @@ bool tryStoreBulkDirect(ConversionPatternRewriter &rewriter, Location location,
     return false;
   Type pointer = LLVM::LLVMPointerType::get(rewriter.getContext());
   auto copy = [&](StringRef name, bool mask = false) {
-    Value base = detail::createGlobalAddress(rewriter, location, name);
-    if (name.starts_with("__talos_continuous_"))
-      base = LLVM::LoadOp::create(rewriter, location, pointer, base, 8);
-    Value destination = byteGEP(rewriter, location, base, range->offset / 8);
+    Value destination;
+    if (name.starts_with("__talos_continuous_")) {
+      // A contribution plane is bound through a pointer global.
+      Value base = LLVM::LoadOp::create(
+          rewriter, location, pointer,
+          LLVM::AddressOfOp::create(rewriter, location, pointer, name), 8);
+      destination = byteGEP(rewriter, location, base, range->offset / 8);
+    } else {
+      destination =
+          globalWindowAddress(rewriter, location, name, range->offset / 8);
+    }
     Value bytes =
         llvmConstant(rewriter, location, rewriter.getI64Type(), width / 8);
     Value ones = llvmConstant(rewriter, location, rewriter.getI8Type(), 255);
@@ -163,20 +183,24 @@ bool tryStoreBulkDirect(ConversionPatternRewriter &rewriter, Location location,
       LLVM::MemcpyOp::create(rewriter, location, destination, input, bytes,
                              false);
     if (unsigned tail = width % 8) {
-      Value address = byteGEP(rewriter, location, destination, width / 8);
-      Value old = LLVM::LoadOp::create(rewriter, location, rewriter.getI8Type(),
-                                       address, 1);
-      Value value = mask ? ones
-                         : LLVM::LoadOp::create(
-                               rewriter, location, rewriter.getI8Type(),
-                               byteGEP(rewriter, location, input, width / 8), 1)
-                               .getResult();
+      // Either side may be a state plane's window.
+      Value address = isTypedStatePointer(destination)
+                          ? destination
+                          : byteGEP(rewriter, location, destination, width / 8);
+      uint64_t addressOffset = address == destination ? width / 8 : 0;
+      Value old = createLoadAt(rewriter, location, rewriter.getI8Type(),
+                               address, Value(), addressOffset, 1);
+      Value value = mask
+                        ? ones
+                        : createLoadAt(rewriter, location, rewriter.getI8Type(),
+                                       input, Value(), width / 8, 1);
       Value bits = llvmConstant(rewriter, location, rewriter.getI8Type(),
                                 (1u << tail) - 1);
       Value delta = arith::XOrIOp::create(rewriter, location, old, value);
       delta = arith::AndIOp::create(rewriter, location, delta, bits);
       Value merged = arith::XOrIOp::create(rewriter, location, old, delta);
-      LLVM::StoreOp::create(rewriter, location, merged, address, 1);
+      createStoreAt(rewriter, location, merged, address, Value(), addressOffset,
+                    1);
     }
   };
   if (continuous && layout->directContinuous) {
@@ -638,19 +662,19 @@ public:
     if (locals && locals->isMemoryValue(op.getResult())) {
       auto range = resolveDirectStaticStateRange(adaptor.getReference().front(),
                                                  *width, directLayout);
-      auto read = [&](StringRef name, bool unknown) {
+      // A memory value borrows its root's window of the plane in place.
+      auto read = [&](schedule::StatePlane plane) -> Value {
         if (locals->canBorrowMemory(op.getResult()) && range &&
-            range->offset % 8 == 0 && (!range->guarded || assumeClean)) {
-          Value base = LLVM::AddressOfOp::create(
-              rewriter, op.getLoc(),
-              LLVM::LLVMPointerType::get(op.getContext()), name);
-          return byteGEP(rewriter, op.getLoc(), base, range->offset / 8);
-        }
-        return loadBulkStatePlane(
-            rewriter, op.getLoc(), adaptor.getReference().front(), *width, name,
-            unknown, stateBitCount, directLayout, assumeClean);
+            range->offset % 8 == 0 && (!range->guarded || assumeClean))
+          return schedule::NativeStateWindowAddressOp::create(
+              rewriter, op.getLoc(), plane, Value(), range->offset / 8);
+        return loadBulkStatePlane(rewriter, op.getLoc(),
+                                  adaptor.getReference().front(), *width,
+                                  schedule::getStatePlaneGlobalName(plane),
+                                  plane == schedule::StatePlane::Unknown,
+                                  stateBitCount, directLayout, assumeClean);
       };
-      SmallVector<Value> buffers{read("__talos_state_value", false)};
+      SmallVector<Value> buffers{read(schedule::StatePlane::Value)};
       if (containsLogic(resultType)) {
         bool valueOnlyUsers =
             llvm::all_of(op.getResult().getUsers(), [&](Operation *user) {
@@ -669,12 +693,9 @@ public:
           // the same snapshot/lifetime proof used for the value plane above,
           // or a sole adjacent known store, which leaves these bits unchanged
           // (IEEE 1800-2023 4.6). No unknown-plane memory is accessed.
-          Value base = LLVM::AddressOfOp::create(
-              rewriter, op.getLoc(),
-              LLVM::LLVMPointerType::get(op.getContext()),
-              "__talos_state_unknown");
-          buffers.push_back(
-              byteGEP(rewriter, op.getLoc(), base, range->offset / 8));
+          buffers.push_back(schedule::NativeStateWindowAddressOp::create(
+              rewriter, op.getLoc(), schedule::StatePlane::Unknown, Value(),
+              range->offset / 8));
         } else if (twoState) {
           Value buffer = allocateBulkPlane(rewriter, op.getLoc(), *width);
           LLVM::MemsetOp::create(
@@ -695,7 +716,7 @@ public:
                   byteGEP(rewriter, op.getLoc(), buffer, byte), 1);
           buffers.push_back(buffer);
         } else {
-          buffers.push_back(read("__talos_state_unknown", true));
+          buffers.push_back(read(schedule::StatePlane::Unknown));
         }
       }
       rewriter.replaceOpWithMultiple(op, {ValueRange(buffers)});

@@ -14,46 +14,34 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
   llvm.mlir.global internal @__talos_state_unknown(dense<[0, 0, 0]> : tensor<3xi8>) : !llvm.array<3 x i8>
 
   llvm.func @writer() attributes {schedule.eval.infallible} {
-    %v = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %x = llvm.mlir.addressof @__talos_state_unknown : !llvm.ptr
     %one = llvm.mlir.constant(1 : i8) : i8
     %all = llvm.mlir.constant(-1 : i8) : i8
-    %oldv = llvm.load %v : !llvm.ptr -> i8
-    %oldx = llvm.load %x : !llvm.ptr -> i8
+    %oldv = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
+    %oldx = schedule.state.load @__talos_state_unknown[0] {alignment = 1 : i64} : i8
     %newv = llvm.add %oldv, %one : i8
     %newx = llvm.xor %oldx, %all : i8
-    llvm.store %newv, %v : i8, !llvm.ptr
-    llvm.store %newx, %x : i8, !llvm.ptr
+    schedule.state.store %newv, @__talos_state_value[0] {alignment = 1 : i64} : i8
+    schedule.state.store %newx, @__talos_state_unknown[0] {alignment = 1 : i64} : i8
     llvm.return
   }
   llvm.func @reader() attributes {schedule.eval.infallible} {
-    %v = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %x = llvm.mlir.addressof @__talos_state_unknown : !llvm.ptr
-    %outv = llvm.getelementptr %v[1] : (!llvm.ptr) -> !llvm.ptr, i8
-    %outx = llvm.getelementptr %x[1] : (!llvm.ptr) -> !llvm.ptr, i8
-    %value = llvm.load %v : !llvm.ptr -> i8
-    %unknown = llvm.load %x : !llvm.ptr -> i8
-    llvm.store %value, %outv : i8, !llvm.ptr
-    llvm.store %unknown, %outx : i8, !llvm.ptr
+    %value = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
+    %unknown = schedule.state.load @__talos_state_unknown[0] {alignment = 1 : i64} : i8
+    schedule.state.store %value, @__talos_state_value[1] {alignment = 1 : i64} : i8
+    schedule.state.store %unknown, @__talos_state_unknown[1] {alignment = 1 : i64} : i8
     llvm.return
   }
   llvm.func @after_mutation() attributes {schedule.eval.infallible} {
-    %v = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %x = llvm.mlir.addressof @__talos_state_unknown : !llvm.ptr
-    %outv = llvm.getelementptr %v[2] : (!llvm.ptr) -> !llvm.ptr, i8
-    %outx = llvm.getelementptr %x[2] : (!llvm.ptr) -> !llvm.ptr, i8
-    %value = llvm.load %v : !llvm.ptr -> i8
-    %unknown = llvm.load %x : !llvm.ptr -> i8
-    llvm.store %value, %outv : i8, !llvm.ptr
-    llvm.store %unknown, %outx : i8, !llvm.ptr
+    %value = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
+    %unknown = schedule.state.load @__talos_state_unknown[0] {alignment = 1 : i64} : i8
+    schedule.state.store %value, @__talos_state_value[2] {alignment = 1 : i64} : i8
+    schedule.state.store %unknown, @__talos_state_unknown[2] {alignment = 1 : i64} : i8
     llvm.return
   }
   // This unmarked function is an opaque boundary to group materialization.
   llvm.func @mutate() -> i1 attributes {passthrough = ["noinline"]} {
-    %v = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %x = llvm.mlir.addressof @__talos_state_unknown : !llvm.ptr
-    %value = llvm.load %v : !llvm.ptr -> i8
-    %unknown = llvm.load %x : !llvm.ptr -> i8
+    %value = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
+    %unknown = schedule.state.load @__talos_state_unknown[0] {alignment = 1 : i64} : i8
     %eight = llvm.mlir.constant(8 : i8) : i8
     %all = llvm.mlir.constant(-1 : i8) : i8
     %vok = llvm.icmp "eq" %value, %eight : i8
@@ -61,26 +49,32 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %ok = llvm.and %vok, %xok : i1
     %forty = llvm.mlir.constant(40 : i8) : i8
     %zero = llvm.mlir.constant(0 : i8) : i8
-    llvm.store %forty, %v : i8, !llvm.ptr
-    llvm.store %zero, %x : i8, !llvm.ptr
+    schedule.state.store %forty, @__talos_state_value[0] {alignment = 1 : i64} : i8
+    schedule.state.store %zero, @__talos_state_unknown[0] {alignment = 1 : i64} : i8
     llvm.return %ok : i1
   }
 
   // CHECK-LABEL: llvm.func @group()
   // CHECK-SAME: schedule.eval.ssa_unknown_ranges = 1 : i64
   // CHECK-SAME: schedule.eval.ssa_value_ranges = 1 : i64
-  // Acquire at the first access, while addresses remain hoisted.
-  // CHECK-DAG: %[[X:.*]] = llvm.mlir.addressof @__talos_state_unknown
-  // CHECK-DAG: %[[XP:.*]] = llvm.getelementptr %[[X]][0]
-  // CHECK-DAG: %[[V:.*]] = llvm.mlir.addressof @__talos_state_value
-  // CHECK-DAG: %[[VP:.*]] = llvm.getelementptr %[[V]][0]
-  // CHECK: llvm.load %[[VP]]{{[ {]}}
-  // CHECK: llvm.load %[[XP]]{{[ {]}}
-  // CHECK: llvm.store {{.*}}, %[[VP]]{{[ {]}}
-  // CHECK-NEXT: llvm.store {{.*}}, %[[XP]]{{[ {]}}
-  // CHECK-NEXT: {{.*}}llvm.call @mutate()
-  // CHECK-NEXT: {{.*}}llvm.load %[[XP]]{{[ {]}}
-  // CHECK-NEXT: {{.*}}llvm.load %[[VP]]{{[ {]}}
+  // Each plane's shared window is acquired once by a typed load at its first
+  // access and kept in SSA (no member reads it from memory); it is published
+  // before the helper and reacquired after it. Inlined accesses carry their
+  // member as a property.
+  // CHECK: schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
+  // CHECK-NEXT: schedule.state.load @__talos_state_unknown[0] {alignment = 1 : i64} : i8
+  // CHECK-NOT: schedule.state.load
+  // CHECK: schedule.state.store %{{.*}}, @__talos_state_value[1] {alignment = 1 : i64, owner = 1 : i32} : i8
+  // CHECK-NEXT: schedule.state.store %{{.*}}, @__talos_state_unknown[1] {alignment = 1 : i64, owner = 1 : i32} : i8
+  // CHECK-NEXT: schedule.state.store %{{.*}}, @__talos_state_value[0] {alignment = 1 : i64} : i8
+  // CHECK-NEXT: schedule.state.store %{{.*}}, @__talos_state_unknown[0] {alignment = 1 : i64} : i8
+  // CHECK-NEXT: llvm.call @mutate()
+  // CHECK-NEXT: schedule.state.load @__talos_state_unknown[0] {alignment = 1 : i64} : i8
+  // CHECK-NEXT: schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
+  // CHECK-NOT: schedule.state.load
+  // CHECK: schedule.state.store %{{.*}}, @__talos_state_value[2] {alignment = 1 : i64, owner = 2 : i32} : i8
+  // CHECK-NEXT: schedule.state.store %{{.*}}, @__talos_state_unknown[2] {alignment = 1 : i64, owner = 2 : i32} : i8
+  // CHECK-NEXT: llvm.return
   llvm.func @group() -> i1 attributes {schedule.eval.ranked_members = array<i32: 0, 1>} {
     llvm.call @writer() {schedule.eval.group_member = 0 : i32} : () -> ()
     llvm.call @reader() {schedule.eval.group_member = 1 : i32} : () -> ()
@@ -106,12 +100,10 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
   }
   llvm.func @main() -> i32 {
     %observed = llvm.call @group() : () -> i1
-    %v = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %x = llvm.mlir.addressof @__talos_state_unknown : !llvm.ptr
-    %outv = llvm.getelementptr %v[2] : (!llvm.ptr) -> !llvm.ptr, i8
-    %outx = llvm.getelementptr %x[2] : (!llvm.ptr) -> !llvm.ptr, i8
-    %value = llvm.load %outv : !llvm.ptr -> i8
-    %unknown = llvm.load %outx : !llvm.ptr -> i8
+    %v = schedule.state.address @__talos_state_value : !llvm.ptr
+    %x = schedule.state.address @__talos_state_unknown : !llvm.ptr
+    %value = schedule.state.load @__talos_state_value[2] {alignment = 1 : i64} : i8
+    %unknown = schedule.state.load @__talos_state_unknown[2] {alignment = 1 : i64} : i8
     %forty = llvm.mlir.constant(40 : i8) : i8
     %zero = llvm.mlir.constant(0 : i8) : i8
     %vok = llvm.icmp "eq" %value, %forty : i8
@@ -119,10 +111,8 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %stateok = llvm.and %vok, %xok : i1
     %boundaryok = llvm.and %observed, %stateok : i1
     llvm.call @indirect_group(%v, %x) : (!llvm.ptr, !llvm.ptr) -> ()
-    %indirectv = llvm.getelementptr %v[1] : (!llvm.ptr) -> !llvm.ptr, i8
-    %indirectx = llvm.getelementptr %x[1] : (!llvm.ptr) -> !llvm.ptr, i8
-    %ivalue = llvm.load %indirectv : !llvm.ptr -> i8
-    %iunknown = llvm.load %indirectx : !llvm.ptr -> i8
+    %ivalue = schedule.state.load @__talos_state_value[1] {alignment = 1 : i64} : i8
+    %iunknown = schedule.state.load @__talos_state_unknown[1] {alignment = 1 : i64} : i8
     %ivok = llvm.icmp "eq" %ivalue, %forty : i8
     %ixok = llvm.icmp "eq" %iunknown, %zero : i8
     %indirectok = llvm.and %ivok, %ixok : i1

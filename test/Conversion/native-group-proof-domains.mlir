@@ -45,7 +45,7 @@ module attributes {runtime.state_bits = 128 : i64} {
   llvm.mlir.global internal @__talos_eval_group_promotion_latched_v1(dense<0> : tensor<2xi8>) {schedule.eval.group_proof_dependencies = [#group0, #group1]} : !llvm.array<2 x i8>
   llvm.func @__talos_eval_promotion_invalidate_range_v1(i64, i64)
   llvm.func @group_test_unknown() -> !llvm.ptr {
-    %p = llvm.mlir.addressof @__talos_state_unknown : !llvm.ptr
+    %p = schedule.state.address @__talos_state_unknown : !llvm.ptr
     llvm.return %p : !llvm.ptr
   }
   llvm.func @group_test_latches() -> !llvm.ptr {

@@ -1,7 +1,7 @@
 // RUN: talos-opt %s --talos-materialize-native-eval-groups -o %t.mlir
 // RUN: FileCheck %s --implicit-check-not=llvm.alloca < %t.mlir
 // RUN: talos-opt %s --mlir-disable-threading --talos-materialize-native-eval-groups | diff %t.mlir -
-// RUN: talos-opt %s '--test-talos-set-module-attributes=attrs="{schedule.native.max_inline_ops = 24 : i64}"' --talos-materialize-native-eval-groups | FileCheck %s --check-prefix=BUDGET
+// RUN: talos-opt %s '--test-talos-set-module-attributes=attrs="{schedule.native.max_inline_ops = 16 : i64}"' --talos-materialize-native-eval-groups | FileCheck %s --check-prefix=BUDGET
 
 // Three overlapping reads span 80 bytes. The group keeps the original CFG
 // and exact memory operations, including before/after snapshots, inactive
@@ -15,24 +15,22 @@
 // CHECK-SAME: schedule.eval.control_flow_dataflow
 // CHECK-SAME: schedule.eval.refresh_group_proofs
 // CHECK: llvm.cond_br
-// CHECK: %[[CROSS1:.*]] = llvm.getelementptr {{.*}}[31]
-// CHECK: %[[CROSS2:.*]] = llvm.getelementptr {{.*}}[63]
 // CHECK: llvm.cond_br
-// CHECK: llvm.load {{.*}} : !llvm.ptr -> i256
-// CHECK: llvm.store {{.*}}, %[[CROSS1]] : i16, !llvm.ptr
-// CHECK: llvm.load {{.*}} : !llvm.ptr -> i256
-// CHECK: llvm.store {{.*}}, %[[CROSS2]] : i16, !llvm.ptr
+// CHECK: schedule.state.load @__talos_state_value[{{[0-9]+}}] {{.*}} : i256
+// CHECK: schedule.state.store %{{.*}}, @__talos_state_value[31] {{.*}} : i16
+// CHECK: schedule.state.load @__talos_state_value[{{[0-9]+}}] {{.*}} : i256
+// CHECK: schedule.state.store %{{.*}}, @__talos_state_value[63] {{.*}} : i16
 // CHECK-LABEL: llvm.func @small(
 // CHECK-SAME: schedule.eval.control_flow_dataflow
 // CHECK-SAME: schedule.eval.refresh_group_proofs
-// CHECK: %[[CROSS:.*]] = llvm.getelementptr {{.*}}[31]
-// CHECK: %[[OLD:.*]] = llvm.load {{.*}} : !llvm.ptr -> i256
+// CHECK: %[[OLD:.*]] = schedule.state.load @__talos_state_unknown[0] {{.*}} : i256
 // CHECK: llvm.cond_br
 // CHECK: %[[LOW:.*]] = llvm.trunc %[[OLD]] : i256 to i16
-// CHECK-NEXT: llvm.store %[[LOW]], %[[CROSS]] : i16, !llvm.ptr
+// CHECK-NEXT: schedule.state.store %[[LOW]], @__talos_state_unknown[31] {{.*}} : i16
 // CHECK: llvm.return
 // CHECK: llvm.return
-// The unchanged CFG must still fit the group operation budget.
+// The unchanged CFG must still fit the group operation budget (a typed state
+// access counts as one operation).
 // BUDGET-LABEL: llvm.func @wide()
 // BUDGET-NOT: schedule.eval.control_flow_dataflow
 // BUDGET: llvm.mlir.addressof @slow
@@ -51,15 +49,6 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     llvm.return
   }
   llvm.func @wide_candidate() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready, schedule.eval.dataflow_candidate = @wide} {
-    %base = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %middle = llvm.getelementptr %base[24] : (!llvm.ptr) -> !llvm.ptr, i8
-    %tail = llvm.getelementptr %base[48] : (!llvm.ptr) -> !llvm.ptr, i8
-    %cross1 = llvm.getelementptr %base[31] : (!llvm.ptr) -> !llvm.ptr, i8
-    %cross2 = llvm.getelementptr %base[63] : (!llvm.ptr) -> !llvm.ptr, i8
-    %snapshot1 = llvm.getelementptr %base[96] : (!llvm.ptr) -> !llvm.ptr, i8
-    %snapshot2 = llvm.getelementptr %base[128] : (!llvm.ptr) -> !llvm.ptr, i8
-    %snapshot3 = llvm.getelementptr %base[160] : (!llvm.ptr) -> !llvm.ptr, i8
-    %snapshot4 = llvm.getelementptr %base[192] : (!llvm.ptr) -> !llvm.ptr, i8
     %ready = llvm.mlir.addressof @ready : !llvm.ptr
     %count = llvm.mlir.constant(1 : i64) : i64
     %temporary = llvm.alloca %count x i256 : (i64) -> !llvm.ptr
@@ -68,20 +57,20 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %active = llvm.icmp "ne" %pending, %zero : i64
     llvm.cond_br %active, ^run, ^done
   ^run:
-    %a = llvm.load %base : !llvm.ptr -> i256
+    %a = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i256
     llvm.store %a, %temporary : i256, !llvm.ptr
     %spilled = llvm.load %temporary : !llvm.ptr -> i256
-    llvm.store %spilled, %snapshot1 : i256, !llvm.ptr
-    %b = llvm.load %middle : !llvm.ptr -> i256
-    llvm.store %b, %snapshot2 : i256, !llvm.ptr
+    schedule.state.store %spilled, @__talos_state_value[96] {alignment = 1 : i64} : i256
+    %b = schedule.state.load @__talos_state_value[24] {alignment = 1 : i64} : i256
+    schedule.state.store %b, @__talos_state_value[128] {alignment = 1 : i64} : i256
     %first = llvm.mlir.constant(4660 : i16) : i16
-    llvm.store %first, %cross1 : i16, !llvm.ptr
-    %c = llvm.load %tail : !llvm.ptr -> i256
-    llvm.store %c, %snapshot3 : i256, !llvm.ptr
-    %d = llvm.load %middle : !llvm.ptr -> i256
-    llvm.store %d, %snapshot4 : i256, !llvm.ptr
+    schedule.state.store %first, @__talos_state_value[31] {alignment = 1 : i64} : i16
+    %c = schedule.state.load @__talos_state_value[48] {alignment = 1 : i64} : i256
+    schedule.state.store %c, @__talos_state_value[160] {alignment = 1 : i64} : i256
+    %d = schedule.state.load @__talos_state_value[24] {alignment = 1 : i64} : i256
+    schedule.state.store %d, @__talos_state_value[192] {alignment = 1 : i64} : i256
     %second = llvm.mlir.constant(22136 : i16) : i16
-    llvm.store %second, %cross2 : i16, !llvm.ptr
+    schedule.state.store %second, @__talos_state_value[63] {alignment = 1 : i64} : i16
     llvm.store %zero, %ready : i64, !llvm.ptr
     llvm.br ^done
   ^done:
@@ -94,20 +83,16 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     llvm.return
   }
   llvm.func @small_candidate(%enabled: i1) attributes {schedule.eval.ranked_members = array<i32: 2, 3>, schedule.eval.group_ingress = @ready, schedule.eval.dataflow_candidate = @small} {
-    %base = llvm.mlir.addressof @__talos_state_unknown : !llvm.ptr
-    %cross = llvm.getelementptr %base[31] : (!llvm.ptr) -> !llvm.ptr, i8
-    %old = llvm.load %base : !llvm.ptr -> i256
+    %old = schedule.state.load @__talos_state_unknown[0] {alignment = 1 : i64} : i256
     llvm.cond_br %enabled, ^update, ^skip
   ^update:
     %low = llvm.trunc %old : i256 to i16
-    llvm.store %low, %cross : i16, !llvm.ptr
+    schedule.state.store %low, @__talos_state_unknown[31] {alignment = 1 : i64} : i16
     llvm.return
   ^skip:
     llvm.return
   }
   llvm.func @main() -> i32 {
-    %base = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %mask = llvm.mlir.addressof @__talos_state_unknown : !llvm.ptr
     %ready = llvm.mlir.addressof @ready : !llvm.ptr
     %slow = llvm.mlir.addressof @slow : !llvm.ptr
     %one = llvm.mlir.constant(1 : i64) : i64
@@ -115,12 +100,12 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %success = llvm.mlir.constant(0 : i32) : i32
     %failure = llvm.mlir.constant(1 : i32) : i32
     llvm.call @wide() : () -> ()
-    %inactive = llvm.load %base : !llvm.ptr -> i1792
+    %inactive = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i1792
     %original = llvm.mlir.constant(185750099682818275762466243853848465303771267256400648794099644386384751099266945852025607259042000376346708302960382341542622282240563392030250863098433374278230859784691476502871328083896713299386689624077985018843170095686071015159794312495613220622237151342521931945428854235859898518695072783294591768292503347458274926145153688963508060802481722591427779154769477054539388349930617326317302981360259499716973138217626972932349817160452199440088989489369759896401352158928070805498465167175702772316618597912474700748156735503854820371 : i1792) : i1792
     %inactive_ok = llvm.icmp "eq" %inactive, %original : i1792
     llvm.store %one, %ready : i64, !llvm.ptr
     llvm.call @wide() : () -> ()
-    %updated = llvm.load %base : !llvm.ptr -> i1792
+    %updated = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i1792
     %expected = llvm.mlir.constant(212017874894850449055828787716361163778334213415853169992499181030237336055259685705143227895319042056120876117256268375600239531766883067385467763990533204246902972541900110651468514353253034193774049560880697861824732843143646584801811608348002665999789639216571554555441626684334677876856269577055138970365955210409294401495647600182057563351275482770069105123174008494808559198162204822608154187590003057087544069616881271538019686934744023995008141620618044198457961704470304991603633049182410558965719816377587343374641179107420101651 : i1792) : i1792
     %value_ok = llvm.icmp "eq" %updated, %expected : i1792
     %pending = llvm.load %ready : !llvm.ptr -> i64
@@ -128,11 +113,11 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %disabled = llvm.mlir.constant(false) : i1
     %enabled = llvm.mlir.constant(true) : i1
     llvm.call @small(%disabled) : (i1) -> ()
-    %unmodified = llvm.load %mask : !llvm.ptr -> i512
+    %unmodified = schedule.state.load @__talos_state_unknown[0] {alignment = 1 : i64} : i512
     %original_mask = llvm.mlir.constant(8675640425256974593842016175309665141310177883912725126762304463584670842988765690871801016460937512034726496473608621140664277113612486435927655239201553 : i512) : i512
     %held_mask = llvm.icmp "eq" %unmodified, %original_mask : i512
     llvm.call @small(%enabled) : (i1) -> ()
-    %unknown = llvm.load %mask : !llvm.ptr -> i512
+    %unknown = schedule.state.load @__talos_state_unknown[0] {alignment = 1 : i64} : i512
     %expected_unknown = llvm.mlir.constant(8675640425256974593842016175309665141310177883912725126762304463584670842975498450397156646757171167768027927281608171178896429362029010443270983682175761 : i512) : i512
     %mask_ok = llvm.icmp "eq" %unknown, %expected_unknown : i512
     %fallback = llvm.load %slow : !llvm.ptr -> i32

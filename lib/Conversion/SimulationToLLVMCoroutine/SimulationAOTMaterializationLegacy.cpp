@@ -385,10 +385,8 @@ LogicalResult makeNativeAOTPlanLegacy(
   Value directEnabled = arith::CmpIOp::create(
       builder, location, arith::CmpIPredicate::ne, directGuard,
       llvmConstant(builder, location, i32, 0));
-  Value stateValue = detail::createStatePlaneAddress(
-      builder, location, schedule::StatePlane::Value);
-  Value stateUnknown = detail::createStatePlaneAddress(
-      builder, location, schedule::StatePlane::Unknown);
+  constexpr auto stateValue = schedule::StatePlane::Value;
+  constexpr auto stateUnknown = schedule::StatePlane::Unknown;
 
   SmallVector<Block *> wordBlocks(nbaDirtyWordCount);
   for (uint32_t word = 0; word != nbaDirtyWordCount; ++word)
@@ -415,21 +413,21 @@ LogicalResult makeNativeAOTPlanLegacy(
   auto scalarMask = [](uint64_t width) {
     return width == 64 ? UINT64_MAX : (uint64_t{1} << width) - 1;
   };
-  auto loadRoot = [&](Value plane, uint64_t offset, uint64_t width) {
+  auto loadRoot = [&](schedule::StatePlane plane, uint64_t offset,
+                      uint64_t width) {
     uint64_t firstByte = offset / 8;
     uint64_t shift = offset % 8;
-    Value low =
-        LLVM::LoadOp::create(builder, location, i64,
-                             byteGEP(builder, location, plane, firstByte), 1);
+    Value low = schedule::NativeStateLoadOp::create(
+        builder, location, i64, plane, Value(), firstByte, 1);
     Value value = low;
     if (shift != 0)
       value =
           arith::ShRUIOp::create(builder, location, value,
                                  llvmConstant(builder, location, i64, shift));
     if (width > 64 - shift) {
-      Value high = LLVM::LoadOp::create(
-          builder, location, builder.getI8Type(),
-          byteGEP(builder, location, plane, firstByte + 8), 1);
+      Value high = schedule::NativeStateLoadOp::create(
+          builder, location, builder.getI8Type(), plane, Value(), firstByte + 8,
+          1);
       high = LLVM::ZExtOp::create(builder, location, i64, high);
       high = arith::ShLIOp::create(
           builder, location, high,
@@ -441,12 +439,12 @@ LogicalResult makeNativeAOTPlanLegacy(
                llvmConstant(builder, location, i64, scalarMask(width)))
         .getResult();
   };
-  auto storeRoot = [&](Value plane, uint64_t offset, uint64_t width,
-                       Value value) {
+  auto storeRoot = [&](schedule::StatePlane plane, uint64_t offset,
+                       uint64_t width, Value value) {
     uint64_t firstByte = offset / 8;
     uint64_t shift = offset % 8;
-    Value address = byteGEP(builder, location, plane, firstByte);
-    Value oldLow = LLVM::LoadOp::create(builder, location, i64, address, 1);
+    Value oldLow = schedule::NativeStateLoadOp::create(
+        builder, location, i64, plane, Value(), firstByte, 1);
     uint64_t lowMask = scalarMask(width) << shift;
     Value cleared =
         arith::AndIOp::create(builder, location, oldLow,
@@ -459,17 +457,17 @@ LogicalResult makeNativeAOTPlanLegacy(
     positioned =
         arith::AndIOp::create(builder, location, positioned,
                               llvmConstant(builder, location, i64, lowMask));
-    LLVM::StoreOp::create(
+    schedule::NativeStateStoreOp::create(
         builder, location,
-        arith::OrIOp::create(builder, location, cleared, positioned), address,
-        1);
+        arith::OrIOp::create(builder, location, cleared, positioned), plane,
+        Value(), firstByte, 1);
     if (width <= 64 - shift)
       return;
     uint64_t highWidth = width - (64 - shift);
     uint8_t highMask = static_cast<uint8_t>((uint16_t{1} << highWidth) - 1);
-    Value highAddress = byteGEP(builder, location, plane, firstByte + 8);
-    Value oldHigh = LLVM::LoadOp::create(builder, location, builder.getI8Type(),
-                                         highAddress, 1);
+    Value oldHigh = schedule::NativeStateLoadOp::create(
+        builder, location, builder.getI8Type(), plane, Value(), firstByte + 8,
+        1);
     Value highValue = arith::ShRUIOp::create(
         builder, location, value,
         llvmConstant(builder, location, i64, 64 - shift));
@@ -484,7 +482,8 @@ LogicalResult makeNativeAOTPlanLegacy(
         arith::AndIOp::create(
             builder, location, highValue,
             llvmConstant(builder, location, builder.getI8Type(), highMask)));
-    LLVM::StoreOp::create(builder, location, newHigh, highAddress, 1);
+    schedule::NativeStateStoreOp::create(builder, location, newHigh, plane,
+                                         Value(), firstByte + 8, 1);
   };
 
   for (uint32_t word = 0; word != nbaDirtyWordCount; ++word) {

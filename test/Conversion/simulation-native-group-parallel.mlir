@@ -70,15 +70,14 @@ module {
   // CHECK: llvm.call @other()
   // CHECK: llvm.return
   llvm.func @candidate() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready, schedule.eval.dataflow_candidate = @original} {
-    %base = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
     %one = llvm.mlir.constant(1 : i8) : i8
-    llvm.store %one, %base : i8, !llvm.ptr
+    schedule.state.store %one, @__talos_state_value[0] {alignment = 1 : i64} : i8
     llvm.return
   }
   // CHECK-LABEL: llvm.func @original()
   // CHECK-SAME: schedule.eval.control_flow_dataflow
   // CHECK-SAME: schedule.eval.dataflow_fallback = @original.fallback
-  // CHECK: llvm.store
+  // CHECK: schedule.state.store %{{.*}}, @__talos_state_value[0]
   // CHECK: llvm.call @original.fallback()
   llvm.func @original() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready} {
     llvm.call @leaf() {schedule.eval.group_member = 0 : i32} : () -> ()

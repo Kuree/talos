@@ -20,6 +20,7 @@
 module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu"} {
   llvm.mlir.global internal @__talos_state_value(dense<0> : tensor<64xi8>) : !llvm.array<64 x i8>
   llvm.mlir.global internal @ready(dense<0> : tensor<1xi64>) : !llvm.array<1 x i64>
+  llvm.mlir.global internal @device(0 : i8) : i8
   llvm.mlir.global internal @__talos_eval_promotion_pending_mask_v1(dense<0> : tensor<1xi64>) : !llvm.array<1 x i64>
   // Guard oracle for the certified-CFG run; unused without a proof domain.
   llvm.mlir.global internal @__talos_eval_group_promotion_latched_v1(dense<0> : tensor<1xi8>) : !llvm.array<1 x i8>
@@ -36,16 +37,14 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     llvm.return
   }
   llvm.func @self_candidate() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready, schedule.eval.dataflow_candidate = @self_candidate} {
-    %base = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %value = llvm.load %base : !llvm.ptr -> i8
-    llvm.store %value, %base : i8, !llvm.ptr
+    %value = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
+    schedule.state.store %value, @__talos_state_value[0] {alignment = 1 : i64} : i8
     llvm.return
   }
   llvm.func @declaration() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready}
   llvm.func @missing_body() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready, schedule.eval.dataflow_candidate = @declaration} {
-    %base = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %value = llvm.load %base : !llvm.ptr -> i8
-    llvm.store %value, %base : i8, !llvm.ptr
+    %value = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
+    schedule.state.store %value, @__talos_state_value[0] {alignment = 1 : i64} : i8
     llvm.return
   }
   llvm.func @group() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready} {
@@ -54,9 +53,8 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
   // A transient candidate with an existing caller cannot be repurposed as
   // the group's cold helper. Preserve its callable body and symbol.
   llvm.func @called_candidate() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready, schedule.eval.dataflow_candidate = @group} {
-    %base = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %value = llvm.load %base : !llvm.ptr -> i8
-    llvm.store %value, %base : i8, !llvm.ptr
+    %value = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
+    schedule.state.store %value, @__talos_state_value[0] {alignment = 1 : i64} : i8
     llvm.return
   }
   llvm.func @caller() {
@@ -64,45 +62,39 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     llvm.return
   }
   llvm.func @division() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready, schedule.eval.dataflow_candidate = @group} {
-    %base = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %value = llvm.load %base : !llvm.ptr -> i8
-    %denominator = llvm.load %base : !llvm.ptr -> i8
+    %value = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
+    %denominator = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
     %result = llvm.udiv %value, %denominator : i8
-    llvm.store %result, %base : i8, !llvm.ptr
+    schedule.state.store %result, @__talos_state_value[0] {alignment = 1 : i64} : i8
     llvm.return
   }
   llvm.func @remainder() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready, schedule.eval.dataflow_candidate = @group} {
-    %base = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %value = llvm.load %base : !llvm.ptr -> i8
-    %denominator = llvm.load %base : !llvm.ptr -> i8
+    %value = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
+    %denominator = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
     %result = llvm.urem %value, %denominator : i8
-    llvm.store %result, %base : i8, !llvm.ptr
+    schedule.state.store %result, @__talos_state_value[0] {alignment = 1 : i64} : i8
     llvm.return
   }
   llvm.func @out_of_bounds() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready, schedule.eval.dataflow_candidate = @group} {
-    %base = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %byte = llvm.getelementptr %base[63] : (!llvm.ptr) -> !llvm.ptr, i8
-    %value = llvm.load %base : !llvm.ptr -> i256
+    %value = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i256
     %low = llvm.trunc %value : i256 to i16
-    llvm.store %low, %byte : i16, !llvm.ptr
+    schedule.state.store %low, @__talos_state_value[63] {alignment = 1 : i64} : i16
     llvm.return
   }
   llvm.func @cyclic_group() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready} {
     llvm.return
   }
   llvm.func @loop() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready, schedule.eval.dataflow_candidate = @cyclic_group} {
-    %base = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %cross = llvm.getelementptr %base[31] : (!llvm.ptr) -> !llvm.ptr, i8
     %one = llvm.mlir.constant(1 : i8) : i8
     llvm.br ^body
   ^body:
     // A wide alias window does not bypass the finite-CFG proof.
-    %wide = llvm.load %base : !llvm.ptr -> i256
+    %wide = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i256
     %low = llvm.trunc %wide : i256 to i16
-    llvm.store %low, %cross : i16, !llvm.ptr
-    %value = llvm.load %base : !llvm.ptr -> i8
+    schedule.state.store %low, @__talos_state_value[31] {alignment = 1 : i64} : i16
+    %value = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
     %next = llvm.add %value, %one : i8
-    llvm.store %next, %base : i8, !llvm.ptr
+    schedule.state.store %next, @__talos_state_value[0] {alignment = 1 : i64} : i8
     %again = llvm.icmp "ne" %next, %one : i8
     llvm.cond_br %again, ^body, ^done
   ^done:
@@ -123,9 +115,9 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     llvm.return
   }
   llvm.func @volatile_read() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready, schedule.eval.dataflow_candidate = @volatile_group} {
-    %base = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %value = llvm.load volatile %base : !llvm.ptr -> i8
-    llvm.store %value, %base : i8, !llvm.ptr
+    %device = llvm.mlir.addressof @device : !llvm.ptr
+    %value = llvm.load volatile %device : !llvm.ptr -> i8
+    schedule.state.store %value, @__talos_state_value[0] {alignment = 1 : i64} : i8
     llvm.return
   }
 }

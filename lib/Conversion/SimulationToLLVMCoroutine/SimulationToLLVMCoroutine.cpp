@@ -1288,6 +1288,9 @@ LogicalResult declareNativeImports(ModuleOp module) {
       reference = call.getCalleeAttr();
     else if (auto address = dyn_cast<schedule::NativeStateAddressOp>(operation))
       reference = address.getGlobalAttr();
+    else if (auto window =
+                 dyn_cast<schedule::NativeStateWindowAddressOp>(operation))
+      reference = window.getGlobalAttr();
     else if (auto load = dyn_cast<schedule::NativeStateLoadOp>(operation))
       reference = load.getGlobalAttr();
     else if (auto store = dyn_cast<schedule::NativeStateStoreOp>(operation))
@@ -3242,8 +3245,6 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
       LLVM::CondBrOp::create(builder, route.twoState.getLoc(), promoted,
                              checkpointClearUnknown, checkpointPublish);
       builder.setInsertionPointToStart(checkpointClearUnknown);
-      Value checkpointUnknown = detail::createStatePlaneAddress(
-          builder, route.twoState.getLoc(), schedule::StatePlane::Unknown);
       ArrayRef<int64_t> checkpointRanges = route.ranges.asArrayRef();
       if ((checkpointRanges.size() & 1) != 0)
         return route.twoState.emitError("malformed local promotion ranges");
@@ -3261,23 +3262,23 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
             mask &= static_cast<uint8_t>(UINT8_MAX << (bitOffset % 8));
           if (byte + 1 == lastByte && lastBit % 8 != 0)
             mask &= static_cast<uint8_t>((uint16_t{1} << (lastBit % 8)) - 1);
-          Value address = detail::byteGEP(builder, route.twoState.getLoc(),
-                                          checkpointUnknown, byte);
+          constexpr auto unknownPlane = schedule::StatePlane::Unknown;
           if (mask == UINT8_MAX) {
-            LLVM::StoreOp::create(
+            schedule::NativeStateStoreOp::create(
                 builder, route.twoState.getLoc(),
                 detail::llvmConstant(builder, route.twoState.getLoc(), i8, 0),
-                address, 1);
+                unknownPlane, Value(), byte, 1);
           } else {
-            Value old = LLVM::LoadOp::create(builder, route.twoState.getLoc(),
-                                             i8, address, 1);
-            LLVM::StoreOp::create(
+            Value old = schedule::NativeStateLoadOp::create(
+                builder, route.twoState.getLoc(), i8, unknownPlane, Value(),
+                byte, 1);
+            schedule::NativeStateStoreOp::create(
                 builder, route.twoState.getLoc(),
                 LLVM::AndOp::create(
                     builder, route.twoState.getLoc(), old,
                     detail::llvmConstant(builder, route.twoState.getLoc(), i8,
                                          static_cast<uint8_t>(~mask))),
-                address, 1);
+                unknownPlane, Value(), byte, 1);
           }
         }
       }
@@ -3490,8 +3491,6 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
             scan, nextRoute);
         builder.setInsertionPointToStart(scan);
         Location location = route.twoState.getLoc();
-        Value unknown = detail::createStatePlaneAddress(
-            builder, location, schedule::StatePlane::Unknown);
         Value anyUnknown = detail::llvmConstant(builder, location, i8, 0);
         ArrayRef<int64_t> encoded = route.ranges.asArrayRef();
         for (size_t index = 0; index != encoded.size(); index += 2) {
@@ -3506,9 +3505,9 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
               mask &= static_cast<uint8_t>(UINT8_MAX << (bitOffset % 8));
             if (byte + 1 == lastByte && lastBit % 8 != 0)
               mask &= static_cast<uint8_t>((uint16_t{1} << (lastBit % 8)) - 1);
-            Value bits = LLVM::LoadOp::create(
-                builder, location, i8,
-                detail::byteGEP(builder, location, unknown, byte), 1);
+            Value bits = schedule::NativeStateLoadOp::create(
+                builder, location, i8, schedule::StatePlane::Unknown, Value(),
+                byte, 1);
             if (mask != UINT8_MAX)
               bits = LLVM::AndOp::create(
                   builder, location, bits,
@@ -4224,8 +4223,8 @@ public:
           schedule::NativeByteAddressOp, schedule::NativeReadyReadOp,
           schedule::NativeReadyUpdateOp, schedule::NativeReadyCommitOp,
           schedule::NativeReadyMergeOp, schedule::NativeStateAddressOp,
-          schedule::NativeStateLoadOp, schedule::NativeStateStoreOp,
-          UnrealizedConversionCastOp>();
+          schedule::NativeStateWindowAddressOp, schedule::NativeStateLoadOp,
+          schedule::NativeStateStoreOp, UnrealizedConversionCastOp>();
       target->markUnknownOpDynamicallyLegal([](Operation *operation) {
         return isa<LLVM::LLVMFuncOp>(operation);
       });
@@ -4448,8 +4447,8 @@ public:
         ModuleOp, UnrealizedConversionCastOp, schedule::NativeByteAddressOp,
         schedule::NativeReadyReadOp, schedule::NativeReadyUpdateOp,
         schedule::NativeReadyCommitOp, schedule::NativeReadyMergeOp,
-        schedule::NativeStateAddressOp, schedule::NativeStateLoadOp,
-        schedule::NativeStateStoreOp>();
+        schedule::NativeStateAddressOp, schedule::NativeStateWindowAddressOp,
+        schedule::NativeStateLoadOp, schedule::NativeStateStoreOp>();
     target.markUnknownOpDynamicallyLegal(
         [](Operation *operation) { return isa<LLVM::LLVMFuncOp>(operation); });
     FrozenRewritePatternSet frozenPatterns(std::move(patterns));

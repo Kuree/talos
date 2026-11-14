@@ -31,13 +31,15 @@
 // CFG: llvm.load {{.*}}schedule.eval.activation_entry = 0
 // CFG: llvm.cond_br %{{.*}}, ^[[RUN0:bb[0-9]+]], ^[[CHECK3:bb[0-9]+]]
 // CFG: ^[[RUN0]]:
-// CFG-COUNT-2: llvm.store
+// CFG: llvm.store
+// CFG: schedule.state.store %{{.*}}, @__talos_state_value[0]
 // CFG: llvm.br ^[[CHECK3]]
 // CFG: ^[[CHECK3]]:
 // CFG-NEXT: llvm.load {{.*}}schedule.eval.activation_entry = 3
 // CFG: llvm.cond_br %{{.*}}, ^[[RUN3:bb[0-9]+]], ^[[DONE:bb[0-9]+]]
 // CFG: ^[[RUN3]]:
-// CFG-COUNT-2: llvm.store
+// CFG: llvm.store
+// CFG: schedule.state.store %{{.*}}, @__talos_state_value[1]
 // CFG: llvm.br ^[[DONE]]
 // CFG: ^[[DONE]]:
 // CFG-NEXT: llvm.return
@@ -57,12 +59,10 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %one32 = llvm.mlir.constant(1 : i32) : i32
     %count = llvm.add %old_count, %one32 : i32
     llvm.store %count, %counter : i32, !llvm.ptr
-    %base = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %destination = llvm.getelementptr %base[0] : (!llvm.ptr) -> !llvm.ptr, i8
-    %old = llvm.load %base : !llvm.ptr -> i8
+    %old = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
     %one = llvm.mlir.constant(1 : i8) : i8
     %value = llvm.add %old, %one : i8
-    llvm.store %value, %destination : i8, !llvm.ptr
+    schedule.state.store %value, @__talos_state_value[0] {alignment = 1 : i64} : i8
     llvm.return
   }
   llvm.func @leaf2() {
@@ -71,12 +71,10 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %one32 = llvm.mlir.constant(1 : i32) : i32
     %count = llvm.add %old_count, %one32 : i32
     llvm.store %count, %counter : i32, !llvm.ptr
-    %base = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %destination = llvm.getelementptr %base[2] : (!llvm.ptr) -> !llvm.ptr, i8
-    %old = llvm.load %base : !llvm.ptr -> i8
+    %old = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
     %one = llvm.mlir.constant(1 : i8) : i8
     %value = llvm.add %old, %one : i8
-    llvm.store %value, %destination : i8, !llvm.ptr
+    schedule.state.store %value, @__talos_state_value[2] {alignment = 1 : i64} : i8
     llvm.return
   }
   llvm.func @boundary() {
@@ -127,12 +125,10 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
   ^execute3:
     %remaining3 = llvm.and %pending3, %clear3 : i64
     llvm.store %remaining3, %ready : i64, !llvm.ptr
-    %base3 = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %destination3 = llvm.getelementptr %base3[1] : (!llvm.ptr) -> !llvm.ptr, i8
-    %old3 = llvm.load %base3 : !llvm.ptr -> i8
+    %old3 = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
     %one3 = llvm.mlir.constant(1 : i8) : i8
     %value3 = llvm.add %old3, %one3 : i8
-    llvm.store %value3, %destination3 : i8, !llvm.ptr
+    schedule.state.store %value3, @__talos_state_value[1] {alignment = 1 : i64} : i8
     llvm.br ^check1
   ^check1:
     %pending1 = llvm.load %ready {schedule.eval.activation_entry = 1 : i32} : !llvm.ptr -> i64
@@ -174,12 +170,10 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
   ^execute0:
     %remaining0 = llvm.and %pending0, %clear0 : i64
     llvm.store %remaining0, %ready : i64, !llvm.ptr
-    %base0 = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %destination0 = llvm.getelementptr %base0[0] : (!llvm.ptr) -> !llvm.ptr, i8
-    %old0 = llvm.load %base0 : !llvm.ptr -> i8
+    %old0 = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
     %one0 = llvm.mlir.constant(1 : i8) : i8
     %value0 = llvm.add %old0, %one0 : i8
-    llvm.store %value0, %destination0 : i8, !llvm.ptr
+    schedule.state.store %value0, @__talos_state_value[0] {alignment = 1 : i64} : i8
     llvm.br ^check3
   ^check3:
     %pending3 = llvm.load %ready {schedule.eval.activation_entry = 3 : i32} : !llvm.ptr -> i64
@@ -191,12 +185,10 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
   ^execute3:
     %remaining3 = llvm.and %pending3, %clear3 : i64
     llvm.store %remaining3, %ready : i64, !llvm.ptr
-    %base3 = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %destination3 = llvm.getelementptr %base3[1] : (!llvm.ptr) -> !llvm.ptr, i8
-    %old3 = llvm.load %base3 : !llvm.ptr -> i8
+    %old3 = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
     %one3 = llvm.mlir.constant(1 : i8) : i8
     %value3 = llvm.add %old3, %one3 : i8
-    llvm.store %value3, %destination3 : i8, !llvm.ptr
+    schedule.state.store %value3, @__talos_state_value[1] {alignment = 1 : i64} : i8
     llvm.br ^check1
   ^check1:
     %pending1 = llvm.load %ready {schedule.eval.activation_entry = 1 : i32} : !llvm.ptr -> i64
@@ -221,20 +213,15 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
   ^execute2:
     %remaining2 = llvm.and %pending2, %clear2 : i64
     llvm.store %remaining2, %ready : i64, !llvm.ptr
-    %base2 = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %destination2 = llvm.getelementptr %base2[2] : (!llvm.ptr) -> !llvm.ptr, i8
-    %old2 = llvm.load %base2 : !llvm.ptr -> i8
+    %old2 = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
     %one2 = llvm.mlir.constant(1 : i8) : i8
     %value2 = llvm.add %old2, %one2 : i8
-    llvm.store %value2, %destination2 : i8, !llvm.ptr
+    schedule.state.store %value2, @__talos_state_value[2] {alignment = 1 : i64} : i8
     llvm.br ^done
   ^done:
     llvm.return
   }
   llvm.func @main() -> i32 {
-    %base = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %out = llvm.getelementptr %base[2] : (!llvm.ptr) -> !llvm.ptr, i8
-    %middle = llvm.getelementptr %base[1] : (!llvm.ptr) -> !llvm.ptr, i8
     %ready = llvm.mlir.addressof @ready : !llvm.ptr
     %proof = llvm.mlir.addressof @__talos_eval_promotion_pending_mask_v1 : !llvm.ptr
     %slow0 = llvm.mlir.addressof @slow0 : !llvm.ptr
@@ -255,7 +242,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %three8 = llvm.mlir.constant(3 : i8) : i8
     %four8 = llvm.mlir.constant(4 : i8) : i8
     llvm.call @group() : () -> ()
-    %result = llvm.load %out : !llvm.ptr -> i8
+    %result = schedule.state.load @__talos_state_value[2] {alignment = 1 : i64} : i8
     %backward = llvm.load %ready : !llvm.ptr -> i64
     %c0 = llvm.load %slow0 : !llvm.ptr -> i32
     %c2 = llvm.load %slow2 : !llvm.ptr -> i32
@@ -268,12 +255,12 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %a = llvm.and %v, %b : i1
     %c = llvm.and %p0, %p2 : i1
     %d = llvm.and %a, %c : i1
-    %visible_middle = llvm.load %middle : !llvm.ptr -> i8
+    %visible_middle = schedule.state.load @__talos_state_value[1] {alignment = 1 : i64} : i8
     %forwarded = llvm.icmp "eq" %visible_middle, %two8 : i8
     %executed = llvm.and %d, %pb : i1
     %first = llvm.and %executed, %forwarded : i1
     llvm.call @group() : () -> ()
-    %held = llvm.load %out : !llvm.ptr -> i8
+    %held = schedule.state.load @__talos_state_value[2] {alignment = 1 : i64} : i8
     %drained = llvm.load %ready : !llvm.ptr -> i64
     %h = llvm.icmp "eq" %held, %two8 : i8
     %r = llvm.icmp "eq" %drained, %zero64 : i64
@@ -284,7 +271,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     llvm.store %two64, %ready : i64, !llvm.ptr
     llvm.call @group() : () -> ()
     %fallback = llvm.load %slow2 : !llvm.ptr -> i32
-    %updated = llvm.load %out : !llvm.ptr -> i8
+    %updated = schedule.state.load @__talos_state_value[2] {alignment = 1 : i64} : i8
     %f = llvm.icmp "eq" %fallback, %one : i32
     %u = llvm.icmp "eq" %updated, %three8 : i8
     %third = llvm.and %f, %u : i1
@@ -298,7 +285,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %no_replay = llvm.load %observed : !llvm.ptr -> i32
     %s = llvm.icmp "eq" %resumed, %one : i32
     %n = llvm.icmp "eq" %no_replay, %two : i32
-    %last_output = llvm.load %out : !llvm.ptr -> i8
+    %last_output = schedule.state.load @__talos_state_value[2] {alignment = 1 : i64} : i8
     %last = llvm.icmp "eq" %last_output, %four8 : i8
     %not_replayed = llvm.and %s, %n : i1
     %fourth = llvm.and %not_replayed, %last : i1

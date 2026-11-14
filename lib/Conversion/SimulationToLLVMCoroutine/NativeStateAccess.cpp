@@ -1,7 +1,7 @@
 //===- NativeStateAccess.cpp - Native state access queries ----------------===//
 //
-// Shared queries over native state accesses: typed state-plane operations
-// and the LLVM loads, stores, copies and fills beside them.
+// Shared queries over native memory accesses: typed state-plane operations
+// and the LLVM loads, stores, copies and fills of other memory.
 //
 //===----------------------------------------------------------------------===//
 
@@ -18,9 +18,13 @@ namespace talos {
 namespace detail {
 FlatSymbolRefAttr getAddressedGlobal(Operation *root) {
   if (auto address = dyn_cast<LLVM::AddressOfOp>(root))
-    return address.getGlobalNameAttr();
+    return schedule::getStatePlaneOfGlobal(address.getGlobalName())
+               ? nullptr
+               : address.getGlobalNameAttr();
   if (auto address = dyn_cast<schedule::NativeStateAddressOp>(root))
     return address.getGlobalAttr();
+  if (auto window = dyn_cast<schedule::NativeStateWindowAddressOp>(root))
+    return window.getGlobalAttr();
   return nullptr;
 }
 
@@ -29,8 +33,9 @@ std::optional<schedule::StatePlane> getStatePlaneRoot(Value pointer) {
     pointer = gep.getBase();
   if (auto address = pointer.getDefiningOp<schedule::NativeStateAddressOp>())
     return address.getPlane();
-  if (auto address = pointer.getDefiningOp<LLVM::AddressOfOp>())
-    return schedule::getStatePlaneOfGlobal(address.getGlobalName());
+  if (auto window =
+          pointer.getDefiningOp<schedule::NativeStateWindowAddressOp>())
+    return window.getPlane();
   return std::nullopt;
 }
 
@@ -51,6 +56,14 @@ std::optional<uint64_t> getConstantByteOffset(Value pointer) {
     bytes += constant.getZExtValue();
     pointer = gep.getBase();
   }
+  // A window address starts at its own offset into the plane.
+  if (auto window =
+          pointer.getDefiningOp<schedule::NativeStateWindowAddressOp>()) {
+    std::optional<uint64_t> start = window.getConstantOffset();
+    if (!start || *start > UINT64_MAX - bytes)
+      return std::nullopt;
+    bytes += *start;
+  }
   return bytes;
 }
 
@@ -63,6 +76,7 @@ std::optional<NativeMemoryAccess> getNativeMemoryAccess(Operation *operation) {
   access.operation = operation;
   if (auto load = dyn_cast<schedule::NativeStateLoadOp>(operation)) {
     access.type = load.getType();
+    access.plane = load.getPlane();
     access.global = load.getGlobal();
     access.offset = load.getConstantOffset();
     access.window = load.getWindowAttr();
@@ -72,6 +86,7 @@ std::optional<NativeMemoryAccess> getNativeMemoryAccess(Operation *operation) {
   if (auto store = dyn_cast<schedule::NativeStateStoreOp>(operation)) {
     access.type = store.getValue().getType();
     access.stored = store.getValue();
+    access.plane = store.getPlane();
     access.global = store.getGlobal();
     access.offset = store.getConstantOffset();
     access.window = store.getWindowAttr();
@@ -107,6 +122,7 @@ NativeAddress describeNativeAddress(Operation *operation, Value pointer) {
     access.root = gep.getBase();
   if (FlatSymbolRefAttr global = getAddressedGlobal(access.root))
     access.global = global.getValue();
+  access.plane = getStatePlaneRoot(access.root);
   access.offset = getConstantByteOffset(pointer);
   access.window = schedule::get<schedule::Field::EvalStateAccessBytes>(operation);
   access.writtenBits =
@@ -144,6 +160,90 @@ Value createStatePlaneAddress(OpBuilder &builder, Location location,
   return LLVM::AddressOfOp::create(
       builder, location, LLVM::LLVMPointerType::get(builder.getContext()),
       schedule::getStatePlaneGlobalName(plane));
+}
+
+std::optional<StateWindow> getStateWindow(Value pointer) {
+  if (auto base = pointer.getDefiningOp<schedule::NativeStateAddressOp>())
+    return StateWindow{base.getPlane(), Value(), 0};
+  if (auto window =
+          pointer.getDefiningOp<schedule::NativeStateWindowAddressOp>())
+    return StateWindow{window.getPlane(), window.getDynamicOffset(),
+                       window.getStaticOffset()};
+  return std::nullopt;
+}
+
+namespace {
+/// The window `dynamicBytes` plus `staticBytes` past a typed window.
+StateWindow offsetWindow(OpBuilder &builder, Location location,
+                         StateWindow window, Value dynamicBytes,
+                         uint64_t staticBytes) {
+  if (dynamicBytes)
+    window.dynamicOffset =
+        window.dynamicOffset
+            ? LLVM::AddOp::create(builder, location, window.dynamicOffset,
+                                  dynamicBytes)
+                  .getResult()
+            : dynamicBytes;
+  assert(window.staticOffset <= UINT64_MAX - staticBytes &&
+         "state window offset overflows");
+  window.staticOffset += staticBytes;
+  return window;
+}
+} // namespace
+
+Value createAddressAt(OpBuilder &builder, Location location, Value base,
+                      Value dynamicBytes, uint64_t staticBytes) {
+  if (std::optional<StateWindow> typed = getStateWindow(base)) {
+    if (!dynamicBytes && !staticBytes)
+      return base;
+    StateWindow window =
+        offsetWindow(builder, location, *typed, dynamicBytes, staticBytes);
+    return schedule::NativeStateWindowAddressOp::create(
+        builder, location, window.plane, window.dynamicOffset,
+        window.staticOffset);
+  }
+  Value address = base;
+  if (dynamicBytes)
+    address = LLVM::GEPOp::create(
+        builder, location, LLVM::LLVMPointerType::get(builder.getContext()),
+        builder.getI8Type(), address, ValueRange{dynamicBytes});
+  if (staticBytes)
+    address = byteGEP(builder, location, address, staticBytes);
+  return address;
+}
+
+Value createLoadAt(OpBuilder &builder, Location location, Type type, Value base,
+                   Value dynamicBytes, uint64_t staticBytes,
+                   unsigned alignment) {
+  if (std::optional<StateWindow> typed = getStateWindow(base)) {
+    assert(llvm::isPowerOf2_64(alignment) && "typed access needs an alignment");
+    StateWindow window =
+        offsetWindow(builder, location, *typed, dynamicBytes, staticBytes);
+    return schedule::NativeStateLoadOp::create(
+        builder, location, type, window.plane, window.dynamicOffset,
+        window.staticOffset, alignment);
+  }
+  return LLVM::LoadOp::create(
+      builder, location, type,
+      createAddressAt(builder, location, base, dynamicBytes, staticBytes),
+      alignment);
+}
+
+Operation *createStoreAt(OpBuilder &builder, Location location, Value value,
+                         Value base, Value dynamicBytes, uint64_t staticBytes,
+                         unsigned alignment) {
+  if (std::optional<StateWindow> typed = getStateWindow(base)) {
+    assert(llvm::isPowerOf2_64(alignment) && "typed access needs an alignment");
+    StateWindow window =
+        offsetWindow(builder, location, *typed, dynamicBytes, staticBytes);
+    return schedule::NativeStateStoreOp::create(
+        builder, location, value, window.plane, window.dynamicOffset,
+        window.staticOffset, alignment);
+  }
+  return LLVM::StoreOp::create(
+      builder, location, value,
+      createAddressAt(builder, location, base, dynamicBytes, staticBytes),
+      alignment);
 }
 
 Value createGlobalAddress(OpBuilder &builder, Location location,

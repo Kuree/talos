@@ -21,7 +21,7 @@
 // CHECK: llvm.shl
 // CHECK: llvm.cond_br %{{.*}}, ^[[ASSIGN:bb[0-9]+]], ^[[CONSUMER]]
 // CHECK: ^[[ASSIGN]]:
-// CHECK-NEXT: llvm.store
+// CHECK-NEXT: schedule.state.store %{{.*}}, @__talos_state_value[1]
 // CHECK-NEXT: %[[PUBLISHED:.*]] = llvm.or
 // CHECK-NEXT: llvm.store %[[PUBLISHED]]
 // CHECK-NEXT: %[[MARKS:.*]] = llvm.load
@@ -47,9 +47,6 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     llvm.return
   }
   llvm.func @dataflow() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready, schedule.eval.dataflow_candidate = @group, schedule.eval.ready_word_count = 2 : i64} {
-    %base = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %middle = llvm.getelementptr %base[1] : (!llvm.ptr) -> !llvm.ptr, i8
-    %output = llvm.getelementptr %base[2] : (!llvm.ptr) -> !llvm.ptr, i8
     %ready = llvm.mlir.addressof @ready : !llvm.ptr
     %dirty = llvm.getelementptr %ready[16] : (!llvm.ptr) -> !llvm.ptr, i8
     %one = llvm.mlir.constant(1 : i64) : i64
@@ -66,7 +63,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
   ^producer:
     %consumed = llvm.and %r, %clear0 : i64
     llvm.store %consumed, %ready : i64, !llvm.ptr
-    %input = llvm.load %base : !llvm.ptr -> i8
+    %input = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
     %low = llvm.and %input, %one8 : i8
     %open = llvm.icmp "eq" %low, %zero8 : i8
     llvm.cond_br %open, ^assign, ^consumer_check
@@ -76,7 +73,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %allowed = llvm.icmp "ne" %shifted, %zero8 : i8
     llvm.cond_br %allowed, ^assign_value, ^consumer_check
   ^assign_value:
-    llvm.store %next, %middle : i8, !llvm.ptr
+    schedule.state.store %next, @__talos_state_value[1] {alignment = 1 : i64} : i8
     %published = llvm.or %consumed, %two : i64
     llvm.store %published, %ready : i64, !llvm.ptr
     %marks = llvm.load %dirty : !llvm.ptr -> i64
@@ -89,8 +86,8 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %active1 = llvm.icmp "ne" %bit1, %zero : i64
     llvm.cond_br %active1, ^consumer, ^done
   ^consumer:
-    %mid = llvm.load %middle : !llvm.ptr -> i8
-    %selector = llvm.load %base : !llvm.ptr -> i8
+    %mid = schedule.state.load @__talos_state_value[1] {alignment = 1 : i64} : i8
+    %selector = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
     %odd = llvm.and %selector, %one8 : i8
     %choose = llvm.icmp "ne" %odd, %zero8 : i8
     llvm.cond_br %choose, ^left, ^right
@@ -102,7 +99,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %other = llvm.add %mid, %two8 : i8
     llvm.br ^selected(%other : i8)
   ^selected(%selected: i8):
-    llvm.store %selected, %output : i8, !llvm.ptr
+    schedule.state.store %selected, @__talos_state_value[2] {alignment = 1 : i64} : i8
     %remaining = llvm.and %pending, %clear1 : i64
     llvm.store %remaining, %ready : i64, !llvm.ptr
     llvm.br ^done
@@ -110,9 +107,6 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     llvm.return
   }
   llvm.func @main() -> i32 {
-    %base = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %middle = llvm.getelementptr %base[1] : (!llvm.ptr) -> !llvm.ptr, i8
-    %output = llvm.getelementptr %base[2] : (!llvm.ptr) -> !llvm.ptr, i8
     %ready = llvm.mlir.addressof @ready : !llvm.ptr
     %outside = llvm.getelementptr %ready[8] : (!llvm.ptr) -> !llvm.ptr, i8
     %dirty = llvm.getelementptr %ready[16] : (!llvm.ptr) -> !llvm.ptr, i8
@@ -130,33 +124,33 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     // Nothing was published: the dirty word is untouched.
     %marks1 = llvm.load %dirty : !llvm.ptr -> i64
     %dirtyok1 = llvm.icmp "eq" %marks1, %zero64 : i64
-    %mid1 = llvm.load %middle : !llvm.ptr -> i8
-    %out1 = llvm.load %output : !llvm.ptr -> i8
+    %mid1 = schedule.state.load @__talos_state_value[1] {alignment = 1 : i64} : i8
+    %out1 = schedule.state.load @__talos_state_value[2] {alignment = 1 : i64} : i8
     %a = llvm.icmp "eq" %mid1, %n99 : i8
     %b = llvm.icmp "eq" %out1, %n100 : i8
     %ok1 = llvm.and %a, %b : i1
-    llvm.store %six, %base : i8, !llvm.ptr
+    schedule.state.store %six, @__talos_state_value[0] {alignment = 1 : i64} : i8
     llvm.store %one64, %ready : i64, !llvm.ptr
     llvm.call @group() : () -> ()
-    %out2 = llvm.load %output : !llvm.ptr -> i8
+    %out2 = schedule.state.load @__talos_state_value[2] {alignment = 1 : i64} : i8
     %ok2out = llvm.icmp "eq" %out2, %nine : i8
     // The producer published to the consumer and marked word zero dirty.
     %marks2 = llvm.load %dirty : !llvm.ptr -> i64
     %marked2 = llvm.icmp "eq" %marks2, %one64 : i64
     %ok2 = llvm.and %ok2out, %marked2 : i1
-    llvm.store %seven, %base : i8, !llvm.ptr
+    schedule.state.store %seven, @__talos_state_value[0] {alignment = 1 : i64} : i8
     llvm.store %one64, %ready : i64, !llvm.ptr
     llvm.store %zero64, %dirty : i64, !llvm.ptr
     llvm.call @group() : () -> ()
-    %mid3 = llvm.load %middle : !llvm.ptr -> i8
-    %out3 = llvm.load %output : !llvm.ptr -> i8
+    %mid3 = schedule.state.load @__talos_state_value[1] {alignment = 1 : i64} : i8
+    %out3 = schedule.state.load @__talos_state_value[2] {alignment = 1 : i64} : i8
     %c = llvm.icmp "eq" %mid3, %seven : i8
     %d = llvm.icmp "eq" %out3, %nine : i8
     %ok3 = llvm.and %c, %d : i1
-    llvm.store %n33, %middle : i8, !llvm.ptr
+    schedule.state.store %n33, @__talos_state_value[1] {alignment = 1 : i64} : i8
     llvm.store %two64, %ready : i64, !llvm.ptr
     llvm.call @group() : () -> ()
-    %out4 = llvm.load %output : !llvm.ptr -> i8
+    %out4 = schedule.state.load @__talos_state_value[2] {alignment = 1 : i64} : i8
     %ok4 = llvm.icmp "eq" %out4, %n34 : i8
     %pending = llvm.load %ready : !llvm.ptr -> i64
     %ok5 = llvm.icmp "eq" %pending, %zero64 : i64

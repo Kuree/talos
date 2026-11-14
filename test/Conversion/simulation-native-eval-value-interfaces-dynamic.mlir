@@ -4,8 +4,8 @@
 // writer's value plane stays canonical; its independent X/Z lane can travel.
 // CHECK-LABEL: llvm.func internal @lane_write.__talos_eval_values(
 // CHECK-SAME: schedule.eval.value_lanes = array<i64: 1, 0, 2, 1>
-// CHECK: llvm.load {{.*}} -> i16
-// CHECK: llvm.store {{.*}}schedule.eval.state_access_bytes
+// CHECK: schedule.state.load @__talos_state_value[0] {{.*}} : i16
+// CHECK: schedule.state.store %{{.*}}, @__talos_state_value[%{{.*}}] {{{.*}}window = array<i64: 0, 2>} : i8
 
 module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", schedule.native.max_inline_ops = 64 : i64} {
   llvm.mlir.global @__talos_state_value(dense<[52, 18, 77]> : tensor<3xi8>) : !llvm.array<3 x i8>
@@ -21,19 +21,16 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
   }
   llvm.func @observer(i16, i16) -> i1
   llvm.func @lane_write(%take: i1 {simulation.capture_kind = 1 : i32}) attributes {schedule.eval.raw_captures, passthrough = ["noinline"]} {
-    %v = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %x = llvm.mlir.addressof @__talos_state_unknown : !llvm.ptr
-    %old = llvm.load %v {alignment = 1 : i64} : !llvm.ptr -> i16
-    %oldx = llvm.load %x {alignment = 1 : i64} : !llvm.ptr -> i16
+    %old = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i16
+    %oldx = schedule.state.load @__talos_state_unknown[0] {alignment = 1 : i64} : i16
     %ctx = llvm.mlir.addressof @context : !llvm.ptr
     %context = llvm.load %ctx : !llvm.ptr -> !llvm.ptr
     %seen = llvm.mlir.addressof @seen_context : !llvm.ptr
     llvm.store %context, %seen : !llvm.ptr, !llvm.ptr
     %one = llvm.mlir.constant(1 : i16) : i16
     %index = llvm.zext %take : i1 to i64
-    %dynamic = llvm.getelementptr %v[%index] : (!llvm.ptr, i64) -> !llvm.ptr, i8
     %dynamic_byte = llvm.mlir.constant(0 : i8) : i8
-    llvm.store %dynamic_byte, %dynamic {schedule.eval.state_access_bytes = array<i64: 0, 2>} : i8, !llvm.ptr
+    schedule.state.store %dynamic_byte, @__talos_state_value[%index] {alignment = 1 : i64, window = array<i64: 0, 2>} : i8
     %work0 = llvm.add %old, %one : i16
     %work1 = llvm.add %work0, %one : i16
     %work2 = llvm.add %work1, %one : i16
@@ -112,22 +109,19 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     %low = llvm.mlir.constant(10 : i16) : i16
     %clear = llvm.and %old, %keep : i16
     %next = llvm.or %clear, %low : i16
-    llvm.store %next, %v {alignment = 1 : i64} : i16, !llvm.ptr
-    %high = llvm.getelementptr %v[1] : (!llvm.ptr) -> !llvm.ptr, i8
+    schedule.state.store %next, @__talos_state_value[0] {alignment = 1 : i64} : i16
     %byte = llvm.mlir.constant(171 : i8) : i8
-    llvm.store %byte, %high : i8, !llvm.ptr
+    schedule.state.store %byte, @__talos_state_value[1] {alignment = 1 : i64} : i8
     %xz = llvm.mlir.constant(-32768 : i16) : i16
     %newx = llvm.or %oldx, %xz : i16
-    llvm.store %newx, %x {alignment = 1 : i64} : i16, !llvm.ptr
+    schedule.state.store %newx, @__talos_state_unknown[0] {alignment = 1 : i64} : i16
     llvm.br ^done
   ^done:
     llvm.return
   }
   llvm.func @lane_read(%expected: i16 {simulation.capture_kind = 1 : i32}, %expected_x: i16) -> i1 attributes {schedule.eval.infallible, passthrough = ["noinline"]} {
-    %v = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %x = llvm.mlir.addressof @__talos_state_unknown : !llvm.ptr
-    %current = llvm.load %v {alignment = 1 : i64} : !llvm.ptr -> i16
-    %current_x = llvm.load %x {alignment = 1 : i64} : !llvm.ptr -> i16
+    %current = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i16
+    %current_x = schedule.state.load @__talos_state_unknown[0] {alignment = 1 : i64} : i16
     %one = llvm.mlir.constant(1 : i16) : i16
     %work0 = llvm.add %current, %one : i16
     %work1 = llvm.add %work0, %one : i16

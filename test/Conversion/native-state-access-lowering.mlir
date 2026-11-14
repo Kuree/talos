@@ -2,10 +2,11 @@
 
 // Typed state accesses become the LLVM accesses they stand for: the plane's
 // address, byte GEPs to the window, and a load or store of the same
-// alignment. Their properties served native passes before this point; LLVM
-// needs none of them, while other dialects' annotations stay. A plane's
-// address and a window's address are each taken once per block, at their
-// first use.
+// alignment, and a window address is the window's byte GEPs. Their
+// properties served native passes before this point; LLVM needs none of them,
+// while other dialects' annotations stay. A plane's address and a window's
+// address are each taken once per block, at their first use; an address
+// nothing uses is not taken.
 module {
   llvm.mlir.global internal @__talos_state_value(dense<0> : tensor<16xi8>) : !llvm.array<16 x i8>
   llvm.mlir.global internal @__talos_state_unknown(dense<0> : tensor<16xi8>) : !llvm.array<16 x i8>
@@ -20,8 +21,9 @@ module {
   // CHECK-NEXT: llvm.store %[[V]], %[[VADDR]] {alignment = 8 : i64} : i64, !llvm.ptr
   // CHECK-NEXT: %[[WADDR:.*]] = llvm.getelementptr %[[VADDR]][8] : (!llvm.ptr) -> !llvm.ptr, i8
   // CHECK-NEXT: llvm.load %[[WADDR]] {alignment = 8 : i64} : !llvm.ptr -> i64
-  // The same window in the same block shares its address.
+  // The same window in the same block shares its address, accessed or taken.
   // CHECK-NEXT: llvm.store %[[V]], %[[WADDR]] {alignment = 8 : i64} : i64, !llvm.ptr
+  // CHECK-NEXT: llvm.call @use(%[[WADDR]])
   // An offset past the GEP's constant range is an i64 index.
   // CHECK-NEXT: %[[FAR:.*]] = llvm.mlir.constant(300000000 : i64) : i64
   // CHECK-NEXT: %[[FADDR:.*]] = llvm.getelementptr %[[VBASE]][%[[FAR]]] : (!llvm.ptr, i64) -> !llvm.ptr, i8
@@ -40,6 +42,9 @@ module {
     schedule.state.store %v, @__talos_state_value[%dyn] {alignment = 8 : i64, window = array<i64: 0, 16>, written_bits = array<i64: 0, 64>, latch_destination} : i64
     %w = schedule.state.load @__talos_state_value[%dyn + 8] {alignment = 8 : i64} : i64
     schedule.state.store %v, @__talos_state_value[%dyn + 8] {alignment = 8 : i64} : i64
+    %window = schedule.state.window_address @__talos_state_value[%dyn + 8] : !llvm.ptr
+    llvm.call @use(%window) : (!llvm.ptr) -> ()
+    %unused = schedule.state.window_address @__talos_state_unknown[%dyn] : !llvm.ptr
     %f = schedule.state.load @__talos_state_value[300000000] {alignment = 1 : i64} : i8
     %z = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
     llvm.call @use(%a) : (!llvm.ptr) -> ()

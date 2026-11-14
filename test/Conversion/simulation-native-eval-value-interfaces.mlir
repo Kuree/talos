@@ -8,20 +8,20 @@
 // CHECK-LABEL: llvm.func internal @lane_write.__talos_eval_values(
 // CHECK-SAME: i16
 // CHECK-SAME: schedule.eval.value_lanes = array<i64: 0, 0, 2, 1, 1, 0, 2, 1>
-// CHECK-NOT: llvm.load {{.*}} -> i16
-// CHECK-NOT: llvm.store {{.*}} : i16, !llvm.ptr
+// CHECK-NOT: schedule.state.load
+// CHECK-NOT: schedule.state.store
 // CHECK: llvm.mlir.addressof @checksum
 // CHECK: llvm.store
-// CHECK-NOT: llvm.load {{.*}} -> i16
+// CHECK-NOT: schedule.state.load
 // CHECK: llvm.and
 // CHECK: llvm.return
 // CHECK-LABEL: llvm.func @lane_write(
-// CHECK: llvm.load
+// CHECK: schedule.state.load
 // CHECK: llvm.call @lane_write.__talos_eval_values
-// CHECK: llvm.store
+// CHECK: schedule.state.store
 // CHECK-LABEL: llvm.func internal @lane_read.__talos_eval_values(
-// CHECK-SAME: schedule.eval.value_lanes = array<i64: 1, 0, 2, 0, 0, 0, 2, 0>
-// CHECK-NOT: llvm.load
+// CHECK-SAME: schedule.eval.value_lanes = array<i64: 0, 0, 2, 0, 1, 0, 2, 0>
+// CHECK-NOT: {{llvm.load|schedule.state.load}}
 // CHECK: llvm.mlir.addressof @checksum
 // CHECK: llvm.return
 // CHECK-LABEL: llvm.func @lane_read(
@@ -29,17 +29,17 @@
 // CHECK-LABEL: llvm.func @lane_run(
 // CHECK-SAME: schedule.eval.ssa_unknown_ranges = 1 : i64
 // CHECK-SAME: schedule.eval.ssa_value_ranges = 1 : i64
-// CHECK: llvm.load
-// CHECK: llvm.load
+// CHECK: schedule.state.load
+// CHECK: schedule.state.load
 // CHECK: llvm.call @lane_write.__talos_eval_values
-// CHECK-NOT: llvm.load
-// CHECK-NOT: llvm.store
+// CHECK-NOT: schedule.state.load
+// CHECK-NOT: schedule.state.store
 // CHECK: llvm.call @lane_read.__talos_eval_values
-// CHECK: llvm.store
-// CHECK: llvm.store
+// CHECK: schedule.state.store
+// CHECK: schedule.state.store
 // CHECK: llvm.call @observer
-// CHECK: llvm.load
-// CHECK: llvm.load
+// CHECK: schedule.state.load
+// CHECK: schedule.state.load
 // CHECK: llvm.call @lane_read.__talos_eval_values
 // ../Runtime/simulation-native-eval-value-interfaces.test executes this module
 // against its C ABI harness.
@@ -58,10 +58,8 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
   }
   llvm.func @observer(i16, i16) -> i1
   llvm.func @lane_write(%take: i1 {simulation.capture_kind = 1 : i32}) attributes {schedule.eval.raw_captures, passthrough = ["noinline"]} {
-    %v = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %x = llvm.mlir.addressof @__talos_state_unknown : !llvm.ptr
-    %old = llvm.load %v {alignment = 1 : i64} : !llvm.ptr -> i16
-    %oldx = llvm.load %x {alignment = 1 : i64} : !llvm.ptr -> i16
+    %old = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i16
+    %oldx = schedule.state.load @__talos_state_unknown[0] {alignment = 1 : i64} : i16
     %ctx = llvm.mlir.addressof @context : !llvm.ptr
     %context = llvm.load %ctx : !llvm.ptr -> !llvm.ptr
     %seen = llvm.mlir.addressof @seen_context : !llvm.ptr
@@ -82,22 +80,19 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     %low = llvm.mlir.constant(10 : i16) : i16
     %clear = llvm.and %old, %keep : i16
     %next = llvm.or %clear, %low : i16
-    llvm.store %next, %v {alignment = 1 : i64} : i16, !llvm.ptr
-    %high = llvm.getelementptr %v[1] : (!llvm.ptr) -> !llvm.ptr, i8
+    schedule.state.store %next, @__talos_state_value[0] {alignment = 1 : i64} : i16
     %byte = llvm.mlir.constant(171 : i8) : i8
-    llvm.store %byte, %high : i8, !llvm.ptr
+    schedule.state.store %byte, @__talos_state_value[1] {alignment = 1 : i64} : i8
     %xz = llvm.mlir.constant(-32768 : i16) : i16
     %newx = llvm.or %oldx, %xz : i16
-    llvm.store %newx, %x {alignment = 1 : i64} : i16, !llvm.ptr
+    schedule.state.store %newx, @__talos_state_unknown[0] {alignment = 1 : i64} : i16
     llvm.br ^done
   ^done:
     llvm.return
   }
   llvm.func @lane_read(%expected: i16 {simulation.capture_kind = 1 : i32}, %expected_x: i16) -> i1 attributes {schedule.eval.infallible, passthrough = ["noinline"]} {
-    %v = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %x = llvm.mlir.addressof @__talos_state_unknown : !llvm.ptr
-    %current = llvm.load %v {alignment = 1 : i64} : !llvm.ptr -> i16
-    %current_x = llvm.load %x {alignment = 1 : i64} : !llvm.ptr -> i16
+    %current = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i16
+    %current_x = schedule.state.load @__talos_state_unknown[0] {alignment = 1 : i64} : i16
     %one = llvm.mlir.constant(1 : i16) : i16
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index

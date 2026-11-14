@@ -1,4 +1,4 @@
-// RUN: talos-opt %S/../Conversion/simulation-native-activation-state-observer.mlir --talos-materialize-native-eval-groups -o %t.mlir
+// RUN: talos-opt %S/../Conversion/simulation-native-activation-state-observer.mlir --pass-pipeline='builtin.module(talos-materialize-native-eval-groups,llvm.func(lower-native-state-access))' -o %t.mlir
 // RUN: talos-translate --mlir-to-llvmir %t.mlir | %llvm_dist/bin/opt -passes='default<O3>' | %llc -filetype=obj -relocation-model=pic -o %t.o
 // RUN: %llvm_dist/bin/clang %S/Inputs/native-activation-state.c %t.o -o %t.exe
 // RUN: %t.exe | FileCheck %s

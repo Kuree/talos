@@ -38,7 +38,8 @@ struct ReadyInlinerInterface final : DialectInlinerInterface {
     // existing callable/activation restrictions.
     // State-plane accesses are plain memory accesses.
     return isa<NativeReadyReadOp, NativeReadyUpdateOp, NativeReadyCommitOp,
-               NativeReadyMergeOp, NativeStateAddressOp, NativeStateLoadOp,
+               NativeReadyMergeOp, NativeStateAddressOp,
+               NativeStateWindowAddressOp, NativeStateLoadOp,
                NativeStateStoreOp>(op);
   }
 };

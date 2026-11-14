@@ -582,7 +582,9 @@ LogicalResult materializeNativePromotionRangeIndex(ModuleOp module,
           put(addressOf(startsGlobal.getSymName()), 2);
           put(addressOf(dependentsGlobal.getSymName()), 3);
           put(llvmConstant(b, location, i64, slices.size()), 4);
-          put(addressOf("__talos_state_unknown"), 5);
+          put(detail::createStatePlaneAddress(b, location,
+                                              schedule::StatePlane::Unknown),
+              5);
           return record;
         });
     auto adjust = getOrDeclareLLVMFunction(
@@ -655,28 +657,12 @@ struct NativeProofPublicationInputs {
   bool valid = true;
 };
 
-/// The constant byte offset of an unknown-plane address built from byte GEPs
-/// with constant indices, kept small enough to scale to bits.
+/// The constant byte offset of an unknown-plane address, kept small enough
+/// to scale to bits.
 std::optional<uint64_t> constantPlaneBytes(Value address) {
-  uint64_t bytes = 0;
-  while (auto gep = address.getDefiningOp<LLVM::GEPOp>()) {
-    APInt constant;
-    bool known =
-        gep.getElemType().isInteger(8) && gep.getIndices().size() == 1;
-    if (known) {
-      auto index = gep.getIndices()[0];
-      if (auto integer = dyn_cast<IntegerAttr>(index))
-        constant = integer.getValue();
-      else
-        known = matchPattern(cast<Value>(index), m_ConstantInt(&constant));
-    }
-    // Bit offsets must stay representable after scaling by eight.
-    if (!known || constant.isNegative() || constant.getActiveBits() > 60 ||
-        constant.getZExtValue() > (UINT64_MAX >> 4) - bytes)
-      return std::nullopt;
-    bytes += constant.getZExtValue();
-    address = gep.getBase();
-  }
+  std::optional<uint64_t> bytes = getConstantByteOffset(address);
+  if (!bytes || *bytes > (UINT64_MAX >> 4))
+    return std::nullopt;
   return bytes;
 }
 
@@ -732,13 +718,18 @@ struct NativeFunctionProofPublications {
       uint64_t width = ((uint64_t{type.getWidth()} + 7) / 8) * 8;
       return disjointRange(begin, width);
     };
+    // The unknown plane is written by typed stores, and by copies and fills
+    // of its window addresses; native finalization rejects any other access.
     auto inUnknownPlane = [](Value address) {
-      return getStatePlaneRoot(address) == schedule::StatePlane::Unknown;
+      std::optional<StateWindow> window = getStateWindow(address);
+      return window && window->plane == schedule::StatePlane::Unknown;
     };
     for (Operation *operation : allStores) {
+      auto typed = dyn_cast<schedule::NativeStateStoreOp>(operation);
+      if (!typed || typed.getPlane() != schedule::StatePlane::Unknown)
+        continue;
       auto store = *getNativeMemoryAccess(operation);
-      if (getStatePlaneOfAccess(store) != schedule::StatePlane::Unknown ||
-          disjointStore(store))
+      if (disjointStore(store))
         continue;
       if (!isa<IntegerType>(store.type)) {
         operation->emitError(
@@ -826,19 +817,20 @@ public:
     // store and this proof publication, which precedes all dependent
     // computation/fanout.
     OpBuilder builder(context);
-    Type pointer = LLVM::LLVMPointerType::get(context);
     Type i64 = builder.getI64Type();
     auto constant = [&](Location location, uint64_t value) -> Value {
       return llvmConstant(builder, location, i64, value);
     };
-    // The bit offset of an unknown-plane address, for dynamic publications.
-    auto planeBitOffset = [&](Location location, Value address) -> Value {
-      Value base = detail::createStatePlaneAddress(
-          builder, location, schedule::StatePlane::Unknown);
-      Value bytes = LLVM::SubOp::create(
-          builder, location,
-          LLVM::PtrToIntOp::create(builder, location, i64, address),
-          LLVM::PtrToIntOp::create(builder, location, i64, base));
+    // The bit offset of a window of the unknown plane, for dynamic
+    // publications.
+    auto planeBitOffset = [&](Location location, Value dynamicOffset,
+                              uint64_t staticOffset) -> Value {
+      Value bytes = dynamicOffset;
+      if (!bytes)
+        bytes = constant(location, staticOffset);
+      else if (staticOffset)
+        bytes = LLVM::AddOp::create(builder, location, bytes,
+                                    constant(location, staticOffset));
       return LLVM::ShlOp::create(builder, location, bytes,
                                  constant(location, 3));
     };
@@ -891,37 +883,21 @@ public:
     };
     for (Operation *operation : work.stores) {
       Location location = operation->getLoc();
+      auto typed = cast<schedule::NativeStateStoreOp>(operation);
       auto store = *getNativeMemoryAccess(operation);
       auto type = cast<IntegerType>(store.type);
       builder.setInsertionPoint(operation);
-      Value old, bitOffset;
+      auto read = schedule::NativeStateLoadOp::create(
+          builder, location, type, typed.getPlane(), typed.getDynamicOffset(),
+          typed.getStaticOffset(), 1);
+      read.setWindowAttr(typed.getWindowAttr());
+      Value old = read;
+      // Bit offsets must stay representable after scaling by eight.
       std::optional<uint64_t> constantBytes;
-      if (auto typed = dyn_cast<schedule::NativeStateStoreOp>(operation)) {
-        auto read = schedule::NativeStateLoadOp::create(
-            builder, location, type, typed.getPlane(),
-            typed.getDynamicOffset(), typed.getStaticOffset(), 1);
-        read.setWindowAttr(typed.getWindowAttr());
-        old = read;
-        // Bit offsets must stay representable after scaling by eight.
-        if (store.offset && *store.offset <= (UINT64_MAX >> 4))
-          constantBytes = store.offset;
-        Value bytes = typed.getDynamicOffset();
-        if (!bytes)
-          bytes = constant(location, typed.getStaticOffset());
-        else if (typed.getStaticOffset())
-          bytes = LLVM::AddOp::create(builder, location, bytes,
-                                      constant(location,
-                                               typed.getStaticOffset()));
-        bitOffset = LLVM::ShlOp::create(builder, location, bytes,
-                                        constant(location, 3));
-      } else {
-        old = LLVM::LoadOp::create(builder, location, type, store.pointer, 1);
-        if (store.window)
-          schedule::set(old.getDefiningOp(),
-                        schedule::Field::EvalStateAccessBytes, store.window);
-        constantBytes = constantPlaneBytes(store.pointer);
-        bitOffset = planeBitOffset(location, store.pointer);
-      }
+      if (store.offset && *store.offset <= (UINT64_MAX >> 4))
+        constantBytes = store.offset;
+      Value bitOffset = planeBitOffset(location, typed.getDynamicOffset(),
+                                       typed.getStaticOffset());
       Value delta = LLVM::XOrOp::create(builder, location, old, store.stored);
       builder.setInsertionPointAfter(operation);
       for (uint64_t bit = 0; bit < type.getWidth(); bit += 64) {
@@ -974,7 +950,9 @@ public:
       schedule::remove<schedule::Field::EvalUnknownWriteRange>(write);
       builder.setInsertionPoint(write);
       std::optional<uint64_t> constantBytes = constantPlaneBytes(destination);
-      Value bitBase = planeBitOffset(location, destination);
+      StateWindow window = *getStateWindow(destination);
+      Value bitBase =
+          planeBitOffset(location, window.dynamicOffset, window.staticOffset);
       // Exact chunks up to this many bytes; a longer write (such as a whole
       // plane fill) or an unbounded one reports its whole range as possibly
       // X/Z after the write instead, which is always sound.
@@ -998,22 +976,15 @@ public:
       // The new and old bytes [at, at + count) of the destination.
       auto chunkAt = [&](Value at, unsigned count) {
         auto type = builder.getIntegerType(count * 8);
-        auto old = LLVM::LoadOp::create(
-            builder, location, type,
-            LLVM::GEPOp::create(builder, location, pointer, builder.getI8Type(),
-                                destination, ArrayRef<LLVM::GEPArg>{at}),
-            1);
+        // Either side may be a state plane's window.
+        Value old =
+            createLoadAt(builder, location, type, destination, at, 0, 1);
         if (auto footprint =
                 schedule::get<schedule::Field::EvalStateAccessBytes>(write))
-          schedule::set(old, schedule::Field::EvalStateAccessBytes, footprint);
+          setNativeAccessWindow(old.getDefiningOp(), footprint);
         Value next;
         if (source) {
-          next = LLVM::LoadOp::create(
-              builder, location, type,
-              LLVM::GEPOp::create(builder, location, pointer,
-                                  builder.getI8Type(), source,
-                                  ArrayRef<LLVM::GEPArg>{at}),
-              1);
+          next = createLoadAt(builder, location, type, source, at, 0, 1);
         } else if (count == 1) {
           next = fill;
         } else {

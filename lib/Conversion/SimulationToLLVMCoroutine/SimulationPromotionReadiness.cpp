@@ -127,9 +127,7 @@ LogicalResult materializeNativeRoutePromotionScan(
   };
   builder.setInsertionPointToStart(entry);
   Value pendingBase = address(pendingName), ownerBase = address(ownerName),
-        rangeBase = address(rangeName),
-        state = detail::createStatePlaneAddress(builder, loc,
-                                                schedule::StatePlane::Unknown);
+        rangeBase = address(rangeName);
   if (!dirtyName.empty())
     LLVM::StoreOp::create(builder, loc, llvmConstant(builder, loc, i8, 0),
                           address(dirtyName), 1);
@@ -205,7 +203,8 @@ LogicalResult materializeNativeRoutePromotionScan(
       builder, loc,
       LLVM::SelectOp::create(builder, loc, isFirst, firstMask, full),
       LLVM::SelectOp::create(builder, loc, isLast, lastMask, full));
-  Value bits = LLVM::LoadOp::create(builder, loc, i8, gep(state, i8, byte), 1);
+  Value bits = schedule::NativeStateLoadOp::create(
+      builder, loc, i8, schedule::StatePlane::Unknown, byte, 0, 1);
   Value hasUnknown =
       LLVM::ICmpOp::create(builder, loc, LLVM::ICmpPredicate::ne,
                            LLVM::AndOp::create(builder, loc, bits, mask),
@@ -392,8 +391,6 @@ materializePromotionReadiness(ModuleOp module, ArrayRef<uint64_t> owners,
   Value owner = entry->getArgument(0);
   Value ownerBase = address(ownerTable.getSymName());
   Value rangeBase = address(rangeTable.getSymName());
-  Value state = detail::createStatePlaneAddress(builder, loc,
-                                                schedule::StatePlane::Unknown);
   Value hintBase = address(hintTable.getSymName());
   Value hintIndex = arith::MulIOp::create(builder, loc, owner, constant(2));
   Value hintWordAddress = gep(hintBase, i64, hintIndex);
@@ -407,10 +404,15 @@ materializePromotionReadiness(ModuleOp module, ArrayRef<uint64_t> owners,
   // footprint, so callers need not materialize value-plane state around it.
   auto unknownPlaneBytes = builder.getDenseI64ArrayAttr(
       {0, int64_t(llvm::divideCeil(stateBits, 64) * 8)});
-  auto hintLoad =
-      LLVM::LoadOp::create(builder, loc, i64, gep(state, i64, hintWord), 8);
-  schedule::set<schedule::Field::EvalStateAccessBytes>(hintLoad,
-                                                       unknownPlaneBytes);
+  // The unknown plane's word `index`.
+  auto loadWord = [&](Value index) {
+    auto load = schedule::NativeStateLoadOp::create(
+        builder, loc, i64, schedule::StatePlane::Unknown,
+        arith::ShLIOp::create(builder, loc, index, constant(3)), 0, 8);
+    detail::setNativeAccessWindow(load, unknownPlaneBytes);
+    return load;
+  };
+  auto hintLoad = loadWord(hintWord);
   Value hintBits = hintLoad;
   Value stillUnknown = arith::CmpIOp::create(
       builder, loc, arith::CmpIPredicate::ne,
@@ -439,10 +441,7 @@ materializePromotionReadiness(ModuleOp module, ArrayRef<uint64_t> owners,
   builder.setInsertionPointToStart(singleWord);
   Value index = arith::AndIOp::create(builder, loc, beginWord,
                                       constant(~singleWordScanTag));
-  auto singleLoad =
-      LLVM::LoadOp::create(builder, loc, i64, gep(state, i64, index), 8);
-  schedule::set<schedule::Field::EvalStateAccessBytes>(singleLoad,
-                                                       unknownPlaneBytes);
+  auto singleLoad = loadWord(index);
   Value singleUnknown = arith::CmpIOp::create(
       builder, loc, arith::CmpIPredicate::ne,
       arith::AndIOp::create(builder, loc, singleLoad, maskOrEnd), constant(0));
@@ -458,10 +457,7 @@ materializePromotionReadiness(ModuleOp module, ArrayRef<uint64_t> owners,
   Value nextWord = arith::AddIOp::create(builder, loc, word, constant(1));
   Value isLast = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::eq,
                                        nextWord, maskOrEnd);
-  auto wordLoad =
-      LLVM::LoadOp::create(builder, loc, i64, gep(state, i64, word), 8);
-  schedule::set<schedule::Field::EvalStateAccessBytes>(wordLoad,
-                                                       unknownPlaneBytes);
+  auto wordLoad = loadWord(word);
   Value bits = wordLoad;
   Value hasUnknown = arith::CmpIOp::create(
       builder, loc, arith::CmpIPredicate::ne, bits, constant(0));
@@ -806,8 +802,6 @@ LogicalResult materializeNativeKernelPromotionReadiness(
       LLVM::CondBrOp::create(builder, loc, valid, known, fresh);
       builder.setInsertionPointToStart(fresh);
     }
-    Value state = detail::createStatePlaneAddress(
-        builder, loc, schedule::StatePlane::Unknown);
     Value any = llvmConstant(builder, loc, builder.getI64Type(), 0);
     for (size_t i = 0; i != remainder.size(); i += 2) {
       bool single = remainder[i] & singleWordScanTag;
@@ -815,10 +809,10 @@ LogicalResult materializeNativeKernelPromotionReadiness(
       uint64_t end = single ? begin + 1 : remainder[i + 1];
       uint64_t mask = single ? remainder[i + 1] : UINT64_MAX;
       for (uint64_t word = begin; word != end; ++word) {
-        Value address = byteGEP(builder, loc, state, word * 8);
-        auto bits = LLVM::LoadOp::create(builder, loc, builder.getI64Type(),
-                                         address, 8);
-        schedule::set<schedule::Field::EvalStateAccessBytes>(
+        auto bits = schedule::NativeStateLoadOp::create(
+            builder, loc, builder.getI64Type(), schedule::StatePlane::Unknown,
+            Value(), word * 8, 8);
+        detail::setNativeAccessWindow(
             bits, builder.getDenseI64ArrayAttr(
                       {int64_t(word * 8), int64_t((word + 1) * 8)}));
         Value masked = LLVM::AndOp::create(

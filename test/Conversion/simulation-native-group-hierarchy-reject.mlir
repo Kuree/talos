@@ -14,30 +14,28 @@ module attributes {schedule.native.max_inline_ops = 5000 : i64} {
   llvm.func @foreign()
   llvm.func @frozen_capture() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready} {
     %ready = llvm.mlir.addressof @ready : !llvm.ptr
-    %state = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
     %r0 = llvm.load %ready {schedule.eval.activation_entry = 0 : i32} : !llvm.ptr -> i64
     llvm.store %r0, %ready : i64, !llvm.ptr
     llvm.call @foreign() : () -> ()
     %undefined = llvm.mlir.undef : i8
     %captured = llvm.freeze %undefined : i8
-    llvm.store %captured, %state : i8, !llvm.ptr
+    schedule.state.store %captured, @__talos_state_value[0] {alignment = 1 : i64} : i8
     %r1 = llvm.load %ready {schedule.eval.activation_entry = 1 : i32} : !llvm.ptr -> i64
     llvm.store %r1, %ready : i64, !llvm.ptr
-    llvm.store %captured, %state : i8, !llvm.ptr
+    schedule.state.store %captured, @__talos_state_value[0] {alignment = 1 : i64} : i8
     llvm.return
   }
   llvm.func @frozen_capture_candidate() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready, schedule.eval.dataflow_candidate = @frozen_capture} {
     %ready = llvm.mlir.addressof @ready : !llvm.ptr
-    %state = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
     %r0 = llvm.load %ready {schedule.eval.activation_entry = 0 : i32} : !llvm.ptr -> i64
     llvm.store %r0, %ready : i64, !llvm.ptr
     llvm.call @foreign() : () -> ()
     %undefined = llvm.mlir.undef : i8
     %captured = llvm.freeze %undefined : i8
-    llvm.store %captured, %state : i8, !llvm.ptr
+    schedule.state.store %captured, @__talos_state_value[0] {alignment = 1 : i64} : i8
     %r1 = llvm.load %ready {schedule.eval.activation_entry = 1 : i32} : !llvm.ptr -> i64
     llvm.store %r1, %ready : i64, !llvm.ptr
-    llvm.store %captured, %state : i8, !llvm.ptr
+    schedule.state.store %captured, @__talos_state_value[0] {alignment = 1 : i64} : i8
     llvm.return
   }
   llvm.func @all_rejected() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready} {
@@ -179,11 +177,10 @@ module attributes {schedule.native.max_inline_ops = 5000 : i64} {
     %r0 = llvm.load %ready {schedule.eval.activation_entry = 0 : i32} : !llvm.ptr -> i64
     llvm.store %r0, %ready : i64, !llvm.ptr
     llvm.call @foreign() : () -> ()
-    %state = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %captured = llvm.load %state : !llvm.ptr -> i8
+    %captured = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
     %r1 = llvm.load %ready {schedule.eval.activation_entry = 1 : i32} : !llvm.ptr -> i64
     llvm.store %r1, %ready : i64, !llvm.ptr
-    llvm.store %captured, %state : i8, !llvm.ptr
+    schedule.state.store %captured, @__talos_state_value[0] {alignment = 1 : i64} : i8
     llvm.return
   }
   llvm.func @cross_capture_candidate() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready, schedule.eval.dataflow_candidate = @cross_capture} {
@@ -191,11 +188,10 @@ module attributes {schedule.native.max_inline_ops = 5000 : i64} {
     %r0 = llvm.load %ready {schedule.eval.activation_entry = 0 : i32} : !llvm.ptr -> i64
     llvm.store %r0, %ready : i64, !llvm.ptr
     llvm.call @foreign() : () -> ()
-    %state = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %captured = llvm.load %state : !llvm.ptr -> i8
+    %captured = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
     %r1 = llvm.load %ready {schedule.eval.activation_entry = 1 : i32} : !llvm.ptr -> i64
     llvm.store %r1, %ready : i64, !llvm.ptr
-    llvm.store %captured, %state : i8, !llvm.ptr
+    schedule.state.store %captured, @__talos_state_value[0] {alignment = 1 : i64} : i8
     llvm.return
   }
 }

@@ -584,11 +584,8 @@ LogicalResult makeSchedulerMain(ModuleOp module,
       builder.setInsertionPointToStart(rootBody);
       Value byte = field(rootsName, rootType, root, 0, i64);
       Value kind = field(rootsName, rootType, root, 1, i32);
-      Value slot = LLVM::GEPOp::create(
-          builder, location, pointer, builder.getI8Type(),
-          detail::createStatePlaneAddress(builder, location,
-                                          schedule::StatePlane::Value),
-          ArrayRef<LLVM::GEPArg>{byte});
+      Value slot = schedule::NativeStateWindowAddressOp::create(
+          builder, location, schedule::StatePlane::Value, byte, 0);
       fail(LLVM::CallOp::create(
                builder, location, TypeRange{i32},
                SymbolRefAttr::get(
@@ -652,14 +649,16 @@ LogicalResult makeSchedulerMain(ModuleOp module,
   }
   if (!stateLayout.unknownSummaryRoots.empty()) {
     auto address = [&](StringRef name) -> Value {
-      return detail::createGlobalAddress(builder, location, name);
+      return LLVM::AddressOfOp::create(builder, location, pointer, name);
     };
     Value status =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
             "talos_rt_v1_native_state_bind_unknown_summary",
             ValueRange{
-                runtimeContext, address("__talos_state_unknown"),
+                runtimeContext,
+                detail::createStatePlaneAddress(builder, location,
+                                                schedule::StatePlane::Unknown),
                 llvmConstant(builder, location, i64, stateLayout.bitCount),
                 address(unknownSummaryName), address(unknownSummaryRootsName),
                 llvmConstant(builder, location, i64,

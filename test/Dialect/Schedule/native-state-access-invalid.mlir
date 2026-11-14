@@ -33,6 +33,17 @@ module {
 
 // -----
 
+module {
+  llvm.mlir.global internal @other(0 : i8) : i8
+  llvm.func @window_not_a_plane(%offset: i64) -> !llvm.ptr {
+    // expected-error @below {{names 'other', no native state plane}}
+    %a = schedule.state.window_address @other[%offset] : !llvm.ptr
+    llvm.return %a : !llvm.ptr
+  }
+}
+
+// -----
+
 // A state access needs its plane's global.
 module {
   llvm.func @missing_plane(%offset: i64) -> i8 {
@@ -61,6 +72,17 @@ module {
   llvm.mlir.global internal @pointer() : !llvm.ptr {
     // expected-error @below {{must be in a function}}
     %a = schedule.state.address @__talos_state_value : !llvm.ptr
+    llvm.return %a : !llvm.ptr
+  }
+}
+
+// -----
+
+module {
+  llvm.mlir.global internal @__talos_state_value(0 : i8) : i8
+  llvm.mlir.global internal @window() : !llvm.ptr {
+    // expected-error @below {{must be in a function}}
+    %a = schedule.state.window_address @__talos_state_value[0] : !llvm.ptr
     llvm.return %a : !llvm.ptr
   }
 }

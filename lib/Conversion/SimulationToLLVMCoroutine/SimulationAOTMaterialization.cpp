@@ -3250,13 +3250,11 @@ FailureOr<bool> makeNativeEvalPlan(
         Value bitOffset = arith::AndIOp::create(
             loadBuilder, call.getLoc(), sourceBit,
             llvmConstant(loadBuilder, call.getLoc(), i64, 7));
-        Value address = LLVM::GEPOp::create(
-            loadBuilder, call.getLoc(), pointer, loadBuilder.getI8Type(),
-            arguments[1], ValueRange{byteOffset});
         unsigned spanWidth = static_cast<unsigned>(((*width + 14) / 8) * 8);
         IntegerType spanType = IntegerType::get(context, spanWidth);
-        Value span = LLVM::LoadOp::create(loadBuilder, call.getLoc(), spanType,
-                                          address, 1);
+        // The call's plane argument is the plane's typed base.
+        Value span = detail::createLoadAt(loadBuilder, call.getLoc(), spanType,
+                                          arguments[1], byteOffset, 0, 1);
         Value shift =
             spanWidth < 64 ? LLVM::TruncOp::create(loadBuilder, call.getLoc(),
                                                    spanType, bitOffset)

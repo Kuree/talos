@@ -25,7 +25,8 @@ bool reproducibleSetup(Operation *operation) {
   // poison captures one value which must remain correlated across children.
   // Generated entries need only constants and static address construction.
   return isa<LLVM::ConstantOp, LLVM::AddressOfOp, LLVM::GEPOp,
-             schedule::NativeStateAddressOp>(operation);
+             schedule::NativeStateAddressOp,
+             schedule::NativeStateWindowAddressOp>(operation);
 }
 
 /// An entry is an executable readiness load, not an inferred graph rank.

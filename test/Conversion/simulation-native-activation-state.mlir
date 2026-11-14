@@ -13,35 +13,32 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128"} {
   // CHECK-LABEL: llvm.func @activation
   // CHECK-SAME: schedule.eval.ssa_unknown_ranges = 1 : i64
   // CHECK-SAME: schedule.eval.ssa_value_ranges = 1 : i64
-  // CHECK: llvm.load
-  // CHECK: llvm.load
+  // CHECK: schedule.state.load
+  // CHECK: schedule.state.load
   // CHECK: llvm.br
   // CHECK: llvm.cond_br
-  // CHECK-NOT: llvm.load
-  // CHECK-NOT: llvm.store
+  // CHECK-NOT: {{llvm.load|llvm.store|schedule.state.load|schedule.state.store}}
   // CHECK: llvm.br
-  // CHECK: llvm.store
+  // CHECK: schedule.state.store
   // CHECK: llvm.return
   llvm.func @activation(%count: i8) attributes {schedule.eval.raw_captures} {
-    %v = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %x = llvm.mlir.addressof @__talos_state_unknown : !llvm.ptr
     %t = llvm.mlir.addressof @transitions : !llvm.ptr
     %zero = llvm.mlir.constant(0 : i8) : i8
     %one = llvm.mlir.constant(1 : i8) : i8
     %all = llvm.mlir.constant(-1 : i8) : i8
-    llvm.store %zero, %v : i8, !llvm.ptr
-    llvm.store %zero, %x : i8, !llvm.ptr
+    schedule.state.store %zero, @__talos_state_value[0] {alignment = 1 : i64} : i8
+    schedule.state.store %zero, @__talos_state_unknown[0] {alignment = 1 : i64} : i8
     llvm.br ^header(%zero, %zero : i8, i8)
   ^header(%i: i8, %seen: i8):
     %more = llvm.icmp "ult" %i, %count : i8
     llvm.cond_br %more, ^body, ^exit
   ^body:
-    %oldv = llvm.load %v : !llvm.ptr -> i8
-    %oldx = llvm.load %x : !llvm.ptr -> i8
+    %oldv = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
+    %oldx = schedule.state.load @__talos_state_unknown[0] {alignment = 1 : i64} : i8
     %newv = llvm.xor %oldv, %one : i8
     %newx = llvm.xor %oldx, %all : i8
-    llvm.store %newv, %v : i8, !llvm.ptr
-    llvm.store %newx, %x : i8, !llvm.ptr
+    schedule.state.store %newv, @__talos_state_value[0] {alignment = 1 : i64} : i8
+    schedule.state.store %newx, @__talos_state_unknown[0] {alignment = 1 : i64} : i8
     %delta = llvm.xor %newv, %oldv : i8
     %observed = llvm.or %seen, %delta : i8
     %next = llvm.add %i, %one : i8
@@ -54,11 +51,9 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128"} {
   llvm.func @main() -> i32 {
     %two = llvm.mlir.constant(2 : i8) : i8
     llvm.call @activation(%two) : (i8) -> ()
-    %v = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %x = llvm.mlir.addressof @__talos_state_unknown : !llvm.ptr
     %t = llvm.mlir.addressof @transitions : !llvm.ptr
-    %value = llvm.load %v : !llvm.ptr -> i8
-    %unknown = llvm.load %x : !llvm.ptr -> i8
+    %value = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
+    %unknown = schedule.state.load @__talos_state_unknown[0] {alignment = 1 : i64} : i8
     %seen = llvm.load %t : !llvm.ptr -> i8
     %zero = llvm.mlir.constant(0 : i8) : i8
     %one = llvm.mlir.constant(1 : i8) : i8

@@ -15,54 +15,51 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128"} {
     llvm.return
   }
   llvm.func @activation() attributes {schedule.eval.raw_captures} {
-    %base = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
+    %base = schedule.state.address @__talos_state_value : !llvm.ptr
     %one = llvm.mlir.constant(1 : i8) : i8
-    %old = llvm.load %base : !llvm.ptr -> i8
+    %old = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
     %next = llvm.add %old, %one : i8
-    llvm.store %next, %base : i8, !llvm.ptr
+    schedule.state.store %next, @__talos_state_value[0] {alignment = 1 : i64} : i8
     %address = llvm.ptrtoint %base : !llvm.ptr to i64
     %offset = llvm.sub %address, %address : i64
     llvm.call @notify(%offset) : (i64) -> ()
-    %current = llvm.load %base : !llvm.ptr -> i8
+    %current = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
     %twice = llvm.add %current, %one : i8
-    llvm.store %twice, %base : i8, !llvm.ptr
-    %other = llvm.getelementptr %base[4] : (!llvm.ptr) -> !llvm.ptr, i8
+    schedule.state.store %twice, @__talos_state_value[0] {alignment = 1 : i64} : i8
+    %other = schedule.state.window_address @__talos_state_value[4] : !llvm.ptr
     %source = llvm.mlir.addressof @source : !llvm.ptr
     %length = llvm.mlir.constant(1 : i64) : i64
     "llvm.intr.memcpy"(%other, %source, %length) {isVolatile = false} : (!llvm.ptr, !llvm.ptr, i64) -> ()
     llvm.call @observer() : () -> ()
-    %observed = llvm.load %base : !llvm.ptr -> i8
+    %observed = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
     %final = llvm.add %observed, %one : i8
-    llvm.store %final, %base : i8, !llvm.ptr
+    schedule.state.store %final, @__talos_state_value[0] {alignment = 1 : i64} : i8
     llvm.return
   }
   llvm.func @read_state(%index: i64) -> i8 {
-    %base = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    %address = llvm.getelementptr %base[%index] : (!llvm.ptr, i64) -> !llvm.ptr, i8
-    %value = llvm.load %address : !llvm.ptr -> i8
+    %value = schedule.state.load @__talos_state_value[%index] {alignment = 1 : i64} : i8
     llvm.return %value : i8
   }
   llvm.func @write_state(%value: i8) {
-    %base = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-    llvm.store %value, %base : i8, !llvm.ptr
+    schedule.state.store %value, @__talos_state_value[0] {alignment = 1 : i64} : i8
     llvm.return
   }
 }
 
 // CHECK-LABEL: llvm.func @activation()
 // CHECK-SAME: schedule.eval.ssa_value_ranges = 1 : i64
-// CHECK: %[[OLD:.*]] = llvm.load
+// CHECK: %[[OLD:.*]] = schedule.state.load @__talos_state_value[0]
 // CHECK: %[[NEXT:.*]] = llvm.add %[[OLD]],
-// CHECK-NOT: llvm.store
+// CHECK-NOT: schedule.state.store
 // CHECK: llvm.call @notify
-// CHECK-NOT: llvm.load
-// CHECK-NOT: llvm.store
+// CHECK-NOT: schedule.state.load
+// CHECK-NOT: schedule.state.store
 // CHECK: %[[TWICE:.*]] = llvm.add %[[NEXT]],
-// CHECK-NOT: llvm.store
+// CHECK-NOT: schedule.state.store
 // CHECK: "llvm.intr.memcpy"
-// CHECK: llvm.store %[[TWICE]],
+// CHECK: schedule.state.store %[[TWICE]], @__talos_state_value[0]
 // CHECK-NEXT: llvm.call @observer
-// CHECK-NEXT: %[[ACQUIRED:.*]] = llvm.load
+// CHECK-NEXT: %[[ACQUIRED:.*]] = schedule.state.load @__talos_state_value[0]
 // CHECK: %[[FINAL:.*]] = llvm.add %[[ACQUIRED]],
-// CHECK: llvm.store %[[FINAL]],
+// CHECK: schedule.state.store %[[FINAL]], @__talos_state_value[0]
 // CHECK-NEXT: llvm.return

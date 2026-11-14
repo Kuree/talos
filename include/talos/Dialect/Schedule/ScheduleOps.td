@@ -914,9 +914,9 @@ def NativeStateAddressOp : ScheduleNativeOp<"state.address", [
     Pure, ConstantLike, DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
   let summary = "base address of a canonical native state plane";
   let description = [{
-    The address of the first byte of a state plane, for accesses that leave
-    typed state operations: runtime calls, bulk copies and pointer selects.
-    Like `llvm.mlir.addressof`, it is a constant; it folds to its plane.
+    The address of the first byte of a state plane, for a plane that leaves
+    typed state operations whole: into runtime calls and bulk copies. Like
+    `llvm.mlir.addressof`, it is a constant; it folds to its plane.
   }];
   let arguments = (ins FlatSymbolRefAttr:$global);
   let results = (outs LLVM_DefaultPointer:$result);
@@ -924,6 +924,39 @@ def NativeStateAddressOp : ScheduleNativeOp<"state.address", [
   let builders = [OpBuilder<(ins "::talos::schedule::StatePlane":$plane)>];
   let extraClassDeclaration = [{
     ::talos::schedule::StatePlane getPlane();
+  }];
+  let hasFolder = 1;
+  let hasVerifier = 1;
+}
+
+def NativeStateWindowAddressOp : ScheduleNativeOp<"state.window_address", [
+    Pure, DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let summary = "address of a window of a canonical native state plane";
+  let description = [{
+    The address of the plane's byte at `static_offset` plus the optional
+    `dynamic_offset`, for a window whose bytes leave typed state operations:
+    bulk copies and fills, runtime calls, and memory values that borrow
+    state in place. Loads and stores of the window are `schedule.state.load`
+    and `schedule.state.store` at its offset; native finalization rejects an
+    LLVM load, store or address computation on this address, so every
+    pointer into a plane is this operation or `schedule.state.address`.
+  }];
+  let arguments = (ins FlatSymbolRefAttr:$global,
+                       Optional<I64>:$dynamic_offset,
+                       I64Attr:$static_offset);
+  let results = (outs LLVM_DefaultPointer:$result);
+  let assemblyFormat = [{
+    $global `[` custom<StateOffset>($dynamic_offset, $static_offset) `]`
+    attr-dict `:` qualified(type($result))
+  }];
+  let builders = [OpBuilder<(ins "::talos::schedule::StatePlane":$plane,
+                                 "::mlir::Value":$dynamicOffset,
+                                 "uint64_t":$staticOffset)>];
+  let extraClassDeclaration = [{
+    ::talos::schedule::StatePlane getPlane();
+    /// The byte offset when it is constant: the static offset, plus a
+    /// dynamic one defined by a constant.
+    std::optional<uint64_t> getConstantOffset();
   }];
   let hasFolder = 1;
   let hasVerifier = 1;

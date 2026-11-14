@@ -326,10 +326,15 @@ void eliminateTwoStateUnknownPlane(ModuleOp module) {
   constexpr uint64_t unknownBytes = afterUnknown - unknownOffset;
   static_assert(unknownBytes ==
                 sizeof(talos_rt_generated_nba_accumulator_256::unknown));
+  // The unknown plane and the NBA batches' private unknown buffers. Functions
+  // address the plane through typed state operations; global initializers,
+  // like the schedule plan's, take its address as a constant, which becomes
+  // null with the plane.
   SmallVector<LLVM::GlobalOp> globals;
   llvm::DenseSet<StringRef> names;
   for (auto global : module.getOps<LLVM::GlobalOp>())
-    if (global.getSymName() == "__talos_state_unknown" ||
+    if (global.getSymName() ==
+            schedule::getStatePlaneGlobalName(schedule::StatePlane::Unknown) ||
         global.getSymName().starts_with("__talos_eval_nba_unknown_")) {
       globals.push_back(global);
       names.insert(global.getSymName());
@@ -337,10 +342,13 @@ void eliminateTwoStateUnknownPlane(ModuleOp module) {
   llvm::DenseSet<Value> pointers;
   SmallVector<Value> worklist;
   module.walk([&](Operation *operation) {
+    // The plane's base and the addresses of its windows.
     auto plane = dyn_cast<schedule::NativeStateAddressOp>(operation);
-    if (plane && plane.getPlane() == schedule::StatePlane::Unknown) {
-      pointers.insert(plane.getResult());
-      worklist.push_back(plane.getResult());
+    auto window = dyn_cast<schedule::NativeStateWindowAddressOp>(operation);
+    if ((plane && plane.getPlane() == schedule::StatePlane::Unknown) ||
+        (window && window.getPlane() == schedule::StatePlane::Unknown)) {
+      pointers.insert(operation->getResult(0));
+      worklist.push_back(operation->getResult(0));
       return;
     }
     auto address = dyn_cast<LLVM::AddressOfOp>(operation);

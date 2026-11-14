@@ -1,6 +1,7 @@
 //===- SimulationLocalStorageLowering.cpp - Native local storage ----------===//
 
 #include "SimulationLocalStorageLowering.h"
+#include "NativeStateAccess.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -318,17 +319,37 @@ Window getWindow(ConversionPatternRewriter &rewriter, Location location,
   return {byte, resizeNativeInteger(rewriter, location, bit, span), valid,
           span};
 }
-Value windowAddress(ConversionPatternRewriter &rewriter, Location location,
-                    Value base, const Window &window) {
-  return LLVM::GEPOp::create(rewriter, location, base.getType(),
-                             rewriter.getI8Type(), base,
-                             ValueRange{window.byteOffset});
+// Where a window lies: the GEP of a local base, or, for a memory value that
+// borrows a state plane in place, the plane pointer and the window's byte
+// offset, which typed state accesses address.
+struct WindowAddress {
+  Value address;
+  Value byteOffset;
+};
+WindowAddress windowAddress(ConversionPatternRewriter &rewriter,
+                            Location location, Value base,
+                            const Window &window) {
+  if (isTypedStatePointer(base))
+    return {base, window.byteOffset};
+  return {LLVM::GEPOp::create(rewriter, location, base.getType(),
+                              rewriter.getI8Type(), base,
+                              ValueRange{window.byteOffset}),
+          Value()};
+}
+Value loadWindowAt(ConversionPatternRewriter &rewriter, Location location,
+                   IntegerType type, const WindowAddress &address) {
+  return createLoadAt(rewriter, location, type, address.address,
+                      address.byteOffset, 0, 1);
+}
+void storeWindowAt(ConversionPatternRewriter &rewriter, Location location,
+                   Value value, const WindowAddress &address) {
+  createStoreAt(rewriter, location, value, address.address, address.byteOffset,
+                0, 1);
 }
 Value loadWindow(ConversionPatternRewriter &rewriter, Location location,
                  Value base, const Window &window, IntegerType result) {
-  Value address = windowAddress(rewriter, location, base, window);
-  Value value =
-      LLVM::LoadOp::create(rewriter, location, window.spanType, address, 1);
+  Value value = loadWindowAt(rewriter, location, window.spanType,
+                             windowAddress(rewriter, location, base, window));
   value = arith::ShRUIOp::create(rewriter, location, value, window.shift);
   return resizeNativeInteger(rewriter, location, value, result);
 }
@@ -428,14 +449,15 @@ void storePlane(ConversionPatternRewriter &rewriter, Location location,
           // This is the complete native element, including its owned padding.
           // A packed field view cannot use this path. Preserve invalid-index
           // semantics; LLVM removes the old load when validity is proved.
-          Value address = windowAddress(rewriter, location, base, window);
+          WindowAddress address =
+              windowAddress(rewriter, location, base, window);
           if (!matchPattern(window.valid, m_One())) {
-            Value old = LLVM::LoadOp::create(rewriter, location,
-                                             window.spanType, address, 1);
+            Value old =
+                loadWindowAt(rewriter, location, window.spanType, address);
             value = rewriter.createOrFold<arith::SelectOp>(
                 location, window.valid, value, old);
           }
-          LLVM::StoreOp::create(rewriter, location, value, address, 1);
+          storeWindowAt(rewriter, location, value, address);
           return;
         }
         Value mask = arith::ConstantOp::create(
@@ -450,15 +472,14 @@ void storePlane(ConversionPatternRewriter &rewriter, Location location,
         mask = rewriter.createOrFold<arith::SelectOp>(
             location, window.valid, mask,
             llvmConstant(rewriter, location, window.spanType, 0));
-        Value address = windowAddress(rewriter, location, base, window);
-        Value old = LLVM::LoadOp::create(rewriter, location, window.spanType,
-                                         address, 1);
+        WindowAddress address = windowAddress(rewriter, location, base, window);
+        Value old = loadWindowAt(rewriter, location, window.spanType, address);
         Value delta =
             rewriter.createOrFold<arith::XOrIOp>(location, old, value);
         delta = rewriter.createOrFold<arith::AndIOp>(location, delta, mask);
         Value merged =
             rewriter.createOrFold<arith::XOrIOp>(location, old, delta);
-        LLVM::StoreOp::create(rewriter, location, merged, address, 1);
+        storeWindowAt(rewriter, location, merged, address);
       });
 }
 
