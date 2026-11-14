@@ -1,16 +1,19 @@
 // RUN: %split-file %s %t
-// RUN: %talos --std=1800-2023 -emit-talos %t/wrap.sv | not talos-opt '--lower-talos-to-sim=opt-level=0' 2>&1 | FileCheck %s
-// RUN: %talos --std=1800-2023 -emit-talos %t/body-write.sv | not talos-opt '--lower-talos-to-sim=opt-level=0' 2>&1 | FileCheck %s
-// RUN: %talos --std=1800-2023 -emit-talos %t/dynamic.sv | not talos-opt '--lower-talos-to-sim=opt-level=0' 2>&1 | FileCheck %s
-// RUN: %talos --std=1800-2023 -emit-talos %t/budget.sv | not talos-opt '--lower-talos-to-sim=opt-level=0' 2>&1 | FileCheck %s
-// RUN: %talos --std=1800-2023 -emit-talos %t/unknown.sv | not talos-opt '--lower-talos-to-sim=opt-level=0' 2>&1 | FileCheck %s
-// RUN: %talos --std=1800-2023 -emit-talos %t/real-conversion.sv | not talos-opt '--lower-talos-to-sim=opt-level=0' 2>&1 | FileCheck %s
+// RUN: %talos --std=1800-2023 -emit-talos %t/wrap.sv | talos-opt '--lower-talos-to-sim=opt-level=0' | FileCheck %s
+// RUN: %talos --std=1800-2023 -emit-talos %t/body-write.sv | talos-opt '--lower-talos-to-sim=opt-level=0' | FileCheck %s
+// RUN: %talos --std=1800-2023 -emit-talos %t/dynamic.sv | talos-opt '--lower-talos-to-sim=opt-level=0' | FileCheck %s
+// RUN: %talos --std=1800-2023 -emit-talos %t/budget.sv | talos-opt '--lower-talos-to-sim=opt-level=0' | FileCheck %s
+// RUN: %talos --std=1800-2023 -emit-talos %t/unknown.sv | talos-opt '--lower-talos-to-sim=opt-level=0' | FileCheck %s
+// RUN: %talos --std=1800-2023 -emit-talos %t/real-conversion.sv | talos-opt '--lower-talos-to-sim=opt-level=0' | FileCheck %s
+// REQUIRES: compiled-sampler
 
-// Do not truncate loops that may wrap forever, whose counter changes in the
-// body, whose bounds depend on random arguments, or which exceed the policy.
-// Known counters and endpoints are required for this finite expansion path.
-// Numeric real conversions cannot be treated as bit-vector extensions.
-// CHECK: error: constraint function id must be a side-effect-free expression function or an admitted automatic statement body
+// IEEE 1800-2023 18.5.11: unproved, dynamic, and large pure scalar
+// bodies execute natively after their random arguments have been sampled.
+// Conversion must preserve the complete loop, including local counter writes
+// and numeric real casts. These compile-only probes include potentially
+// nonterminating bodies and must never be executed or finitely truncated.
+// CHECK: simulation.random.function_stage
+// CHECK-SAME: SAMP
 
 //--- wrap.sv
 class C;

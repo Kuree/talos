@@ -3140,6 +3140,82 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     return failure();
   }
 
+  bool hasNativeFunctionStages = false;
+  for (Operation *root : children)
+    root->walk([&](semantic::SVCallExpressionOp call) {
+      auto inputs = sim::get<sim::metadata::RandomGuardInputs>(call);
+      hasNativeFunctionStages |=
+          sim::has<sim::metadata::RandomNativeFunction>(call) && inputs &&
+          !inputs.getValue().isZero();
+    });
+  Block *nativeCaptureEntry = nullptr;
+  Block *nativeDispatch = nullptr;
+  Block *nativeSample = nullptr;
+  Value nativeCandidate, nativeRemaining, nativeState, nativeInitialState;
+
+  auto materializeCandidates = [&](Value assignment,
+                                   bool preserveSymbols =
+                                       false) -> FailureOr<SmallVector<Value>> {
+    SmallVector<Value> candidates;
+    unsigned offset = 0;
+    for (const Property &property : planned) {
+      Value bits = assignment;
+      if (offset != 0)
+        bits = arith::ShRUIOp::create(builder, location, bits,
+                                      constantAssignment64(offset));
+      Type integerType =
+          IntegerType::get(function.getContext(), property.width);
+      if (property.width != assignmentWidth)
+        bits = arith::TruncIOp::create(builder, location, integerType, bits);
+      FailureOr<Value> converted = [&]() -> FailureOr<Value> {
+        if (isa<FloatType>(property.type)) {
+          Value value = sim::SimRandomRealFromRankOp::create(
+              builder, location, property.type, bits);
+          return arith::SelectOp::create(builder, location,
+                                         propertyEnabled[candidates.size()],
+                                         value, property.currentValue)
+              .getResult();
+        }
+        return isa<sim::UnpackedArrayType>(property.type)
+                   ? convertFixedBitstreamTarget(bits, property.type, location)
+                   : convert(bits, property.type, false, location,
+                             property.isSigned);
+      }();
+      if (failed(converted))
+        return failure();
+      // A native actual may include frozen X/Z symbols beside sampled bits.
+      // Merge with the original snapshot before passing the scalar by value
+      // or through a const-ref temporary; bit coordinates alone cannot carry
+      // those symbols.
+      if (preserveSymbols && property.originalScalar &&
+          isa<sim::LogicType>(property.originalScalar.getType())) {
+        auto scalar = toRandomScalar(*converted, location);
+        if (failed(scalar))
+          return failure();
+        Value enabled = propertyMutableMasks[candidates.size()];
+        if (offset)
+          enabled = arith::ShRUIOp::create(builder, location, enabled,
+                                           constantAssignment64(offset));
+        if (property.width != assignmentWidth)
+          enabled =
+              arith::TruncIOp::create(builder, location, integerType, enabled);
+        Value condition = sim::SimLogicFromBitsOp::create(
+            builder, location, property.originalScalar.getType(), enabled);
+        Value merged = sim::SimLogicBitwiseMuxOp::create(
+            builder, location, condition, *scalar, property.originalScalar);
+        converted =
+            isa<sim::UnpackedArrayType>(property.type)
+                ? convertFixedBitstreamTarget(merged, property.type, location)
+                : FailureOr<Value>(merged);
+        if (failed(converted))
+          return failure();
+      }
+      candidates.push_back(*converted);
+      offset += property.width;
+    }
+    return candidates;
+  };
+
   struct EncodedInstruction {
     uint8_t opcode;
     uint32_t width;
@@ -3203,6 +3279,10 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
       auto [node, ready] = worklist.pop_back_val();
       if (expressionDependencies.contains(node))
         continue;
+      if (sim::has<sim::metadata::RandomNativeFunction>(node)) {
+        expressionDependencies[node] = {false, true};
+        continue;
+      }
       if (!ready) {
         worklist.emplace_back(node, true);
         if (arithmeticGraph && arithmeticGraph->isNode(node)) {
@@ -5699,8 +5779,25 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     enclosingThisObject = programSavedThis;
     thisObject = receiver;
   }
-  for (const Property &property : planned)
-    randomizeCandidateValues.push_back(property.currentValue);
+  if (hasNativeFunctionStages) {
+    nativeCaptureEntry = addBlock();
+    nativeCandidate = nativeCaptureEntry->addArgument(assignmentType, location);
+    nativeRemaining = nativeCaptureEntry->addArgument(assignmentType, location);
+    nativeState = nativeCaptureEntry->addArgument(i64, location);
+    // Fill the initial dispatch after encoding discovers every real operation.
+    // Its CFG may consume an aggregate draw only for integral programs.
+    nativeDispatch = current;
+    nativeInitialState = state;
+    setCurrent(nativeCaptureEntry);
+    state = nativeState;
+    auto candidates = materializeCandidates(nativeCandidate, true);
+    if (failed(candidates))
+      return failure();
+    randomizeCandidateValues = *candidates;
+  } else {
+    for (const Property &property : planned)
+      randomizeCandidateValues.push_back(property.currentValue);
+  }
   bool emittedHard = false;
   bool emittedSoft = false;
   llvm::DenseMap<Operation *, uint64_t> softPriorities;
@@ -5960,6 +6057,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
   unsigned safeEvaluationDepth = 0;
   bool freezeSafeStateValues = true;
   bool preserveArithmeticSource = false;
+  llvm::SmallDenseSet<Operation *> evaluatingNativeCalls;
   llvm::SmallDenseSet<Value> nonNullReceivers;
   for (Value object = receiver; object;) {
     nonNullReceivers.insert(object);
@@ -5998,6 +6096,80 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     FailureOr<Type> resultType = getNormalizedSemanticType(expression);
     if (failed(resultType))
       return failure();
+    if (nativeRemaining &&
+        sim::has<sim::metadata::RandomNativeFunction>(expression) &&
+        !evaluatingNativeCalls.contains(expression)) {
+      // Argument addresses and data are evaluated only after their random
+      // inputs have been accepted. In particular, an old out-of-range index
+      // must not reject an argument stage that has not chosen that index yet.
+      Value inputs = constantAssignment(priorityInputs(expression));
+      Value arguments = constantAssignment(sourceFunctionArguments(expression));
+      Value unresolved =
+          arith::AndIOp::create(builder, location, nativeRemaining, arguments);
+      Value ready =
+          arith::CmpIOp::create(builder, location, arith::CmpIPredicate::eq,
+                                unresolved, constantAssignment64(0));
+      Block *evaluate = addBlock();
+      Block *defer = addBlock();
+      Block *merge = addBlock();
+      Type mergeTypes[] = {*resultType, builder.getI1Type(),
+                           builder.getI1Type()};
+      for (Type type : mergeTypes)
+        merge->addArgument(type, location);
+      cf::CondBranchOp::create(builder, location, ready, evaluate, ValueRange{},
+                               defer, ValueRange{});
+      setCurrent(defer);
+      Value dummy = createDefaultValue(builder, location, *resultType);
+      Value valid = guardConstant(true);
+      cf::BranchOp::create(builder, location, merge,
+                           ValueRange{dummy, valid, valid});
+      setCurrent(evaluate);
+      FailureOr<SafeConstraintValue> evaluated = failure();
+      {
+        // Branch-local reads cannot escape through a shared expression bank.
+        // Only the merged function value below dominates subsequent captures.
+        auto savedState = std::move(safeStateValues);
+        auto savedRawState = std::move(safeRawStateValues);
+        auto savedArithmetic = std::move(safeArithmeticValues);
+        auto savedRawArithmetic = std::move(safeRawArithmeticValues);
+        evaluatingNativeCalls.insert(expression);
+        auto restore = llvm::scope_exit([&] {
+          safeStateValues = std::move(savedState);
+          safeRawStateValues = std::move(savedRawState);
+          safeArithmeticValues = std::move(savedArithmetic);
+          safeRawArithmeticValues = std::move(savedRawArithmetic);
+          evaluatingNativeCalls.erase(expression);
+        });
+        evaluated = safeConstraintValue(expression);
+      }
+      if (failed(evaluated))
+        return failure();
+      cf::BranchOp::create(
+          builder, location, merge,
+          ValueRange{evaluated->value, evaluated->valid, evaluated->errors});
+      setCurrent(merge);
+      // Source function arguments establish ordering even if the body ignores
+      // their values. Preserve that inventory while the call is deferred;
+      // once ready, its result is a state value with ordinary symbols.
+      Value known = matchPattern(evaluated->valid, m_One())
+                        ? guardConstant(true)
+                        : merge->getArgument(1);
+      Value errors = matchPattern(evaluated->errors, m_One())
+                         ? guardConstant(true)
+                         : merge->getArgument(2);
+      SafeConstraintValue safe{merge->getArgument(0),
+                               known,
+                               guardNot(ready),
+                               inputs,
+                               arguments,
+                               errors,
+                               false};
+      if (stateKey && freezeSafeStateValues) {
+        safeStateValues[stateKey] = safe;
+        safeRawStateValues[stateKey] = safe;
+      }
+      return safe;
+    }
     SmallVector<Operation *> operands = arithmetic.operands(expression);
     // An array method's with clause reads its iterator, which only lowering the
     // whole call binds, so state it captures is one value.
@@ -6151,6 +6323,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     Value errors = guardConstant(true);
     auto caseComparison = dyn_cast<semantic::SVBinaryExpressionOp>(expression);
     bool consumesSymbols =
+        sim::has<sim::metadata::RandomNativeFunction>(expression) ||
         isa<semantic::SVInsideExpressionOp>(expression) ||
         (caseComparison &&
          (caseComparison.getOperatorKind() ==
@@ -6240,7 +6413,9 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
             ? guardConstant(false)
             : arith::CmpIOp::create(builder, location, arith::CmpIPredicate::ne,
                                     arith::AndIOp::create(builder, location,
-                                                          activeGuardBits,
+                                                          nativeRemaining
+                                                              ? nativeRemaining
+                                                              : activeGuardBits,
                                                           guardInputs),
                                     constantAssignment64(0))
                   .getResult();
@@ -6635,6 +6810,50 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
             expressionCaptures.erase(input);
         }
       });
+      auto lowerEvaluatedExpression = [&]() -> FailureOr<Value> {
+        SmallVector<std::pair<Operation *, Value>> references;
+        auto restore = llvm::scope_exit([&] {
+          for (auto [actual, reference] : llvm::reverse(references)) {
+            if (reference)
+              lvalueExpressionCaptures[actual] = reference;
+            else
+              lvalueExpressionCaptures.erase(actual);
+          }
+        });
+        if (sim::has<sim::metadata::RandomNativeFunction>(expression)) {
+          auto call = cast<semantic::SVCallExpressionOp>(expression);
+          auto formals = sim::get<sim::metadata::CalleeFormals>(expression);
+          auto operands = getChildren(expression);
+          if (!formals || call.getArgumentCount() > operands.size() ||
+              formals.size() != call.getArgumentCount())
+            return failure();
+          auto actuals = ArrayRef(operands).take_back(call.getArgumentCount());
+          for (auto [source, attribute] : llvm::zip_equal(actuals, formals)) {
+            auto formal = cast<sim::CalleeFormalAttr>(attribute);
+            if (formal.getDirection() != sim::FormalDirection::Ref)
+              continue;
+            // Purity validation admitted only const-ref formals. Bind them to
+            // the accepted argument value, while body-only reads still see
+            // the unchanged original object or scope storage.
+            Value value = expressionCaptures.lookup(source);
+            if (!value)
+              return failure();
+            auto converted =
+                convert(value, formal.getType(), isSignedNode(source), location,
+                        formal.getIsSigned());
+            if (failed(converted))
+              return failure();
+            Operation *actual = getCopyOutActual(source);
+            references.push_back(
+                {actual, lvalueExpressionCaptures.lookup(actual)});
+            lvalueExpressionCaptures[actual] = sim::SimRefAllocOp::create(
+                builder, location,
+                sim::RefType::get(function.getContext(), formal.getType()),
+                *converted);
+          }
+        }
+        return lowerExpression(expression);
+      };
       Value evaluate = errors;
       if (sim::has<sim::metadata::RandomNativeFunction>(expression))
         for (Operation *child = expression, *parent = child->getParentOp();
@@ -6670,7 +6889,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
               guardAnd(evaluate, guardAnd(guard->valid, guardNot(*eliminated)));
         }
       if (matchPattern(evaluate, m_One())) {
-        FailureOr<Value> lowered = lowerExpression(expression);
+        FailureOr<Value> lowered = lowerEvaluatedExpression();
         if (failed(lowered))
           return failure();
         result = *lowered;
@@ -6685,7 +6904,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         Value dummy = createDefaultValue(builder, location, *resultType);
         cf::BranchOp::create(builder, location, done, ValueRange{dummy});
         setCurrent(read);
-        FailureOr<Value> lowered = lowerExpression(expression);
+        FailureOr<Value> lowered = lowerEvaluatedExpression();
         if (failed(lowered))
           return failure();
         cf::BranchOp::create(builder, location, done, ValueRange{*lowered});
@@ -6720,6 +6939,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         valid = guardAnd(valid, guardOr(random, known));
       }
     if (!preserveArithmeticSource &&
+        !sim::has<sim::metadata::RandomNativeFunction>(expression) &&
         !isa<semantic::SVDistExpressionOp>(expression) &&
         arithmetic.needed(expression)) {
       auto planes = arithmetic.get(expression);
@@ -6768,6 +6988,14 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
                              guardArguments, errors, dynamicInputs};
     if (stateKey && freezeSafeStateValues)
       stateValues[stateKey] = safe;
+    if (stateKey && freezeSafeStateValues &&
+        sim::has<sim::metadata::RandomNativeFunction>(expression)) {
+      // Native returns retain their ordinary symbols in either evaluation
+      // mode. Reuse one call per source occurrence and stage across value,
+      // unknown and high-impedance projections.
+      safeStateValues[stateKey] = safe;
+      safeRawStateValues[stateKey] = safe;
+    }
     if (graphNode)
       graphValues[expression] = safe;
     return safe;
@@ -6844,21 +7072,58 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     }
     return valid;
   };
+  auto liveFunctionArguments = [&](Operation *source) -> FailureOr<Value> {
+    Value arguments = constantAssignment64(0);
+    auto result = source->walk([&](Operation *node) -> WalkResult {
+      auto inputs = sim::get<sim::metadata::RandomGuardInputs>(node);
+      if (!inputs || inputs.getValue().isZero())
+        return WalkResult::advance();
+      Value enabled = guardConstant(true);
+      for (Operation *child = node, *parent = child->getParentOp();
+           parent && parent != op.getOperation();
+           child = parent, parent = parent->getParentOp()) {
+        bool implication = isa<semantic::SVImplicationConstraintOp>(parent);
+        if (!implication && !isa<semantic::SVConditionalConstraintOp>(parent))
+          continue;
+        auto parts = getChildren(parent);
+        if (parts.empty() || child == parts.front())
+          continue;
+        auto guard = safeConstraintValue(parts.front());
+        if (failed(guard))
+          return WalkResult::interrupt();
+        auto eliminated =
+            stateGuard(*guard, !(implication || child == parts[1]));
+        if (failed(eliminated))
+          return WalkResult::interrupt();
+        enabled =
+            guardAnd(enabled, guardAnd(guard->valid, guardNot(*eliminated)));
+      }
+      arguments = unionGuardInputs(
+          arguments,
+          selectGuardInputs(
+              enabled, constantAssignment(
+                           inputs.getValue().zextOrTrunc(assignmentWidth))));
+      return WalkResult::advance();
+    });
+    return result.wasInterrupted() ? FailureOr<Value>(failure())
+                                   : FailureOr<Value>(arguments);
+  };
   struct CreationCheck {
     Value valid;
     uint32_t block;
   };
   SmallVector<CreationCheck> creationChecks;
   bool hasDynamicGuardInputs = false;
-  auto recordPriorityInputs = [&](APInt inputs, APInt arguments,
-                                  Operation *source =
-                                      nullptr) -> LogicalResult {
+  auto recordPriorityInputs =
+      [&](APInt inputs, APInt arguments, Operation *source = nullptr,
+          Value liveArguments = Value{}) -> LogicalResult {
     if (hasFunctionPriority) {
       uint32_t maskCapture = 0;
       if (source) {
         Value mask = constantAssignment(sourceReferences(source));
         Value argumentMask =
-            constantAssignment(sourceFunctionArguments(source));
+            liveArguments ? liveArguments
+                          : constantAssignment(sourceFunctionArguments(source));
         Value enabled = guardConstant(true);
         for (Operation *child = source, *parent = child->getParentOp();
              parent && parent != op->getParentOp();
@@ -7086,8 +7351,16 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
             arith::ExtUIOp::create(builder, location, i64, *valid));
         instruction(TALOS_RT_RANDOM_PUSH_CAPTURE_V1, 1, false, capture);
         instruction(TALOS_RT_RANDOM_END_HARD_V1, 1, false, constraintBlock);
-        if (failed(recordPriorityInputs(APInt::getZero(assignmentWidth),
-                                        APInt::getZero(assignmentWidth))))
+        if (hasNativeFunctionStages) {
+          auto arguments = liveFunctionArguments(item);
+          if (failed(arguments) ||
+              failed(recordPriorityInputs(priorityInputs(item),
+                                          priorityArguments(item), item,
+                                          *arguments)))
+            return failure();
+        } else if (failed(
+                       recordPriorityInputs(APInt::getZero(assignmentWidth),
+                                            APInt::getZero(assignmentWidth))))
           return failure();
         emittedHard = true;
       }
@@ -7393,6 +7666,14 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
   thisObject = programSavedThis;
   randomizeCandidateValues = std::move(programSavedCandidates);
   restoreProgramBindings.release();
+  if (hasNativeFunctionStages) {
+    nativeSample = addBlock();
+    Block *legacy = addBlock();
+    Value staged = guardConstant(true);
+    cf::CondBranchOp::create(builder, location, staged, nativeSample,
+                             ValueRange{}, legacy, ValueRange{});
+    setCurrent(legacy);
+  }
 
   SmallVector<uint8_t> program;
   auto append16 = [&](uint16_t value) {
@@ -7430,7 +7711,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
   if (hasFiniteDomains)
     programFlags |= TALOS_RT_RANDOM_PROGRAM_HAS_DOMAINS;
   bool wideProgram =
-      useCyclicPlan || totalWidth > 64 ||
+      hasNativeFunctionStages || useCyclicPlan || totalWidth > 64 ||
       llvm::any_of(programInstructions,
                    [](const EncodedInstruction &op) { return op.width > 64; });
   append32(TALOS_RT_RANDOM_PROGRAM_MAGIC);
@@ -9512,41 +9793,6 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     cf::BranchOp::create(builder, location, failedBlock, ValueRange{});
   }
 
-  auto materializeCandidates =
-      [&](Value assignment) -> FailureOr<SmallVector<Value>> {
-    SmallVector<Value> candidates;
-    unsigned offset = 0;
-    for (const Property &property : planned) {
-      Value bits = assignment;
-      if (offset != 0)
-        bits = arith::ShRUIOp::create(builder, location, bits,
-                                      constantAssignment64(offset));
-      Type integerType =
-          IntegerType::get(function.getContext(), property.width);
-      if (property.width != assignmentWidth)
-        bits = arith::TruncIOp::create(builder, location, integerType, bits);
-      FailureOr<Value> converted = [&]() -> FailureOr<Value> {
-        if (isa<FloatType>(property.type)) {
-          Value value = sim::SimRandomRealFromRankOp::create(
-              builder, location, property.type, bits);
-          return arith::SelectOp::create(builder, location,
-                                         propertyEnabled[candidates.size()],
-                                         value, property.currentValue)
-              .getResult();
-        }
-        return isa<sim::UnpackedArrayType>(property.type)
-                   ? convertFixedBitstreamTarget(bits, property.type, location)
-                   : convert(bits, property.type, false, location,
-                             property.isSigned);
-      }();
-      if (failed(converted))
-        return failure();
-      candidates.push_back(*converted);
-      offset += property.width;
-    }
-    return candidates;
-  };
-
   struct ConstraintCheck {
     Value hard;
     Value preferred;
@@ -10312,6 +10558,58 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
             : satisfied;
     return ConstraintCheck{satisfied, preferred};
   };
+
+  if (hasNativeFunctionStages) {
+    OpBuilder::InsertionGuard insertion(builder);
+    Block *savedCurrent = current;
+    setCurrent(nativeDispatch);
+    // Match the ordinary function-priority entry's aggregate draw. Checkers
+    // and real programs consume no initial draw; real coordinates must also
+    // start at valid ranks rather than arbitrary bit patterns. All subsequent
+    // stage RNG is tentative until the complete solve succeeds.
+    if (hasRealProgram) {
+      cf::BranchOp::create(
+          builder, location, nativeCaptureEntry,
+          ValueRange{currentAssignment, mutableMask, nativeInitialState});
+    } else {
+      Block *draw = addBlock();
+      cf::CondBranchOp::create(
+          builder, location, allPropertiesDisabled, nativeCaptureEntry,
+          ValueRange{currentAssignment, mutableMask, nativeInitialState}, draw,
+          ValueRange{});
+      setCurrent(draw);
+      Value drawState = nativeInitialState;
+      Value tentative = nextAssignment(drawState);
+      tentative = arith::OrIOp::create(
+          builder, location,
+          arith::AndIOp::create(builder, location, tentative, mutableMask),
+          fixedAssignment);
+      storeRandomState(drawState);
+      cf::BranchOp::create(builder, location, nativeCaptureEntry,
+                           ValueRange{tentative, mutableMask, drawState});
+    }
+    setCurrent(nativeSample);
+    auto stage = sim::SimRandomFunctionStageOp::create(
+        builder, location, function.getBody().front().getArgument(0),
+        nativeCandidate, nativeRemaining, relevantConstraintMode,
+        constant64(fallbackAttempts), nativeState, increment, programCaptures,
+        getSamplerProgram());
+    Block *accepted = addBlock();
+    Block *complete = addBlock();
+    cf::CondBranchOp::create(builder, location, stage.getSuccess(), accepted,
+                             ValueRange{}, failedBlock, ValueRange{});
+    setCurrent(accepted);
+    cf::CondBranchOp::create(builder, location, stage.getComplete(), complete,
+                             ValueRange{}, nativeCaptureEntry,
+                             ValueRange{stage.getAssignment(),
+                                        stage.getRemainingMask(),
+                                        stage.getNextRngState()});
+    setCurrent(complete);
+    storeRandomState(stage.getNextRngState());
+    cf::BranchOp::create(builder, location, commit,
+                         ValueRange{stage.getAssignment()});
+    current = savedCurrent;
+  }
 
   if (useCyclicPlan) {
     // IEEE 1800-2023 18.4.2: project each cyclic field before drawing ordinary

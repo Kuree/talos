@@ -3,16 +3,19 @@
 // RUN: %talos --std=1800-2023 -emit-talos %t/casez.sv | talos-opt '--lower-talos-to-sim=opt-level=0' | FileCheck %s --check-prefix=ACCEPT
 // RUN: %talos --std=1800-2023 -emit-talos %t/case-inside.sv | talos-opt '--lower-talos-to-sim=opt-level=0' | FileCheck %s --check-prefix=ACCEPT
 // RUN: %talos --std=1800-2023 -emit-talos %t/tolerance.sv | not talos-opt '--lower-talos-to-sim=opt-level=0' 2>&1 | FileCheck %s --check-prefix=REJECT
-// RUN: %talos --std=1800-2023 -emit-talos %t/unique.sv | not talos-opt '--lower-talos-to-sim=opt-level=0' 2>&1 | FileCheck %s --check-prefix=REJECT
+// RUN: %talos --std=1800-2023 -emit-talos %t/unique.sv | talos-opt '--lower-talos-to-sim=opt-level=0' 2>&1 | FileCheck %s --check-prefix=NATIVE
+// REQUIRES: compiled-sampler
 
 // IEEE 1800-2023 12.5 and 18.5.11: wildcard (casex, casez) and membership
 // (case inside) statements in a constraint function compile into the Z3
-// sampling plan as exact symbol comparisons. Qualifier reports (unique) and
-// tolerance ranges (11.4.13) still require their own function implementation
-// and are diagnosed.
+// sampling plan as exact symbol comparisons. Qualified case statements use
+// native stages; tolerance ranges (11.4.13) remain diagnosed by ordinary
+// function lowering.
 // ACCEPT: simulation.random.solve
 // ACCEPT-SAME: "ODR1
-// REJECT: error: constraint function id must be a side-effect-free expression function or an admitted automatic statement body
+// NATIVE: simulation.random.function_stage
+// NATIVE-SAME: SAMP
+// REJECT: error: case inside tolerance ranges are not executable
 
 //--- casex.sv
 class C;

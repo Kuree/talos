@@ -10,7 +10,7 @@
 // covers signed narrow operands and 130-bit patterns. Failed and checker-only
 // calls preserve fields; dollar endpoints work in ordinary membership. Every
 // randomize call keeps a compiled sampling plan.
-// PLAN-COUNT-2: simulation.random.solve{{.*}}SAMP
+// PLAN-COUNT-3: simulation.random.function_stage{{.*}}SAMP
 // RUNTIME: case inside valid 1
 
 class C;

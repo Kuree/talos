@@ -511,10 +511,16 @@ class ExpansionBudget {
 public:
   static constexpr uint64_t limit = uint64_t{1} << 20;
 
+  explicit ExpansionBudget(uint64_t available = limit) : remaining(available) {}
+
   /// Charge every operation in `root`; false once the budget is exhausted.
   bool spend(Operation *root) {
     uint64_t count = 0;
     root->walk([&](Operation *) { ++count; });
+    return spend(count);
+  }
+
+  bool spend(uint64_t count) {
     if (exhausted() || count > remaining) {
       remaining = 0;
       return false;
@@ -523,6 +529,7 @@ public:
     return true;
   }
 
+  uint64_t available() const { return remaining; }
   bool exhausted() const { return remaining == 0; }
 
   void diagnose(Location location) {
@@ -2171,7 +2178,7 @@ LogicalResult expandRandomConstraintFunctions(
       FailureOr<Operation *> result = failure();
       auto inputs = sim::get<sim::metadata::RandomGuardInputs>(source);
       bool hasCallees = false;
-      if (!functionBody && inputs && inputs.getValue().isZero() &&
+      if (!functionBody && inputs &&
           canExecuteNativeConstraintFunction(*function, semanticSymbols,
                                              hasCallees)) {
         // Keep inexpensive leaf expressions and proved bounded bodies available
@@ -2180,19 +2187,24 @@ LogicalResult expandRandomConstraintFunctions(
         // Retain closed graphs containing user calls as a whole: an immediate
         // return expression can still call an unbounded or recursive body.
         if (!hasCallees) {
-          ExpansionBudget trial = budget;
+          // A native fallback makes a large speculative expansion unnecessary.
+          // Keep the folding trial cheap even for exponentially reused locals.
+          uint64_t allowance = budget.available();
+          if (!inputs.getValue().isZero())
+            allowance = std::min(allowance, uint64_t{1} << 14);
+          ExpansionBudget trial(allowance);
           ScopedDiagnosticHandler handler(
               source->getContext(), [](Diagnostic &) { return success(); });
           result = getConstraintFunctionResult(*function, callExpression,
                                                semanticSymbols, builder,
                                                *functionExpressions, trial);
           if (succeeded(result))
-            budget = trial;
+            budget.spend(allowance - trial.available());
         }
         if (failed(result)) {
-          // No active-argument priority handoff is needed. Ordinary function
-          // lowering executes arbitrary control flow against the pre-solve
-          // state, and the exact plan binds its return as an opaque capture.
+          // Ordinary function lowering executes the validated graph. Source
+          // random arguments require a priority-stage handoff before its
+          // opaque return capture is ready.
           Operation *cloned = source->cloneWithoutRegions();
           sim::mark<sim::metadata::RandomNativeFunction>(cloned);
           if (!budget.spend(cloned)) {

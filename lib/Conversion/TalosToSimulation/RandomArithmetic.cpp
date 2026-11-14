@@ -368,10 +368,11 @@ struct RandomArithmetic::Impl {
     if (sim::has<sim::metadata::RandomArithmeticNode>(expression))
       return false;
     auto semanticType = expression->getAttrOfType<TypeAttr>("semantic_type");
-    if (!semanticType ||
-        (!getSemanticPackedWidth(semanticType.getValue()) &&
-         !isa<semantic::TimeType>(semanticType.getValue())))
+    if (!semanticType || (!getSemanticPackedWidth(semanticType.getValue()) &&
+                          !isa<semantic::TimeType>(semanticType.getValue())))
       return false;
+    if (sim::has<sim::metadata::RandomNativeFunction>(expression))
+      return fourState(expression);
     Operation *key = canonical(expression);
     if (auto found = needs.find(key); found != needs.end())
       return found->second;
@@ -967,6 +968,11 @@ struct RandomArithmetic::Impl {
     if (!needed(expression))
       return RandomArithmeticPlanes{
           cast(expression, expression, precision, signedResult), nullptr};
+    if (sim::has<sim::metadata::RandomNativeFunction>(expression))
+      return RandomArithmeticPlanes{
+          projection(expression, precision, Plane::Value),
+          projection(expression, precision, Plane::Unknown),
+          projection(expression, precision, Plane::HighImpedance)};
     if (candidate(expression) &&
         isa<semantic::SVElementSelectExpressionOp,
             semantic::SVRangeSelectExpressionOp,

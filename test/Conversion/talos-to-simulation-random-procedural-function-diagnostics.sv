@@ -7,8 +7,8 @@
 // local (16), a const-ref formal (24) and a const local (33) are rejected.
 // A static return variable read
 // before its first assignment (41, and 48 when the result is returned by
-// fallthrough) cannot be replaced by an automatic zero, and an unbounded loop
-// (57) remains an implementation boundary. The const and static-result cases
+// fallthrough) cannot be replaced by an automatic zero. The unbounded pure
+// loop (57) compiles to a native stage. The const and static-result cases
 // are retargeted by attribute edits because the source frontend rejects them.
 // REJECT-DAG: reject.sv:7:30: error: constraint function id must be a side-effect-free expression function or an admitted automatic statement body
 // REJECT-DAG: reject.sv:16:30: error: constraint function id must be a side-effect-free expression function or an admitted automatic statement body
@@ -16,7 +16,6 @@
 // REJECT-DAG: reject.sv:33:30: error: constraint function id must be a side-effect-free expression function or an admitted automatic statement body
 // REJECT-DAG: reject.sv:41:30: error: constraint function static_result must be a side-effect-free expression function or an admitted automatic statement body
 // REJECT-DAG: reject.sv:48:30: error: constraint function static_fast must be a side-effect-free expression function or an admitted automatic statement body
-// REJECT-DAG: reject.sv:57:30: error: constraint function id must be a side-effect-free expression function or an admitted automatic statement body
 
 // IEEE 1800-2023 18.5.11 and 18.5.12: when the state error (null handle
 // read) is selected by the candidate value of y, the compiled sampler cannot

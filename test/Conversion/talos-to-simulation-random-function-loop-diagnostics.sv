@@ -1,18 +1,20 @@
 // RUN: %split-file %s %t
-// RUN: %talos --std=1800-2023 -emit-talos %t/zero-shift.sv | not talos-opt '--lower-talos-to-sim=opt-level=0' 2>&1 | FileCheck %s --check-prefix=REJECT
-// RUN: %talos --std=1800-2023 -emit-talos %t/nonzero-exit.sv | not talos-opt '--lower-talos-to-sim=opt-level=0' 2>&1 | FileCheck %s --check-prefix=REJECT
-// RUN: %talos --std=1800-2023 -emit-talos %t/body-write.sv | not talos-opt '--lower-talos-to-sim=opt-level=0' 2>&1 | FileCheck %s --check-prefix=REJECT
-// RUN: %talos --std=1800-2023 -emit-talos %t/signed-widening.sv | not talos-opt '--lower-talos-to-sim=opt-level=0' 2>&1 | FileCheck %s --check-prefix=REJECT
-// RUN: %talos --std=1800-2023 -emit-talos %t/width-bound.sv | not talos-opt '--lower-talos-to-sim=opt-level=0' 2>&1 | FileCheck %s --check-prefix=REJECT
-// RUN: %talos --std=1800-2023 -emit-talos %t/repeat-bound.sv | not talos-opt '--lower-talos-to-sim=opt-level=0' 2>&1 | FileCheck %s --check-prefix=REJECT
-// RUN: %talos --std=1800-2023 -emit-talos %t/repeat-dynamic.sv | not talos-opt '--lower-talos-to-sim=opt-level=0' 2>&1 | FileCheck %s --check-prefix=REJECT
+// RUN: %talos --std=1800-2023 -emit-talos %t/zero-shift.sv | talos-opt '--lower-talos-to-sim=opt-level=0' | FileCheck %s
+// RUN: %talos --std=1800-2023 -emit-talos %t/nonzero-exit.sv | talos-opt '--lower-talos-to-sim=opt-level=0' | FileCheck %s
+// RUN: %talos --std=1800-2023 -emit-talos %t/body-write.sv | talos-opt '--lower-talos-to-sim=opt-level=0' | FileCheck %s
+// RUN: %talos --std=1800-2023 -emit-talos %t/signed-widening.sv | talos-opt '--lower-talos-to-sim=opt-level=0' | FileCheck %s
+// RUN: %talos --std=1800-2023 -emit-talos %t/width-bound.sv | talos-opt '--lower-talos-to-sim=opt-level=0' | FileCheck %s
+// RUN: %talos --std=1800-2023 -emit-talos %t/repeat-bound.sv | talos-opt '--lower-talos-to-sim=opt-level=0' | FileCheck %s
+// RUN: %talos --std=1800-2023 -emit-talos %t/repeat-dynamic.sv | talos-opt '--lower-talos-to-sim=opt-level=0' | FileCheck %s
+// REQUIRES: compiled-sampler
 
-// IEEE 1800-2023 18.5.11 function bodies: a function loop is expanded only
-// with an exact admitted bound. Zero shifts, modified variants, and sign
-// extension before truncation can prevent progress. Nonzero exit tests and
-// loops beyond the compiler expansion policy need staged execution. General
-// dynamic repeat counts need a complete staged evaluator.
-// REJECT: error: constraint function id must be a side-effect-free expression function or an admitted automatic statement body
+// IEEE 1800-2023 18.5.11: unproved, dynamic, and large pure scalar
+// bodies execute natively after their random arguments have been sampled.
+// Conversion must preserve the complete loop, including local counter writes
+// and numeric real casts. These compile-only probes include potentially
+// nonterminating bodies and must never be executed or finitely truncated.
+// CHECK: simulation.random.function_stage
+// CHECK-SAME: SAMP
 
 //--- zero-shift.sv
 class C;
