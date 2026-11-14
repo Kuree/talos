@@ -10,6 +10,21 @@
 
 using namespace mlir;
 namespace talos::detail {
+/// Declare the runtime entry points a specialized NBA batch calls.
+void declareSpecializedNBABatchRuntime(ModuleOp module) {
+  MLIRContext *context = module.getContext();
+  auto ptr = LLVM::LLVMPointerType::get(context);
+  auto i32 = IntegerType::get(context, 32);
+  auto i64 = IntegerType::get(context, 64);
+  auto voidType = LLVM::LLVMVoidType::get(context);
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_batch_guard", i32,
+                           {ptr, ptr, i32});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_batch_knownness",
+                           voidType, {ptr, i64, i64, i64, i64});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_batch_finish",
+                           voidType, {ptr, i64, i64, i32});
+}
+
 namespace {
 // Each generated commit uses constant storage offsets and consumer masks.
 // Dirty bits predicate bounded runs of roots; no actor runs inside this region.
@@ -20,20 +35,15 @@ public:
         module(op->getParentOfType<ModuleOp>()), i64(b.getI64Type()),
         i32(b.getI32Type()), ptr(LLVM::LLVMPointerType::get(b.getContext())) {}
 
-  void run() {
+  void run(bool declareRuntime) {
     auto function = op->getParentOfType<FunctionOpInterface>();
     Block *entry = op->getBlock();
     done = entry->splitBlock(Block::iterator(op));
     b.setInsertionPointToEnd(entry);
     Value status = llvmConstant(b, loc, i32, TALOS_RT_OK);
     op.getStatus().replaceAllUsesWith(status);
-    auto voidType = LLVM::LLVMVoidType::get(b.getContext());
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_batch_guard", i32,
-                             {ptr, ptr, i32});
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_batch_knownness",
-                             voidType, {ptr, i64, i64, i64, i64});
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_batch_finish",
-                             voidType, {ptr, i64, i64, i32});
+    if (declareRuntime)
+      declareSpecializedNBABatchRuntime(module);
     Value guard =
         call("talos_rt_v1_static_nba_batch_guard", i32,
              {op.getContext(), address(layout.getPlan()), op.getBarrier()});
@@ -445,7 +455,8 @@ private:
   SmallVector<PromotableAllocationOpInterface> allocations;
 };
 } // namespace
-void lowerSpecializedNBABatch(schedule::NativeNBABatchOp op) {
-  BatchLowering(op).run();
+void lowerSpecializedNBABatch(schedule::NativeNBABatchOp op,
+                              bool declareRuntime) {
+  BatchLowering(op).run(declareRuntime);
 }
 } // namespace talos::detail

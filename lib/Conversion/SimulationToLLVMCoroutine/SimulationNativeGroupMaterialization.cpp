@@ -10,6 +10,7 @@
 #include "talos/Dialect/Schedule/ScheduleEnums.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
+#include "talos/Dialect/Schedule/Transforms/NativeTransforms.h"
 
 #include "talos/Conversion/Passes.h"
 #include "talos/Conversion/SimulationToLLVMCoroutine.h"
@@ -1822,8 +1823,9 @@ struct GroupPlan {
   /// materialization never changes them.
   DenseMap<Operation *, uint64_t> stableCosts;
   /// Groups that no other group calls or refines, and that call nothing
-  /// leading to a group: inlining one reads only definitions that do not
-  /// change, so workers can inline them concurrently.
+  /// leading to a group: preparing one (inlining its members, eliding its
+  /// publications, lowering its actions) reads only definitions that do not
+  /// change, so workers can prepare them concurrently.
   SmallVector<LLVM::LLVMFuncOp> independent;
 };
 
@@ -1963,7 +1965,7 @@ GroupPlan planGroups(ModuleOp module, const SymbolTable &symbols) {
   // Refinement can replace the original named by candidate metadata without
   // a call edge. Preserve that write-before-inline dependency as well. An
   // original preceding its candidate may be prepared early: its ordered
-  // inlining already runs before the candidate's body transaction.
+  // preparation already runs before the candidate's body transaction.
   DenseMap<Operation *, size_t> groupOrder;
   for (auto [i, function] : llvm::enumerate(plan.groups))
     groupOrder.try_emplace(function, i);
@@ -1990,6 +1992,19 @@ GroupPlan planGroups(ModuleOp module, const SymbolTable &symbols) {
   return plan;
 }
 
+/// The part of materializing a group that changes only its own body: its
+/// members inlined, its redundant publications elided and its schedule
+/// actions lowered.
+struct PreparedGroup {
+  InlinedGroupBody body;
+  unsigned elidedPublications = 0;
+  /// How a worker lowered its schedule actions. One whose lowering would add
+  /// a module symbol is left to the ordered phase; the runtime entry points
+  /// the lowered actions call are declared there, in order.
+  std::optional<NativeFunctionActionLowering> actions;
+  LogicalResult status = success();
+};
+
 /// A group whose dataflow candidate was rejected, split into children that
 /// partition its members. Its body becomes a sequence of child calls once
 /// every group has materialized.
@@ -2014,8 +2029,12 @@ public:
   LogicalResult run();
 
 private:
+  PreparedGroup
+  prepareConcurrently(LLVM::LLVMFuncOp function,
+                      const schedule::NativeGlobalLookup &globals);
+  PreparedGroup prepare(LLVM::LLVMFuncOp function);
   LogicalResult materializeGroup(LLVM::LLVMFuncOp function,
-                                 InlinedGroupBody body);
+                                 const PreparedGroup &group);
   bool isValidCandidate(LLVM::LLVMFuncOp function, LLVM::LLVMFuncOp original,
                         DenseI32ArrayAttr members);
   void refineOriginal(LLVM::LLVMFuncOp function, LLVM::LLVMFuncOp original);
@@ -2055,18 +2074,17 @@ private:
 };
 
 LogicalResult GroupMaterializer::run() {
-  SmallVector<InlinedGroupBody> inlinedBodies(plan.independent.size());
+  // Workers add or remove no symbols until the ordered phase.
+  schedule::NativeGlobalLookup globals(symbols);
+  SmallVector<PreparedGroup> preparedBodies(plan.independent.size());
   parallelFor(module.getContext(), 0, plan.independent.size(), [&](size_t i) {
-    DenseMap<Operation *, uint64_t> localCosts;
-    inlinedBodies[i] =
-        inlineGroupBody(plan.independent[i], symbols, plan.stableCosts,
-                        localCosts, operationLimit);
+    preparedBodies[i] = prepareConcurrently(plan.independent[i], globals);
   });
-  DenseMap<Operation *, InlinedGroupBody> preInlined;
+  DenseMap<Operation *, PreparedGroup> prepared;
   for (auto [i, function] : llvm::enumerate(plan.independent))
-    preInlined.try_emplace(function, inlinedBodies[i]);
+    prepared.try_emplace(function, preparedBodies[i]);
   if (native::has<native::DebugTiming>(module))
-    llvm::errs() << "talos native group inlining: independent="
+    llvm::errs() << "talos native group preparation: independent="
                  << plan.independent.size()
                  << " ordered=" << plan.groups.size() - plan.independent.size()
                  << '\n';
@@ -2081,17 +2099,14 @@ LogicalResult GroupMaterializer::run() {
           ::talos::schedule::Field::EvalDataflowCandidate>(function);
       continue;
     }
-    auto inlined = preInlined.find(function);
-    InlinedGroupBody body =
-        inlined != preInlined.end()
-            ? inlined->second
-            : inlineGroupBody(function, symbols, plan.stableCosts, costs,
-                              operationLimit);
+    auto found = prepared.find(function);
+    PreparedGroup group =
+        found != prepared.end() ? found->second : prepare(function);
     // Refinement may erase a candidate and allocate new child functions.
     // Do not retain a consumed operation pointer across that allocation.
-    if (inlined != preInlined.end())
-      preInlined.erase(inlined);
-    if (failed(materializeGroup(function, body)))
+    if (found != prepared.end())
+      prepared.erase(found);
+    if (failed(materializeGroup(function, group)))
       return failure();
   }
   for (auto &refinement : llvm::reverse(refinements))
@@ -2107,17 +2122,51 @@ LogicalResult GroupMaterializer::run() {
   return success();
 }
 
-LogicalResult GroupMaterializer::materializeGroup(LLVM::LLVMFuncOp function,
-                                                  InlinedGroupBody body) {
+/// Prepare an independent group on a worker: its own body is all it changes.
+PreparedGroup GroupMaterializer::prepareConcurrently(
+    LLVM::LLVMFuncOp function, const schedule::NativeGlobalLookup &globals) {
+  PreparedGroup group;
+  DenseMap<Operation *, uint64_t> localCosts;
+  group.body = inlineGroupBody(function, symbols, plan.stableCosts, localCosts,
+                               operationLimit);
+  group.elidedPublications = elideUnconditionalMemberPublications(function);
+  FailureOr<NativeFunctionActionLowering> actions =
+      lowerNativeFunctionScheduleActions(function, globals);
+  group.status = success(succeeded(actions));
+  if (succeeded(actions))
+    group.actions = *actions;
+  return group;
+}
+
+/// Prepare a group in order, after the groups it depends on.
+PreparedGroup GroupMaterializer::prepare(LLVM::LLVMFuncOp function) {
+  PreparedGroup group;
+  group.body = inlineGroupBody(function, symbols, plan.stableCosts, costs,
+                               operationLimit);
   // Publications to unconditional members that still execute later are
   // redundant. Preserve backward publications inside an SCC for another
   // sweep. The typed actions still name their destination word and bits.
-  report.elidedUnconditionalPublications +=
-      elideUnconditionalMemberPublications(function);
+  group.elidedPublications = elideUnconditionalMemberPublications(function);
   // Member effects are now visible in one CFG. Combine semantic readiness
   // reads/updates before expanding indexes.
-  if (failed(lowerNativeScheduleActionsToLLVM(function, &symbolTables)))
+  group.status = lowerNativeScheduleActionsToLLVM(function, &symbolTables);
+  return group;
+}
+
+LogicalResult GroupMaterializer::materializeGroup(LLVM::LLVMFuncOp function,
+                                                  const PreparedGroup &group) {
+  if (failed(group.status))
     return failure();
+  // A worker leaves to this ordered turn the action lowering that adds
+  // module symbols, and declaring the runtime entry points its lowering
+  // calls, so both happen in group order.
+  if (group.actions && !group.actions->lowered) {
+    if (failed(lowerNativeScheduleActionsToLLVM(function, &symbolTables)))
+      return failure();
+  } else if (group.actions) {
+    declareNativeFunctionActionRuntime(module, *group.actions);
+  }
+  report.elidedUnconditionalPublications += group.elidedPublications;
   if (auto candidate = ::talos::schedule::get<
           ::talos::schedule::Field::EvalDataflowCandidate>(function)) {
     auto original = symbols.lookup<LLVM::LLVMFuncOp>(candidate.getValue());
@@ -2145,10 +2194,10 @@ LogicalResult GroupMaterializer::materializeGroup(LLVM::LLVMFuncOp function,
   }
   // A completely outlined group can still carry current lanes through
   // explicit helper interfaces; zero inlined calls is not an eval exit.
-  if (!body.materialized && !refinedChildren.contains(function))
+  if (!group.body.materialized && !refinedChildren.contains(function))
     whollyOutlinedGroups.insert(function);
-  residuals.emplace_back(function, body.remaining);
-  residualBudgets[function] = body.remaining;
+  residuals.emplace_back(function, group.body.remaining);
+  residualBudgets[function] = group.body.remaining;
   return success();
 }
 

@@ -18,7 +18,9 @@ using namespace mlir;
 
 namespace talos {
 namespace detail {
-void lowerSpecializedNBABatch(schedule::NativeNBABatchOp op);
+void declareSpecializedNBABatchRuntime(ModuleOp module);
+void lowerSpecializedNBABatch(schedule::NativeNBABatchOp op,
+                              bool declareRuntime);
 void lowerNativeReadyRegion(schedule::NativeReadyRegionOp op,
                             const schedule::NativeGlobalLookup &globals);
 } // namespace detail
@@ -295,7 +297,7 @@ void lowerNBABatches(Operation *operation, SymbolTableCollection *cache) {
       analysis::collectInWalkOrder<schedule::NativeNBABatchOp>(operation);
   for (auto batch : batches) {
     if (batch.getLayoutAttr()) {
-      detail::lowerSpecializedNBABatch(batch);
+      detail::lowerSpecializedNBABatch(batch, /*declareRuntime=*/true);
       continue;
     }
     auto module = batch->getParentOfType<ModuleOp>();
@@ -339,7 +341,8 @@ void lowerNBABatches(Operation *operation, SymbolTableCollection *cache) {
 
 /// Lowers the remaining actions in place. The module is touched only to
 /// declare the static-transition entry, and only if `declareRuntime`.
-void materializeLocalScheduleActions(
+/// Returns whether the lowered actions call the static transition.
+bool materializeLocalScheduleActions(
     Operation *operation, bool coalesce, bool preserveReadiness,
     const schedule::NativeGlobalLookup &globals, bool declareRuntime) {
   if (coalesce && !preserveReadiness)
@@ -449,6 +452,7 @@ void materializeLocalScheduleActions(
                                                                    routed);
     transition.erase();
   }
+  return !transitions.empty();
 }
 
 LogicalResult convertActionArithmetic(Operation *operation) {
@@ -536,6 +540,37 @@ void materializeNativeScheduleActions(Operation *operation, bool coalesce,
   materializeLocalScheduleActions(operation, coalesce, preserveReadiness,
                                   cache ? *cache : local,
                                   /*declareRuntime=*/true);
+}
+
+FailureOr<NativeFunctionActionLowering> lowerNativeFunctionScheduleActions(
+    LLVM::LLVMFuncOp function, const schedule::NativeGlobalLookup &globals) {
+  NativeFunctionActionLowering lowering;
+  SmallVector<schedule::NativeNBABatchOp> batches =
+      analysis::collectInWalkOrder<schedule::NativeNBABatchOp>(function);
+  // An unspecialized batch adds its root table to the module.
+  if (llvm::any_of(batches, [](schedule::NativeNBABatchOp batch) {
+        return !batch.getLayoutAttr();
+      }))
+    return lowering;
+  for (auto batch : batches)
+    detail::lowerSpecializedNBABatch(batch, /*declareRuntime=*/false);
+  lowering.callsBatchRuntime = !batches.empty();
+  lowering.callsStaticTransition = materializeLocalScheduleActions(
+      function, /*coalesce=*/true, /*preserveReadiness=*/false, globals,
+      /*declareRuntime=*/false);
+  if (failed(convertActionArithmetic(function)))
+    return failure();
+  lowering.lowered = true;
+  return lowering;
+}
+
+void declareNativeFunctionActionRuntime(
+    ModuleOp module, const NativeFunctionActionLowering &lowering) {
+  // In the order lowerNativeScheduleActionsToLLVM declares them.
+  if (lowering.callsBatchRuntime)
+    detail::declareSpecializedNBABatchRuntime(module);
+  if (lowering.callsStaticTransition)
+    declareStaticTransition(module);
 }
 
 LogicalResult lowerNativeScheduleActionsToLLVM(Operation *operation,

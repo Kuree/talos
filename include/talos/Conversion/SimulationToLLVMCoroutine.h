@@ -18,7 +18,14 @@ class OpPassManager;
 class RewritePatternSet;
 class Operation;
 class SymbolTableCollection;
+namespace LLVM {
+class LLVMFuncOp;
+} // namespace LLVM
 } // namespace mlir
+
+namespace talos::schedule {
+class NativeGlobalLookup;
+} // namespace talos::schedule
 
 namespace talos {
 
@@ -44,6 +51,27 @@ void materializeNativeScheduleActions(
 /// the integer arithmetic and CFG needed by local readiness regions.
 mlir::LogicalResult lowerNativeScheduleActionsToLLVM(
     mlir::Operation *operation, mlir::SymbolTableCollection *symbols = nullptr);
+/// How lowerNativeFunctionScheduleActions lowered one function.
+struct NativeFunctionActionLowering {
+  /// False, before any change, when lowering would add a module symbol (an
+  /// unspecialized NBA batch's root table).
+  bool lowered = false;
+  /// The runtime entry points the lowered actions call, which the caller
+  /// declares with declareNativeFunctionActionRuntime.
+  bool callsBatchRuntime = false;
+  bool callsStaticTransition = false;
+};
+/// Lower the schedule actions of `function` as lowerNativeScheduleActionsToLLVM
+/// does, without changing any other operation, so that several functions can
+/// be lowered concurrently. Calls name their runtime entry points, which the
+/// caller declares afterwards.
+mlir::FailureOr<NativeFunctionActionLowering>
+lowerNativeFunctionScheduleActions(mlir::LLVM::LLVMFuncOp function,
+                                   const schedule::NativeGlobalLookup &globals);
+/// Declare the runtime entry points that a lowering calls, in the order
+/// lowerNativeScheduleActionsToLLVM would.
+void declareNativeFunctionActionRuntime(
+    mlir::ModuleOp module, const NativeFunctionActionLowering &lowering);
 
 /// Address each native state plane through one invariant base per function
 /// that accesses it in several blocks, instead of constant offsets from the
