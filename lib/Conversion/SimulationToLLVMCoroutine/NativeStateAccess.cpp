@@ -67,6 +67,15 @@ std::optional<uint64_t> getConstantByteOffset(Value pointer) {
   return bytes;
 }
 
+namespace {
+/// `plane` when it is a canonical plane of design state.
+std::optional<schedule::StatePlane>
+canonical(std::optional<schedule::StatePlane> plane) {
+  return plane && schedule::isCanonicalStatePlane(*plane) ? plane
+                                                          : std::nullopt;
+}
+} // namespace
+
 bool NativeAddress::isLocal() const {
   return root && root.getDefiningOp<LLVM::AllocaOp>();
 }
@@ -76,7 +85,7 @@ std::optional<NativeMemoryAccess> getNativeMemoryAccess(Operation *operation) {
   access.operation = operation;
   if (auto load = dyn_cast<schedule::NativeStateLoadOp>(operation)) {
     access.type = load.getType();
-    access.plane = load.getPlane();
+    access.plane = canonical(load.getPlane());
     access.global = load.getGlobal();
     access.offset = load.getConstantOffset();
     access.window = load.getWindowAttr();
@@ -86,7 +95,7 @@ std::optional<NativeMemoryAccess> getNativeMemoryAccess(Operation *operation) {
   if (auto store = dyn_cast<schedule::NativeStateStoreOp>(operation)) {
     access.type = store.getValue().getType();
     access.stored = store.getValue();
-    access.plane = store.getPlane();
+    access.plane = canonical(store.getPlane());
     access.global = store.getGlobal();
     access.offset = store.getConstantOffset();
     access.window = store.getWindowAttr();
@@ -122,7 +131,7 @@ NativeAddress describeNativeAddress(Operation *operation, Value pointer) {
     access.root = gep.getBase();
   if (FlatSymbolRefAttr global = getAddressedGlobal(access.root))
     access.global = global.getValue();
-  access.plane = getStatePlaneRoot(access.root);
+  access.plane = canonical(getStatePlaneRoot(access.root));
   access.offset = getConstantByteOffset(pointer);
   access.window = schedule::get<schedule::Field::EvalStateAccessBytes>(operation);
   access.writtenBits =
@@ -150,6 +159,8 @@ void clearNativeLatchDestination(Operation *operation) {
 
 Value createStatePlaneAddress(OpBuilder &builder, Location location,
                               schedule::StatePlane plane) {
+  assert(schedule::isCanonicalStatePlane(plane) &&
+         "a contribution plane's address is loaded from its binding");
   // Typed state operations live in functions; a global's initializer takes
   // a plane's address as a constant.
   Block *block = builder.getInsertionBlock();
@@ -244,15 +255,6 @@ Operation *createStoreAt(OpBuilder &builder, Location location, Value value,
       builder, location, value,
       createAddressAt(builder, location, base, dynamicBytes, staticBytes),
       alignment);
-}
-
-Value createGlobalAddress(OpBuilder &builder, Location location,
-                          StringRef global) {
-  if (auto plane = schedule::getStatePlaneOfGlobal(global))
-    return createStatePlaneAddress(builder, location, *plane);
-  return LLVM::AddressOfOp::create(
-      builder, location, LLVM::LLVMPointerType::get(builder.getContext()),
-      global);
 }
 
 void setNativeAccessWindow(Operation *operation, DenseI64ArrayAttr window) {

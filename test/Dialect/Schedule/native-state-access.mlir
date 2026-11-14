@@ -8,6 +8,8 @@
 module {
   llvm.mlir.global internal @__talos_state_value(dense<0> : tensor<16xi8>) : !llvm.array<16 x i8>
   llvm.mlir.global internal @__talos_state_unknown(dense<0> : tensor<16xi8>) : !llvm.array<16 x i8>
+  llvm.mlir.global external @__talos_continuous_value() : !llvm.ptr
+  llvm.mlir.global external @__talos_continuous_mask() : !llvm.ptr
   llvm.func @use(!llvm.ptr)
 
   // Accesses round-trip with a static offset, a dynamic one, or both, and
@@ -19,6 +21,8 @@ module {
   // ROUND: schedule.state.store %{{.*}}, @__talos_state_value[%{{.*}} + 8] {alignment = 8 : i64, latch_destination, owner = 1 : i32, summary_reported, window = array<i64: 0, 16>, written_bits = array<i64: 64, 64>} : i64
   // ROUND: schedule.state.window_address @__talos_state_unknown[%{{.*}} + 2] : !llvm.ptr
   // ROUND: schedule.state.window_address @__talos_state_value[6] : !llvm.ptr
+  // ROUND: schedule.state.store %{{.*}}, @__talos_continuous_mask[3] {alignment = 1 : i64} : i8
+  // ROUND: schedule.state.window_address @__talos_continuous_value[%{{.*}}] : !llvm.ptr
   llvm.func @round(%v: i64, %d: i64) -> i8 {
     %a = schedule.state.address @__talos_state_value : !llvm.ptr
     %x = schedule.state.load @__talos_state_unknown[4] {alignment = 1 : i64, owner = 3 : i32, window = array<i64: 4, 5>, latch_destination} : i8
@@ -26,6 +30,10 @@ module {
     schedule.state.store %v, @__talos_state_value[%d + 8] {alignment = 8 : i64, window = array<i64: 0, 16>, written_bits = array<i64: 64, 64>, summary_reported, latch_destination, owner = 1 : i32} : i64
     %u = schedule.state.window_address @__talos_state_unknown[%d + 2] : !llvm.ptr
     %w = schedule.state.window_address @__talos_state_value[6] : !llvm.ptr
+    %mask = llvm.mlir.constant(-1 : i8) : i8
+    schedule.state.store %mask, @__talos_continuous_mask[3] {alignment = 1 : i64} : i8
+    %c = schedule.state.window_address @__talos_continuous_value[%d] : !llvm.ptr
+    llvm.call @use(%c) : (!llvm.ptr) -> ()
     llvm.call @use(%a) : (!llvm.ptr) -> ()
     llvm.call @use(%u) : (!llvm.ptr) -> ()
     llvm.call @use(%w) : (!llvm.ptr) -> ()

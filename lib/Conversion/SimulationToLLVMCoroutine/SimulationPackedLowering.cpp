@@ -258,9 +258,12 @@ LogicalResult lowerPackedSimulationOperations(
   if (stateLayout.directContinuous) {
     OpBuilder builder = OpBuilder::atBlockBegin(module.getBody());
     auto pointer = LLVM::LLVMPointerType::get(context);
-    for (StringRef name :
-         {"__talos_continuous_value", "__talos_continuous_unknown",
-          "__talos_continuous_mask"}) {
+    // Each contribution plane is bound through a pointer global.
+    for (schedule::StatePlane plane :
+         {schedule::StatePlane::ContributionValue,
+          schedule::StatePlane::ContributionUnknown,
+          schedule::StatePlane::ContributionMask}) {
+      StringRef name = schedule::getStatePlaneGlobalName(plane);
       auto global =
           LLVM::GlobalOp::create(builder, module.getLoc(), pointer, false,
                                  LLVM::Linkage::Internal, name, Attribute{}, 8);

@@ -931,7 +931,7 @@ def NativeStateAddressOp : ScheduleNativeOp<"state.address", [
 
 def NativeStateWindowAddressOp : ScheduleNativeOp<"state.window_address", [
     Pure, DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
-  let summary = "address of a window of a canonical native state plane";
+  let summary = "address of a window of a native state plane";
   let description = [{
     The address of the plane's byte at `static_offset` plus the optional
     `dynamic_offset`, for a window whose bytes leave typed state operations:
@@ -940,6 +940,10 @@ def NativeStateWindowAddressOp : ScheduleNativeOp<"state.window_address", [
     and `schedule.state.store` at its offset; native finalization rejects an
     LLVM load, store or address computation on this address, so every
     pointer into a plane is this operation or `schedule.state.address`.
+
+    A contribution plane is reached through the pointer its global binds;
+    scheduler main has the runtime bind it once, before any design code
+    runs, so the address is still a pure function of its operands.
   }];
   let arguments = (ins FlatSymbolRefAttr:$global,
                        Optional<I64>:$dynamic_offset,
@@ -964,7 +968,7 @@ def NativeStateWindowAddressOp : ScheduleNativeOp<"state.window_address", [
 
 def NativeStateLoadOp : ScheduleNativeOp<"state.load", [
     DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
-  let summary = "read a window of a canonical native state plane";
+  let summary = "read a window of a native state plane";
   let description = [{
     Reads the bytes of the plane starting at byte `static_offset` plus the
     optional `dynamic_offset` as one value, with the given alignment.
@@ -999,7 +1003,7 @@ def NativeStateLoadOp : ScheduleNativeOp<"state.load", [
 
 def NativeStateStoreOp : ScheduleNativeOp<"state.store", [
     DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
-  let summary = "write a window of a canonical native state plane";
+  let summary = "write a window of a native state plane";
   let description = [{
     Writes `value` to the bytes of the plane starting at byte `static_offset`
     plus the optional `dynamic_offset`, with the given alignment.

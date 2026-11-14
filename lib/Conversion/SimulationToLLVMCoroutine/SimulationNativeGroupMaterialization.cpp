@@ -1252,7 +1252,8 @@ LogicalResult materializeNativeEvalValueCalls(
           cutPlane(plane).emplace_back(0, planeArray(plane).getNumElements());
         };
         auto cutPointer = [&](Value pointer) {
-          if (auto plane = getStatePlaneRoot(pointer))
+          if (auto plane = getStatePlaneRoot(pointer);
+              plane && schedule::isCanonicalStatePlane(*plane))
             cutWholePlane(*plane);
         };
         // Freeze cuts once, rather than rescanning the complete body for every

@@ -2980,7 +2980,8 @@ FailureOr<bool> makeNativeEvalPlan(
       if (Value selected = tryLoadSelectedStaticStatePlane(
               selectedBuilder, call.getLoc(), handle,
               selectedBuilder.getIntegerType(*width),
-              *unknownPlane ? "__talos_state_unknown" : "__talos_state_value",
+              *unknownPlane ? schedule::StatePlane::Unknown
+                            : schedule::StatePlane::Value,
               &stateLayout, true, twoState && *unknownPlane)) {
         if (call.getNumResults() != 1 || call.getResult().getType() != i32)
           return call.emitError("unsupported native state load status ABI"),
@@ -3127,7 +3128,8 @@ FailureOr<bool> makeNativeEvalPlan(
         if (Value selected = tryLoadSelectedStaticStatePlane(
                 chainBuilder, call.getLoc(), chainBase,
                 chainBuilder.getIntegerType(*width),
-                *unknownPlane ? "__talos_state_unknown" : "__talos_state_value",
+                *unknownPlane ? schedule::StatePlane::Unknown
+                              : schedule::StatePlane::Value,
                 &stateLayout, true, twoState && *unknownPlane, {},
                 *projectedOffset)) {
           if (call.getNumResults() != 1 || call.getResult().getType() != i32)
@@ -7202,8 +7204,10 @@ FailureOr<bool> makeNativeEvalPlan(
         runtimeCommitEntry->getArgument(2), runtimeCommitEntry->getArgument(3),
         schedule::NBABatchLayoutAttr::get(
             context, FlatSymbolRefAttr::get(context, planName),
-            FlatSymbolRefAttr::get(context, "__talos_state_value"),
-            FlatSymbolRefAttr::get(context, "__talos_state_unknown"),
+            FlatSymbolRefAttr::get(context, schedule::getStatePlaneGlobalName(
+                                                schedule::StatePlane::Value)),
+            FlatSymbolRefAttr::get(context, schedule::getStatePlaneGlobalName(
+                                                schedule::StatePlane::Unknown)),
             FlatSymbolRefAttr::get(context, nbaDirtyRootsName),
             FlatSymbolRefAttr::get(context, nbaDirtySummaryName),
             FlatSymbolRefAttr::get(context, evalModelIngressName),

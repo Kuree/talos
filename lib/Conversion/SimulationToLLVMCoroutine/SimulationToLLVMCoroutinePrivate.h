@@ -607,7 +607,7 @@ std::optional<uint64_t> resolveCFGConstantInteger(mlir::Value value);
 // A fixed projection is checked against every leaf and the handle offset ABI.
 mlir::Value tryLoadSelectedStaticStatePlane(
     mlir::OpBuilder &builder, mlir::Location location, mlir::Value handle,
-    mlir::IntegerType resultType, llvm::StringRef globalName,
+    mlir::IntegerType resultType, schedule::StatePlane plane,
     const NativeStateLayout *directLayout, bool assumeClean,
     bool knownZero = false,
     llvm::function_ref<mlir::Value(mlir::Value)> remap = {},
@@ -615,7 +615,7 @@ mlir::Value tryLoadSelectedStaticStatePlane(
 mlir::Value loadStatePlane(mlir::ConversionPatternRewriter &rewriter,
                            mlir::Location location, mlir::Value handle,
                            mlir::IntegerType resultType,
-                           llvm::StringRef globalName, bool unknownFallback,
+                           schedule::StatePlane plane, bool unknownFallback,
                            uint64_t stateBitCount,
                            const NativeStateLayout *directLayout = nullptr,
                            mlir::Value guardedPermission = {},
@@ -623,7 +623,7 @@ mlir::Value loadStatePlane(mlir::ConversionPatternRewriter &rewriter,
                            const NativeStateAccessInfo *access = nullptr);
 mlir::Value storeStatePlane(mlir::ConversionPatternRewriter &rewriter,
                             mlir::Location location, mlir::Value handle,
-                            mlir::Value input, llvm::StringRef globalName,
+                            mlir::Value input, schedule::StatePlane plane,
                             uint64_t stateBitCount,
                             const NativeStateLayout *directLayout = nullptr,
                             mlir::Value guardedPermission = {},

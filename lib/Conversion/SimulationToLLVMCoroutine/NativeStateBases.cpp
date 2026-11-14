@@ -18,6 +18,7 @@
 #include "mlir/IR/Threading.h"
 #include "talos/Analysis/ParallelWalk.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
+#include "talos/Dialect/Schedule/ScheduleOps.h"
 
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/MapVector.h"
@@ -166,8 +167,9 @@ annotateStateMetadataCalls(LLVM::LLVMFuncOp function,
       builder.getStringAttr("native state versus proof metadata"));
   DenseMap<StringAttr, Attribute> byPlane;
   SmallVector<Attribute, 2> scopes;
-  for (StringRef name : {"__talos_state_value", "__talos_state_unknown"}) {
-    auto key = builder.getStringAttr(name);
+  for (schedule::StatePlane plane :
+       {schedule::StatePlane::Value, schedule::StatePlane::Unknown}) {
+    auto key = builder.getStringAttr(schedule::getStatePlaneGlobalName(plane));
     if (!bases.contains(key))
       continue;
     auto scope =
@@ -185,14 +187,14 @@ annotateStateMetadataCalls(LLVM::LLVMFuncOp function,
 } // namespace
 
 LogicalResult addressNativeStateThroughBases(ModuleOp module) {
-  static constexpr StringLiteral planes[] = {"__talos_state_value",
-                                             "__talos_state_unknown"};
   MLIRContext *context = module.getContext();
   SymbolTable symbols(module);
   OpBuilder builder(context);
   auto pointer = LLVM::LLVMPointerType::get(context);
   DenseMap<StringAttr, StateBase> bases;
-  for (StringRef plane : planes) {
+  for (schedule::StatePlane statePlane :
+       {schedule::StatePlane::Value, schedule::StatePlane::Unknown}) {
+    StringRef plane = schedule::getStatePlaneGlobalName(statePlane);
     auto global = symbols.lookup<LLVM::GlobalOp>(plane);
     if (!global)
       continue;

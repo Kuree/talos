@@ -470,23 +470,23 @@ public:
     if (userRaw) {
       oldRawValue = loadStatePlane(
           rewriter, op.getLoc(), adaptor.getDriver().front(), driveType,
-          "__talos_state_value", false, layout.bitCount, storeLayout);
+          schedule::StatePlane::Value, false, layout.bitCount, storeLayout);
       oldRawUnknown = loadStatePlane(
           rewriter, op.getLoc(), adaptor.getDriver().front(), driveType,
-          "__talos_state_unknown", true, layout.bitCount, storeLayout);
+          schedule::StatePlane::Unknown, true, layout.bitCount, storeLayout);
     }
     Value driveValueChanged =
         mirror ? boolean(false)
                : storeStatePlane(rewriter, op.getLoc(),
                                  adaptor.getDriver().front(), driveValue,
-                                 "__talos_state_value", layout.bitCount,
+                                 schedule::StatePlane::Value, layout.bitCount,
                                  storeLayout);
     Value driveUnknownChanged =
         knownContribution || mirror
             ? boolean(false)
             : storeStatePlane(rewriter, op.getLoc(),
                               adaptor.getDriver().front(), driveUnknown,
-                              "__talos_state_unknown", layout.bitCount,
+                              schedule::StatePlane::Unknown, layout.bitCount,
                               storeLayout);
     // Set when a resolver below would load this mirror drive's own slot.
     bool readsMirrorSlot = false;
@@ -711,11 +711,11 @@ public:
             rewriter.getI64IntegerAttr(
                 encodeNativeStaticHandle(net->handleID)));
         Value oldValue = loadStatePlane(rewriter, op.getLoc(), netHandle,
-                                        driveType, "__talos_state_value", false,
-                                        layout.bitCount, &layout);
+                                        driveType, schedule::StatePlane::Value,
+                                        false, layout.bitCount, &layout);
         Value oldUnknown =
             !known ? loadStatePlane(rewriter, op.getLoc(), netHandle, driveType,
-                                    "__talos_state_unknown", true,
+                                    schedule::StatePlane::Unknown, true,
                                     layout.bitCount, &layout)
                    : integerConstant(APInt::getZero(driveType.getWidth()));
         Value publishValue = driveValue;
@@ -738,14 +738,15 @@ public:
       for (const BulkPublication &publication : bulkPublications) {
         Value valueChanged = storeStatePlane(
             rewriter, op.getLoc(), publication.handle, publication.value,
-            "__talos_state_value", layout.bitCount, &layout);
+            schedule::StatePlane::Value, layout.bitCount, &layout);
         // A two-state net's unknown plane is permanently zero. A certified
         // four-state net stays known for this activation; its fallback still
         // publishes X/Z transitions and invalidates the certificate.
         Value unknownChanged =
             !publication.known
                 ? storeStatePlane(rewriter, op.getLoc(), publication.handle,
-                                  publication.unknown, "__talos_state_unknown",
+                                  publication.unknown,
+                                  schedule::StatePlane::Unknown,
                                   layout.bitCount, &layout)
                 : boolean(false);
         changed = arith::OrIOp::create(
@@ -975,12 +976,12 @@ public:
           planes.push_back(
               inRunOrder(contribution.member,
                          loadStatePlane(rewriter, op.getLoc(), handle, type,
-                                        "__talos_state_value", false,
+                                        schedule::StatePlane::Value, false,
                                         layout.bitCount, &layout)));
           planes.push_back(
               inRunOrder(contribution.member,
                          loadStatePlane(rewriter, op.getLoc(), handle, type,
-                                        "__talos_state_unknown", true,
+                                        schedule::StatePlane::Unknown, true,
                                         layout.bitCount, &layout)));
         }
         // Project the constant planes out of the tables, so the expansion
@@ -1071,8 +1072,8 @@ public:
               *lookup.netByID.lookup(member.net);
           Value netHandle = handleAt(memberNet.handleID, sliceLow(memberIndex));
           Value oldValue = loadStatePlane(rewriter, op.getLoc(), netHandle,
-                                          type, "__talos_state_value", false,
-                                          layout.bitCount, &layout);
+                                          type, schedule::StatePlane::Value,
+                                          false, layout.bitCount, &layout);
           // IEEE 1800-2023 6.3.1, 6.6.1: a certified known drive preserves
           // knownness on its exclusive bits. Other disjoint drivers do not
           // participate in this slice's resolution. The entry certificate
@@ -1090,7 +1091,7 @@ public:
                         first.contributions.front().driver == affectedDriver);
           Value oldUnknown =
               !known ? loadStatePlane(rewriter, op.getLoc(), netHandle, type,
-                                      "__talos_state_unknown", true,
+                                      schedule::StatePlane::Unknown, true,
                                       layout.bitCount, &layout)
                      : zero;
           Value publishValue =
@@ -1220,11 +1221,11 @@ public:
                 rewriter.getI64IntegerAttr(encodeNativeStaticHandle(
                     driver.handleID, static_cast<int32_t>(member.offset))));
             Value driverValue = loadStatePlane(rewriter, op.getLoc(), handle,
-                                               i1, "__talos_state_value", false,
-                                               layout.bitCount, &layout);
+                                               i1, schedule::StatePlane::Value,
+                                               false, layout.bitCount, &layout);
             Value driverUnknown = loadStatePlane(
-                rewriter, op.getLoc(), handle, i1, "__talos_state_unknown",
-                true, layout.bitCount, &layout);
+                rewriter, op.getLoc(), handle, i1,
+                schedule::StatePlane::Unknown, true, layout.bitCount, &layout);
             unsigned strength0 = static_cast<unsigned>(driver.strength0);
             unsigned strength1 = static_cast<unsigned>(driver.strength1);
             uint16_t zeroMask = strengthIndexBit(7 - strength0);
@@ -1332,11 +1333,11 @@ public:
                 rewriter.getI64IntegerAttr(encodeNativeStaticHandle(
                     memberNet->handleID, static_cast<int32_t>(member.offset))));
             Value memberValue = loadStatePlane(
-                rewriter, op.getLoc(), memberHandle, i1, "__talos_state_value",
-                false, layout.bitCount, &layout);
+                rewriter, op.getLoc(), memberHandle, i1,
+                schedule::StatePlane::Value, false, layout.bitCount, &layout);
             Value memberUnknown = loadStatePlane(
                 rewriter, op.getLoc(), memberHandle, i1,
-                "__talos_state_unknown", true, layout.bitCount, &layout);
+                schedule::StatePlane::Unknown, true, layout.bitCount, &layout);
             unsigned strength =
                 static_cast<unsigned>(*memberNet->chargeStrength);
             uint16_t zeroMask = strengthIndexBit(7 - strength);
@@ -1398,13 +1399,13 @@ public:
               rewriter.getI64IntegerAttr(encodeNativeStaticHandle(
                   memberNet->handleID, static_cast<int32_t>(member.offset))));
           Value oldResolvedValue = loadStatePlane(
-              rewriter, op.getLoc(), netHandle, i1, "__talos_state_value",
+              rewriter, op.getLoc(), netHandle, i1, schedule::StatePlane::Value,
               false, layout.bitCount, &layout);
           // The unknown plane of an integer net is permanently zero.
           Value oldResolvedUnknown =
               memberNet->fourState
                   ? loadStatePlane(rewriter, op.getLoc(), netHandle, i1,
-                                   "__talos_state_unknown", true,
+                                   schedule::StatePlane::Unknown, true,
                                    layout.bitCount, &layout)
                   : boolean(false);
           Value publishValue = resolvedValue;
@@ -1440,13 +1441,13 @@ public:
       changed = arith::OrIOp::create(
           rewriter, op.getLoc(), changed,
           storeStatePlane(rewriter, op.getLoc(), publication.handle,
-                          publication.value, "__talos_state_value",
+                          publication.value, schedule::StatePlane::Value,
                           layout.bitCount, &layout));
       if (publication.storeUnknown)
         changed = arith::OrIOp::create(
             rewriter, op.getLoc(), changed,
             storeStatePlane(rewriter, op.getLoc(), publication.handle,
-                            publication.unknown, "__talos_state_unknown",
+                            publication.unknown, schedule::StatePlane::Unknown,
                             layout.bitCount, &layout));
     }
     auto packBits = [&](ArrayRef<Publication> run, Value Publication::*member) {

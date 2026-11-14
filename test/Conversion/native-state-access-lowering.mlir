@@ -57,4 +57,27 @@ module {
   ^bb2:
     llvm.return %t : i8
   }
+
+  // A contribution plane is reached through the pointer its global binds,
+  // taken once per block like a plane's address.
+  // CHECK-LABEL: llvm.func @contribution(
+  // CHECK-SAME: %[[MASK:.*]]: i8, %[[D:.*]]: i64)
+  // CHECK-NEXT: %[[BINDING:.*]] = llvm.mlir.addressof @__talos_continuous_mask : !llvm.ptr
+  // CHECK-NEXT: %[[PLANE:.*]] = llvm.load %[[BINDING]] {alignment = 8 : i64} : !llvm.ptr -> !llvm.ptr
+  // CHECK-NEXT: %[[AT:.*]] = llvm.getelementptr %[[PLANE]][3] : (!llvm.ptr) -> !llvm.ptr, i8
+  // CHECK-NEXT: llvm.store %[[MASK]], %[[AT]] {alignment = 1 : i64} : i8, !llvm.ptr
+  // CHECK-NEXT: %[[WINDOW:.*]] = llvm.getelementptr %[[PLANE]][%[[D]]] : (!llvm.ptr, i64) -> !llvm.ptr, i8
+  // CHECK-NEXT: llvm.call @use(%[[WINDOW]])
+  // The runtime binds the plane through its global's address.
+  // CHECK-NEXT: %[[BIND:.*]] = llvm.mlir.addressof @__talos_continuous_mask : !llvm.ptr
+  // CHECK-NEXT: llvm.call @use(%[[BIND]])
+  llvm.mlir.global external @__talos_continuous_mask() : !llvm.ptr
+  llvm.func @contribution(%mask: i8, %d: i64) {
+    schedule.state.store %mask, @__talos_continuous_mask[3] {alignment = 1 : i64} : i8
+    %w = schedule.state.window_address @__talos_continuous_mask[%d] : !llvm.ptr
+    llvm.call @use(%w) : (!llvm.ptr) -> ()
+    %bind = llvm.mlir.addressof @__talos_continuous_mask : !llvm.ptr
+    llvm.call @use(%bind) : (!llvm.ptr) -> ()
+    llvm.return
+  }
 }

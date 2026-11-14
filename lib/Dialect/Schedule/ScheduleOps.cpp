@@ -1,5 +1,4 @@
 #include "talos/Dialect/Schedule/ScheduleOps.h"
-#include "talos/Dialect/Schedule/ScheduleDialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
@@ -10,8 +9,10 @@
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "talos/Dialect/Runtime/RuntimeOps.h"
+#include "talos/Dialect/Schedule/ScheduleDialect.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/TypeSwitch.h"
 using namespace mlir;
 #define GET_OP_CLASSES
@@ -55,16 +56,29 @@ static void printStateOffset(OpAsmPrinter &printer, Operation *,
 
 namespace talos::schedule {
 StringRef getStatePlaneGlobalName(StatePlane plane) {
-  return plane == StatePlane::Value ? "__talos_state_value"
-                                    : "__talos_state_unknown";
+  switch (plane) {
+  case StatePlane::Value:
+    return "__talos_state_value";
+  case StatePlane::Unknown:
+    return "__talos_state_unknown";
+  case StatePlane::ContributionValue:
+    return "__talos_continuous_value";
+  case StatePlane::ContributionUnknown:
+    return "__talos_continuous_unknown";
+  case StatePlane::ContributionMask:
+    return "__talos_continuous_mask";
+  }
+  llvm_unreachable("unknown state plane");
 }
 
 std::optional<StatePlane> getStatePlaneOfGlobal(StringRef name) {
-  if (name == "__talos_state_value")
-    return StatePlane::Value;
-  if (name == "__talos_state_unknown")
-    return StatePlane::Unknown;
-  return std::nullopt;
+  return llvm::StringSwitch<std::optional<StatePlane>>(name)
+      .Case("__talos_state_value", StatePlane::Value)
+      .Case("__talos_state_unknown", StatePlane::Unknown)
+      .Case("__talos_continuous_value", StatePlane::ContributionValue)
+      .Case("__talos_continuous_unknown", StatePlane::ContributionUnknown)
+      .Case("__talos_continuous_mask", StatePlane::ContributionMask)
+      .Default(std::nullopt);
 }
 
 static FlatSymbolRefAttr getStatePlaneSymbol(MLIRContext *context,
@@ -152,7 +166,13 @@ StatePlane NativeStateAddressOp::getPlane() {
   return *getStatePlaneOfGlobal(getGlobal());
 }
 LogicalResult NativeStateAddressOp::verify() {
-  return verifyStateAccess(*this, getGlobal());
+  if (failed(verifyStateAccess(*this, getGlobal())))
+    return failure();
+  // A contribution plane's address is loaded from its binding, no constant.
+  if (!isCanonicalStatePlane(getPlane()))
+    return emitOpError("names a contribution plane, whose address is no "
+                       "constant; use schedule.state.window_address");
+  return success();
 }
 LogicalResult
 NativeStateAddressOp::verifySymbolUses(SymbolTableCollection &tables) {

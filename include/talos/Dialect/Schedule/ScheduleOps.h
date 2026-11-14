@@ -16,6 +16,11 @@
 namespace talos::schedule {
 /// The global that holds a canonical native state plane.
 llvm::StringRef getStatePlaneGlobalName(StatePlane plane);
+/// Whether `plane` is a canonical plane of design state, whose global holds
+/// its bytes; a contribution plane's global holds a pointer to them.
+inline bool isCanonicalStatePlane(StatePlane plane) {
+  return plane == StatePlane::Value || plane == StatePlane::Unknown;
+}
 /// The state plane a global holds, if it is one.
 std::optional<StatePlane> getStatePlaneOfGlobal(llvm::StringRef name);
 /// Whether `range` is a well-formed state access `window`: physical bytes

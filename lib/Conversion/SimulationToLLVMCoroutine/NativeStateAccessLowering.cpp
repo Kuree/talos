@@ -4,8 +4,8 @@
 // operations: producers emit them, and every pointer into a plane is a
 // plane's base or a window's address. Once nothing needs to tell a state
 // access from another memory access, each becomes the LLVM access it stands
-// for: the plane global's address, a byte GEP to the window, and a load or
-// store of it.
+// for: the plane global's address, or for a contribution plane the pointer
+// its global binds, a byte GEP to the window, and a load or store of it.
 //
 //===----------------------------------------------------------------------===//
 
@@ -39,9 +39,12 @@ public:
                                uint64_t{0});
     if (Value address = addresses.lookup(key))
       return address;
+    auto pointer = LLVM::LLVMPointerType::get(builder.getContext());
     Value address = LLVM::AddressOfOp::create(
-        builder, location, LLVM::LLVMPointerType::get(builder.getContext()),
-        schedule::getStatePlaneGlobalName(plane));
+        builder, location, pointer, schedule::getStatePlaneGlobalName(plane));
+    // A contribution plane's global binds the runtime's retained plane.
+    if (!schedule::isCanonicalStatePlane(plane))
+      address = LLVM::LoadOp::create(builder, location, pointer, address, 8);
     addresses.try_emplace(key, address);
     return address;
   }
@@ -112,12 +115,25 @@ public:
               schedule::NativeStateWindowAddressOp>(operation))
         valid &= succeeded(verifyStatePointerUses(operation->getResult(0)));
       // Before this point a function names a plane only through typed
-      // operations.
-      if (auto address = dyn_cast<LLVM::AddressOfOp>(operation);
-          address && schedule::getStatePlaneOfGlobal(address.getGlobalName())) {
-        address.emitError("takes a state plane's address outside typed state "
-                          "operations");
-        valid = false;
+      // operations. A contribution plane's binding global is otherwise only
+      // handed to the runtime, as a call argument, which binds it.
+      if (auto address = dyn_cast<LLVM::AddressOfOp>(operation)) {
+        std::optional<schedule::StatePlane> plane =
+            schedule::getStatePlaneOfGlobal(address.getGlobalName());
+        if (plane && schedule::isCanonicalStatePlane(*plane)) {
+          address.emitError("takes a state plane's address outside typed "
+                            "state operations");
+          valid = false;
+        } else if (plane &&
+                   !llvm::all_of(address->getUses(), [](OpOperand &use) {
+                     auto call = dyn_cast<LLVM::CallOp>(use.getOwner());
+                     return call && !(call.getCallee() == std::nullopt &&
+                                      use.getOperandNumber() == 0);
+                   })) {
+          address.emitError("takes a contribution plane's binding address "
+                            "outside a runtime binding call");
+          valid = false;
+        }
       }
     });
     if (!valid)

@@ -53,7 +53,9 @@ void materializeNativeStatePlanes(ModuleOp module,
   // The private guard word supports the existing unaligned scalar windows.
   uint64_t bytes = (layout.bitCount + 7) / 8 + sizeof(uint64_t);
   Type array = LLVM::LLVMArrayType::get(builder.getI8Type(), bytes);
-  for (StringRef name : {"__talos_state_value", "__talos_state_unknown"}) {
+  for (schedule::StatePlane plane :
+       {schedule::StatePlane::Value, schedule::StatePlane::Unknown}) {
+    StringRef name = schedule::getStatePlaneGlobalName(plane);
     builder.setInsertionPointToStart(module.getBody());
     auto global =
         LLVM::GlobalOp::create(builder, location, array, false,
@@ -339,29 +341,28 @@ void eliminateTwoStateUnknownPlane(ModuleOp module) {
       globals.push_back(global);
       names.insert(global.getSymName());
     }
+  // The X/Z planes: the canonical unknown plane, and the unknown plane of
+  // the retained continuous contributions, which is all zero too.
+  auto unknownPlane = [](schedule::StatePlane plane) {
+    return plane == schedule::StatePlane::Unknown ||
+           plane == schedule::StatePlane::ContributionUnknown;
+  };
   llvm::DenseSet<Value> pointers;
   SmallVector<Value> worklist;
   module.walk([&](Operation *operation) {
     // The plane's base and the addresses of its windows.
     auto plane = dyn_cast<schedule::NativeStateAddressOp>(operation);
     auto window = dyn_cast<schedule::NativeStateWindowAddressOp>(operation);
-    if ((plane && plane.getPlane() == schedule::StatePlane::Unknown) ||
-        (window && window.getPlane() == schedule::StatePlane::Unknown)) {
+    if ((plane && unknownPlane(plane.getPlane())) ||
+        (window && unknownPlane(window.getPlane()))) {
       pointers.insert(operation->getResult(0));
       worklist.push_back(operation->getResult(0));
       return;
     }
     auto address = dyn_cast<LLVM::AddressOfOp>(operation);
-    if (!address)
-      return;
-    if (names.contains(address.getGlobalName())) {
+    if (address && names.contains(address.getGlobalName())) {
       pointers.insert(address.getResult());
       worklist.push_back(address.getResult());
-    } else if (address.getGlobalName() == "__talos_continuous_unknown") {
-      for (Operation *user : address.getResult().getUsers())
-        if (auto load = dyn_cast<LLVM::LoadOp>(user))
-          if (pointers.insert(load.getResult()).second)
-            worklist.push_back(load.getResult());
     }
   });
   // The generated accumulator's value, write mask and control fields keep
@@ -405,13 +406,13 @@ void eliminateTwoStateUnknownPlane(ModuleOp module) {
     OpBuilder builder(op);
     // The unknown plane is all zero: its reads are zero, its writes vanish.
     if (auto load = dyn_cast<schedule::NativeStateLoadOp>(op)) {
-      if (load.getPlane() == schedule::StatePlane::Unknown) {
+      if (unknownPlane(load.getPlane())) {
         load.getResult().replaceAllUsesWith(
             LLVM::ZeroOp::create(builder, op->getLoc(), load.getType()));
         erase.push_back(op);
       }
     } else if (auto store = dyn_cast<schedule::NativeStateStoreOp>(op)) {
-      if (store.getPlane() == schedule::StatePlane::Unknown)
+      if (unknownPlane(store.getPlane()))
         erase.push_back(op);
     } else if (auto load = dyn_cast<LLVM::LoadOp>(op)) {
       if (pointers.contains(load.getAddr())) {

@@ -80,6 +80,20 @@ module {
 
 // -----
 
+// A contribution plane's binding is handed only to the runtime.
+module {
+  llvm.mlir.global external @__talos_continuous_value() : !llvm.ptr
+  llvm.func @binding_load() -> i8 {
+    // expected-error @below {{takes a contribution plane's binding address outside a runtime binding call}}
+    %binding = llvm.mlir.addressof @__talos_continuous_value : !llvm.ptr
+    %plane = llvm.load %binding {alignment = 8 : i64} : !llvm.ptr -> !llvm.ptr
+    %x = llvm.load %plane {alignment = 1 : i64} : !llvm.ptr -> i8
+    llvm.return %x : i8
+  }
+}
+
+// -----
+
 // A window address may leave typed operations whole: as a copy's operand or
 // a call's argument.
 module {

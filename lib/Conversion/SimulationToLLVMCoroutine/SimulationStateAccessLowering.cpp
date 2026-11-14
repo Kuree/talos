@@ -80,23 +80,10 @@ Value allocateBulkPlane(ConversionPatternRewriter &rewriter, Location location,
                      1);
 }
 
-/// The address `bytes` into the global `name`: a window address of a state
-/// plane, or a byte GEP of another global.
-Value globalWindowAddress(OpBuilder &builder, Location location, StringRef name,
-                          uint64_t bytes) {
-  if (auto plane = schedule::getStatePlaneOfGlobal(name))
-    return schedule::NativeStateWindowAddressOp::create(builder, location,
-                                                        *plane, Value(), bytes);
-  return byteGEP(builder, location,
-                 LLVM::AddressOfOp::create(
-                     builder, location,
-                     LLVM::LLVMPointerType::get(builder.getContext()), name),
-                 bytes);
-}
-
 Value loadBulkStatePlane(ConversionPatternRewriter &rewriter, Location location,
-                         Value handle, uint64_t width, StringRef globalName,
-                         bool unknownFallback, uint64_t stateBitCount,
+                         Value handle, uint64_t width,
+                         schedule::StatePlane plane, bool unknownFallback,
+                         uint64_t stateBitCount,
                          const NativeStateLayout *directLayout,
                          bool assumeClean) {
   Type i32 = rewriter.getI32Type();
@@ -107,11 +94,12 @@ Value loadBulkStatePlane(ConversionPatternRewriter &rewriter, Location location,
   if (range && (!range->guarded || assumeClean) && range->offset % 8 == 0) {
     LLVM::MemcpyOp::create(
         rewriter, location, output,
-        globalWindowAddress(rewriter, location, globalName, range->offset / 8),
+        schedule::NativeStateWindowAddressOp::create(
+            rewriter, location, plane, Value(), range->offset / 8),
         llvmConstant(rewriter, location, i64, (width + 7) / 8), false);
     return output;
   }
-  Value base = detail::createGlobalAddress(rewriter, location, globalName);
+  Value base = detail::createStatePlaneAddress(rewriter, location, plane);
   Value context = loadCurrentRuntimeContext(rewriter, location);
   LLVM::CallOp::create(
       rewriter, location, TypeRange{i32},
@@ -121,7 +109,7 @@ Value loadBulkStatePlane(ConversionPatternRewriter &rewriter, Location location,
                  llvmConstant(rewriter, location, i64, stateBitCount), handle,
                  llvmConstant(rewriter, location, i64, width),
                  llvmConstant(rewriter, location, i32,
-                              globalName == "__talos_state_unknown" ? 1 : 0),
+                              plane == schedule::StatePlane::Unknown ? 1 : 0),
                  llvmConstant(rewriter, location, i32, unknownFallback ? 1 : 0),
                  output});
   return output;
@@ -129,11 +117,11 @@ Value loadBulkStatePlane(ConversionPatternRewriter &rewriter, Location location,
 
 void storeBulkStatePlane(ConversionPatternRewriter &rewriter, Location location,
                          Value handle, Value input, uint64_t width,
-                         StringRef globalName, uint64_t stateBitCount,
+                         schedule::StatePlane plane, uint64_t stateBitCount,
                          Value changed, bool continuous) {
   Type i32 = rewriter.getI32Type();
   Type i64 = rewriter.getI64Type();
-  Value base = detail::createGlobalAddress(rewriter, location, globalName);
+  Value base = detail::createStatePlaneAddress(rewriter, location, plane);
   Value context = loadCurrentRuntimeContext(rewriter, location);
   LLVM::CallOp::create(
       rewriter, location, TypeRange{i32},
@@ -145,7 +133,7 @@ void storeBulkStatePlane(ConversionPatternRewriter &rewriter, Location location,
                  llvmConstant(rewriter, location, i64, stateBitCount), handle,
                  llvmConstant(rewriter, location, i64, width),
                  llvmConstant(rewriter, location, i32,
-                              globalName == "__talos_state_unknown" ? 1 : 0),
+                              plane == schedule::StatePlane::Unknown ? 1 : 0),
                  input, changed});
 }
 
@@ -154,28 +142,20 @@ void storeBulkStatePlane(ConversionPatternRewriter &rewriter, Location location,
 // Continuous roots also retain their contribution for later force/release.
 bool tryStoreBulkDirect(ConversionPatternRewriter &rewriter, Location location,
                         Value handle, Value input, uint64_t width,
-                        StringRef globalName, const NativeStateLayout *layout,
-                        bool assumeClean, bool continuous) {
+                        schedule::StatePlane plane,
+                        const NativeStateLayout *layout, bool assumeClean,
+                        bool continuous) {
   auto range = resolveDirectStaticStateRange(handle, width, layout);
   if (!range || range->offset % 8 || (range->guarded && !assumeClean) ||
       (continuous && range->guarded && !layout->directContinuous))
     return false;
-  Type pointer = LLVM::LLVMPointerType::get(rewriter.getContext());
-  auto copy = [&](StringRef name, bool mask = false) {
-    Value destination;
-    if (name.starts_with("__talos_continuous_")) {
-      // A contribution plane is bound through a pointer global.
-      Value base = LLVM::LoadOp::create(
-          rewriter, location, pointer,
-          LLVM::AddressOfOp::create(rewriter, location, pointer, name), 8);
-      destination = byteGEP(rewriter, location, base, range->offset / 8);
-    } else {
-      destination =
-          globalWindowAddress(rewriter, location, name, range->offset / 8);
-    }
+  IntegerType i8 = rewriter.getI8Type();
+  auto copy = [&](schedule::StatePlane target, bool mask = false) {
+    Value destination = schedule::NativeStateWindowAddressOp::create(
+        rewriter, location, target, Value(), range->offset / 8);
     Value bytes =
         llvmConstant(rewriter, location, rewriter.getI64Type(), width / 8);
-    Value ones = llvmConstant(rewriter, location, rewriter.getI8Type(), 255);
+    Value ones = llvmConstant(rewriter, location, i8, 255);
     if (mask)
       LLVM::MemsetOp::create(rewriter, location, destination, ones, bytes,
                              false);
@@ -183,33 +163,30 @@ bool tryStoreBulkDirect(ConversionPatternRewriter &rewriter, Location location,
       LLVM::MemcpyOp::create(rewriter, location, destination, input, bytes,
                              false);
     if (unsigned tail = width % 8) {
-      // Either side may be a state plane's window.
-      Value address = isTypedStatePointer(destination)
-                          ? destination
-                          : byteGEP(rewriter, location, destination, width / 8);
-      uint64_t addressOffset = address == destination ? width / 8 : 0;
-      Value old = createLoadAt(rewriter, location, rewriter.getI8Type(),
-                               address, Value(), addressOffset, 1);
-      Value value = mask
-                        ? ones
-                        : createLoadAt(rewriter, location, rewriter.getI8Type(),
-                                       input, Value(), width / 8, 1);
-      Value bits = llvmConstant(rewriter, location, rewriter.getI8Type(),
-                                (1u << tail) - 1);
+      // The input may borrow a state plane's window too.
+      Value old = createLoadAt(rewriter, location, i8, destination, Value(),
+                               width / 8, 1);
+      Value value = mask ? ones
+                         : createLoadAt(rewriter, location, i8, input, Value(),
+                                        width / 8, 1);
+      Value bits = llvmConstant(rewriter, location, i8, (1u << tail) - 1);
       Value delta = arith::XOrIOp::create(rewriter, location, old, value);
       delta = arith::AndIOp::create(rewriter, location, delta, bits);
       Value merged = arith::XOrIOp::create(rewriter, location, old, delta);
-      createStoreAt(rewriter, location, merged, address, Value(), addressOffset,
+      createStoreAt(rewriter, location, merged, destination, Value(), width / 8,
                     1);
     }
   };
+  // A continuous root retains its contribution for a later release (IEEE
+  // 1800-2023 10.6.2).
   if (continuous && layout->directContinuous) {
-    copy(globalName == "__talos_state_unknown" ? "__talos_continuous_unknown"
-                                               : "__talos_continuous_value");
-    if (globalName == "__talos_state_value")
-      copy("__talos_continuous_mask", true);
+    copy(plane == schedule::StatePlane::Unknown
+             ? schedule::StatePlane::ContributionUnknown
+             : schedule::StatePlane::ContributionValue);
+    if (plane == schedule::StatePlane::Value)
+      copy(schedule::StatePlane::ContributionMask, true);
   }
-  copy(globalName);
+  copy(plane);
   return true;
 }
 
@@ -282,41 +259,41 @@ public:
     bool sourceAssumeClean = native::has<native::BulkCopySourceAssumeClean>(op);
 
     Value sourceValue = loadBulkStatePlane(
-        rewriter, location, source, *width, "__talos_state_value", false,
+        rewriter, location, source, *width, schedule::StatePlane::Value, false,
         stateBitCount, directLayout, sourceAssumeClean);
     Value sourceUnknown;
     if (fourState)
       sourceUnknown = loadBulkStatePlane(
-          rewriter, location, source, *width, "__talos_state_unknown", true,
-          stateBitCount, directLayout, sourceAssumeClean);
+          rewriter, location, source, *width, schedule::StatePlane::Unknown,
+          true, stateBitCount, directLayout, sourceAssumeClean);
     Value oldValue = loadBulkStatePlane(rewriter, location, destination, *width,
-                                        "__talos_state_value", false,
+                                        schedule::StatePlane::Value, false,
                                         stateBitCount, directLayout, false);
     Value oldUnknown;
     if (fourState)
       oldUnknown = loadBulkStatePlane(rewriter, location, destination, *width,
-                                      "__talos_state_unknown", true,
+                                      schedule::StatePlane::Unknown, true,
                                       stateBitCount, directLayout, false);
 
     Value changed = entryAlloca(rewriter, location, rewriter.getI8Type(), 1, 1);
     storeBulkStatePlane(rewriter, location, destination, sourceValue, *width,
-                        "__talos_state_value", stateBitCount, changed,
+                        schedule::StatePlane::Value, stateBitCount, changed,
                         continuous);
     if (fourState)
       storeBulkStatePlane(rewriter, location, destination, sourceUnknown,
-                          *width, "__talos_state_unknown", stateBitCount,
+                          *width, schedule::StatePlane::Unknown, stateBitCount,
                           changed, continuous);
 
     // A generic packed store may be partially masked by a force or procedural
     // assign. Reload the visible destination planes before publication, just
     // like the scalar lowering required by IEEE 1800-2017 10.6.1-10.6.2.
     Value newValue = loadBulkStatePlane(rewriter, location, destination, *width,
-                                        "__talos_state_value", false,
+                                        schedule::StatePlane::Value, false,
                                         stateBitCount, directLayout, false);
     Value newUnknown;
     if (fourState)
       newUnknown = loadBulkStatePlane(rewriter, location, destination, *width,
-                                      "__talos_state_unknown", true,
+                                      schedule::StatePlane::Unknown, true,
                                       stateBitCount, directLayout, false);
     notifyBulkSignal(
         rewriter, location, destination, *width, oldValue, oldUnknown,
@@ -669,8 +646,7 @@ public:
           return schedule::NativeStateWindowAddressOp::create(
               rewriter, op.getLoc(), plane, Value(), range->offset / 8);
         return loadBulkStatePlane(rewriter, op.getLoc(),
-                                  adaptor.getReference().front(), *width,
-                                  schedule::getStatePlaneGlobalName(plane),
+                                  adaptor.getReference().front(), *width, plane,
                                   plane == schedule::StatePlane::Unknown,
                                   stateBitCount, directLayout, assumeClean);
       };
@@ -730,7 +706,7 @@ public:
           rewriter, op.getLoc(), range->staticID, TALOS_RT_STATIC_ROOT_READ);
     Value value =
         loadStatePlane(rewriter, op.getLoc(), adaptor.getReference().front(),
-                       plane, "__talos_state_value", false, stateBitCount,
+                       plane, schedule::StatePlane::Value, false, stateBitCount,
                        directLayout, guardedPermission, assumeClean, access);
     value = maskStoragePlane(rewriter, op.getLoc(), value, resultType, false);
     if (isa<FloatType>(resultType))
@@ -748,7 +724,7 @@ public:
                     .getResult()
               : loadStatePlane(
                     rewriter, op.getLoc(), adaptor.getReference().front(),
-                    plane, "__talos_state_unknown", true, stateBitCount,
+                    plane, schedule::StatePlane::Unknown, true, stateBitCount,
                     directLayout, guardedPermission, assumeClean, access);
       converted.push_back(
           maskStoragePlane(rewriter, op.getLoc(), unknown, resultType, true));
@@ -874,18 +850,18 @@ public:
       Location location = op.getLoc();
       Value handle = adaptor.getReference().front();
       bool fourState = containsLogic(valueType) && !twoState;
-      auto snapshot = [&](StringRef plane, bool unknown) {
+      auto snapshot = [&](schedule::StatePlane plane, bool unknown) {
         return loadBulkStatePlane(rewriter, location, handle, *width, plane,
                                   unknown, stateBitCount, directLayout,
                                   assumeClean);
       };
       Value oldValue, oldUnknown;
       if (needsNotification) {
-        oldValue = snapshot("__talos_state_value", false);
+        oldValue = snapshot(schedule::StatePlane::Value, false);
         if (fourState)
-          oldUnknown = snapshot("__talos_state_unknown", true);
+          oldUnknown = snapshot(schedule::StatePlane::Unknown, true);
       }
-      auto store = [&](Value input, StringRef plane) {
+      auto store = [&](Value input, schedule::StatePlane plane) {
         if (tryStoreBulkDirect(rewriter, location, handle, input, *width, plane,
                                directLayout, assumeClean, continuous))
           return true;
@@ -896,19 +872,19 @@ public:
         return false;
       };
       Value newValue = adaptor.getValue().front();
-      bool direct = store(newValue, "__talos_state_value");
+      bool direct = store(newValue, schedule::StatePlane::Value);
       Value newUnknown;
       if (fourState) {
         newUnknown = adaptor.getValue()[1];
-        direct &= store(newUnknown, "__talos_state_unknown");
+        direct &= store(newUnknown, schedule::StatePlane::Unknown);
       }
       if (needsNotification) {
         // Runtime stores may be partially suppressed by an override. Publish
         // the actual visible value, with the same semantics as scalar stores.
         if (!direct) {
-          newValue = snapshot("__talos_state_value", false);
+          newValue = snapshot(schedule::StatePlane::Value, false);
           if (fourState)
-            newUnknown = snapshot("__talos_state_unknown", true);
+            newUnknown = snapshot(schedule::StatePlane::Unknown, true);
         }
         notifyBulkSignal(
             rewriter, location, handle, *width, oldValue, oldUnknown, newValue,
@@ -943,15 +919,15 @@ public:
     if (!needsNotification) {
       (void)storeStatePlane(
           rewriter, op.getLoc(), adaptor.getReference().front(), storedValue,
-          "__talos_state_value", stateBitCount, directLayout, guardedPermission,
-          assumeClean, /*trackChange=*/false, continuous);
+          schedule::StatePlane::Value, stateBitCount, directLayout,
+          guardedPermission, assumeClean, /*trackChange=*/false, continuous);
       if (containsLogic(valueType) && !twoState)
         (void)storeStatePlane(
             rewriter, op.getLoc(), adaptor.getReference().front(),
             adaptor.getValue().size() == 2
                 ? adaptor.getValue()[1]
                 : llvmConstant(rewriter, op.getLoc(), plane, 0),
-            "__talos_state_unknown", stateBitCount, directLayout,
+            schedule::StatePlane::Unknown, stateBitCount, directLayout,
             guardedPermission, assumeClean,
             /*trackChange=*/false, continuous);
       rewriter.eraseOp(op);
@@ -959,7 +935,7 @@ public:
     }
     Value oldValue =
         loadStatePlane(rewriter, op.getLoc(), adaptor.getReference().front(),
-                       plane, "__talos_state_value", false, stateBitCount,
+                       plane, schedule::StatePlane::Value, false, stateBitCount,
                        directLayout, guardedPermission, assumeClean, access);
     Value oldUnknown;
     if (containsLogic(valueType))
@@ -967,7 +943,7 @@ public:
                        ? llvmConstant(rewriter, op.getLoc(), plane, 0)
                        : loadStatePlane(rewriter, op.getLoc(),
                                         adaptor.getReference().front(), plane,
-                                        "__talos_state_unknown", true,
+                                        schedule::StatePlane::Unknown, true,
                                         stateBitCount, directLayout,
                                         guardedPermission, assumeClean, access);
     Value notificationValue = storedValue;
@@ -1020,24 +996,24 @@ public:
           storedValue, storedUnknown, directRange,
           ::talos::schedule::get<schedule::metadata::evalSourceOwner>(op),
           nbaEquivalent, [&] {
-            (void)storeStatePlane(rewriter, op.getLoc(), reference,
-                                  storedValue, "__talos_state_value",
-                                  stateBitCount, directLayout, Value{},
-                                  assumeClean, /*trackChange=*/false,
+            (void)storeStatePlane(rewriter, op.getLoc(), reference, storedValue,
+                                  schedule::StatePlane::Value, stateBitCount,
+                                  directLayout, Value{}, assumeClean,
+                                  /*trackChange=*/false,
                                   /*continuous=*/false);
             if (storedUnknown)
-              (void)storeStatePlane(rewriter, op.getLoc(), reference,
-                                    storedUnknown, "__talos_state_unknown",
-                                    stateBitCount, directLayout, Value{},
-                                    assumeClean, /*trackChange=*/false,
-                                    /*continuous=*/false);
+              (void)storeStatePlane(
+                  rewriter, op.getLoc(), reference, storedUnknown,
+                  schedule::StatePlane::Unknown, stateBitCount, directLayout,
+                  Value{}, assumeClean, /*trackChange=*/false,
+                  /*continuous=*/false);
           });
       rewriter.eraseOp(op);
       return success();
     }
     Value valueChanged =
         storeStatePlane(rewriter, op.getLoc(), adaptor.getReference().front(),
-                        storedValue, "__talos_state_value", stateBitCount,
+                        storedValue, schedule::StatePlane::Value, stateBitCount,
                         directLayout, guardedPermission, assumeClean,
                         /*trackChange=*/true, continuous);
     // Runtime plane stores can suppress a write while force or procedural
@@ -1051,11 +1027,11 @@ public:
       Value storedUnknown = adaptor.getValue().size() == 2
                                 ? adaptor.getValue()[1]
                                 : llvmConstant(rewriter, op.getLoc(), plane, 0);
-      Value unknownChanged =
-          storeStatePlane(rewriter, op.getLoc(), adaptor.getReference().front(),
-                          storedUnknown, "__talos_state_unknown", stateBitCount,
-                          directLayout, guardedPermission, assumeClean,
-                          /*trackChange=*/true, continuous);
+      Value unknownChanged = storeStatePlane(
+          rewriter, op.getLoc(), adaptor.getReference().front(), storedUnknown,
+          schedule::StatePlane::Unknown, stateBitCount, directLayout,
+          guardedPermission, assumeClean,
+          /*trackChange=*/true, continuous);
       notificationUnknown = arith::SelectOp::create(
           rewriter, op.getLoc(), unknownChanged, storedUnknown, oldUnknown);
     }
@@ -1071,16 +1047,16 @@ public:
          !directLayout || !directRange ||
          (directRange->guarded && !assumeClean));
     if (needsVisibleReload) {
-      notificationValue =
-          loadStatePlane(rewriter, op.getLoc(), adaptor.getReference().front(),
-                         plane, "__talos_state_value", false, stateBitCount,
-                         directLayout, guardedPermission, assumeClean, access);
+      notificationValue = loadStatePlane(
+          rewriter, op.getLoc(), adaptor.getReference().front(), plane,
+          schedule::StatePlane::Value, false, stateBitCount, directLayout,
+          guardedPermission, assumeClean, access);
       if (containsLogic(valueType))
         notificationUnknown =
             twoState ? llvmConstant(rewriter, op.getLoc(), plane, 0)
                      : loadStatePlane(rewriter, op.getLoc(),
                                       adaptor.getReference().front(), plane,
-                                      "__talos_state_unknown", true,
+                                      schedule::StatePlane::Unknown, true,
                                       stateBitCount, directLayout,
                                       guardedPermission, assumeClean, access);
     }
@@ -1148,18 +1124,19 @@ public:
     IntegerType plane = rewriter.getIntegerType(*width);
     Value value = loadStatePlane(
         rewriter, op.getLoc(), adaptor.getNet().front(), plane,
-        "__talos_state_value", false, stateBitCount, directLayout);
+        schedule::StatePlane::Value, false, stateBitCount, directLayout);
     value = maskStoragePlane(rewriter, op.getLoc(), value, resultType, false);
     if (isa<FloatType>(resultType))
       value =
           arith::BitcastOp::create(rewriter, op.getLoc(), resultType, value);
     SmallVector<Value> converted{value};
     if (containsLogic(resultType)) {
-      Value unknown = twoState ? llvmConstant(rewriter, op.getLoc(), plane, 0)
-                               : loadStatePlane(rewriter, op.getLoc(),
-                                                adaptor.getNet().front(), plane,
-                                                "__talos_state_unknown", true,
-                                                stateBitCount, directLayout);
+      Value unknown =
+          twoState
+              ? llvmConstant(rewriter, op.getLoc(), plane, 0)
+              : loadStatePlane(rewriter, op.getLoc(), adaptor.getNet().front(),
+                               plane, schedule::StatePlane::Unknown, true,
+                               stateBitCount, directLayout);
       converted.push_back(
           maskStoragePlane(rewriter, op.getLoc(), unknown, resultType, true));
     }
@@ -1196,7 +1173,7 @@ public:
     IntegerType plane = rewriter.getIntegerType(*width);
     Value value = loadStatePlane(
         rewriter, op.getLoc(), adaptor.getDriver().front(), plane,
-        "__talos_state_value", false, stateBitCount, directLayout);
+        schedule::StatePlane::Value, false, stateBitCount, directLayout);
     value = maskStoragePlane(rewriter, op.getLoc(), value, resultType, false);
     if (isa<FloatType>(resultType))
       value =
@@ -1207,7 +1184,7 @@ public:
                           ? llvmConstant(rewriter, op.getLoc(), plane, 0)
                           : loadStatePlane(rewriter, op.getLoc(),
                                            adaptor.getDriver().front(), plane,
-                                           "__talos_state_unknown", true,
+                                           schedule::StatePlane::Unknown, true,
                                            stateBitCount, directLayout);
       converted.push_back(
           maskStoragePlane(rewriter, op.getLoc(), unknown, resultType, true));
@@ -1245,14 +1222,15 @@ public:
     IntegerType plane = rewriter.getIntegerType(*width);
     Value handle = adaptor.getNet().front();
     Value oldValue = loadStatePlane(rewriter, op.getLoc(), handle, plane,
-                                    "__talos_state_value", false, stateBitCount,
-                                    directLayout);
+                                    schedule::StatePlane::Value, false,
+                                    stateBitCount, directLayout);
     Value oldUnknown;
     if (containsLogic(valueType))
-      oldUnknown = twoState ? llvmConstant(rewriter, op.getLoc(), plane, 0)
-                            : loadStatePlane(rewriter, op.getLoc(), handle,
-                                             plane, "__talos_state_unknown",
-                                             true, stateBitCount, directLayout);
+      oldUnknown = twoState
+                       ? llvmConstant(rewriter, op.getLoc(), plane, 0)
+                       : loadStatePlane(rewriter, op.getLoc(), handle, plane,
+                                        schedule::StatePlane::Unknown, true,
+                                        stateBitCount, directLayout);
     Value newValue = adaptor.getValue().front();
     if (isa<FloatType>(valueType))
       newValue =
@@ -1261,10 +1239,11 @@ public:
                            ? adaptor.getValue()[1]
                            : Value{};
     (void)storeStatePlane(rewriter, op.getLoc(), handle, newValue,
-                          "__talos_state_value", stateBitCount, directLayout);
+                          schedule::StatePlane::Value, stateBitCount,
+                          directLayout);
     if (containsLogic(valueType) && !twoState)
       (void)storeStatePlane(rewriter, op.getLoc(), handle, newUnknown,
-                            "__talos_state_unknown", stateBitCount,
+                            schedule::StatePlane::Unknown, stateBitCount,
                             directLayout);
 
     if (isa<FloatType>(valueType)) {

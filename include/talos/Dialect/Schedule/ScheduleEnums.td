@@ -249,13 +249,25 @@ def SimNativeSchedulerMode
   let cppNamespace = "::talos::schedule";
 }
 
-// The two canonical planes of native design state: values, and the X/Z
-// (unknown) bits beside them.
+// The two canonical planes of native design state, values and the X/Z
+// (unknown) bits beside them, and the continuous contribution planes the
+// runtime retains for continuously assigned roots: the contribution's value,
+// its X/Z bits, and the mask of bits it drives. Releasing a force reestablishes
+// the continuous assignment (IEEE 1800-2023 10.6.2) from them. A contribution
+// plane is bound through a pointer global and is memory apart from the
+// canonical planes.
 def StatePlaneValue : I32EnumAttrCase<"Value", 0, "value">;
 def StatePlaneUnknown : I32EnumAttrCase<"Unknown", 1, "unknown">;
+def StatePlaneContributionValue
+    : I32EnumAttrCase<"ContributionValue", 2, "contribution_value">;
+def StatePlaneContributionUnknown
+    : I32EnumAttrCase<"ContributionUnknown", 3, "contribution_unknown">;
+def StatePlaneContributionMask
+    : I32EnumAttrCase<"ContributionMask", 4, "contribution_mask">;
 def StatePlaneEnum
-    : I32EnumAttr<"StatePlane", "canonical native state plane", [
-        StatePlaneValue, StatePlaneUnknown
+    : I32EnumAttr<"StatePlane", "native state plane", [
+        StatePlaneValue, StatePlaneUnknown, StatePlaneContributionValue,
+        StatePlaneContributionUnknown, StatePlaneContributionMask
       ]> {
   let cppNamespace = "::talos::schedule";
   let genSpecializedAttr = 0;

@@ -634,11 +634,14 @@ LogicalResult makeSchedulerMain(ModuleOp module,
   }
   if (stateLayout.directContinuous) {
     SmallVector<Value> arguments{runtimeContext};
-    for (StringRef name :
-         {"__talos_continuous_value", "__talos_continuous_unknown",
-          "__talos_continuous_mask"})
+    // The runtime binds each contribution plane's pointer global.
+    for (schedule::StatePlane plane :
+         {schedule::StatePlane::ContributionValue,
+          schedule::StatePlane::ContributionUnknown,
+          schedule::StatePlane::ContributionMask})
       arguments.push_back(
-          LLVM::AddressOfOp::create(builder, location, pointer, name));
+          LLVM::AddressOfOp::create(builder, location, pointer,
+                                    schedule::getStatePlaneGlobalName(plane)));
     Value status = LLVM::CallOp::create(
                        builder, location, TypeRange{i32},
                        "talos_rt_v1_native_state_bind_continuous", arguments)

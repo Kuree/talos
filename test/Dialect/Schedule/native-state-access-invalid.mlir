@@ -44,6 +44,18 @@ module {
 
 // -----
 
+// A contribution plane is reached through its binding, no constant address.
+module {
+  llvm.mlir.global external @__talos_continuous_unknown() : !llvm.ptr
+  llvm.func @contribution_base() -> !llvm.ptr {
+    // expected-error @below {{names a contribution plane, whose address is no constant}}
+    %a = schedule.state.address @__talos_continuous_unknown : !llvm.ptr
+    llvm.return %a : !llvm.ptr
+  }
+}
+
+// -----
+
 // A state access needs its plane's global.
 module {
   llvm.func @missing_plane(%offset: i64) -> i8 {

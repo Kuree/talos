@@ -107,36 +107,22 @@ struct UnknownSummaryWriteInputs {
   bool patterned = false;
 };
 
-/// The byte offset of `pointer` from the unknown plane, when every step is a
-/// constant byte GEP.
-std::optional<uint64_t> constantByteOffset(Value pointer) {
-  if (getStatePlaneRoot(pointer) != schedule::StatePlane::Unknown)
-    return std::nullopt;
-  return getConstantByteOffset(pointer);
-}
-
 /// Where a write lands in the unknown plane: its constant byte offset when
-/// static, and how to compute its byte offset when it is not.
+/// static, and the offsets that compute it when it is not.
 struct PlaneWrite {
   std::optional<uint64_t> bytes;
-  /// The address of a write through a pointer that is no typed plane
-  /// pointer, such as a select of window addresses; null when the offsets
-  /// are known.
-  Value pointer;
-  /// The offsets of a typed store or a typed window address.
+  /// The offsets of a typed store or a window address.
   Value dynamicOffset;
   uint64_t staticOffset = 0;
   /// The bits a dynamic write may change, when its producer declared them.
   DenseI64ArrayAttr writtenBits;
 
-  /// A copy or fill of `pointer`.
+  /// A copy or fill of the unknown-plane window `pointer` addresses.
   static PlaneWrite of(Operation *write, Value pointer) {
-    auto writtenBits =
-        schedule::get<schedule::Field::EvalUnknownWriteRange>(write);
-    if (std::optional<StateWindow> window = getStateWindow(pointer))
-      return {constantByteOffset(pointer), Value(), window->dynamicOffset,
-              window->staticOffset, writtenBits};
-    return {constantByteOffset(pointer), pointer, {}, 0, writtenBits};
+    StateWindow window = *getStateWindow(pointer);
+    return {getConstantByteOffset(pointer), window.dynamicOffset,
+            window.staticOffset,
+            schedule::get<schedule::Field::EvalUnknownWriteRange>(write)};
   }
 };
 
@@ -166,11 +152,11 @@ public:
     if (!inputs->active || function.isExternal())
       return markAllAnalysesPreserved();
 
-    // Every operation a plane pointer reaches, following GEPs, selects and
-    // block arguments.
+    // The unknown plane is written by typed stores, and by copies and fills of
+    // its window addresses; native finalization rejects any other use of a
+    // plane address but passing it to a call.
     SmallVector<Operation *> writes, escapes;
     SmallVector<Value> pending;
-    DenseSet<Value> seen;
     function.walk([&](Operation *operation) {
       if (auto store = dyn_cast<schedule::NativeStateStoreOp>(operation)) {
         if (store.getPlane() == schedule::StatePlane::Unknown)
@@ -184,20 +170,11 @@ public:
           pending.push_back(window.getResult());
       }
     });
-    while (!pending.empty()) {
-      Value pointer = pending.pop_back_val();
-      if (!seen.insert(pointer).second)
-        continue;
+    for (Value pointer : pending)
       for (OpOperand &use : pointer.getUses()) {
         Operation *user = use.getOwner();
-        if (isa<LLVM::GEPOp>(user) && use.getOperandNumber() == 0) {
-          pending.push_back(user->getResult(0));
-        } else if (isa<LLVM::SelectOp>(user) && use.getOperandNumber() != 0) {
-          pending.push_back(user->getResult(0));
-        } else if (isa<LLVM::LoadOp, LLVM::PtrToIntOp, LLVM::ICmpOp>(user)) {
-        } else if (auto store = dyn_cast<LLVM::StoreOp>(user)) {
-          (store.getAddr() == pointer ? writes : escapes).push_back(user);
-        } else if (isa<LLVM::MemcpyOp, LLVM::MemmoveOp, LLVM::MemsetOp>(user)) {
+        if (isa<LLVM::MemcpyOp, LLVM::MemcpyInlineOp, LLVM::MemmoveOp,
+                LLVM::MemsetOp, LLVM::MemsetInlineOp>(user)) {
           // Operand 0 is the destination.
           if (use.getOperandNumber() == 0)
             writes.push_back(user);
@@ -205,19 +182,10 @@ public:
           // Runtime services report the writes they make.
           if (!call.getCallee() || !call.getCallee()->starts_with("talos_rt_"))
             escapes.push_back(user);
-        } else if (auto branch = dyn_cast<BranchOpInterface>(user)) {
-          for (unsigned index = 0; index != user->getNumSuccessors(); ++index) {
-            SuccessorOperands operands = branch.getSuccessorOperands(index);
-            for (unsigned position = 0; position != operands.size(); ++position)
-              if (operands[position] == pointer)
-                pending.push_back(
-                    user->getSuccessor(index)->getArgument(position));
-          }
-        } else {
+        } else if (!isa<LLVM::PtrToIntOp, LLVM::ICmpOp>(user)) {
           escapes.push_back(user);
         }
       }
-    }
     if (writes.empty() && escapes.empty())
       return markAllAnalysesPreserved();
     OpBuilder builder(function.getContext());
@@ -257,14 +225,7 @@ private:
     Type i64 = builder.getI64Type();
     Type ptr = LLVM::LLVMPointerType::get(builder.getContext());
     Value bytes;
-    if (write.pointer) {
-      Value base = detail::createStatePlaneAddress(
-          builder, location, schedule::StatePlane::Unknown);
-      bytes = LLVM::SubOp::create(
-          builder, location,
-          LLVM::PtrToIntOp::create(builder, location, i64, write.pointer),
-          LLVM::PtrToIntOp::create(builder, location, i64, base));
-    } else if (!write.dynamicOffset) {
+    if (!write.dynamicOffset) {
       bytes = llvmConstant(builder, location, i64, write.staticOffset);
     } else {
       bytes = write.dynamicOffset;
@@ -386,29 +347,18 @@ private:
   void instrument(OpBuilder &builder, Operation *write) {
     Location location = write->getLoc();
     Type i64 = builder.getI64Type();
-    if (isa<LLVM::StoreOp, schedule::NativeStateStoreOp>(write)) {
-      Value value;
-      PlaneWrite at;
-      if (auto store = dyn_cast<schedule::NativeStateStoreOp>(write)) {
-        // The writer already reported this store's roots itself.
-        if (store.getSummaryReported()) {
-          store.setSummaryReported(false);
-          return;
-        }
-        value = store.getValue();
-        at.bytes = getNativeMemoryAccess(store)->offset;
-        at.dynamicOffset = store.getDynamicOffset();
-        at.staticOffset = store.getStaticOffset();
-        at.writtenBits = store.getWrittenBitsAttr();
-      } else {
-        auto raw = cast<LLVM::StoreOp>(write);
-        if (schedule::has<schedule::Field::EvalUnknownSummaryReported>(raw)) {
-          schedule::remove<schedule::Field::EvalUnknownSummaryReported>(raw);
-          return;
-        }
-        value = raw.getValue();
-        at = PlaneWrite::of(raw, raw.getAddr());
+    if (auto store = dyn_cast<schedule::NativeStateStoreOp>(write)) {
+      // The writer already reported this store's roots itself.
+      if (store.getSummaryReported()) {
+        store.setSummaryReported(false);
+        return;
       }
+      Value value = store.getValue();
+      PlaneWrite at;
+      at.bytes = getNativeMemoryAccess(store)->offset;
+      at.dynamicOffset = store.getDynamicOffset();
+      at.staticOffset = store.getStaticOffset();
+      at.writtenBits = store.getWrittenBitsAttr();
       auto type = dyn_cast<IntegerType>(value.getType());
       builder.setInsertionPointAfter(write);
       if (!type) {

@@ -23,8 +23,9 @@ namespace talos::detail {
 
 /// The global an address root names: the plane global of a typed plane
 /// pointer, or the global of an llvm.mlir.addressof. An LLVM address of a
-/// state plane names none: native code takes no such address, and a pointer
-/// of unknown origin may alias anything.
+/// state plane, or of a contribution plane's binding, names none: native
+/// code accesses no plane through it, and a pointer of unknown origin may
+/// alias anything.
 mlir::FlatSymbolRefAttr getAddressedGlobal(mlir::Operation *root);
 inline mlir::FlatSymbolRefAttr getAddressedGlobal(mlir::Value root) {
   mlir::Operation *definition = root.getDefiningOp();
@@ -49,10 +50,14 @@ struct NativeAddress {
   mlir::Value pointer;
   /// The root of an LLVM address after its GEPs.
   mlir::Value root;
-  /// The state plane of a typed access or of a typed plane pointer.
+  /// The canonical state plane of a typed access or of a typed plane
+  /// pointer. A contribution plane is memory apart from design state; its
+  /// accesses describe its binding global instead.
   std::optional<schedule::StatePlane> plane;
   /// The global the address derives from, a state plane's or any other;
-  /// empty when the address derives from no global's address.
+  /// empty when the address derives from no global's address. For a
+  /// contribution plane it is the pointer global that binds the plane, and
+  /// `offset` indexes the bound plane, not the binding.
   llvm::StringRef global;
   /// The constant byte offset, when it is static: from the plane for a
   /// typed access or a window address, from the root otherwise.
@@ -116,13 +121,6 @@ inline bool isNativeMemoryStore(mlir::Operation *operation) {
 mlir::Value createStatePlaneAddress(mlir::OpBuilder &builder,
                                     mlir::Location location,
                                     schedule::StatePlane plane);
-/// The address of a global named at run time of the producer, which may be
-/// a state plane: createStatePlaneAddress for a plane, llvm.mlir.addressof
-/// otherwise.
-mlir::Value createGlobalAddress(mlir::OpBuilder &builder,
-                                mlir::Location location,
-                                llvm::StringRef global);
-
 /// The window a state plane's base or a window address points to: its plane,
 /// its dynamic byte offset (null when static) and its static byte offset.
 struct StateWindow {
