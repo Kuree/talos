@@ -99,6 +99,8 @@ using RandomFunctionOrder =
     TalosSimulationDialect::RandomFunctionOrderAttrHelper;
 using RandomFunctionState =
     TalosSimulationDialect::RandomFunctionStateAttrHelper;
+using RandomNativeFunction =
+    TalosSimulationDialect::RandomNativeFunctionAttrHelper;
 using RandomGuardInputs = TalosSimulationDialect::RandomGuardInputsAttrHelper;
 using RandomIncrementField =
     TalosSimulationDialect::RandomIncrementFieldAttrHelper;

@@ -54,6 +54,10 @@ struct RandomArithmetic::Impl {
   }
 
   Operation *canonical(Operation *expression) {
+    // A native function capture is evaluated only while its source atom is
+    // active. Distinct occurrences can have different enclosing state guards.
+    if (sim::has<sim::metadata::RandomNativeFunction>(expression))
+      return expression;
     if (auto found = canonicalValues.find(expression);
         found != canonicalValues.end())
       return found->second;
@@ -364,7 +368,9 @@ struct RandomArithmetic::Impl {
     if (sim::has<sim::metadata::RandomArithmeticNode>(expression))
       return false;
     auto semanticType = expression->getAttrOfType<TypeAttr>("semantic_type");
-    if (!semanticType || !getSemanticPackedWidth(semanticType.getValue()))
+    if (!semanticType ||
+        (!getSemanticPackedWidth(semanticType.getValue()) &&
+         !isa<semantic::TimeType>(semanticType.getValue())))
       return false;
     Operation *key = canonical(expression);
     if (auto found = needs.find(key); found != needs.end())

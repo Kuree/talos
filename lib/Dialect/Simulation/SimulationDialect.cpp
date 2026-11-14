@@ -597,6 +597,7 @@ static const llvm::StringMap<discardable::PayloadCheck> &declarations() {
       metadata::RandomFunctionCaseCondition,
       metadata::RandomFunctionConditional, metadata::RandomFunctionExpression,
       metadata::RandomFunctionOrder, metadata::RandomFunctionState,
+      metadata::RandomNativeFunction,
       metadata::RandomGuardInputs, metadata::RandomIncrementField,
       metadata::RandomModeField, metadata::RandomModeIndex,
       metadata::RandomNestedConstraintModes, metadata::RandomNestedHooks,

@@ -6186,6 +6186,11 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     }
     if (consumesSymbols)
       valid = errors;
+    // Unknown actual data can be ignored or consumed by the function body.
+    // Structural argument errors still prevent the call, and the returned
+    // four-state value is checked for knownness below like any state value.
+    if (sim::has<sim::metadata::RandomNativeFunction>(expression))
+      valid = errors;
     if (auto call = dyn_cast<semantic::SVCallExpressionOp>(expression);
         call && call.getIsSystemCall() &&
         call.getCalleeName() == "$countbits" && !values.empty()) {
@@ -6630,7 +6635,41 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
             expressionCaptures.erase(input);
         }
       });
-      if (matchPattern(errors, m_One())) {
+      Value evaluate = errors;
+      if (sim::has<sim::metadata::RandomNativeFunction>(expression))
+        for (Operation *child = expression, *parent = child->getParentOp();
+             parent && parent != op.getOperation();
+             child = parent, parent = parent->getParentOp()) {
+          if (auto block =
+                  sim::get<sim::metadata::RandomConstraintBlock>(parent)) {
+            const APInt &index = block.getValue();
+            if (index.isNegative() || index.getActiveBits() > 6)
+              return failure();
+            Value disabled = arith::AndIOp::create(
+                builder, location, relevantConstraintMode,
+                constant64(uint64_t{1} << index.getZExtValue()));
+            evaluate = guardAnd(evaluate,
+                                arith::CmpIOp::create(builder, location,
+                                                      arith::CmpIPredicate::eq,
+                                                      disabled, constant64(0)));
+          }
+          bool implication = isa<semantic::SVImplicationConstraintOp>(parent);
+          if (!implication && !isa<semantic::SVConditionalConstraintOp>(parent))
+            continue;
+          SmallVector<Operation *> parts = getChildren(parent);
+          if (parts.empty() || child == parts.front())
+            continue;
+          auto guard = safeConstraintValue(parts.front());
+          if (failed(guard))
+            return failure();
+          bool positive = implication || child == parts[1];
+          auto eliminated = stateGuard(*guard, !positive);
+          if (failed(eliminated))
+            return failure();
+          evaluate =
+              guardAnd(evaluate, guardAnd(guard->valid, guardNot(*eliminated)));
+        }
+      if (matchPattern(evaluate, m_One())) {
         FailureOr<Value> lowered = lowerExpression(expression);
         if (failed(lowered))
           return failure();
@@ -6640,8 +6679,8 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         Block *invalid = addBlock();
         Block *done = addBlock();
         result = done->addArgument(*resultType, location);
-        cf::CondBranchOp::create(builder, location, errors, read, ValueRange{},
-                                 invalid, ValueRange{});
+        cf::CondBranchOp::create(builder, location, evaluate, read,
+                                 ValueRange{}, invalid, ValueRange{});
         setCurrent(invalid);
         Value dummy = createDefaultValue(builder, location, *resultType);
         cf::BranchOp::create(builder, location, done, ValueRange{dummy});

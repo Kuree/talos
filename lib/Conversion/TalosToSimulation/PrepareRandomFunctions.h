@@ -71,6 +71,8 @@ mlir::LogicalResult freezeRandomConstraintPriorityInputs(
 
 /// Expand validated pure expression calls. Actual arguments remain constraint
 /// variables; non-argument random reads introduced by a body become state.
+/// Eligible automatic scalar calls with state-only arguments can retain their
+/// ordinary body when expansion is unavailable or it contains other user calls.
 mlir::LogicalResult expandRandomConstraintFunctions(
     llvm::MutableArrayRef<mlir::Operation *> roots,
     const llvm::StringMap<mlir::Operation *> &symbols, mlir::Builder &builder,

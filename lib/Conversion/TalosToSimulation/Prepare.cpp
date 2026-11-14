@@ -435,8 +435,9 @@ static bool isStatefulResolutionSystemCall(StringRef name) {
 /// lowering that cannot introduce poison during exhaustive search.
 static bool isSupportedRandomConstraintExpression(Operation *op) {
   if (auto call = dyn_cast<semantic::SVCallExpressionOp>(op))
-    return call.getIsSystemCall() &&
-           isRandomConstraintSystemFunction(call.getCalleeName());
+    return sim::has<sim::metadata::RandomNativeFunction>(call) ||
+           (call.getIsSystemCall() &&
+            isRandomConstraintSystemFunction(call.getCalleeName()));
   if (auto unary = dyn_cast<semantic::SVUnaryExpressionOp>(op)) {
     using Unary = semantic::SVUnaryOperator;
     switch (unary.getOperatorKind()) {
@@ -6034,7 +6035,7 @@ void TalosSimPreparePass::runOnOperation() {
       }
       root->walk([&](Operation *nested) {
         if (auto function = dyn_cast<semantic::SVCallExpressionOp>(nested);
-            function &&
+            function && !sim::has<sim::metadata::RandomNativeFunction>(function) &&
             !(function.getIsSystemCall() &&
               isRandomConstraintSystemFunction(function.getCalleeName()))) {
           emitError(getSemanticLocation(nested))

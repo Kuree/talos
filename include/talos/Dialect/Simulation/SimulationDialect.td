@@ -122,6 +122,8 @@ def TalosSimulationDialect : Dialect {
     "::mlir::UnitAttr":$random_function_expression,
     "::mlir::ArrayAttr":$random_function_order,
     "::mlir::UnitAttr":$random_function_state,
+    // A validated automatic function evaluated as a pre-solve state capture.
+    "::mlir::UnitAttr":$random_native_function,
     "::mlir::IntegerAttr":$random_guard_inputs,
     "::mlir::FlatSymbolRefAttr":$random_increment_field,
     // Root-class field containing the 64-bit disabled-property mask.

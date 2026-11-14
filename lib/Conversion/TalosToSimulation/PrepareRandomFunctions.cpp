@@ -5,6 +5,8 @@
 #include "PrepareRandomIteration.h"
 #include "talos/Runtime/Runtime.h"
 
+#include "mlir/IR/Diagnostics.h"
+
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallString.h"
@@ -1814,6 +1816,163 @@ private:
 
 } // namespace
 
+// Native state captures need no expression-tree expansion. Admit a closed
+// automatic scalar call graph only after checking every write and call,
+// including in unused initializers or return values. Operations whose ERROR
+// state needs constraint-specific instrumentation retain expression lowering.
+static bool
+canExecuteNativeConstraintFunction(semantic::SVSubroutineSymbolOp entry,
+                                   const llvm::StringMap<Operation *> &symbols,
+                                   bool &hasCallees) {
+  llvm::SmallPtrSet<Operation *, 16> visited;
+  auto resolve = [&](Operation *expression) -> Operation * {
+    auto reference =
+        expression->getAttrOfType<SymbolRefAttr>("referenced_symbol");
+    return reference ? symbols.lookup(reference.getLeafReference()) : nullptr;
+  };
+  auto integral = [](Operation *symbol) {
+    auto type = symbol->getAttrOfType<TypeAttr>("semantic_type");
+    return type && (getSemanticPackedWidth(type.getValue()).has_value() ||
+                    isa<semantic::TimeType>(type.getValue()));
+  };
+  std::function<bool(semantic::SVSubroutineSymbolOp)> validate;
+  validate = [&](semantic::SVSubroutineSymbolOp function) -> bool {
+    if (visited.contains(function))
+      return true;
+    if (function.getSubroutineKind() != semantic::SVSubroutineKind::Function ||
+        function.getDefaultLifetime() !=
+            semantic::SVVariableLifetime::Automatic ||
+        function.getIsDpiImport().value_or(false) ||
+        function.getIsConstructor().value_or(false) ||
+        function.getIsBuiltin().value_or(false) ||
+        function.getIsVirtual().value_or(false))
+      return false;
+    auto result = function.getReturnVariableSymbol();
+    Operation *returnVariable =
+        result ? symbols.lookup(result->getLeafReference()) : nullptr;
+    if (!returnVariable || !integral(returnVariable))
+      return false;
+    visited.insert(function);
+    llvm::SmallPtrSet<Operation *, 16> writable;
+    bool valid = true;
+    function->walk([&](Operation *node) {
+      if (auto local = dyn_cast<semantic::SVVariableSymbolOp>(node)) {
+        if (function.getThisVariableSymbol() &&
+            function.getThisVariableSymbol()->getLeafReference() ==
+                local.getSymName())
+          return;
+        if (!integral(local) ||
+            local.getLifetime() != semantic::SVVariableLifetime::Automatic) {
+          valid = false;
+          return;
+        }
+        if (!local.getIsConst().value_or(false))
+          writable.insert(local);
+      } else if (auto formal =
+                     dyn_cast<semantic::SVFormalArgumentSymbolOp>(node)) {
+        bool input = formal.getDirection() == semantic::SVArgumentDirection::In;
+        bool constRef =
+            formal.getDirection() == semantic::SVArgumentDirection::Ref &&
+            formal.getIsConst().value_or(false);
+        if ((!input && !constRef) || !integral(formal))
+          valid = false;
+        if (input && !formal.getIsConst().value_or(false))
+          writable.insert(formal);
+      }
+    });
+    if (!valid)
+      return false;
+    auto writableLocal = [&](Operation *expression) {
+      return isa<semantic::SVNamedValueExpressionOp>(expression) &&
+             writable.contains(resolve(expression));
+    };
+    auto checked = function->walk([&](Operation *node) -> WalkResult {
+      SmallVector<Operation *> children = getChildren(node);
+      if (auto assignment =
+              dyn_cast<semantic::SVAssignmentExpressionOp>(node)) {
+        if (assignment.getHasTimingControl() ||
+            assignment.getAssignmentKind() !=
+                semantic::SVAssignmentKind::Blocking ||
+            children.size() != 2 || !writableLocal(children.front()))
+          return WalkResult::interrupt();
+      }
+      if (auto unary = dyn_cast<semantic::SVUnaryExpressionOp>(node)) {
+        using Unary = semantic::SVUnaryOperator;
+        if (unary.getOperatorKind() == Unary::Preincrement ||
+            unary.getOperatorKind() == Unary::Predecrement ||
+            unary.getOperatorKind() == Unary::Postincrement ||
+            unary.getOperatorKind() == Unary::Postdecrement)
+          if (children.size() != 1 || !writableLocal(children.front()))
+            return WalkResult::interrupt();
+      }
+      if (auto binary = dyn_cast<semantic::SVBinaryExpressionOp>(node)) {
+        using Binary = semantic::SVBinaryOperator;
+        if (binary.getOperatorKind() == Binary::Divide ||
+            binary.getOperatorKind() == Binary::Mod ||
+            binary.getOperatorKind() == Binary::Power)
+          return WalkResult::interrupt();
+      }
+      if (isa<semantic::SVElementSelectExpressionOp,
+              semantic::SVRangeSelectExpressionOp,
+              semantic::SVNewClassExpressionOp,
+              semantic::SVCopyClassExpressionOp,
+              semantic::SVNewArrayExpressionOp,
+              semantic::SVNewCovergroupExpressionOp>(node))
+        return WalkResult::interrupt();
+      if (isa<semantic::SVMemberAccessExpressionOp>(node)) {
+        // Only a method's own non-null receiver can be read without carrying
+        // a nullable address's ERROR state back to constraint creation.
+        Operation *base =
+            children.empty() ? nullptr : resolve(children.front());
+        if (!base || !function.getThisVariableSymbol() ||
+            base != symbols.lookup(
+                        function.getThisVariableSymbol()->getLeafReference()))
+          return WalkResult::interrupt();
+      }
+      if (auto call = dyn_cast<semantic::SVCallExpressionOp>(node)) {
+        if (call.getIsSystemCall()) {
+          if (!isRandomConstraintSystemFunction(call.getCalleeName()))
+            return WalkResult::interrupt();
+        } else {
+          hasCallees = true;
+          auto target =
+              dyn_cast_or_null<semantic::SVSubroutineSymbolOp>(resolve(call));
+          if (!target || !validate(target))
+            return WalkResult::interrupt();
+          // An explicit receiver must be this, rather than a nullable handle.
+          if (call.getHasThisClass()) {
+            Operation *base =
+                children.empty() ? nullptr : resolve(children.front());
+            if (!base || !function.getThisVariableSymbol() ||
+                base !=
+                    symbols.lookup(
+                        function.getThisVariableSymbol()->getLeafReference()))
+              return WalkResult::interrupt();
+          }
+        }
+      }
+      if (auto block = dyn_cast<semantic::SVBlockStatementOp>(node))
+        if (block.getBlockKind() != semantic::SVStatementBlockKind::Sequential)
+          return WalkResult::interrupt();
+      if (node->getName().getStringRef().starts_with("talos.sv.statement.") &&
+          !isa<semantic::SVStatementListOp, semantic::SVBlockStatementOp,
+               semantic::SVEmptyStatementOp,
+               semantic::SVVariableDeclStatementOp,
+               semantic::SVExpressionStatementOp, semantic::SVReturnStatementOp,
+               semantic::SVConditionalStatementOp, semantic::SVCaseStatementOp,
+               semantic::SVForLoopStatementOp, semantic::SVWhileLoopStatementOp,
+               semantic::SVDoWhileLoopStatementOp,
+               semantic::SVRepeatLoopStatementOp,
+               semantic::SVForeverLoopStatementOp, semantic::SVBreakStatementOp,
+               semantic::SVContinueStatementOp>(node))
+        return WalkResult::interrupt();
+      return WalkResult::advance();
+    });
+    return !checked.wasInterrupted();
+  };
+  return validate(entry);
+}
+
 static FailureOr<Operation *> getConstraintFunctionResult(
     semantic::SVSubroutineSymbolOp function, semantic::SVCallExpressionOp call,
     const llvm::StringMap<Operation *> &symbols, Builder &builder,
@@ -2008,6 +2167,58 @@ LogicalResult expandRandomConstraintFunctions(
         }
       }
 
+      auto functionExpressions = std::make_unique<Block>();
+      FailureOr<Operation *> result = failure();
+      auto inputs = sim::get<sim::metadata::RandomGuardInputs>(source);
+      bool hasCallees = false;
+      if (!functionBody && inputs && inputs.getValue().isZero() &&
+          canExecuteNativeConstraintFunction(*function, semanticSymbols,
+                                             hasCallees)) {
+        // Keep inexpensive leaf expressions and proved bounded bodies available
+        // for folding. A failed trial consumes neither the shared expansion
+        // budget nor a diagnostic: the validated native body is the fallback.
+        // Retain closed graphs containing user calls as a whole: an immediate
+        // return expression can still call an unbounded or recursive body.
+        if (!hasCallees) {
+          ExpansionBudget trial = budget;
+          ScopedDiagnosticHandler handler(
+              source->getContext(), [](Diagnostic &) { return success(); });
+          result = getConstraintFunctionResult(*function, callExpression,
+                                               semanticSymbols, builder,
+                                               *functionExpressions, trial);
+          if (succeeded(result))
+            budget = trial;
+        }
+        if (failed(result)) {
+          // No active-argument priority handoff is needed. Ordinary function
+          // lowering executes arbitrary control flow against the pre-solve
+          // state, and the exact plan binds its return as an opaque capture.
+          Operation *cloned = source->cloneWithoutRegions();
+          sim::mark<sim::metadata::RandomNativeFunction>(cloned);
+          if (!budget.spend(cloned)) {
+            cloned->destroy();
+            budget.diagnose(getSemanticLocation(source));
+            return failure();
+          }
+          for (auto [sourceRegion, clonedRegion] :
+               llvm::zip_equal(source->getRegions(), cloned->getRegions()))
+            for (Block &block : sourceRegion) {
+              auto *clonedBlock = new Block();
+              clonedRegion.push_back(clonedBlock);
+              for (Operation &child : block) {
+                auto input = cloneConstraintExpression(&child, substitutions,
+                                                       false, callStack);
+                if (failed(input)) {
+                  cloned->destroy();
+                  return failure();
+                }
+                clonedBlock->push_back(*input);
+              }
+            }
+          return cloned;
+        }
+      }
+
       auto templates = std::make_unique<Block>();
       for (Operation *argument : ArrayRef(children).take_back(argumentCount)) {
         FailureOr<Operation *> cloned = cloneConstraintExpression(
@@ -2021,10 +2232,10 @@ LogicalResult expandRandomConstraintFunctions(
            llvm::zip_equal(formals, templates->getOperations()))
         functionSubstitutions[formal.getOperation()] = &actual;
 
-      auto functionExpressions = std::make_unique<Block>();
-      FailureOr<Operation *> result = getConstraintFunctionResult(
-          *function, callExpression, semanticSymbols, builder,
-          *functionExpressions, budget);
+      if (failed(result))
+        result = getConstraintFunctionResult(*function, callExpression,
+                                             semanticSymbols, builder,
+                                             *functionExpressions, budget);
       if (failed(result))
         return failure();
       callStack.push_back(function->getOperation());
