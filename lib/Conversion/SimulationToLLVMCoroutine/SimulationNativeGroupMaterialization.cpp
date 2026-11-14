@@ -1809,88 +1809,72 @@ emitGroupDomainGuard(OpBuilder &builder, Location loc,
   return success();
 }
 
-} // namespace
-
-/// Materialize certified activation bodies before native partitioning. The
-/// original pending bits, source predicates, and boundary exits remain the
-/// schedule. Only an explicit source proof of inert redundant evaluation may
-/// remove an activation predicate (IEEE 1800-2023 4.3--4.7).
-///
-/// Route specialization must run first. A durable two-state certificate then
-/// exposes a direct body; an unresolved route remains an executor boundary.
-/// In particular, do not select a two-state callee just because it appears in
-/// an indirect call's allowed-callee inventory.
-FailureOr<std::shared_ptr<NativeGroupPromotionReport>>
-materializeNativeEvalGroupBodies(ModuleOp module, AnalysisManager manager) {
-  auto report = std::make_shared<NativeGroupPromotionReport>();
+/// The groups of a module, in order, and what their materialization may
+/// assume before it changes any body.
+struct GroupPlan {
+  /// Every group, in module order.
   SmallVector<LLVM::LLVMFuncOp> groups;
+  /// Candidates with existing callers. Candidates are transient
+  /// compiler-owned bodies; preserve user-authored ones rather than deleting
+  /// or retargeting their callable interface.
+  DenseSet<Operation *> externallyUsedCandidates;
+  /// Costs of the non-group definitions that groups reach; group
+  /// materialization never changes them.
+  DenseMap<Operation *, uint64_t> stableCosts;
+  /// Groups that no other group calls or refines, and that call nothing
+  /// leading to a group: inlining one reads only definitions that do not
+  /// change, so workers can inline them concurrently.
+  SmallVector<LLVM::LLVMFuncOp> independent;
+};
+
+DenseSet<Operation *>
+findExternallyUsedCandidates(ModuleOp module,
+                             ArrayRef<LLVM::LLVMFuncOp> groups) {
+  DenseSet<Operation *> used;
+  if (llvm::none_of(groups, [](auto function) {
+        return ::talos::schedule::has<
+            ::talos::schedule::Field::EvalDataflowCandidate>(function);
+      }))
+    return used;
+  // Inventory uses once, not once per group.
+  SmallVector<Region *> scopes;
+  for (Operation *operation : analysis::collectInWalkOrder<Operation *>(
+           module, [](Operation *operation) {
+             return operation->hasTrait<OpTrait::SymbolTable>();
+           }))
+    for (Region &region : operation->getRegions())
+      scopes.push_back(&region);
+  auto uses = collectNativeSymbolUses(module.getContext(), scopes);
+  if (!uses) {
+    // An unknown symbol scope cannot prove a transient candidate unused.
+    for (auto function : groups)
+      if (::talos::schedule::has<
+              ::talos::schedule::Field::EvalDataflowCandidate>(function))
+        used.insert(function);
+    return used;
+  }
+  SymbolTableCollection tables;
+  // Resolve in the scope containing the user, as SymbolUserMap does.
+  // A symbol-table operation's own attributes still use its outer scope.
+  for (const auto &use : *uses)
+    if (auto function = tables.lookupNearestSymbolFrom<LLVM::LLVMFuncOp>(
+            use.getUser()->getParentOp(), use.getSymbolRef());
+        function &&
+        ::talos::schedule::has<::talos::schedule::Field::EvalDataflowCandidate>(
+            function))
+      used.insert(function);
+  return used;
+}
+
+GroupPlan planGroups(ModuleOp module, const SymbolTable &symbols) {
+  GroupPlan plan;
   for (auto function : module.getOps<LLVM::LLVMFuncOp>())
     if (::talos::schedule::has<::talos::schedule::Field::EvalRankedMembers>(
             function))
-      groups.push_back(function);
-  auto &inputs = manager.getAnalysis<NativeGroupPromotionInputs>();
-  inputs.report = report;
-  DialectRegistry registry;
-  LLVM::registerInlinerInterface(registry);
-  module.getContext()->appendDialectRegistry(registry);
-  // Every symbol change below goes through `symbols`, so the per-function
-  // action lowering reuses the same module table instead of rebuilding it.
-  SymbolTableCollection symbolTables;
-  SymbolTable &symbols = symbolTables.getSymbolTable(module);
-  // Candidates are transient compiler-owned bodies. Preserve user-authored
-  // candidates with existing callers rather than deleting or retargeting
-  // their callable interface. Inventory uses once, not once per group.
-  DenseSet<Operation *> externallyUsedCandidates;
-  if (llvm::any_of(groups, [](auto function) {
-        return ::talos::schedule::has<
-            ::talos::schedule::Field::EvalDataflowCandidate>(function);
-      })) {
-    SmallVector<Region *> scopes;
-    for (Operation *operation : analysis::collectInWalkOrder<Operation *>(
-             module, [](Operation *operation) {
-               return operation->hasTrait<OpTrait::SymbolTable>();
-             }))
-      for (Region &region : operation->getRegions())
-        scopes.push_back(&region);
-    auto uses = collectNativeSymbolUses(module.getContext(), scopes);
-    if (!uses) {
-      // An unknown symbol scope cannot prove a transient candidate unused.
-      for (auto function : groups)
-        if (::talos::schedule::has<
-                ::talos::schedule::Field::EvalDataflowCandidate>(function))
-          externallyUsedCandidates.insert(function);
-    } else {
-      SymbolTableCollection tables;
-      // Resolve in the scope containing the user, as SymbolUserMap does.
-      // A symbol-table operation's own attributes still use its outer scope.
-      for (const auto &use : *uses)
-        if (auto function = tables.lookupNearestSymbolFrom<LLVM::LLVMFuncOp>(
-                use.getUser()->getParentOp(), use.getSymbolRef());
-            function &&
-            ::talos::schedule::has<
-                ::talos::schedule::Field::EvalDataflowCandidate>(function))
-          externallyUsedCandidates.insert(function);
-    }
-  }
+      plan.groups.push_back(function);
+  plan.externallyUsedCandidates =
+      findExternallyUsedCandidates(module, plan.groups);
 
-  uint64_t operationLimit = schedule::getMaxInlineOperations(module);
-
-  // Measure each needed definition once. Charging its own operations bounds
-  // both cloning and subsequent optimization; following shared callees here
-  // would repeatedly charge the same graph, just as following global
-  // initializers did in native partition cost estimation.
-  llvm::DenseMap<Operation *, uint64_t> costs;
-  SmallVector<std::pair<LLVM::LLVMFuncOp, uint64_t>> residuals;
-  DenseSet<Operation *> whollyOutlinedGroups;
-  DenseMap<Operation *, uint64_t> residualBudgets;
-  DenseSet<Operation *> finalized, discarded, refinedChildren;
-  struct Refinement {
-    LLVM::LLVMFuncOp parent;
-    SmallVector<LLVM::LLVMFuncOp> children;
-  };
-  SmallVector<Refinement> refinements;
-  DenseMap<Operation *, unsigned> refinementRoots;
-  SmallVector<uint64_t> refinementBudgets;
   // Establish body read/write dependencies over the call graph before
   // mutation. A worker must neither read a group another worker can change,
   // nor change a definition read by the ordered refinement phase. Shared leaf
@@ -1935,7 +1919,7 @@ materializeNativeEvalGroupBodies(ModuleOp module, AnalysisManager manager) {
       referencedGroups(definitions.size(), false),
       reachable(definitions.size(), false);
   SmallVector<unsigned> pending;
-  for (auto function : groups)
+  for (auto function : plan.groups)
     if (auto node = nodes.find(function); node != nodes.end()) {
       groupNodes[node->second] = true;
       reachesGroup[node->second] = true;
@@ -1973,19 +1957,18 @@ materializeNativeEvalGroupBodies(ModuleOp module, AnalysisManager manager) {
         stableCounts[i] += nativeOperationCost(operation);
     });
   });
-  DenseMap<Operation *, uint64_t> stableCosts;
   for (auto [i, function] : llvm::enumerate(stableDefinitions))
-    stableCosts.try_emplace(function, stableCounts[i]);
+    plan.stableCosts.try_emplace(function, stableCounts[i]);
 
   // Refinement can replace the original named by candidate metadata without
   // a call edge. Preserve that write-before-inline dependency as well. An
   // original preceding its candidate may be prepared early: its ordered
   // inlining already runs before the candidate's body transaction.
   DenseMap<Operation *, size_t> groupOrder;
-  for (auto [i, function] : llvm::enumerate(groups))
+  for (auto [i, function] : llvm::enumerate(plan.groups))
     groupOrder.try_emplace(function, i);
   DenseSet<Operation *> earlyRefinementTargets;
-  for (auto [i, function] : llvm::enumerate(groups))
+  for (auto [i, function] : llvm::enumerate(plan.groups))
     if (auto candidate = ::talos::schedule::get<
             ::talos::schedule::Field::EvalDataflowCandidate>(function)) {
       auto original = symbols.lookup<LLVM::LLVMFuncOp>(candidate.getValue());
@@ -1993,38 +1976,107 @@ materializeNativeEvalGroupBodies(ModuleOp module, AnalysisManager manager) {
       if (position != groupOrder.end() && position->second > i)
         earlyRefinementTargets.insert(original);
     }
-  SmallVector<LLVM::LLVMFuncOp> independent;
-  for (auto function : groups) {
+  for (auto function : plan.groups) {
     auto node = nodes.find(function);
     if (!flatCallables || node == nodes.end() ||
         referencedGroups[node->second] ||
         earlyRefinementTargets.contains(function) ||
-        externallyUsedCandidates.contains(function) ||
+        plan.externallyUsedCandidates.contains(function) ||
         llvm::any_of(callees[node->second],
                      [&](unsigned callee) { return reachesGroup[callee]; }))
       continue;
-    independent.push_back(function);
+    plan.independent.push_back(function);
   }
-  SmallVector<InlinedGroupBody> inlinedBodies(independent.size());
-  parallelFor(module.getContext(), 0, independent.size(), [&](size_t i) {
+  return plan;
+}
+
+/// A group whose dataflow candidate was rejected, split into children that
+/// partition its members. Its body becomes a sequence of child calls once
+/// every group has materialized.
+struct GroupRefinement {
+  LLVM::LLVMFuncOp parent;
+  SmallVector<LLVM::LLVMFuncOp> children;
+};
+
+/// Materializes the group bodies of a module in order: inline each group's
+/// members, then install an accepted candidate's dataflow body in front of
+/// its original, refine the original of a rejected one into children, erase
+/// an invalid one, or leave an ordinary group for residual promotion.
+class GroupMaterializer {
+public:
+  GroupMaterializer(ModuleOp module, NativeGroupPromotionInputs &inputs,
+                    NativeGroupPromotionReport &report)
+      : module(module), inputs(inputs), report(report),
+        symbols(symbolTables.getSymbolTable(module)),
+        operationLimit(schedule::getMaxInlineOperations(module)),
+        plan(planGroups(module, symbols)), worklist(plan.groups) {}
+
+  LogicalResult run();
+
+private:
+  LogicalResult materializeGroup(LLVM::LLVMFuncOp function,
+                                 InlinedGroupBody body);
+  bool isValidCandidate(LLVM::LLVMFuncOp function, LLVM::LLVMFuncOp original,
+                        DenseI32ArrayAttr members);
+  void refineOriginal(LLVM::LLVMFuncOp function, LLVM::LLVMFuncOp original);
+  LogicalResult acceptCandidate(LLVM::LLVMFuncOp function,
+                                LLVM::LLVMFuncOp original,
+                                DenseI32ArrayAttr members);
+  LogicalResult buildRefinement(const GroupRefinement &refinement);
+  void selectResiduals();
+  LogicalResult materializeValueCalls();
+  void publishResiduals();
+
+  ModuleOp module;
+  NativeGroupPromotionInputs &inputs;
+  NativeGroupPromotionReport &report;
+  // Every symbol change goes through `symbols`, so the per-function action
+  // lowering reuses the same module table instead of rebuilding it.
+  SymbolTableCollection symbolTables;
+  SymbolTable &symbols;
+  uint64_t operationLimit;
+  const GroupPlan plan;
+  // The groups to materialize, in order; refinement appends its children.
+  SmallVector<LLVM::LLVMFuncOp> worklist;
+  // Measure each other needed definition once. Charging its own operations
+  // bounds both cloning and subsequent optimization; following shared callees
+  // would repeatedly charge the same graph, just as following global
+  // initializers did in native partition cost estimation.
+  DenseMap<Operation *, uint64_t> costs;
+  SmallVector<std::pair<LLVM::LLVMFuncOp, uint64_t>> residuals;
+  DenseMap<Operation *, uint64_t> residualBudgets;
+  DenseSet<Operation *> whollyOutlinedGroups, finalized, discarded,
+      refinedChildren;
+  SmallVector<GroupRefinement> refinements;
+  // The refinement tree each candidate belongs to, and that tree's remaining
+  // operation budget.
+  DenseMap<Operation *, unsigned> refinementRoots;
+  SmallVector<uint64_t> refinementBudgets;
+};
+
+LogicalResult GroupMaterializer::run() {
+  SmallVector<InlinedGroupBody> inlinedBodies(plan.independent.size());
+  parallelFor(module.getContext(), 0, plan.independent.size(), [&](size_t i) {
     DenseMap<Operation *, uint64_t> localCosts;
-    inlinedBodies[i] = inlineGroupBody(independent[i], symbols, stableCosts,
-                                       localCosts, operationLimit);
+    inlinedBodies[i] =
+        inlineGroupBody(plan.independent[i], symbols, plan.stableCosts,
+                        localCosts, operationLimit);
   });
   DenseMap<Operation *, InlinedGroupBody> preInlined;
-  for (auto [i, function] : llvm::enumerate(independent))
+  for (auto [i, function] : llvm::enumerate(plan.independent))
     preInlined.try_emplace(function, inlinedBodies[i]);
   if (native::has<native::DebugTiming>(module))
     llvm::errs() << "talos native group inlining: independent="
-                 << independent.size()
-                 << " ordered=" << groups.size() - independent.size() << '\n';
+                 << plan.independent.size()
+                 << " ordered=" << plan.groups.size() - plan.independent.size()
+                 << '\n';
 
   // Refinement appends children. Keep original activation CFGs intact until
   // all candidates have been considered; memory SSA would erase the entry
   // evidence needed to prove a partial split.
-  for (size_t index = 0; index < groups.size(); ++index) {
-    auto function = groups[index];
-    if (externallyUsedCandidates.contains(function)) {
+  for (size_t index = 0; index < worklist.size(); ++index) {
+    auto function = worklist[index];
+    if (plan.externallyUsedCandidates.contains(function)) {
       ::talos::schedule::remove<
           ::talos::schedule::Field::EvalDataflowCandidate>(function);
       continue;
@@ -2033,289 +2085,338 @@ materializeNativeEvalGroupBodies(ModuleOp module, AnalysisManager manager) {
     InlinedGroupBody body =
         inlined != preInlined.end()
             ? inlined->second
-            : inlineGroupBody(function, symbols, stableCosts, costs,
+            : inlineGroupBody(function, symbols, plan.stableCosts, costs,
                               operationLimit);
     // Refinement may erase a candidate and allocate new child functions.
     // Do not retain a consumed operation pointer across that allocation.
     if (inlined != preInlined.end())
       preInlined.erase(inlined);
-    // Publications to unconditional members that still execute later are
-    // redundant. Preserve backward publications inside an SCC for another
-    // sweep. The typed actions still name their destination word and bits.
-    report->elidedUnconditionalPublications +=
-        elideUnconditionalMemberPublications(function);
-    // Member effects are now visible in one CFG. Combine semantic readiness
-    // reads/updates before expanding indexes.
-    if (failed(lowerNativeScheduleActionsToLLVM(function, &symbolTables)))
+    if (failed(materializeGroup(function, body)))
       return failure();
-    uint64_t remaining = body.remaining;
-    if (auto candidate = ::talos::schedule::get<
-            ::talos::schedule::Field::EvalDataflowCandidate>(function)) {
-      auto original = symbols.lookup<LLVM::LLVMFuncOp>(candidate.getValue());
-      auto members =
-          ::talos::schedule::get<::talos::schedule::Field::EvalRankedMembers>(
-              function);
-      if (original &&
-          schedule::get<schedule::Field::EvalGroupProofDomain>(original) !=
-              schedule::get<schedule::Field::EvalGroupProofDomain>(function))
-        return function.emitError(
-                   "candidate and original group proof domains differ"),
-               failure();
-      auto pendingGlobal = symbols.lookup<LLVM::GlobalOp>(
-          "__talos_eval_promotion_pending_mask_v1");
-      auto pendingType =
-          pendingGlobal
-              ? dyn_cast<LLVM::LLVMArrayType>(pendingGlobal.getGlobalType())
-              : LLVM::LLVMArrayType{};
-      bool identitiesValid =
-          original && original != function && !original.empty() &&
-          !::talos::schedule::has<
-              ::talos::schedule::Field::EvalDataflowCandidate>(original) &&
-          !::talos::schedule::has<
-              ::talos::schedule::Field::EvalDataflowExecutor>(original) &&
-          members &&
-          !::talos::schedule::has<
-              ::talos::schedule::Field::EvalDataflowFallback>(original) &&
-          !members.empty() &&
-          original.getFunctionType() == function.getFunctionType() &&
-          ::talos::schedule::get<::talos::schedule::Field::EvalRankedMembers>(
-              original) == members &&
-          ::talos::schedule::get<::talos::schedule::Field::EvalGroupIngress>(
-              original) ==
-              ::talos::schedule::get<
-                  ::talos::schedule::Field::EvalGroupIngress>(function) &&
-          pendingType && pendingType.getElementType().isInteger(64);
-      llvm::SmallDenseSet<uint32_t> identities;
-      if (identitiesValid)
-        for (int32_t owner : members.asArrayRef())
-          identitiesValid &=
-              owner >= 0 &&
-              uint32_t(owner) / 64 < pendingType.getNumElements() &&
-              identities.insert(owner).second;
-      bool accepted = identitiesValid &&
-                      materializeNativeGroupDataflow(function, operationLimit);
-      if (native::has<native::DebugTiming>(module))
-        llvm::errs() << "talos group dataflow: " << function.getSymName()
-                     << " accepted=" << accepted << '\n';
-      if (!accepted) {
-        if (identitiesValid) {
-          auto [root, inserted] =
-              refinementRoots.try_emplace(function, refinementBudgets.size());
-          if (inserted)
-            refinementBudgets.push_back(operationLimit);
-          unsigned rootID = root->second;
-          auto children = splitNativeEvalGroup(original, function, symbols,
-                                               refinementBudgets[rootID]);
-          llvm::append_range(groups, children);
-          if (!children.empty()) {
-            refinements.push_back({original, {children[0], children[2]}});
-            refinedChildren.insert(children[0]);
-            refinedChildren.insert(children[2]);
-            for (unsigned i : {1u, 3u})
-              refinementRoots[children[i]] = rootID;
-          }
-        }
-        symbols.erase(function);
-        continue;
-      }
-      // One value-domain check for the whole computation. Refresh
-      // unqueried certificates before treating a pending bit as unknown. A
-      // failed proof retains the ordinary per-member path, allowing the
-      // unaffected members to remain two-state. Activation predicates are
-      // still evaluated inside the dataflow body; no cached coherence fact
-      // can be invalidated by a known VPI deposit.
-      // Promote the slow body before adding its fast guard, so slow-path
-      // materialization never introduces loads on a collapsed child's entry.
-      if (auto remaining = residualBudgets.find(original);
-          remaining != residualBudgets.end()) {
-        if (failed(lowerNativeScheduleActionsToLLVM(original, &symbolTables)))
-          return failure();
-        if (failed(promoteGroupReadyWords(original, inputs.globalTypes,
-                                          remaining->second)) ||
-            failed(promoteGroupState(original, inputs.globalTypes,
-                                     "__talos_state_value", remaining->second,
-                                     inputs.metadataOnly,
-                                     inputs.callFootprints)) ||
-            failed(promoteGroupState(
-                original, inputs.globalTypes, "__talos_state_unknown",
-                remaining->second, inputs.metadataOnly, inputs.callFootprints)))
-          return failure();
-        finalized.insert(original);
-      }
-      if (schedule::has<schedule::Field::EvalRefreshGroupProofs>(function))
-        schedule::set<schedule::Field::EvalRefreshGroupProofs>(
-            original, UnitAttr::get(module.getContext()));
-      if (refinedChildren.contains(original)) {
-        // The parent owns this child's selection point. Keeping another
-        // guarded wrapper on the fast path would add a call boundary which
-        // physical native partitioning cannot reliably inline away.
-        ::talos::schedule::set<::talos::schedule::Field::EvalDataflowExecutor>(
-            original, FlatSymbolRefAttr::get(function));
-        ::talos::schedule::remove<
-            ::talos::schedule::Field::EvalDataflowCandidate>(function);
-        continue;
-      }
-      // Make computation the actual group entry before physical partitioning.
-      // Keep exactly one copy of each body: the original guarded executor
-      // becomes a cold helper, while the finite SSA body moves into the entry.
-      // Native partitioning can then split helpers without reintroducing a
-      // wrapper call on every known activation.
-      Region fallbackBody;
-      fallbackBody.takeBody(original.getBody());
-      original.getBody().takeBody(function.getBody());
-      function.getBody().takeBody(fallbackBody);
-      for (auto name : {::talos::schedule::Field::EvalMaterializedGroupCalls,
-                        ::talos::schedule::Field::EvalSsaReadyWords,
-                        ::talos::schedule::Field::EvalSsaValueRanges,
-                        ::talos::schedule::Field::EvalSsaUnknownRanges,
-                        ::talos::schedule::Field::EvalControlFlowDataflow,
-                        ::talos::schedule::Field::EvalUnconditionalMembers}) {
-        Attribute slow = schedule::get<Attribute>(original, name),
-                  fast = schedule::get<Attribute>(function, name);
-        schedule::remove(original, name);
-        schedule::remove(function, name);
-        if (fast)
-          schedule::set(original, name, fast);
-        if (slow)
-          schedule::set(function, name, slow);
-      }
-      symbols.remove(function);
-      function.setSymName(original.getSymName().str() + ".fallback");
-      symbols.insert(function);
-      ::talos::schedule::remove<
-          ::talos::schedule::Field::EvalDataflowCandidate>(function);
-      OpBuilder builder(module.getContext());
-      Location loc = function.getLoc();
-      Block *oldEntry = &original.getBody().front();
-      auto *guard = new Block, *fallback = new Block;
-      original.getBody().push_front(guard);
-      original.getBody().push_back(fallback);
-      for (BlockArgument argument : oldEntry->getArguments())
-        guard->addArgument(argument.getType(), argument.getLoc());
-      builder.setInsertionPointToStart(guard);
-      unsigned width = 64;
-      for (int32_t owner : members.asArrayRef())
-        width = std::max(width, unsigned(owner) + 1);
-      APInt mask(width, 0);
-      for (int32_t owner : members.asArrayRef())
-        mask.setBit(owner);
-      SmallVector<std::pair<unsigned, uint64_t>> masks;
-      for (unsigned word = 0; word < mask.getNumWords(); ++word) {
-        uint64_t bits = ownerMaskWord(mask, word);
-        if (bits)
-          masks.emplace_back(word, bits);
-      }
-      if (failed(emitGroupDomainGuard(
-              builder, loc, masks, symbols,
-              schedule::has<schedule::Field::EvalRefreshGroupProofs>(original),
-              schedule::get<schedule::Field::EvalGroupProofDomain>(original),
-              oldEntry, guard->getArguments(), fallback)))
-        return failure();
-      builder.setInsertionPointToStart(fallback);
-      LLVM::CallOp::create(builder, loc, TypeRange{}, function.getSymName(),
-                           guard->getArguments());
-      LLVM::ReturnOp::create(builder, loc, ValueRange{});
-      ::talos::schedule::set<::talos::schedule::Field::EvalDataflowFallback>(
-          original, FlatSymbolRefAttr::get(function));
-      continue;
-    }
-    // A completely outlined group can still carry current lanes through
-    // explicit helper interfaces; zero inlined calls is not an eval exit.
-    if (!body.materialized && !refinedChildren.contains(function))
-      whollyOutlinedGroups.insert(function);
-    residuals.emplace_back(function, remaining);
-    residualBudgets[function] = remaining;
   }
-  for (auto &refinement : llvm::reverse(refinements)) {
-    bool useful = llvm::any_of(refinement.children, [](auto child) {
-      return ::talos::schedule::has<
-                 ::talos::schedule::Field::EvalDataflowExecutor>(child) ||
-             ::talos::schedule::has<
-                 ::talos::schedule::Field::EvalGroupChildren>(child);
-    });
-    if (!useful) {
-      for (auto child : refinement.children) {
-        discarded.insert(child);
-        symbols.erase(child);
-      }
-      continue;
-    }
-    // Children partition the original ordered leaf identities. A parent adds
-    // no readiness bits, domain guard, or event queue. Backward publications
-    // survive child return for the shared loop (IEEE 1800-2023 4.4--4.7).
-    auto parent = refinement.parent;
-    parent.getBody().dropAllReferences();
-    parent.getBody().getBlocks().clear();
-    OpBuilder builder(module.getContext());
-    Block *entry = parent.addEntryBlock(builder);
-    builder.setInsertionPointToStart(entry);
-    auto ingress =
-        ::talos::schedule::get<::talos::schedule::Field::EvalGroupIngress>(
-            parent);
-    Value ready = LLVM::AddressOfOp::create(
-        builder, parent.getLoc(),
-        LLVM::LLVMPointerType::get(module.getContext()), ingress.getValue());
-    SmallVector<Attribute> references;
-    for (auto child : refinement.children) {
-      references.push_back(FlatSymbolRefAttr::get(child));
-      // Enter a collapsed child only when it owns pending work: its guard and
-      // proof refresh cost more than skipping an inactive child.
-      // Reacquire after each child: an earlier child can publish a later one.
-      std::map<unsigned, uint64_t> masks;
-      for (int32_t owner :
-           ::talos::schedule::get<::talos::schedule::Field::EvalRankedMembers>(
-               child)
-               .asArrayRef())
-        masks[unsigned(owner) / 64] |= uint64_t{1} << (unsigned(owner) % 64);
-      Value pending =
-          llvmConstant(builder, parent.getLoc(), builder.getI64Type(), 0);
-      for (auto [word, mask] : masks) {
-        Value bits = LLVM::AndOp::create(
-            builder, parent.getLoc(),
-            loadOwnerWord(builder, parent.getLoc(), ready, word),
-            llvmConstant(builder, parent.getLoc(), builder.getI64Type(), mask));
-        pending = LLVM::OrOp::create(builder, parent.getLoc(), pending, bits);
-      }
-      Value active = LLVM::ICmpOp::create(
-          builder, parent.getLoc(), LLVM::ICmpPredicate::ne, pending,
-          llvmConstant(builder, parent.getLoc(), builder.getI64Type(), 0));
-      auto *execute = new Block, *next = new Block;
-      parent.getBody().push_back(execute);
-      parent.getBody().push_back(next);
-      LLVM::CondBrOp::create(builder, parent.getLoc(), active, execute,
-                             ValueRange{}, next, ValueRange{});
-      builder.setInsertionPointToStart(execute);
-      if (auto fast = ::talos::schedule::get<
-              ::talos::schedule::Field::EvalDataflowExecutor>(child)) {
-        auto *collapsed = new Block, *fallback = new Block;
-        parent.getBody().push_back(collapsed);
-        parent.getBody().push_back(fallback);
-        SmallVector<std::pair<unsigned, uint64_t>> domains(masks.begin(),
-                                                           masks.end());
-        if (failed(emitGroupDomainGuard(
-                builder, parent.getLoc(), domains, symbols,
-                schedule::has<schedule::Field::EvalRefreshGroupProofs>(child),
-                schedule::get<schedule::Field::EvalGroupProofDomain>(child),
-                collapsed, {}, fallback)))
-          return failure();
-        builder.setInsertionPointToStart(collapsed);
-        LLVM::CallOp::create(builder, parent.getLoc(), TypeRange{},
-                             fast.getValue(), entry->getArguments());
-        LLVM::BrOp::create(builder, parent.getLoc(), ValueRange{}, next);
-        builder.setInsertionPointToStart(fallback);
-      }
-      LLVM::CallOp::create(builder, parent.getLoc(), TypeRange{},
-                           child.getSymName(), entry->getArguments());
-      LLVM::BrOp::create(builder, parent.getLoc(), ValueRange{}, next);
-      builder.setInsertionPointToStart(next);
-    }
-    LLVM::ReturnOp::create(builder, parent.getLoc(), ValueRange{});
-    ::talos::schedule::set<::talos::schedule::Field::EvalGroupChildren>(
-        parent, builder.getArrayAttr(references));
+  for (auto &refinement : llvm::reverse(refinements))
+    if (failed(buildRefinement(refinement)))
+      return failure();
+  selectResiduals();
+  if (failed(materializeValueCalls()))
+    return failure();
+  publishResiduals();
+  if (native::has<native::DebugTiming>(module))
+    llvm::errs() << "talos unconditional member publications elided: "
+                 << report.elidedUnconditionalPublications << '\n';
+  return success();
+}
+
+LogicalResult GroupMaterializer::materializeGroup(LLVM::LLVMFuncOp function,
+                                                  InlinedGroupBody body) {
+  // Publications to unconditional members that still execute later are
+  // redundant. Preserve backward publications inside an SCC for another
+  // sweep. The typed actions still name their destination word and bits.
+  report.elidedUnconditionalPublications +=
+      elideUnconditionalMemberPublications(function);
+  // Member effects are now visible in one CFG. Combine semantic readiness
+  // reads/updates before expanding indexes.
+  if (failed(lowerNativeScheduleActionsToLLVM(function, &symbolTables)))
+    return failure();
+  if (auto candidate = ::talos::schedule::get<
+          ::talos::schedule::Field::EvalDataflowCandidate>(function)) {
+    auto original = symbols.lookup<LLVM::LLVMFuncOp>(candidate.getValue());
+    auto members =
+        ::talos::schedule::get<::talos::schedule::Field::EvalRankedMembers>(
+            function);
+    if (original &&
+        schedule::get<schedule::Field::EvalGroupProofDomain>(original) !=
+            schedule::get<schedule::Field::EvalGroupProofDomain>(function))
+      return function.emitError(
+                 "candidate and original group proof domains differ"),
+             failure();
+    bool identitiesValid = isValidCandidate(function, original, members);
+    bool accepted = identitiesValid &&
+                    materializeNativeGroupDataflow(function, operationLimit);
     if (native::has<native::DebugTiming>(module))
-      llvm::errs() << "talos group hierarchy: " << parent.getSymName()
-                   << " children=" << refinement.children.size() << '\n';
+      llvm::errs() << "talos group dataflow: " << function.getSymName()
+                   << " accepted=" << accepted << '\n';
+    if (accepted)
+      return acceptCandidate(function, original, members);
+    if (identitiesValid)
+      refineOriginal(function, original);
+    symbols.erase(function);
+    return success();
   }
+  // A completely outlined group can still carry current lanes through
+  // explicit helper interfaces; zero inlined calls is not an eval exit.
+  if (!body.materialized && !refinedChildren.contains(function))
+    whollyOutlinedGroups.insert(function);
+  residuals.emplace_back(function, body.remaining);
+  residualBudgets[function] = body.remaining;
+  return success();
+}
+
+/// Whether `function` is a candidate for exactly the members, signature and
+/// ingress of `original`, with one pending-mask bit per member.
+bool GroupMaterializer::isValidCandidate(LLVM::LLVMFuncOp function,
+                                         LLVM::LLVMFuncOp original,
+                                         DenseI32ArrayAttr members) {
+  auto pendingGlobal =
+      symbols.lookup<LLVM::GlobalOp>("__talos_eval_promotion_pending_mask_v1");
+  auto pendingType =
+      pendingGlobal
+          ? dyn_cast<LLVM::LLVMArrayType>(pendingGlobal.getGlobalType())
+          : LLVM::LLVMArrayType{};
+  bool identitiesValid =
+      original && original != function && !original.empty() &&
+      !::talos::schedule::has<::talos::schedule::Field::EvalDataflowCandidate>(
+          original) &&
+      !::talos::schedule::has<::talos::schedule::Field::EvalDataflowExecutor>(
+          original) &&
+      members &&
+      !::talos::schedule::has<::talos::schedule::Field::EvalDataflowFallback>(
+          original) &&
+      !members.empty() &&
+      original.getFunctionType() == function.getFunctionType() &&
+      ::talos::schedule::get<::talos::schedule::Field::EvalRankedMembers>(
+          original) == members &&
+      ::talos::schedule::get<::talos::schedule::Field::EvalGroupIngress>(
+          original) ==
+          ::talos::schedule::get<::talos::schedule::Field::EvalGroupIngress>(
+              function) &&
+      pendingType && pendingType.getElementType().isInteger(64);
+  llvm::SmallDenseSet<uint32_t> identities;
+  if (identitiesValid)
+    for (int32_t owner : members.asArrayRef())
+      identitiesValid &= owner >= 0 &&
+                         uint32_t(owner) / 64 < pendingType.getNumElements() &&
+                         identities.insert(owner).second;
+  return identitiesValid;
+}
+
+/// Split `original`, whose dataflow candidate `function` was rejected, into
+/// children that partition its members, each with its own candidate, sharing
+/// one operation budget per refinement tree.
+void GroupMaterializer::refineOriginal(LLVM::LLVMFuncOp function,
+                                       LLVM::LLVMFuncOp original) {
+  auto [root, inserted] =
+      refinementRoots.try_emplace(function, refinementBudgets.size());
+  if (inserted)
+    refinementBudgets.push_back(operationLimit);
+  unsigned rootID = root->second;
+  auto children = splitNativeEvalGroup(original, function, symbols,
+                                       refinementBudgets[rootID]);
+  llvm::append_range(worklist, children);
+  if (children.empty())
+    return;
+  refinements.push_back({original, {children[0], children[2]}});
+  refinedChildren.insert(children[0]);
+  refinedChildren.insert(children[2]);
+  for (unsigned i : {1u, 3u})
+    refinementRoots[children[i]] = rootID;
+}
+
+/// Make the accepted dataflow body of `function` the entry of `original`,
+/// guarded by one value-domain check, with the original body as fallback.
+LogicalResult GroupMaterializer::acceptCandidate(LLVM::LLVMFuncOp function,
+                                                 LLVM::LLVMFuncOp original,
+                                                 DenseI32ArrayAttr members) {
+  // Promote the slow body before adding its fast guard, so slow-path
+  // materialization never introduces loads on a collapsed child's entry.
+  if (auto remaining = residualBudgets.find(original);
+      remaining != residualBudgets.end()) {
+    if (failed(lowerNativeScheduleActionsToLLVM(original, &symbolTables)))
+      return failure();
+    if (failed(promoteGroupReadyWords(original, inputs.globalTypes,
+                                      remaining->second)) ||
+        failed(promoteGroupState(original, inputs.globalTypes,
+                                 "__talos_state_value", remaining->second,
+                                 inputs.metadataOnly, inputs.callFootprints)) ||
+        failed(promoteGroupState(original, inputs.globalTypes,
+                                 "__talos_state_unknown", remaining->second,
+                                 inputs.metadataOnly, inputs.callFootprints)))
+      return failure();
+    finalized.insert(original);
+  }
+  if (schedule::has<schedule::Field::EvalRefreshGroupProofs>(function))
+    schedule::set<schedule::Field::EvalRefreshGroupProofs>(
+        original, UnitAttr::get(module.getContext()));
+  if (refinedChildren.contains(original)) {
+    // The parent owns this child's selection point. Keeping another
+    // guarded wrapper on the fast path would add a call boundary which
+    // physical native partitioning cannot reliably inline away.
+    ::talos::schedule::set<::talos::schedule::Field::EvalDataflowExecutor>(
+        original, FlatSymbolRefAttr::get(function));
+    ::talos::schedule::remove<::talos::schedule::Field::EvalDataflowCandidate>(
+        function);
+    return success();
+  }
+  // Make computation the actual group entry before physical partitioning.
+  // Keep exactly one copy of each body: the original guarded executor
+  // becomes a cold helper, while the finite SSA body moves into the entry.
+  // Native partitioning can then split helpers without reintroducing a
+  // wrapper call on every known activation.
+  Region fallbackBody;
+  fallbackBody.takeBody(original.getBody());
+  original.getBody().takeBody(function.getBody());
+  function.getBody().takeBody(fallbackBody);
+  for (auto name : {::talos::schedule::Field::EvalMaterializedGroupCalls,
+                    ::talos::schedule::Field::EvalSsaReadyWords,
+                    ::talos::schedule::Field::EvalSsaValueRanges,
+                    ::talos::schedule::Field::EvalSsaUnknownRanges,
+                    ::talos::schedule::Field::EvalControlFlowDataflow,
+                    ::talos::schedule::Field::EvalUnconditionalMembers}) {
+    Attribute slow = schedule::get<Attribute>(original, name),
+              fast = schedule::get<Attribute>(function, name);
+    schedule::remove(original, name);
+    schedule::remove(function, name);
+    if (fast)
+      schedule::set(original, name, fast);
+    if (slow)
+      schedule::set(function, name, slow);
+  }
+  symbols.remove(function);
+  function.setSymName(original.getSymName().str() + ".fallback");
+  symbols.insert(function);
+  ::talos::schedule::remove<::talos::schedule::Field::EvalDataflowCandidate>(
+      function);
+  OpBuilder builder(module.getContext());
+  Location loc = function.getLoc();
+  Block *oldEntry = &original.getBody().front();
+  auto *guard = new Block, *fallback = new Block;
+  original.getBody().push_front(guard);
+  original.getBody().push_back(fallback);
+  for (BlockArgument argument : oldEntry->getArguments())
+    guard->addArgument(argument.getType(), argument.getLoc());
+  builder.setInsertionPointToStart(guard);
+  unsigned width = 64;
+  for (int32_t owner : members.asArrayRef())
+    width = std::max(width, unsigned(owner) + 1);
+  APInt mask(width, 0);
+  for (int32_t owner : members.asArrayRef())
+    mask.setBit(owner);
+  SmallVector<std::pair<unsigned, uint64_t>> masks;
+  for (unsigned word = 0; word < mask.getNumWords(); ++word) {
+    uint64_t bits = ownerMaskWord(mask, word);
+    if (bits)
+      masks.emplace_back(word, bits);
+  }
+  // One value-domain check for the whole computation. Refresh
+  // unqueried certificates before treating a pending bit as unknown. A
+  // failed proof retains the ordinary per-member path, allowing the
+  // unaffected members to remain two-state. Activation predicates are
+  // still evaluated inside the dataflow body; no cached coherence fact
+  // can be invalidated by a known VPI deposit.
+  if (failed(emitGroupDomainGuard(
+          builder, loc, masks, symbols,
+          schedule::has<schedule::Field::EvalRefreshGroupProofs>(original),
+          schedule::get<schedule::Field::EvalGroupProofDomain>(original),
+          oldEntry, guard->getArguments(), fallback)))
+    return failure();
+  builder.setInsertionPointToStart(fallback);
+  LLVM::CallOp::create(builder, loc, TypeRange{}, function.getSymName(),
+                       guard->getArguments());
+  LLVM::ReturnOp::create(builder, loc, ValueRange{});
+  ::talos::schedule::set<::talos::schedule::Field::EvalDataflowFallback>(
+      original, FlatSymbolRefAttr::get(function));
+  return success();
+}
+
+/// Replace the body of a refined parent with its children in member order,
+/// or discard the children when none of them collapsed.
+LogicalResult
+GroupMaterializer::buildRefinement(const GroupRefinement &refinement) {
+  bool useful = llvm::any_of(refinement.children, [](auto child) {
+    return ::talos::schedule::has<
+               ::talos::schedule::Field::EvalDataflowExecutor>(child) ||
+           ::talos::schedule::has<::talos::schedule::Field::EvalGroupChildren>(
+               child);
+  });
+  if (!useful) {
+    for (auto child : refinement.children) {
+      discarded.insert(child);
+      symbols.erase(child);
+    }
+    return success();
+  }
+  // Children partition the original ordered leaf identities. A parent adds
+  // no readiness bits, domain guard, or event queue. Backward publications
+  // survive child return for the shared loop (IEEE 1800-2023 4.4--4.7).
+  auto parent = refinement.parent;
+  parent.getBody().dropAllReferences();
+  parent.getBody().getBlocks().clear();
+  OpBuilder builder(module.getContext());
+  Block *entry = parent.addEntryBlock(builder);
+  builder.setInsertionPointToStart(entry);
+  auto ingress =
+      ::talos::schedule::get<::talos::schedule::Field::EvalGroupIngress>(
+          parent);
+  Value ready = LLVM::AddressOfOp::create(
+      builder, parent.getLoc(), LLVM::LLVMPointerType::get(module.getContext()),
+      ingress.getValue());
+  SmallVector<Attribute> references;
+  for (auto child : refinement.children) {
+    references.push_back(FlatSymbolRefAttr::get(child));
+    // Enter a collapsed child only when it owns pending work: its guard and
+    // proof refresh cost more than skipping an inactive child.
+    // Reacquire after each child: an earlier child can publish a later one.
+    std::map<unsigned, uint64_t> masks;
+    for (int32_t owner :
+         ::talos::schedule::get<::talos::schedule::Field::EvalRankedMembers>(
+             child)
+             .asArrayRef())
+      masks[unsigned(owner) / 64] |= uint64_t{1} << (unsigned(owner) % 64);
+    Value pending =
+        llvmConstant(builder, parent.getLoc(), builder.getI64Type(), 0);
+    for (auto [word, mask] : masks) {
+      Value bits = LLVM::AndOp::create(
+          builder, parent.getLoc(),
+          loadOwnerWord(builder, parent.getLoc(), ready, word),
+          llvmConstant(builder, parent.getLoc(), builder.getI64Type(), mask));
+      pending = LLVM::OrOp::create(builder, parent.getLoc(), pending, bits);
+    }
+    Value active = LLVM::ICmpOp::create(
+        builder, parent.getLoc(), LLVM::ICmpPredicate::ne, pending,
+        llvmConstant(builder, parent.getLoc(), builder.getI64Type(), 0));
+    auto *execute = new Block, *next = new Block;
+    parent.getBody().push_back(execute);
+    parent.getBody().push_back(next);
+    LLVM::CondBrOp::create(builder, parent.getLoc(), active, execute,
+                           ValueRange{}, next, ValueRange{});
+    builder.setInsertionPointToStart(execute);
+    if (auto fast = ::talos::schedule::get<
+            ::talos::schedule::Field::EvalDataflowExecutor>(child)) {
+      auto *collapsed = new Block, *fallback = new Block;
+      parent.getBody().push_back(collapsed);
+      parent.getBody().push_back(fallback);
+      SmallVector<std::pair<unsigned, uint64_t>> domains(masks.begin(),
+                                                         masks.end());
+      if (failed(emitGroupDomainGuard(
+              builder, parent.getLoc(), domains, symbols,
+              schedule::has<schedule::Field::EvalRefreshGroupProofs>(child),
+              schedule::get<schedule::Field::EvalGroupProofDomain>(child),
+              collapsed, {}, fallback)))
+        return failure();
+      builder.setInsertionPointToStart(collapsed);
+      LLVM::CallOp::create(builder, parent.getLoc(), TypeRange{},
+                           fast.getValue(), entry->getArguments());
+      LLVM::BrOp::create(builder, parent.getLoc(), ValueRange{}, next);
+      builder.setInsertionPointToStart(fallback);
+    }
+    LLVM::CallOp::create(builder, parent.getLoc(), TypeRange{},
+                         child.getSymName(), entry->getArguments());
+    LLVM::BrOp::create(builder, parent.getLoc(), ValueRange{}, next);
+    builder.setInsertionPointToStart(next);
+  }
+  LLVM::ReturnOp::create(builder, parent.getLoc(), ValueRange{});
+  ::talos::schedule::set<::talos::schedule::Field::EvalGroupChildren>(
+      parent, builder.getArrayAttr(references));
+  if (native::has<native::DebugTiming>(module))
+    llvm::errs() << "talos group hierarchy: " << parent.getSymName()
+                 << " children=" << refinement.children.size() << '\n';
+  return success();
+}
+
+/// The functions left for residual promotion: ordinary groups that were
+/// neither refined, discarded nor promoted with their candidate, and the
+/// raw-capture functions outside groups.
+void GroupMaterializer::selectResiduals() {
   // Group refinement and symbol creation are complete. Residual promotion
   // only rewrites its own function and reads globals through a frozen table.
   llvm::erase_if(residuals, [&](const auto &residual) {
@@ -2335,6 +2436,12 @@ materializeNativeEvalGroupBodies(ModuleOp module, AnalysisManager manager) {
         schedule::has<schedule::Field::EvalRawCaptures>(function) &&
         !schedule::has<schedule::Field::EvalRankedMembers>(function))
       residuals.emplace_back(function, operationLimit);
+}
+
+/// Rewrite the residual functions' calls of closed value helpers to carry
+/// current lanes as arguments and results, then drop the completely
+/// outlined groups no such call changed.
+LogicalResult GroupMaterializer::materializeValueCalls() {
   DenseSet<Operation *> valueCallers;
   if (failed(
           materializeNativeEvalValueCalls(module, residuals, inputs.globalTypes,
@@ -2347,17 +2454,43 @@ materializeNativeEvalGroupBodies(ModuleOp module, AnalysisManager manager) {
     return whollyOutlinedGroups.contains(residual.first) &&
            !valueCallers.contains(residual.first);
   });
+  return success();
+}
+
+/// Hand the residuals and the final call footprints to the function-local
+/// promotion pass.
+void GroupMaterializer::publishResiduals() {
   // Value cores and their canonical wrappers have different footprints. Freeze
   // the new complete closure before any function-local promotion worker runs.
   inputs.callFootprints = buildNativeStateFootprints(module, inputs.globalTypes,
                                                      inputs.metadataOnly);
-  report->diagnostics.resize(residuals.size());
+  report.diagnostics.resize(residuals.size());
   for (auto [index, residual] : llvm::enumerate(residuals))
     inputs.residuals.try_emplace(residual.first,
                                  std::make_pair(residual.second, index));
-  if (native::has<native::DebugTiming>(module))
-    llvm::errs() << "talos unconditional member publications elided: "
-                 << report->elidedUnconditionalPublications << '\n';
+}
+} // namespace
+
+/// Materialize certified activation bodies before native partitioning. The
+/// original pending bits, source predicates, and boundary exits remain the
+/// schedule. Only an explicit source proof of inert redundant evaluation may
+/// remove an activation predicate (IEEE 1800-2023 4.3--4.7).
+///
+/// Route specialization must run first. A durable two-state certificate then
+/// exposes a direct body; an unresolved route remains an executor boundary.
+/// In particular, do not select a two-state callee just because it appears in
+/// an indirect call's allowed-callee inventory.
+FailureOr<std::shared_ptr<NativeGroupPromotionReport>>
+materializeNativeEvalGroupBodies(ModuleOp module, AnalysisManager manager) {
+  auto report = std::make_shared<NativeGroupPromotionReport>();
+  auto &inputs = manager.getAnalysis<NativeGroupPromotionInputs>();
+  inputs.report = report;
+  DialectRegistry registry;
+  LLVM::registerInlinerInterface(registry);
+  module.getContext()->appendDialectRegistry(registry);
+  GroupMaterializer materializer(module, inputs, *report);
+  if (failed(materializer.run()))
+    return failure();
   return report;
 }
 
