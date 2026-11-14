@@ -60,6 +60,7 @@ struct DomainGroup {
 };
 
 struct WideProgram {
+  talos::random::SamplerPlanView samplerPlan;
   uint32_t aggregateWidth = 0;
   uint32_t maxDepth = 0;
   uint32_t temporaryCount = 0;
@@ -414,10 +415,10 @@ bool parseWideProgram(const uint8_t *bytes, size_t size, WideProgram &result,
   if (encodedCaptureCount != captureCount)
     return false;
   if (flags & TALOS_RT_RANDOM_PROGRAM_HAS_SAMPLER_PLAN) {
-    talos::random::SamplerPlanView plan;
-    if (!talos::random::readSamplerPlan(bytes, size, captureWidths, plan))
+    if (!talos::random::readSamplerPlan(bytes, size, captureWidths,
+                                        result.samplerPlan))
       return false;
-    size = plan.coreSize;
+    size = result.samplerPlan.coreSize;
   }
   uint32_t literalWordCount = read32(bytes + 24);
   bool encodedDomains = (flags & TALOS_RT_RANDOM_PROGRAM_HAS_DOMAINS) != 0;
@@ -1235,7 +1236,8 @@ extern "C" talos_rt_status talos_rt_v1_random_cycle_sample(
     auto result = talos::runtime::sampleRandomPlan(
         programBytes, programSize, startWords, mutableMaskWords,
         assignmentWordCount, constraintMask, captureWords, captureWidths,
-        captureCount, assignment.data(), &state, nullptr, 0, &request);
+        captureCount, assignment.data(), &state, nullptr, 0, &request,
+        program.samplerPlan.nodes ? &program.samplerPlan : nullptr);
     if (result == talos::runtime::SamplerResult::Unsatisfiable)
       return TALOS_RT_OK;
     if (result == talos::runtime::SamplerResult::Exhausted)
@@ -1350,7 +1352,8 @@ extern "C" talos_rt_status talos_rt_v1_random_solve_wide_modes_state(
           programBytes, static_cast<size_t>(programSize), startWords,
           mutableMaskWords, assignmentWordCount, constraintMask, captureWords,
           captureWidths, captureCount, outAssignmentWords, &randomState,
-          orderedMasks.data(), solveLayers.size());
+          orderedMasks.data(), solveLayers.size(), nullptr,
+          program.samplerPlan.nodes ? &program.samplerPlan : nullptr);
       if (result == talos::runtime::SamplerResult::Exhausted)
         return TALOS_RT_OUT_OF_RESOURCES;
       if (result == talos::runtime::SamplerResult::Satisfiable)

@@ -1587,13 +1587,16 @@ SamplerResult sampleRandomPlan(
     uint64_t constraintMask, const uint64_t *captures,
     const uint32_t *captureWidths, size_t captureCount, uint64_t *assignment,
     talos_rt_random_state_v1 *randomState, const uint64_t *orderedMasks,
-    size_t orderedLayerCount, CyclicSampleRequest *cyclic) {
+    size_t orderedLayerCount, CyclicSampleRequest *cyclic,
+    const random::SamplerPlanView *validatedPlan) {
   if (programSize < TALOS_RT_RANDOM_PROGRAM_HEADER_SIZE ||
       read32(program + 16) != captureCount ||
       !(read32(program + 20) & TALOS_RT_RANDOM_PROGRAM_HAS_SAMPLER_PLAN))
     return SamplerResult::Unavailable;
   random::SamplerPlanView plan;
-  if (!random::readSamplerPlan(program, programSize, captureWidths, plan))
+  if (validatedPlan)
+    plan = *validatedPlan;
+  else if (!random::readSamplerPlan(program, programSize, captureWidths, plan))
     return SamplerResult::Invalid;
   size_t fullProgramSize = programSize;
   programSize = plan.coreSize;

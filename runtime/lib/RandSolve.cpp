@@ -626,8 +626,8 @@ randomSolveModesImpl(talos_rt_context *context, const uint8_t *program,
                  !(programFlags & TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM)))
       return TALOS_RT_INVALID_ARGUMENT;
     size_t bundleSize = static_cast<size_t>(programSize);
+    talos::random::SamplerPlanView plan;
     if (programFlags & TALOS_RT_RANDOM_PROGRAM_HAS_SAMPLER_PLAN) {
-      talos::random::SamplerPlanView plan;
       if (!talos::random::readSamplerPlan(program, bundleSize, nullptr, plan))
         return TALOS_RT_INVALID_ARGUMENT;
       programSize = plan.coreSize;
@@ -975,7 +975,8 @@ randomSolveModesImpl(talos_rt_context *context, const uint8_t *program,
       auto result = talos::runtime::sampleRandomPlan(
           program, bundleSize, &start, &mutableMask, 1, constraintMask,
           captures, nullptr, captureCount, outAssignment, randomState,
-          solveLayers.data(), solveLayers.size());
+          solveLayers.data(), solveLayers.size(), nullptr,
+          plan.nodes ? &plan : nullptr);
       if (result == talos::runtime::SamplerResult::Exhausted)
         return TALOS_RT_OUT_OF_RESOURCES;
       if (result == talos::runtime::SamplerResult::Satisfiable)
