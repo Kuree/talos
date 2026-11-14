@@ -4285,8 +4285,6 @@ public:
     }
     markTiming("serial runtime conversion");
 
-    if (failed(verify(module)))
-      return signalPassFailure();
     SmallVector<schedule::NativeObserverOp> deadObservers =
         analysis::collectInWalkOrder<schedule::NativeObserverOp>(
             module, [](schedule::NativeObserverOp observer) {
