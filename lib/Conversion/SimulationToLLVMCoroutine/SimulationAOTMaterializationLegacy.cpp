@@ -1,5 +1,6 @@
 //===- SimulationAOTMaterialization.cpp - Native AOT LLVM plan --------===//
 
+#include "NativeStateAccess.h"
 #include "SimulationAOTPlanning.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 
@@ -384,10 +385,10 @@ LogicalResult makeNativeAOTPlanLegacy(
   Value directEnabled = arith::CmpIOp::create(
       builder, location, arith::CmpIPredicate::ne, directGuard,
       llvmConstant(builder, location, i32, 0));
-  Value stateValue = LLVM::AddressOfOp::create(builder, location, pointer,
-                                               "__talos_state_value");
-  Value stateUnknown = LLVM::AddressOfOp::create(builder, location, pointer,
-                                                 "__talos_state_unknown");
+  Value stateValue = detail::createStatePlaneAddress(
+      builder, location, schedule::StatePlane::Value);
+  Value stateUnknown = detail::createStatePlaneAddress(
+      builder, location, schedule::StatePlane::Unknown);
 
   SmallVector<Block *> wordBlocks(nbaDirtyWordCount);
   for (uint32_t word = 0; word != nbaDirtyWordCount; ++word)
@@ -861,16 +862,16 @@ LogicalResult makeNativeAOTPlanLegacy(
                          ? TALOS_RT_NATIVE_SCHEDULE_CLEAN_SUPERSTEP
                          : 0)),
             NativeSchedulePlanField::Flags);
-        value = insertValue(initializerBuilder, location, value,
-                            LLVM::AddressOfOp::create(initializerBuilder,
-                                                      location, pointer,
-                                                      "__talos_state_value"),
-                            NativeSchedulePlanField::StateValue);
-        value = insertValue(initializerBuilder, location, value,
-                            LLVM::AddressOfOp::create(initializerBuilder,
-                                                      location, pointer,
-                                                      "__talos_state_unknown"),
-                            NativeSchedulePlanField::StateUnknown);
+        value = insertValue(
+            initializerBuilder, location, value,
+            detail::createStatePlaneAddress(initializerBuilder, location,
+                                            schedule::StatePlane::Value),
+            NativeSchedulePlanField::StateValue);
+        value = insertValue(
+            initializerBuilder, location, value,
+            detail::createStatePlaneAddress(initializerBuilder, location,
+                                            schedule::StatePlane::Unknown),
+            NativeSchedulePlanField::StateUnknown);
         value = insertValue(initializerBuilder, location, value,
                             llvmConstant(initializerBuilder, location, i64,
                                          stateLayout.bitCount),

@@ -1,6 +1,7 @@
 //===- SimulationNBALowering.cpp - Native NBA rewrite patterns ----------===//
 
 #include "SimulationNBALowering.h"
+#include "NativeStateAccess.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
@@ -83,14 +84,13 @@ preparePowerNBAArguments(Op op, Adaptor &adaptor, ConversionPatternRewriter &r,
   Value null = LLVM::ZeroOp::create(r, loc, pointer);
   Value unknown =
       adaptor.getValue().size() == 2 ? spill(adaptor.getValue()[1]) : null;
-  Value unknownPlane =
-      adaptor.getValue().size() == 2
-          ? LLVM::AddressOfOp::create(r, loc, pointer, "__talos_state_unknown")
-                .getResult()
-          : null;
+  Value unknownPlane = adaptor.getValue().size() == 2
+                           ? detail::createStatePlaneAddress(
+                                 r, loc, schedule::StatePlane::Unknown)
+                           : null;
   SmallVector<Value> prefix{
       adaptor.getContext().front(),
-      LLVM::AddressOfOp::create(r, loc, pointer, "__talos_state_value"),
+      detail::createStatePlaneAddress(r, loc, schedule::StatePlane::Value),
       unknownPlane, llvmConstant(r, loc, i64, stateBitCount)};
   return PowerNBAArguments{std::move(prefix), spill(adaptor.getValue().front()),
                            unknown, spec};
@@ -251,8 +251,8 @@ public:
     Value unknownPlane = LLVM::ZeroOp::create(rewriter, location, pointer);
     if (adaptor.getValue().size() == 2) {
       unknown = savePlane(adaptor.getValue()[1]);
-      unknownPlane = LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                               "__talos_state_unknown");
+      unknownPlane = detail::createStatePlaneAddress(
+          rewriter, location, schedule::StatePlane::Unknown);
     }
     uint32_t flags = 0;
     if (op.getVectorDelay())
@@ -272,8 +272,8 @@ public:
                                "talos_rt_v1_scheduler_inertial_driver"),
             ValueRange{
                 runtimeContext,
-                LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                          "__talos_state_value"),
+                detail::createStatePlaneAddress(rewriter, location,
+                                                schedule::StatePlane::Value),
                 unknownPlane,
                 llvmConstant(rewriter, location, i64, stateBitCount),
                 adaptor.getDriver().front(),
@@ -338,8 +338,8 @@ public:
     Value unknownPlane = LLVM::ZeroOp::create(rewriter, location, pointer);
     if (adaptor.getValue().size() == 2) {
       unknown = savePlane(adaptor.getValue()[1]);
-      unknownPlane = LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                               "__talos_state_unknown");
+      unknownPlane = detail::createStatePlaneAddress(
+          rewriter, location, schedule::StatePlane::Unknown);
     }
     bool pulseControlled = !adaptor.getPulseTransitionMasks().empty();
     uint32_t flags = 0;
@@ -355,8 +355,8 @@ public:
       flags |= TALOS_RT_INERTIAL_PATH_EXACT_TRANSITIONS;
     SmallVector<Value, 23> arguments{
         runtimeContext,
-        LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                  "__talos_state_value"),
+        detail::createStatePlaneAddress(rewriter, location,
+                                        schedule::StatePlane::Value),
         unknownPlane,
         llvmConstant(rewriter, location, i64, stateBitCount),
         adaptor.getDriver().front(),
@@ -447,14 +447,14 @@ public:
     Value unknownPlane = LLVM::ZeroOp::create(rewriter, location, pointer);
     if (adaptor.getValue().size() == 2) {
       unknown = savePlane(adaptor.getValue()[1]);
-      unknownPlane = LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                               "__talos_state_unknown");
+      unknownPlane = detail::createStatePlaneAddress(
+          rewriter, location, schedule::StatePlane::Unknown);
     }
     bool pulseControlled = !adaptor.getPulseTransitionMasks().empty();
     SmallVector<Value, 24> arguments{
         runtimeContext,
-        LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                  "__talos_state_value"),
+        detail::createStatePlaneAddress(rewriter, location,
+                                        schedule::StatePlane::Value),
         unknownPlane,
         llvmConstant(rewriter, location, i64, stateBitCount),
         adaptor.getReference().front(),
@@ -567,10 +567,10 @@ public:
                 "talos_rt_v1_scheduler_inertial_driver_strength_pair"),
             ValueRange{
                 runtimeContext,
-                LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                          "__talos_state_value"),
-                LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                          "__talos_state_unknown"),
+                detail::createStatePlaneAddress(rewriter, location,
+                                                schedule::StatePlane::Value),
+                detail::createStatePlaneAddress(rewriter, location,
+                                                schedule::StatePlane::Unknown),
                 llvmConstant(rewriter, location, i64, stateBitCount),
                 adaptor.getLowDriver().front(), adaptor.getHighDriver().front(),
                 llvmConstant(rewriter, location, i64, *width),
@@ -637,10 +637,10 @@ public:
     };
     SmallVector<Value> arguments{
         runtimeContext,
-        LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                  "__talos_state_value"),
-        LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                  "__talos_state_unknown"),
+        detail::createStatePlaneAddress(rewriter, location,
+                                        schedule::StatePlane::Value),
+        detail::createStatePlaneAddress(rewriter, location,
+                                        schedule::StatePlane::Unknown),
         llvmConstant(rewriter, location, i64, stateBitCount),
         adaptor.getLowDriver().front(),
         adaptor.getHighDriver().front(),
@@ -1138,8 +1138,8 @@ public:
     Value unknownPlane = LLVM::ZeroOp::create(rewriter, location, pointer);
     if (adaptor.getValue().size() == 2) {
       unknown = savePlane(adaptor.getValue()[1]);
-      unknownPlane = LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                               "__talos_state_unknown");
+      unknownPlane = detail::createStatePlaneAddress(
+          rewriter, location, schedule::StatePlane::Unknown);
     }
     Value contextAddress = LLVM::AddressOfOp::create(
         rewriter, location, pointer, "__talos_current_context");
@@ -1161,8 +1161,8 @@ public:
             SymbolRefAttr::get(rewriter.getContext(),
                                "talos_rt_v1_scheduler_packed_slice_nba"),
             ValueRange{runtimeContext,
-                       LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                                 "__talos_state_value"),
+                       detail::createStatePlaneAddress(
+                           rewriter, location, schedule::StatePlane::Value),
                        unknownPlane,
                        llvmConstant(rewriter, location, i64, stateBitCount),
                        base, llvmConstant(rewriter, location, i64, *baseWidth),
@@ -1197,16 +1197,13 @@ Value buildGeneratedNBAChange(OpBuilder &builder, Location location,
                               uint64_t bitOffset, unsigned width, Value value,
                               Value unknown) {
   assert(width > 0 && width <= 64);
-  Type pointer = LLVM::LLVMPointerType::get(builder.getContext());
   Type i64 = builder.getI64Type();
   unsigned firstBit = bitOffset % 8;
   auto spanType =
       IntegerType::get(builder.getContext(), ((width + firstBit + 7) / 8) * 8);
-  auto loadCurrent = [&](StringRef name) -> Value {
-    Value plane = LLVM::AddressOfOp::create(builder, location, pointer, name);
-    Value current = LLVM::LoadOp::create(
-        builder, location, spanType,
-        byteGEP(builder, location, plane, bitOffset / 8), 1);
+  auto loadCurrent = [&](schedule::StatePlane plane) -> Value {
+    Value current = schedule::NativeStateLoadOp::create(
+        builder, location, spanType, plane, Value{}, bitOffset / 8, 1);
     if (firstBit)
       current = arith::ShRUIOp::create(
           builder, location, current,
@@ -1220,9 +1217,9 @@ Value buildGeneratedNBAChange(OpBuilder &builder, Location location,
   Value changed = arith::OrIOp::create(
       builder, location,
       arith::XOrIOp::create(builder, location, value,
-                            loadCurrent("__talos_state_value")),
+                            loadCurrent(schedule::StatePlane::Value)),
       arith::XOrIOp::create(builder, location, unknown,
-                            loadCurrent("__talos_state_unknown")));
+                            loadCurrent(schedule::StatePlane::Unknown)));
   return arith::AndIOp::create(
       builder, location, changed,
       llvmConstant(builder, location, i64,
@@ -1713,8 +1710,8 @@ public:
                 ValueRange{
                     runtimeContext,
                     llvmConstant(rewriter, location, i32, staticRoot->second),
-                    LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                              "__talos_state_value"),
+                    detail::createStatePlaneAddress(
+                        rewriter, location, schedule::StatePlane::Value),
                     LLVM::ZeroOp::create(rewriter, location, pointer),
                     llvmConstant(rewriter, location, i64, stateBitCount),
                     llvmConstant(rewriter, location, i64,
@@ -1761,12 +1758,11 @@ public:
               ValueRange{
                   runtimeContext,
                   llvmConstant(rewriter, location, i32, staticRoot->second),
-                  LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                            "__talos_state_value"),
+                  detail::createStatePlaneAddress(rewriter, location,
+                                                  schedule::StatePlane::Value),
                   adaptor.getValue().size() == 2
-                      ? LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                                  "__talos_state_unknown")
-                            .getResult()
+                      ? detail::createStatePlaneAddress(
+                            rewriter, location, schedule::StatePlane::Unknown)
                       : LLVM::ZeroOp::create(rewriter, location, pointer)
                             .getResult(),
                   llvmConstant(rewriter, location, i64, stateBitCount),
@@ -1797,11 +1793,11 @@ public:
     Value unknownPlane = LLVM::ZeroOp::create(rewriter, location, pointer);
     if (adaptor.getValue().size() == 2) {
       unknown = savePlane(adaptor.getValue()[1]);
-      unknownPlane = LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                               "__talos_state_unknown");
+      unknownPlane = detail::createStatePlaneAddress(
+          rewriter, location, schedule::StatePlane::Unknown);
     }
-    Value valuePlane = LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                                 "__talos_state_value");
+    Value valuePlane = detail::createStatePlaneAddress(
+        rewriter, location, schedule::StatePlane::Value);
     Value delay = adaptor.getDelay().empty()
                       ? llvmConstant(rewriter, location, i64, 0)
                       : adaptor.getDelay().front();

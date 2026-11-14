@@ -1,5 +1,6 @@
 //===- SimulationManagedCoverageLowering.cpp - Covergroup patterns ---===//
 
+#include "NativeStateAccess.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "llvm/ADT/BitVector.h"
@@ -1475,22 +1476,23 @@ public:
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
             SymbolRefAttr::get(rewriter.getContext(),
                                "talos_rt_v1_covergroup_formal_read"),
-            ValueRange{context, adaptor.getHandle().front(),
-                       llvmConstant(rewriter, op.getLoc(),
-                                    rewriter.getI64Type(), op.getFormalId()),
-                       llvmConstant(rewriter, op.getLoc(),
-                                    rewriter.getI32Type(), kind),
-                       llvmConstant(rewriter, op.getLoc(),
-                                    rewriter.getI64Type(), bitWidth),
-                       llvmConstant(rewriter, op.getLoc(),
-                                    rewriter.getI64Type(), size),
-                       LLVM::AddressOfOp::create(rewriter, op.getLoc(), pointer,
-                                                 "__talos_state_value"),
-                       LLVM::AddressOfOp::create(rewriter, op.getLoc(), pointer,
-                                                 "__talos_state_unknown"),
-                       llvmConstant(rewriter, op.getLoc(),
-                                    rewriter.getI64Type(), stateBitCount),
-                       value, unknown})
+            ValueRange{
+                context, adaptor.getHandle().front(),
+                llvmConstant(rewriter, op.getLoc(), rewriter.getI64Type(),
+                             op.getFormalId()),
+                llvmConstant(rewriter, op.getLoc(), rewriter.getI32Type(),
+                             kind),
+                llvmConstant(rewriter, op.getLoc(), rewriter.getI64Type(),
+                             bitWidth),
+                llvmConstant(rewriter, op.getLoc(), rewriter.getI64Type(),
+                             size),
+                detail::createStatePlaneAddress(rewriter, op.getLoc(),
+                                                schedule::StatePlane::Value),
+                detail::createStatePlaneAddress(rewriter, op.getLoc(),
+                                                schedule::StatePlane::Unknown),
+                llvmConstant(rewriter, op.getLoc(), rewriter.getI64Type(),
+                             stateBitCount),
+                value, unknown})
             .getResult();
     reportManagedStatus(rewriter, op.getLoc(), context, status);
     SmallVector<Value> results;

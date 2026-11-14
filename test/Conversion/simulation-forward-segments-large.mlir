@@ -7,27 +7,37 @@
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_0(
 // PLAN-SAME: schedule.eval.control_flow_dataflow
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_0.fallback(
-// PLAN-SAME: schedule.eval.ranked_members = array<i32: 0, 1, {{.*}}28, 29>
-// Deferred readiness is charged before expansion; the remaining helper
-// budget keeps the two ready words in SSA and admits 22 state ranges using
-// their actual joins and memory cuts. (The budget counts a typed state access
-// as one operation, the machine access it becomes.) Promotion queries read
-// only the unknown plane and are no value-plane cut.
-// PLAN-SAME: schedule.eval.ssa_ready_words = 2 : i64
-// PLAN-SAME: schedule.eval.ssa_value_ranges = 22 : i64
-// PLAN-LABEL: llvm.func @__talos_eval_ranked_group_2(
+// PLAN-SAME: schedule.eval.ranked_members = array<i32: 0, 1, {{.*}}32, 33>
+// The group budget counts a typed state access as one operation, the machine
+// access it becomes, so the first chunk takes 34 members. Deferred readiness
+// is charged before expansion; flushing two ready words around each of the
+// fallback's calls costs more than its remaining helper budget, so they stay
+// in memory, and the budget admits 33 state ranges using their actual joins
+// and memory cuts. Promotion queries read only the unknown plane and are no
+// value-plane cut.
+// PLAN-NOT: schedule.eval.ssa_ready_words
+// PLAN-SAME: schedule.eval.ssa_value_ranges = 33 : i64
+// PLAN-LABEL: llvm.func @__talos_eval_ranked_group_1(
 // PLAN-SAME: schedule.eval.control_flow_dataflow
-// PLAN-LABEL: llvm.func @__talos_eval_ranked_group_2.fallback(
+// PLAN-LABEL: llvm.func @__talos_eval_ranked_group_1.fallback(
+// PLAN-SAME: schedule.eval.ranked_members = array<i32: 34, 35, {{.*}}66, 67>
 // PLAN-NOT: schedule.ready.
+// The last member forms a chunk of its own, too small for a dataflow body.
+// PLAN-LABEL: llvm.func @__talos_eval_ranked_group_2(
+// PLAN-SAME: schedule.eval.ranked_members = array<i32: 68>
 // The chain spans two ready words, so the coordinator's word sweep calls the
-// chunks in rank order instead of a segment wrapper; the last chunk starts in
-// word 0 and runs again from word 1 only if its members there are pending.
+// chunks in rank order instead of a segment wrapper; the chunk that crosses
+// the word boundary starts in word 0 and runs again from word 1 only if its
+// members there are pending.
 // PLAN-NOT: .segment(
 // PLAN-LABEL: llvm.func @__talos_eval_dispatch_v1.word_0(
 // PLAN: llvm.call @__talos_eval_ranked_group_0(
 // PLAN: llvm.call @__talos_eval_ranked_group_1(
-// PLAN: llvm.call @__talos_eval_ranked_group_2(
+// PLAN-NOT: llvm.func
+// PLAN-NOT: @__talos_eval_ranked_group_2(
 // PLAN-LABEL: llvm.func @__talos_eval_dispatch_v1.word_1(
+// PLAN-NOT: llvm.func
+// PLAN: llvm.call @__talos_eval_ranked_group_1(
 // PLAN-NOT: llvm.func
 // PLAN: llvm.call @__talos_eval_ranked_group_2(
 

@@ -1,5 +1,6 @@
 //===- SimulationSchedulerMainLowering.cpp - Native scheduler entry ----===//
 
+#include "NativeStateAccess.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
@@ -175,10 +176,10 @@ LogicalResult makeSchedulerMain(ModuleOp module,
       builder, location, TypeRange{i32},
       SymbolRefAttr::get(context, "talos_rt_v1_native_state_initialize"),
       ValueRange{runtimeContext,
-                 LLVM::AddressOfOp::create(builder, location, pointer,
-                                           "__talos_state_value"),
-                 LLVM::AddressOfOp::create(builder, location, pointer,
-                                           "__talos_state_unknown"),
+                 detail::createStatePlaneAddress(builder, location,
+                                                 schedule::StatePlane::Value),
+                 detail::createStatePlaneAddress(builder, location,
+                                                 schedule::StatePlane::Unknown),
                  llvmConstant(builder, location, i64, stateLayout.bitCount),
                  LLVM::AddressOfOp::create(builder, location, pointer,
                                            initializers.getSymName()),
@@ -200,10 +201,10 @@ LogicalResult makeSchedulerMain(ModuleOp module,
   LLVM::ReturnOp::create(builder, location, initialized.getResult());
   builder.setInsertionPointToStart(initializedReady);
   if (sharedNativeState) {
-    Value value = LLVM::AddressOfOp::create(builder, location, pointer,
-                                            "__talos_state_value");
-    Value unknown = LLVM::AddressOfOp::create(builder, location, pointer,
-                                              "__talos_state_unknown");
+    Value value = detail::createStatePlaneAddress(builder, location,
+                                                  schedule::StatePlane::Value);
+    Value unknown = detail::createStatePlaneAddress(
+        builder, location, schedule::StatePlane::Unknown);
     Value status =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
@@ -427,8 +428,8 @@ LogicalResult makeSchedulerMain(ModuleOp module,
       uint64_t rootOffset = root.bitOffset;
       if ((bound.offset + rootOffset) & 7)
         return module.emitError("managed static root is not byte aligned");
-      Value state = LLVM::AddressOfOp::create(builder, location, pointer,
-                                              "__talos_state_value");
+      Value state = detail::createStatePlaneAddress(
+          builder, location, schedule::StatePlane::Value);
       Value slot =
           byteGEP(builder, location, state, (bound.offset + rootOffset) / 8);
       SmallVector<Value> rootArguments{
@@ -585,8 +586,8 @@ LogicalResult makeSchedulerMain(ModuleOp module,
       Value kind = field(rootsName, rootType, root, 1, i32);
       Value slot = LLVM::GEPOp::create(
           builder, location, pointer, builder.getI8Type(),
-          LLVM::AddressOfOp::create(builder, location, pointer,
-                                    "__talos_state_value"),
+          detail::createStatePlaneAddress(builder, location,
+                                          schedule::StatePlane::Value),
           ArrayRef<LLVM::GEPArg>{byte});
       fail(LLVM::CallOp::create(
                builder, location, TypeRange{i32},
@@ -617,10 +618,10 @@ LogicalResult makeSchedulerMain(ModuleOp module,
                          ValueRange{runtimeContext});
   }
   if (requiresNativeStateSync) {
-    Value stateValue = LLVM::AddressOfOp::create(builder, location, pointer,
-                                                 "__talos_state_value");
-    Value stateUnknown = LLVM::AddressOfOp::create(builder, location, pointer,
-                                                   "__talos_state_unknown");
+    Value stateValue = detail::createStatePlaneAddress(
+        builder, location, schedule::StatePlane::Value);
+    Value stateUnknown = detail::createStatePlaneAddress(
+        builder, location, schedule::StatePlane::Unknown);
     Value status =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
@@ -651,7 +652,7 @@ LogicalResult makeSchedulerMain(ModuleOp module,
   }
   if (!stateLayout.unknownSummaryRoots.empty()) {
     auto address = [&](StringRef name) -> Value {
-      return LLVM::AddressOfOp::create(builder, location, pointer, name);
+      return detail::createGlobalAddress(builder, location, name);
     };
     Value status =
         LLVM::CallOp::create(

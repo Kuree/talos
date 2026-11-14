@@ -1,5 +1,6 @@
 //===- SimulationManagedReferenceLowering.cpp - Reference patterns ---===//
 
+#include "NativeStateAccess.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 
 #include "talos/Analysis/SimulationStorageAnalysis.h"
@@ -175,10 +176,10 @@ public:
     if (watching) {
       ownerReference = unpackArgumentReference(
           rewriter, op.getLoc(), adaptor.getOwnerReference().front());
-      valueState = LLVM::AddressOfOp::create(rewriter, op.getLoc(), pointer,
-                                             "__talos_state_value");
-      unknownState = LLVM::AddressOfOp::create(rewriter, op.getLoc(), pointer,
-                                               "__talos_state_unknown");
+      valueState = detail::createStatePlaneAddress(rewriter, op.getLoc(),
+                                                   schedule::StatePlane::Value);
+      unknownState = detail::createStatePlaneAddress(
+          rewriter, op.getLoc(), schedule::StatePlane::Unknown);
     }
     Value status =
         LLVM::CallOp::create(
@@ -240,10 +241,10 @@ public:
       owner = managedObjectPointer(rewriter, location, reference.owner);
       payload = reference.payload;
       managed = reference.managed;
-      valueState = LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                             "__talos_state_value");
-      unknownState = LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                               "__talos_state_unknown");
+      valueState = detail::createStatePlaneAddress(rewriter, location,
+                                                   schedule::StatePlane::Value);
+      unknownState = detail::createStatePlaneAddress(
+          rewriter, location, schedule::StatePlane::Unknown);
       bitCount = llvmConstant(rewriter, location, i64, stateBitCount);
     } else {
       handle = adaptor.getHandle().front();
@@ -301,10 +302,10 @@ public:
                           output, 8);
     UnpackedArgumentReference ownerReference = unpackArgumentReference(
         rewriter, location, adaptor.getOwnerReference().front());
-    Value valueState = LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                                 "__talos_state_value");
-    Value unknownState = LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                                   "__talos_state_unknown");
+    Value valueState = detail::createStatePlaneAddress(
+        rewriter, location, schedule::StatePlane::Value);
+    Value unknownState = detail::createStatePlaneAddress(
+        rewriter, location, schedule::StatePlane::Unknown);
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{rewriter.getI32Type()},
@@ -378,10 +379,10 @@ public:
                           output, 8);
     UnpackedArgumentReference ownerReference = unpackArgumentReference(
         rewriter, location, adaptor.getOwnerReference().front());
-    Value valueState = LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                                 "__talos_state_value");
-    Value unknownState = LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                                   "__talos_state_unknown");
+    Value valueState = detail::createStatePlaneAddress(
+        rewriter, location, schedule::StatePlane::Value);
+    Value unknownState = detail::createStatePlaneAddress(
+        rewriter, location, schedule::StatePlane::Unknown);
     Value traceSlots = LLVM::ZeroOp::create(rewriter, location, pointer);
     if (!op.getTraceOffsets().empty())
       traceSlots = LLVM::AddressOfOp::create(
@@ -470,10 +471,10 @@ public:
                                    op.getArray().getType(), adaptor.getKey());
     UnpackedArgumentReference ownerReference = unpackArgumentReference(
         rewriter, op.getLoc(), adaptor.getOwnerReference().front());
-    Value valueState = LLVM::AddressOfOp::create(rewriter, op.getLoc(), pointer,
-                                                 "__talos_state_value");
-    Value unknownState = LLVM::AddressOfOp::create(
-        rewriter, op.getLoc(), pointer, "__talos_state_unknown");
+    Value valueState = detail::createStatePlaneAddress(
+        rewriter, op.getLoc(), schedule::StatePlane::Value);
+    Value unknownState = detail::createStatePlaneAddress(
+        rewriter, op.getLoc(), schedule::StatePlane::Unknown);
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
@@ -574,10 +575,10 @@ public:
           LLVM::ZeroOp::create(rewriter, location, convertedTypes[1]),
           unknownOut, storage->alignment);
     }
-    Value valueState = LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                                 "__talos_state_value");
-    Value unknownState = LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                                   "__talos_state_unknown");
+    Value valueState = detail::createStatePlaneAddress(
+        rewriter, location, schedule::StatePlane::Value);
+    Value unknownState = detail::createStatePlaneAddress(
+        rewriter, location, schedule::StatePlane::Unknown);
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{i32},
@@ -651,10 +652,10 @@ public:
         rewriter, location, adaptor.getReference().front());
     auto [context, lane] = managedContextAndLane(rewriter, location);
     (void)lane;
-    Value valueState = LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                                 "__talos_state_value");
-    Value unknownState = LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                                   "__talos_state_unknown");
+    Value valueState = detail::createStatePlaneAddress(
+        rewriter, location, schedule::StatePlane::Value);
+    Value unknownState = detail::createStatePlaneAddress(
+        rewriter, location, schedule::StatePlane::Unknown);
     SmallVector<Value> commonArguments{
         context,
         valueState,

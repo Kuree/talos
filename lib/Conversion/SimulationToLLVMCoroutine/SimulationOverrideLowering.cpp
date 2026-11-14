@@ -1,5 +1,6 @@
 //===- SimulationOverrideLowering.cpp - Override rewrite patterns -------===//
 
+#include "NativeStateAccess.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 
 #include "talos/Analysis/SimulationStorageAnalysis.h"
@@ -130,10 +131,10 @@ public:
         rewriter, location, pointer, "__talos_current_context");
     Value context =
         LLVM::LoadOp::create(rewriter, location, pointer, contextAddress, 8);
-    Value globalValue = LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                                  "__talos_state_value");
-    Value globalUnknown = LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                                    "__talos_state_unknown");
+    Value globalValue = detail::createStatePlaneAddress(
+        rewriter, location, schedule::StatePlane::Value);
+    Value globalUnknown = detail::createStatePlaneAddress(
+        rewriter, location, schedule::StatePlane::Unknown);
     uint32_t descriptorKind = isa<sim::NetType>(op.getTarget().getType())
                                   ? TALOS_RT_DESCRIPTOR_NET
                                   : TALOS_RT_DESCRIPTOR_STORAGE;
@@ -246,10 +247,10 @@ public:
         rewriter, location, pointer, "__talos_current_context");
     Value context =
         LLVM::LoadOp::create(rewriter, location, pointer, contextAddress, 8);
-    Value globalValue = LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                                  "__talos_state_value");
-    Value globalUnknown = LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                                    "__talos_state_unknown");
+    Value globalValue = detail::createStatePlaneAddress(
+        rewriter, location, schedule::StatePlane::Value);
+    Value globalUnknown = detail::createStatePlaneAddress(
+        rewriter, location, schedule::StatePlane::Unknown);
     uint32_t descriptorKind = isa<sim::NetType>(op.getTarget().getType())
                                   ? TALOS_RT_DESCRIPTOR_NET
                                   : TALOS_RT_DESCRIPTOR_STORAGE;
@@ -352,10 +353,10 @@ public:
         rewriter, location, pointer, "__talos_current_context");
     Value context =
         LLVM::LoadOp::create(rewriter, location, pointer, contextAddress, 8);
-    Value globalValue = LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                                  "__talos_state_value");
-    Value globalUnknown = LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                                    "__talos_state_unknown");
+    Value globalValue = detail::createStatePlaneAddress(
+        rewriter, location, schedule::StatePlane::Value);
+    Value globalUnknown = detail::createStatePlaneAddress(
+        rewriter, location, schedule::StatePlane::Unknown);
     uint32_t descriptorKind = isa<sim::NetType>(op.getTarget().getType())
                                   ? TALOS_RT_DESCRIPTOR_NET
                                   : TALOS_RT_DESCRIPTOR_STORAGE;

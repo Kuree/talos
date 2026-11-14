@@ -1,5 +1,6 @@
 //===- SimulationNBACommit.cpp - Table-driven scalar NBA commits ----------===//
 
+#include "NativeStateAccess.h"
 #include "SimulationAOTPlanning.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
@@ -308,10 +309,9 @@ void emitScalarNBACommitLoop(OpBuilder &b, ModuleOp module,
   schedule::set<schedule::Field::EvalTwoStateZeroUnknown>(unknownLoad,
                                                           b.getUnitAttr());
   Value stagedUnknown = unknownLoad;
-  Value valueAddress =
-      gep(address("__talos_state_value"), b.getI8Type(), offset);
-  Value unknownAddress =
-      gep(address("__talos_state_unknown"), b.getI8Type(), offset);
+  // Each plane's window at the root's byte offset.
+  constexpr auto valuePlane = schedule::StatePlane::Value;
+  constexpr auto unknownPlane = schedule::StatePlane::Unknown;
   SmallVector<APInt> cases;
   SmallVector<Block *> bodies;
   SmallVector<ValueRange> operands;
@@ -335,8 +335,12 @@ void emitScalarNBACommitLoop(OpBuilder &b, ModuleOp module,
         return LLVM::ZExtOp::create(b, loc, target, value);
       return LLVM::TruncOp::create(b, loc, target, value);
     };
-    Value oldRaw = LLVM::LoadOp::create(b, loc, type, valueAddress, 1);
-    Value unknownRaw = LLVM::LoadOp::create(b, loc, type, unknownAddress, 1);
+    Value oldRaw = schedule::NativeStateLoadOp::create(b, loc, type, valuePlane,
+                                                       offset, 0, 1)
+                       ->getResult(0);
+    Value unknownRaw = schedule::NativeStateLoadOp::create(
+                           b, loc, type, unknownPlane, offset, 0, 1)
+                           ->getResult(0);
     Value typedShift = resize(shift, type);
     auto extract = [&](Value raw) {
       return band(resize(arith::ShRUIOp::create(b, loc, raw, typedShift), i64),
@@ -349,21 +353,22 @@ void emitScalarNBACommitLoop(OpBuilder &b, ModuleOp module,
         bor(band(oldUnknown, inv(writeMask)), band(stagedUnknown, writeMask));
     Value mask =
         arith::ShLIOp::create(b, loc, resize(widthMask, type), typedShift);
-    auto store = [&, &bits = bits](Value raw, Value value, Value destination) {
+    auto store = [&, &bits = bits](Value raw, Value value,
+                                   schedule::StatePlane plane) {
       Value keep = arith::XOrIOp::create(
           b, loc, mask,
           LLVM::ConstantOp::create(
               b, loc, type, b.getIntegerAttr(type, APInt::getAllOnes(bits))));
       Value positioned =
           arith::ShLIOp::create(b, loc, resize(value, type), typedShift);
-      return LLVM::StoreOp::create(
-          b, loc, bor(band(raw, keep), band(positioned, mask)), destination, 1);
+      return schedule::NativeStateStoreOp::create(
+          b, loc, bor(band(raw, keep), band(positioned, mask)), plane, offset,
+          0, 1);
     };
-    store(oldRaw, newValue, valueAddress);
-    auto unknownStore = store(unknownRaw, newUnknown, unknownAddress);
+    store(oldRaw, newValue, valuePlane);
+    Operation *unknownStore = store(unknownRaw, newUnknown, unknownPlane);
     if (inlineSummary)
-      schedule::set<schedule::Field::EvalUnknownSummaryReported>(
-          unknownStore, b.getUnitAttr());
+      detail::setNativeSummaryReported(unknownStore);
     cf::BranchOp::create(
         b, loc, publish,
         ValueRange{oldValue, oldUnknown, newValue, newUnknown});

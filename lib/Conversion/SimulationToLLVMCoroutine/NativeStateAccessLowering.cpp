@@ -21,6 +21,7 @@
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 
 using namespace mlir;
 
@@ -147,22 +148,31 @@ class RaiseNativeStateAccessPass final
     : public impl::RaiseNativeStateAccessPassBase<RaiseNativeStateAccessPass> {
 public:
   void runOnOperation() override {
-    SmallVector<LLVM::AddressOfOp> planes;
-    getOperation().walk([&](LLVM::AddressOfOp address) {
-      if (schedule::getStatePlaneOfGlobal(address.getGlobalName()))
-        planes.push_back(address);
+    // Plane addresses: LLVM ones become typed bases; producers' typed bases
+    // are raised from as they are.
+    SmallVector<Operation *> planes;
+    getOperation().walk([&](Operation *operation) {
+      if (auto address = dyn_cast<LLVM::AddressOfOp>(operation)) {
+        if (schedule::getStatePlaneOfGlobal(address.getGlobalName()))
+          planes.push_back(address);
+      } else if (isa<schedule::NativeStateAddressOp>(operation)) {
+        planes.push_back(operation);
+      }
     });
     if (planes.empty())
       return markAllAnalysesPreserved();
-    for (LLVM::AddressOfOp address : planes) {
-      OpBuilder builder(address);
-      if (!address->getDiscardableAttrDictionary().empty())
-        continue;
-      auto base = schedule::NativeStateAddressOp::create(
-          builder, address.getLoc(), address.getType(),
-          address.getGlobalNameAttr());
-      address.replaceAllUsesWith(base.getResult());
-      address.erase();
+    for (Operation *plane : planes) {
+      auto base = dyn_cast<schedule::NativeStateAddressOp>(plane);
+      if (auto address = dyn_cast<LLVM::AddressOfOp>(plane)) {
+        if (!address->getDiscardableAttrDictionary().empty())
+          continue;
+        OpBuilder builder(address);
+        base = schedule::NativeStateAddressOp::create(
+            builder, address.getLoc(), address.getType(),
+            address.getGlobalNameAttr());
+        address.replaceAllUsesWith(base.getResult());
+        address.erase();
+      }
       // An access at offset zero uses the base itself: canonicalization
       // folds a zero GEP away.
       for (Operation *user : llvm::make_early_inc_range(base->getUsers())) {
@@ -206,8 +216,16 @@ private:
     for (Operation *user : llvm::make_early_inc_range(gep->getUsers()))
       raiseAccess(user, gep.getResult(), base.getPlane(), dynamicOffset,
                   staticOffset);
-    if (gep->use_empty())
-      gep.erase();
+    if (!gep->use_empty())
+      return;
+    // The static offset replaced a constant index, which may now be unused.
+    Operation *constantIndex = nullptr;
+    if (!dynamicOffset && !gep.getDynamicIndices().empty())
+      constantIndex = gep.getDynamicIndices().front().getDefiningOp();
+    gep.erase();
+    if (constantIndex && constantIndex->use_empty() &&
+        isMemoryEffectFree(constantIndex))
+      constantIndex->erase();
   }
 
   // A plain load or store of `address`, the plane's window at the given

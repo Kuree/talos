@@ -1286,6 +1286,12 @@ LogicalResult declareNativeImports(ModuleOp module) {
       reference = address.getGlobalNameAttr();
     else if (auto call = dyn_cast<LLVM::CallOp>(operation))
       reference = call.getCalleeAttr();
+    else if (auto address = dyn_cast<schedule::NativeStateAddressOp>(operation))
+      reference = address.getGlobalAttr();
+    else if (auto load = dyn_cast<schedule::NativeStateLoadOp>(operation))
+      reference = load.getGlobalAttr();
+    else if (auto store = dyn_cast<schedule::NativeStateStoreOp>(operation))
+      reference = store.getGlobalAttr();
     if (!reference || symbols.lookupSymbolIn(design, reference))
       return;
     Operation *definition = moduleSymbols.lookup(reference.getValue());
@@ -3141,12 +3147,12 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
                    TypeRange{builder.getI32Type()},
                    SymbolRefAttr::get(context, "talos_rt_v1_native_state_sync"),
                    ValueRange{callbackEntry->getArgument(0),
-                              LLVM::AddressOfOp::create(
-                                  builder, route.fourState.getLoc(), pointer,
-                                  "__talos_state_value"),
-                              LLVM::AddressOfOp::create(
-                                  builder, route.fourState.getLoc(), pointer,
-                                  "__talos_state_unknown"),
+                              detail::createStatePlaneAddress(
+                                  builder, route.fourState.getLoc(),
+                                  schedule::StatePlane::Value),
+                              detail::createStatePlaneAddress(
+                                  builder, route.fourState.getLoc(),
+                                  schedule::StatePlane::Unknown),
                               detail::llvmConstant(
                                   builder, route.fourState.getLoc(),
                                   builder.getI64Type(), stateBits.getUInt())})
@@ -3236,8 +3242,8 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
       LLVM::CondBrOp::create(builder, route.twoState.getLoc(), promoted,
                              checkpointClearUnknown, checkpointPublish);
       builder.setInsertionPointToStart(checkpointClearUnknown);
-      Value checkpointUnknown = LLVM::AddressOfOp::create(
-          builder, route.twoState.getLoc(), pointer, "__talos_state_unknown");
+      Value checkpointUnknown = detail::createStatePlaneAddress(
+          builder, route.twoState.getLoc(), schedule::StatePlane::Unknown);
       ArrayRef<int64_t> checkpointRanges = route.ranges.asArrayRef();
       if ((checkpointRanges.size() & 1) != 0)
         return route.twoState.emitError("malformed local promotion ranges");
@@ -3484,8 +3490,8 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
             scan, nextRoute);
         builder.setInsertionPointToStart(scan);
         Location location = route.twoState.getLoc();
-        Value unknown = LLVM::AddressOfOp::create(builder, location, pointer,
-                                                  "__talos_state_unknown");
+        Value unknown = detail::createStatePlaneAddress(
+            builder, location, schedule::StatePlane::Unknown);
         Value anyUnknown = detail::llvmConstant(builder, location, i8, 0);
         ArrayRef<int64_t> encoded = route.ranges.asArrayRef();
         for (size_t index = 0; index != encoded.size(); index += 2) {

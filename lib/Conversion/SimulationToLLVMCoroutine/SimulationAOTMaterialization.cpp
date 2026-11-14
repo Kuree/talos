@@ -1,5 +1,6 @@
 //===- SimulationAOTMaterialization.cpp - Native AOT LLVM plan --------===//
 
+#include "NativeStateAccess.h"
 #include "SimulationAOTPlanning.h"
 #include "SimulationEvalNBAQueue.h"
 #include "SimulationEvalReadySet.h"
@@ -4167,8 +4168,8 @@ FailureOr<bool> makeNativeEvalPlan(
     if (forcedTwoState)
       LLVM::MemsetOp::create(
           builder, location,
-          LLVM::AddressOfOp::create(builder, location, pointer,
-                                    "__talos_state_unknown"),
+          detail::createStatePlaneAddress(builder, location,
+                                          schedule::StatePlane::Unknown),
           llvmConstant(builder, location, builder.getI8Type(), 0),
           llvmConstant(builder, location, i64, (stateLayout.bitCount + 7) / 8),
           /*isVolatile=*/false);
@@ -4217,10 +4218,8 @@ FailureOr<bool> makeNativeEvalPlan(
     // hot loop. Reconstruct both canonical planes before runtime callbacks,
     // the end-of-slot dump or asynchronous Tier-2 intervention observe them.
     auto reconstructAliasDrivers = [&] {
-      Value stateUnknown = LLVM::AddressOfOp::create(builder, location, pointer,
-                                                     "__talos_state_unknown");
-      Value handoffState = LLVM::AddressOfOp::create(builder, location, pointer,
-                                                     "__talos_state_value");
+      constexpr auto stateUnknown = schedule::StatePlane::Unknown;
+      constexpr auto handoffState = schedule::StatePlane::Value;
       for (const NativePeriodicAlias &alias : periodicAliases) {
         auto source = llvm::find_if(periodicClocks, [&](const auto &clock) {
           return clock.getStaticState() == alias.getSourceStaticState() &&
@@ -4228,10 +4227,11 @@ FailureOr<bool> makeNativeEvalPlan(
         });
         if (source == periodicClocks.end())
           continue;
-        Value sourceAddress = byteGEP(builder, location, handoffState,
-                                      source->getBitOffset() / 8);
-        Value sourceByte = LLVM::LoadOp::create(
-            builder, location, builder.getI8Type(), sourceAddress, 1);
+        Value sourceByte =
+            schedule::NativeStateLoadOp::create(
+                builder, location, builder.getI8Type(), handoffState, Value{},
+                source->getBitOffset() / 8, 1)
+                ->getResult(0);
         uint8_t sourceMask = uint8_t{1} << (source->getBitOffset() % 8);
         Value sourceSet = arith::CmpIOp::create(
             builder, location, arith::CmpIPredicate::ne,
@@ -4240,10 +4240,11 @@ FailureOr<bool> makeNativeEvalPlan(
                                                builder.getI8Type(),
                                                sourceMask)),
             llvmConstant(builder, location, builder.getI8Type(), 0));
-        Value driverAddress = byteGEP(builder, location, handoffState,
-                                      alias.getDriverBitOffset() / 8);
-        Value driverByte = LLVM::LoadOp::create(
-            builder, location, builder.getI8Type(), driverAddress, 1);
+        Value driverByte =
+            schedule::NativeStateLoadOp::create(
+                builder, location, builder.getI8Type(), handoffState, Value{},
+                alias.getDriverBitOffset() / 8, 1)
+                ->getResult(0);
         uint8_t driverMask = uint8_t{1} << (alias.getDriverBitOffset() % 8);
         Value driverValue = arith::SelectOp::create(
             builder, location, sourceSet,
@@ -4254,18 +4255,21 @@ FailureOr<bool> makeNativeEvalPlan(
                 builder, location, driverByte,
                 llvmConstant(builder, location, builder.getI8Type(),
                              static_cast<uint8_t>(~driverMask))));
-        LLVM::StoreOp::create(builder, location, driverValue, driverAddress, 1);
-        Value driverUnknownAddress = byteGEP(builder, location, stateUnknown,
-                                             alias.getDriverBitOffset() / 8);
-        Value driverUnknown = LLVM::LoadOp::create(
-            builder, location, builder.getI8Type(), driverUnknownAddress, 1);
-        LLVM::StoreOp::create(
+        schedule::NativeStateStoreOp::create(builder, location, driverValue,
+                                             handoffState, Value{},
+                                             alias.getDriverBitOffset() / 8, 1);
+        Value driverUnknown =
+            schedule::NativeStateLoadOp::create(
+                builder, location, builder.getI8Type(), stateUnknown, Value{},
+                alias.getDriverBitOffset() / 8, 1)
+                ->getResult(0);
+        schedule::NativeStateStoreOp::create(
             builder, location,
             arith::AndIOp::create(
                 builder, location, driverUnknown,
                 llvmConstant(builder, location, builder.getI8Type(),
                              static_cast<uint8_t>(~driverMask))),
-            driverUnknownAddress, 1);
+            stateUnknown, Value{}, alias.getDriverBitOffset() / 8, 1);
       }
     };
     auto postponedHooksActive = [&]() -> Value {
@@ -4497,8 +4501,7 @@ FailureOr<bool> makeNativeEvalPlan(
     Value hasIngress = llvmConstant(builder, location, builder.getI1Type(), 0);
     SmallVector<Value> directReady(allOwners.getNumWords(),
                                    llvmConstant(builder, location, i64, 0));
-    Value stateValue = LLVM::AddressOfOp::create(builder, location, pointer,
-                                                 "__talos_state_value");
+    constexpr auto stateValue = schedule::StatePlane::Value;
     auto recordClockCoverage = [&](const NativePeriodicClock &clock,
                                    Value enabled) {
       if (clock.getCoveragePoints().empty())
@@ -4577,10 +4580,10 @@ FailureOr<bool> makeNativeEvalPlan(
           arith::SelectOp::create(builder, location, due, advanced, edge),
           edgeAddress, 8);
 
-      Value byteAddress =
-          byteGEP(builder, location, stateValue, clock.getBitOffset() / 8);
-      Value oldByte = LLVM::LoadOp::create(builder, location,
-                                           builder.getI8Type(), byteAddress, 1);
+      Value oldByte = schedule::NativeStateLoadOp::create(
+                          builder, location, builder.getI8Type(), stateValue,
+                          Value{}, clock.getBitOffset() / 8, 1)
+                          ->getResult(0);
       uint8_t bitMask = uint8_t{1} << (clock.getBitOffset() % 8);
       Value oldSet = arith::CmpIOp::create(
           builder, location, arith::CmpIPredicate::ne,
@@ -4591,10 +4594,10 @@ FailureOr<bool> makeNativeEvalPlan(
       Value toggled = arith::XOrIOp::create(
           builder, location, oldByte,
           llvmConstant(builder, location, builder.getI8Type(), bitMask));
-      LLVM::StoreOp::create(
+      schedule::NativeStateStoreOp::create(
           builder, location,
           arith::SelectOp::create(builder, location, due, toggled, oldByte),
-          byteAddress, 1);
+          stateValue, Value{}, clock.getBitOffset() / 8, 1);
       Value newSet = arith::SelectOp::create(
           builder, location, due,
           arith::XOrIOp::create(
@@ -4627,10 +4630,10 @@ FailureOr<bool> makeNativeEvalPlan(
             alias.getDriverBitOffset() != alias.getTargetBitOffset())
           aliasBits.push_back(alias.getDriverBitOffset());
         for (uint64_t bitOffset : aliasBits) {
-          Value aliasAddress =
-              byteGEP(builder, location, stateValue, bitOffset / 8);
-          Value aliasOld = LLVM::LoadOp::create(
-              builder, location, builder.getI8Type(), aliasAddress, 1);
+          Value aliasOld = schedule::NativeStateLoadOp::create(
+                               builder, location, builder.getI8Type(),
+                               stateValue, Value{}, bitOffset / 8, 1)
+                               ->getResult(0);
           uint8_t aliasMask = uint8_t{1} << (bitOffset % 8);
           Value aliasValue = arith::SelectOp::create(
               builder, location, oldSet,
@@ -4644,8 +4647,9 @@ FailureOr<bool> makeNativeEvalPlan(
                                                 aliasMask)));
           Value storedAlias = arith::SelectOp::create(builder, location, due,
                                                       aliasValue, aliasOld);
-          LLVM::StoreOp::create(builder, location, storedAlias, aliasAddress,
-                                1);
+          schedule::NativeStateStoreOp::create(builder, location, storedAlias,
+                                               stateValue, Value{},
+                                               bitOffset / 8, 1);
           Value aliasOldSet = arith::CmpIOp::create(
               builder, location, arith::CmpIPredicate::ne,
               arith::AndIOp::create(builder, location, aliasOld,
@@ -5305,34 +5309,35 @@ FailureOr<bool> makeNativeEvalPlan(
       const NativePeriodicClock &clock = periodicClocks.front();
       recordClockCoverage(
           clock, llvmConstant(builder, location, builder.getI1Type(), 1));
-      Value sourceAddress =
-          byteGEP(builder, location, stateValue, clock.getBitOffset() / 8);
-      Value source = LLVM::LoadOp::create(
-          builder, location, builder.getI8Type(), sourceAddress, 1);
+      Value source = schedule::NativeStateLoadOp::create(
+                         builder, location, builder.getI8Type(), stateValue,
+                         Value{}, clock.getBitOffset() / 8, 1)
+                         ->getResult(0);
       uint8_t sourceMask = uint8_t{1} << (clock.getBitOffset() % 8);
-      LLVM::StoreOp::create(
+      schedule::NativeStateStoreOp::create(
           builder, location,
           arith::AndIOp::create(
               builder, location, source,
               llvmConstant(builder, location, builder.getI8Type(),
                            static_cast<uint8_t>(~sourceMask))),
-          sourceAddress, 1);
+          stateValue, Value{}, clock.getBitOffset() / 8, 1);
       for (const NativePeriodicAlias &alias : periodicAliases) {
         if (alias.getSourceStaticState() != clock.getStaticState() ||
             alias.getSourceBitOffset() != clock.getBitOffset())
           continue;
         for (uint64_t bitOffset : {alias.getTargetBitOffset()}) {
-          Value address = byteGEP(builder, location, stateValue, bitOffset / 8);
-          Value old = LLVM::LoadOp::create(builder, location,
-                                           builder.getI8Type(), address, 1);
+          Value old = schedule::NativeStateLoadOp::create(
+                          builder, location, builder.getI8Type(), stateValue,
+                          Value{}, bitOffset / 8, 1)
+                          ->getResult(0);
           uint8_t mask = uint8_t{1} << (bitOffset % 8);
-          LLVM::StoreOp::create(
+          schedule::NativeStateStoreOp::create(
               builder, location,
               arith::AndIOp::create(builder, location, old,
                                     llvmConstant(builder, location,
                                                  builder.getI8Type(),
                                                  static_cast<uint8_t>(~mask))),
-              address, 1);
+              stateValue, Value{}, bitOffset / 8, 1);
         }
       }
       Value noOverflow = arith::CmpIOp::create(
@@ -5776,10 +5781,8 @@ FailureOr<bool> makeNativeEvalPlan(
                             8);
   }
 
-  Value stateValue = LLVM::AddressOfOp::create(builder, location, pointer,
-                                               "__talos_state_value");
-  Value stateUnknown = LLVM::AddressOfOp::create(builder, location, pointer,
-                                                 "__talos_state_unknown");
+  constexpr auto stateValue = schedule::StatePlane::Value;
+  constexpr auto stateUnknown = schedule::StatePlane::Unknown;
   // Build the source barrier with the complete four-state semantics.  The
   // canonical and value-only two-state variants are derived from this body
   // later, after every dynamic and fixed-root unknown-plane access exists.
@@ -6050,10 +6053,14 @@ FailureOr<bool> makeNativeEvalPlan(
         builder, location, dynamicByte,
         llvmConstant(builder, location, i64,
                      staticNBAPlan.generatedOffsets[entry.rootIndex] / 8));
-    auto planeAddress = [&](Value plane) {
-      return LLVM::GEPOp::create(builder, location, pointer,
-                                 builder.getI8Type(), plane,
-                                 ValueRange{byteOffset});
+    // The selected window of a plane at the dynamic byte offset.
+    auto loadWindow = [&](schedule::StatePlane plane, Type type) {
+      return schedule::NativeStateLoadOp::create(builder, location, type, plane,
+                                                 byteOffset, 0, 1);
+    };
+    auto storeWindow = [&](schedule::StatePlane plane, Value value) {
+      return schedule::NativeStateStoreOp::create(builder, location, value,
+                                                  plane, byteOffset, 0, 1);
     };
     active = arith::AndIOp::create(builder, location, active, overlaps);
     Value oldFieldValue = entryAlloca(builder, location, i64, 1, 8);
@@ -6084,15 +6091,12 @@ FailureOr<bool> makeNativeEvalPlan(
 
       builder.setInsertionPointToStart(aligned);
       IntegerType alignedType = IntegerType::get(context, entry.width);
-      auto commitAlignedPlane = [&](Value plane, StringRef stagedName,
-                                    Value oldField) {
-        Value address = planeAddress(plane);
-        auto old =
-            LLVM::LoadOp::create(builder, location, alignedType, address, 1);
+      auto commitAlignedPlane = [&](schedule::StatePlane plane,
+                                    StringRef stagedName, Value oldField) {
+        Operation *oldLoad = loadWindow(plane, alignedType);
+        Value old = oldLoad->getResult(0);
         if (plane == stateUnknown)
-          ::talos::schedule::set<
-              ::talos::schedule::Field::EvalPreserveNbaUnknown>(
-              old, builder.getUnitAttr());
+          detail::setNativeLatchDestination(oldLoad);
         LLVM::StoreOp::create(
             builder, location,
             resizeNativeInteger(builder, location, old, cast<IntegerType>(i64)),
@@ -6100,17 +6104,12 @@ FailureOr<bool> makeNativeEvalPlan(
         Value staged64 = loadStaged(stagedName);
         Value staged =
             resizeNativeInteger(builder, location, staged64, alignedType);
-        auto store = LLVM::StoreOp::create(
-            builder, location,
-            arith::SelectOp::create(builder, location, active, staged, old),
-            address, 1);
+        Operation *store =
+            storeWindow(plane, arith::SelectOp::create(builder, location,
+                                                       active, staged, old));
         if (plane == stateUnknown) {
-          ::talos::schedule::set<
-              ::talos::schedule::Field::EvalPreserveNbaUnknown>(
-              store, builder.getUnitAttr());
-          ::talos::schedule::set<
-              ::talos::schedule::Field::EvalUnknownWriteRange>(
-              store, publicationRange);
+          detail::setNativeLatchDestination(store);
+          detail::setNativeAccessWrittenBits(store, publicationRange);
         }
       };
       commitAlignedPlane(stateValue, entry.valueName, oldFieldValue);
@@ -6151,9 +6150,7 @@ FailureOr<bool> makeNativeEvalPlan(
                                             windowHighClip);
     Value shiftedMask =
         arith::ShLIOp::create(builder, location, destinationMask, windowShift);
-    Value valueAddress = planeAddress(stateValue);
-    Value oldValue =
-        LLVM::LoadOp::create(builder, location, windowType, valueAddress, 1);
+    Value oldValue = loadWindow(stateValue, windowType)->getResult(0);
     Value oldSelectedValue = arith::AndIOp::create(
         builder, location,
         arith::ShRUIOp::create(builder, location, oldValue, windowShift),
@@ -6184,16 +6181,12 @@ FailureOr<bool> makeNativeEvalPlan(
             builder, location,
             arith::XOrIOp::create(builder, location, oldValue, stagedValue),
             shiftedMask));
-    LLVM::StoreOp::create(builder, location,
-                          arith::SelectOp::create(builder, location, active,
-                                                  mergedValue, oldValue),
-                          valueAddress, 1);
+    storeWindow(stateValue, arith::SelectOp::create(builder, location, active,
+                                                    mergedValue, oldValue));
     if (!forcedTwoStateEval) {
-      Value unknownAddress = planeAddress(stateUnknown);
-      auto oldUnknown = LLVM::LoadOp::create(builder, location, windowType,
-                                             unknownAddress, 1);
-      ::talos::schedule::set<::talos::schedule::Field::EvalPreserveNbaUnknown>(
-          oldUnknown, builder.getUnitAttr());
+      Operation *oldUnknownLoad = loadWindow(stateUnknown, windowType);
+      Value oldUnknown = oldUnknownLoad->getResult(0);
+      detail::setNativeLatchDestination(oldUnknownLoad);
       Value oldSelectedUnknown = arith::AndIOp::create(
           builder, location,
           arith::ShRUIOp::create(builder, location, oldUnknown, windowShift),
@@ -6226,17 +6219,13 @@ FailureOr<bool> makeNativeEvalPlan(
                                                       oldUnknown,
                                                       stagedUnknown),
                                 shiftedMask));
-      auto store = LLVM::StoreOp::create(
-          builder, location,
-          arith::SelectOp::create(builder, location, active, mergedUnknown,
-                                  oldUnknown),
-          unknownAddress, 1);
-      ::talos::schedule::set<::talos::schedule::Field::EvalPreserveNbaUnknown>(
-          store, builder.getUnitAttr());
+      Operation *store = storeWindow(
+          stateUnknown, arith::SelectOp::create(builder, location, active,
+                                                mergedUnknown, oldUnknown));
+      detail::setNativeLatchDestination(store);
       // The clipped mask preserves every bit outside this canonical root,
       // including neighbors in the byte-rounded load/store window.
-      ::talos::schedule::set<::talos::schedule::Field::EvalUnknownWriteRange>(
-          store, publicationRange);
+      detail::setNativeAccessWrittenBits(store, publicationRange);
     } else
       LLVM::StoreOp::create(builder, location,
                             llvmConstant(builder, location, i64, 0),
@@ -6479,13 +6468,15 @@ FailureOr<bool> makeNativeEvalPlan(
   auto scalarMask = [](uint64_t width) {
     return width == 64 ? UINT64_MAX : (uint64_t{1} << width) - 1;
   };
-  auto loadRoot = [&](Value plane, uint64_t offset, uint64_t width) {
+  auto loadRoot = [&](schedule::StatePlane plane, uint64_t offset,
+                      uint64_t width) {
     uint64_t firstByte = offset / 8;
     uint64_t shift = offset % 8;
     if (shift == 0 && width < 8) {
-      Value exact =
-          LLVM::LoadOp::create(builder, location, builder.getI8Type(),
-                               byteGEP(builder, location, plane, firstByte), 1);
+      Value exact = schedule::NativeStateLoadOp::create(
+                        builder, location, builder.getI8Type(), plane, Value{},
+                        firstByte, 1)
+                        ->getResult(0);
       exact = arith::AndIOp::create(builder, location, exact,
                                     llvmConstant(builder, location,
                                                  builder.getI8Type(),
@@ -6496,24 +6487,26 @@ FailureOr<bool> makeNativeEvalPlan(
         (width == 8 || width == 16 || width == 32 || width == 64)) {
       IntegerType rootType = IntegerType::get(context, width);
       Value exact =
-          LLVM::LoadOp::create(builder, location, rootType,
-                               byteGEP(builder, location, plane, firstByte), 1);
+          schedule::NativeStateLoadOp::create(builder, location, rootType,
+                                              plane, Value{}, firstByte, 1)
+              ->getResult(0);
       return width == 64 ? exact
                          : LLVM::ZExtOp::create(builder, location, i64, exact)
                                .getResult();
     }
-    Value low =
-        LLVM::LoadOp::create(builder, location, i64,
-                             byteGEP(builder, location, plane, firstByte), 1);
+    Value low = schedule::NativeStateLoadOp::create(
+                    builder, location, i64, plane, Value{}, firstByte, 1)
+                    ->getResult(0);
     Value value = low;
     if (shift != 0)
       value =
           arith::ShRUIOp::create(builder, location, value,
                                  llvmConstant(builder, location, i64, shift));
     if (width > 64 - shift) {
-      Value high = LLVM::LoadOp::create(
-          builder, location, builder.getI8Type(),
-          byteGEP(builder, location, plane, firstByte + 8), 1);
+      Value high = schedule::NativeStateLoadOp::create(
+                       builder, location, builder.getI8Type(), plane, Value{},
+                       firstByte + 8, 1)
+                       ->getResult(0);
       high = LLVM::ZExtOp::create(builder, location, i64, high);
       high = arith::ShLIOp::create(
           builder, location, high,
@@ -6525,15 +6518,15 @@ FailureOr<bool> makeNativeEvalPlan(
                llvmConstant(builder, location, i64, scalarMask(width)))
         .getResult();
   };
-  auto storeRoot = [&](Value plane, uint64_t offset, uint64_t width,
-                       Value value) {
+  auto storeRoot = [&](schedule::StatePlane plane, uint64_t offset,
+                       uint64_t width, Value value) {
     uint64_t firstByte = offset / 8;
     uint64_t shift = offset % 8;
     if (shift == 0 && width < 8) {
       Value exact =
           LLVM::TruncOp::create(builder, location, builder.getI8Type(), value);
-      LLVM::StoreOp::create(builder, location, exact,
-                            byteGEP(builder, location, plane, firstByte), 1);
+      schedule::NativeStateStoreOp::create(builder, location, exact, plane,
+                                           Value{}, firstByte, 1);
       return;
     }
     if (shift == 0 &&
@@ -6543,12 +6536,13 @@ FailureOr<bool> makeNativeEvalPlan(
                                 : LLVM::TruncOp::create(builder, location,
                                                         rootType, value)
                                       .getResult();
-      LLVM::StoreOp::create(builder, location, exact,
-                            byteGEP(builder, location, plane, firstByte), 1);
+      schedule::NativeStateStoreOp::create(builder, location, exact, plane,
+                                           Value{}, firstByte, 1);
       return;
     }
-    Value address = byteGEP(builder, location, plane, firstByte);
-    Value oldLow = LLVM::LoadOp::create(builder, location, i64, address, 1);
+    Value oldLow = schedule::NativeStateLoadOp::create(
+                       builder, location, i64, plane, Value{}, firstByte, 1)
+                       ->getResult(0);
     uint64_t lowMask = scalarMask(width) << shift;
     Value cleared =
         arith::AndIOp::create(builder, location, oldLow,
@@ -6561,17 +6555,18 @@ FailureOr<bool> makeNativeEvalPlan(
     positioned =
         arith::AndIOp::create(builder, location, positioned,
                               llvmConstant(builder, location, i64, lowMask));
-    LLVM::StoreOp::create(
+    schedule::NativeStateStoreOp::create(
         builder, location,
-        arith::OrIOp::create(builder, location, cleared, positioned), address,
-        1);
+        arith::OrIOp::create(builder, location, cleared, positioned), plane,
+        Value{}, firstByte, 1);
     if (width <= 64 - shift)
       return;
     uint64_t highWidth = width - (64 - shift);
     uint8_t highMask = static_cast<uint8_t>((uint16_t{1} << highWidth) - 1);
-    Value highAddress = byteGEP(builder, location, plane, firstByte + 8);
-    Value oldHigh = LLVM::LoadOp::create(builder, location, builder.getI8Type(),
-                                         highAddress, 1);
+    Value oldHigh = schedule::NativeStateLoadOp::create(
+                        builder, location, builder.getI8Type(), plane, Value{},
+                        firstByte + 8, 1)
+                        ->getResult(0);
     Value highValue = arith::ShRUIOp::create(
         builder, location, value,
         llvmConstant(builder, location, i64, 64 - shift));
@@ -6586,7 +6581,8 @@ FailureOr<bool> makeNativeEvalPlan(
         arith::AndIOp::create(
             builder, location, highValue,
             llvmConstant(builder, location, builder.getI8Type(), highMask)));
-    LLVM::StoreOp::create(builder, location, newHigh, highAddress, 1);
+    schedule::NativeStateStoreOp::create(builder, location, newHigh, plane,
+                                         Value{}, firstByte + 8, 1);
   };
 
   for (uint32_t word = 0; word != nbaDirtyWordCount; ++word) {
@@ -7482,8 +7478,7 @@ FailureOr<bool> makeNativeEvalPlan(
           builder, location, knownEntry->getArgument(2), stagedUnknown,
           llvmConstant(builder, location, i64, 0));
       Value oldUnknown =
-          loadRoot(LLVM::AddressOfOp::create(builder, location, pointer,
-                                             "__talos_state_unknown"),
+          loadRoot(schedule::StatePlane::Unknown,
                    staticNBAPlan.generatedOffsets[rootIndex], root.bit_width);
       Value relevantUnknown = arith::AndIOp::create(
           builder, location,
@@ -7619,16 +7614,16 @@ FailureOr<bool> makeNativeEvalPlan(
                          : 0) |
                     TALOS_RT_NATIVE_SCHEDULE_EVAL),
             NativeSchedulePlanField::Flags);
-        value = insertValue(initializerBuilder, location, value,
-                            LLVM::AddressOfOp::create(initializerBuilder,
-                                                      location, pointer,
-                                                      "__talos_state_value"),
-                            NativeSchedulePlanField::StateValue);
-        value = insertValue(initializerBuilder, location, value,
-                            LLVM::AddressOfOp::create(initializerBuilder,
-                                                      location, pointer,
-                                                      "__talos_state_unknown"),
-                            NativeSchedulePlanField::StateUnknown);
+        value = insertValue(
+            initializerBuilder, location, value,
+            detail::createStatePlaneAddress(initializerBuilder, location,
+                                            schedule::StatePlane::Value),
+            NativeSchedulePlanField::StateValue);
+        value = insertValue(
+            initializerBuilder, location, value,
+            detail::createStatePlaneAddress(initializerBuilder, location,
+                                            schedule::StatePlane::Unknown),
+            NativeSchedulePlanField::StateUnknown);
         value = insertValue(initializerBuilder, location, value,
                             llvmConstant(initializerBuilder, location, i64,
                                          stateLayout.bitCount),

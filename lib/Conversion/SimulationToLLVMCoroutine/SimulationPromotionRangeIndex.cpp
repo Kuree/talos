@@ -790,6 +790,9 @@ public:
   StringRef getArgument() const final {
     return "publish-native-function-proofs";
   }
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<LLVM::LLVMDialect, schedule::ScheduleDialect>();
+  }
   void runOnOperation() override {
     if (getOperation().isExternal()) {
       markAllAnalysesPreserved();
@@ -830,8 +833,8 @@ public:
     };
     // The bit offset of an unknown-plane address, for dynamic publications.
     auto planeBitOffset = [&](Location location, Value address) -> Value {
-      Value base = LLVM::AddressOfOp::create(builder, location, pointer,
-                                             "__talos_state_unknown");
+      Value base = detail::createStatePlaneAddress(
+          builder, location, schedule::StatePlane::Unknown);
       Value bytes = LLVM::SubOp::create(
           builder, location,
           LLVM::PtrToIntOp::create(builder, location, i64, address),

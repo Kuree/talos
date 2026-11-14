@@ -101,8 +101,32 @@ inline bool isNativeMemoryStore(mlir::Operation *operation) {
       operation);
 }
 
-/// Record the group member `owner` on a load or store of either form.
+/// A state plane's address as a producer takes it: the plane's typed base in
+/// a function, llvm.mlir.addressof in a global's initializer.
+mlir::Value createStatePlaneAddress(mlir::OpBuilder &builder,
+                                    mlir::Location location,
+                                    schedule::StatePlane plane);
+/// The address of a global named at run time of the producer, which may be
+/// a state plane: createStatePlaneAddress for a plane, llvm.mlir.addressof
+/// otherwise.
+mlir::Value createGlobalAddress(mlir::OpBuilder &builder,
+                                mlir::Location location,
+                                llvm::StringRef global);
+
+/// What producers record about a load or store of either form: a typed
+/// access takes it as a property, an LLVM one as the tag raising maps to it.
+/// The group member that owns the access.
 void setNativeMemoryOwner(mlir::Operation *operation, mlir::IntegerAttr owner);
+/// The physical byte window [begin, end) the access lies in.
+void setNativeAccessWindow(mlir::Operation *operation,
+                           mlir::DenseI64ArrayAttr window);
+/// The bits [begin, width] a dynamic store may change.
+void setNativeAccessWrittenBits(mlir::Operation *operation,
+                                mlir::DenseI64ArrayAttr bits);
+/// The access is a per-site NBA latch destination.
+void setNativeLatchDestination(mlir::Operation *operation);
+/// The store's writer reports its roots to the unknown summary itself.
+void setNativeSummaryReported(mlir::Operation *operation);
 
 /// Whether `operation` writes or reads a per-site NBA latch destination,
 /// which the fast two-state NBA commit keeps in both planes.

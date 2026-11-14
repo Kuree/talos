@@ -1,7 +1,7 @@
-// RUN: talos-opt %s --materialize-native-group-promotion-readiness --materialize-native-promotion-range-index | %llvm_dist/bin/mlir-opt --convert-arith-to-llvm --convert-cf-to-llvm -o %t.mlir
+// RUN: talos-opt %s --materialize-native-group-promotion-readiness --materialize-native-promotion-range-index | talos-opt --pass-pipeline='builtin.module(llvm.func(lower-native-state-access))' | %llvm_dist/bin/mlir-opt --convert-arith-to-llvm --convert-cf-to-llvm -o %t.mlir
 // RUN: FileCheck %s < %t.mlir
-// RUN: talos-opt %s --mlir-disable-threading --materialize-native-group-promotion-readiness --materialize-native-promotion-range-index | %llvm_dist/bin/mlir-opt --convert-arith-to-llvm --convert-cf-to-llvm | diff %t.mlir -
-// RUN: talos-opt %s '--test-talos-set-module-attributes=attrs="{llvm.data_layout = \"e-p:32:32-i64:64\", llvm.target_triple = \"wasm32-unknown-unknown\"}"' --materialize-native-group-promotion-readiness --materialize-native-promotion-range-index | %llvm_dist/bin/mlir-opt --convert-arith-to-llvm --convert-cf-to-llvm | talos-translate --mlir-to-llvmir | %llvm_dist/bin/opt -passes=verify -disable-output
+// RUN: talos-opt %s --mlir-disable-threading --materialize-native-group-promotion-readiness --materialize-native-promotion-range-index | talos-opt --pass-pipeline='builtin.module(llvm.func(lower-native-state-access))' | %llvm_dist/bin/mlir-opt --convert-arith-to-llvm --convert-cf-to-llvm | diff %t.mlir -
+// RUN: talos-opt %s '--test-talos-set-module-attributes=attrs="{llvm.data_layout = \"e-p:32:32-i64:64\", llvm.target_triple = \"wasm32-unknown-unknown\"}"' --materialize-native-group-promotion-readiness --materialize-native-promotion-range-index | talos-opt --pass-pipeline='builtin.module(llvm.func(lower-native-state-access))' | %llvm_dist/bin/mlir-opt --convert-arith-to-llvm --convert-cf-to-llvm | talos-translate --mlir-to-llvmir | %llvm_dist/bin/opt -passes=verify -disable-output
 // RUN: not talos-opt %s --pass-pipeline='builtin.module(materialize-native-group-promotion-readiness,materialize-native-group-promotion-readiness)' 2>&1 | FileCheck %s --check-prefix=REPEAT
 // REPEAT: group readiness was materialized twice
 

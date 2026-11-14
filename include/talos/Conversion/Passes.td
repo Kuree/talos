@@ -396,8 +396,9 @@ def MaterializeNativeGroupPromotionReadinessPass
     reverse dependency index and unknown-write publication are built.
   }];
   let dependentDialects = ["mlir::LLVM::LLVMDialect",
-                          "mlir::arith::ArithDialect",
-                          "mlir::cf::ControlFlowDialect"];
+                           "mlir::arith::ArithDialect",
+                           "mlir::cf::ControlFlowDialect",
+                           "talos::schedule::ScheduleDialect"];
 }
 
 def MaterializeNativePromotionRangeIndexPass
@@ -472,7 +473,8 @@ def MaterializeNativeEvalRoutesPass
   }];
   let dependentDialects = ["mlir::LLVM::LLVMDialect",
                            "mlir::arith::ArithDialect",
-                           "mlir::cf::ControlFlowDialect"];
+                           "mlir::cf::ControlFlowDialect",
+                           "talos::schedule::ScheduleDialect"];
 }
 
 def PublishNativeProofsPass
@@ -484,7 +486,8 @@ def PublishNativeProofsPass
     them, as a nested llvm.func pipeline, then the promotion windows are
     materialized.
   }];
-  let dependentDialects = ["mlir::LLVM::LLVMDialect"];
+  let dependentDialects = ["mlir::LLVM::LLVMDialect",
+                           "talos::schedule::ScheduleDialect"];
 }
 
 def MaterializeNativeEvalGroupBodiesPass
@@ -498,7 +501,8 @@ def MaterializeNativeEvalGroupBodiesPass
   }];
   let dependentDialects = ["mlir::LLVM::LLVMDialect",
                            "mlir::arith::ArithDialect",
-                           "mlir::cf::ControlFlowDialect"];
+                           "mlir::cf::ControlFlowDialect",
+                           "talos::schedule::ScheduleDialect"];
 }
 
 def MaterializeNativeEvalTransactionsPass
@@ -508,7 +512,8 @@ def MaterializeNativeEvalTransactionsPass
     Native LLVM finalization stage: materializes native eval transactions,
     removes the unknown plane of a two-state build, and caches pure cones.
   }];
-  let dependentDialects = ["mlir::LLVM::LLVMDialect"];
+  let dependentDialects = ["mlir::LLVM::LLVMDialect",
+                           "talos::schedule::ScheduleDialect"];
 }
 
 def RaiseNativeStateAccessPass

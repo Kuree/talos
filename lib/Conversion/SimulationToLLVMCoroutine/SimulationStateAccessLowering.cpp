@@ -1,5 +1,6 @@
 //===- SimulationStateAccessLowering.cpp - Native state access patterns --===//
 
+#include "NativeStateAccess.h"
 #include "SimulationLocalStorageLowering.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Analysis/NativeStorageLayout.h"
@@ -84,23 +85,20 @@ Value loadBulkStatePlane(ConversionPatternRewriter &rewriter, Location location,
                          bool unknownFallback, uint64_t stateBitCount,
                          const NativeStateLayout *directLayout,
                          bool assumeClean) {
-  Type pointer = LLVM::LLVMPointerType::get(rewriter.getContext());
   Type i32 = rewriter.getI32Type();
   Type i64 = rewriter.getI64Type();
   Value output = allocateBulkPlane(rewriter, location, width);
   std::optional<DirectStaticStateRange> range =
       resolveDirectStaticStateRange(handle, width, directLayout);
   if (range && (!range->guarded || assumeClean) && range->offset % 8 == 0) {
-    Value base =
-        LLVM::AddressOfOp::create(rewriter, location, pointer, globalName);
+    Value base = detail::createGlobalAddress(rewriter, location, globalName);
     LLVM::MemcpyOp::create(
         rewriter, location, output,
         byteGEP(rewriter, location, base, range->offset / 8),
         llvmConstant(rewriter, location, i64, (width + 7) / 8), false);
     return output;
   }
-  Value base =
-      LLVM::AddressOfOp::create(rewriter, location, pointer, globalName);
+  Value base = detail::createGlobalAddress(rewriter, location, globalName);
   Value context = loadCurrentRuntimeContext(rewriter, location);
   LLVM::CallOp::create(
       rewriter, location, TypeRange{i32},
@@ -120,11 +118,9 @@ void storeBulkStatePlane(ConversionPatternRewriter &rewriter, Location location,
                          Value handle, Value input, uint64_t width,
                          StringRef globalName, uint64_t stateBitCount,
                          Value changed, bool continuous) {
-  Type pointer = LLVM::LLVMPointerType::get(rewriter.getContext());
   Type i32 = rewriter.getI32Type();
   Type i64 = rewriter.getI64Type();
-  Value base =
-      LLVM::AddressOfOp::create(rewriter, location, pointer, globalName);
+  Value base = detail::createGlobalAddress(rewriter, location, globalName);
   Value context = loadCurrentRuntimeContext(rewriter, location);
   LLVM::CallOp::create(
       rewriter, location, TypeRange{i32},
@@ -153,7 +149,7 @@ bool tryStoreBulkDirect(ConversionPatternRewriter &rewriter, Location location,
     return false;
   Type pointer = LLVM::LLVMPointerType::get(rewriter.getContext());
   auto copy = [&](StringRef name, bool mask = false) {
-    Value base = LLVM::AddressOfOp::create(rewriter, location, pointer, name);
+    Value base = detail::createGlobalAddress(rewriter, location, name);
     if (name.starts_with("__talos_continuous_"))
       base = LLVM::LoadOp::create(rewriter, location, pointer, base, 8);
     Value destination = byteGEP(rewriter, location, base, range->offset / 8);

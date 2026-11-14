@@ -6,9 +6,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "NativeStateAccess.h"
+#include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 
 #include "mlir/IR/Matchers.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 
 using namespace mlir;
 
@@ -128,6 +130,67 @@ void clearNativeLatchDestination(Operation *operation) {
     store.setLatchDestination(false);
   else
     schedule::remove<schedule::Field::EvalPreserveNbaUnknown>(operation);
+}
+
+Value createStatePlaneAddress(OpBuilder &builder, Location location,
+                              schedule::StatePlane plane) {
+  // Typed state operations live in functions; a global's initializer takes
+  // a plane's address as a constant.
+  Block *block = builder.getInsertionBlock();
+  Operation *parent = block ? block->getParentOp() : nullptr;
+  if (parent && (isa<FunctionOpInterface>(parent) ||
+                 parent->getParentOfType<FunctionOpInterface>()))
+    return schedule::NativeStateAddressOp::create(builder, location, plane);
+  return LLVM::AddressOfOp::create(
+      builder, location, LLVM::LLVMPointerType::get(builder.getContext()),
+      schedule::getStatePlaneGlobalName(plane));
+}
+
+Value createGlobalAddress(OpBuilder &builder, Location location,
+                          StringRef global) {
+  if (auto plane = schedule::getStatePlaneOfGlobal(global))
+    return createStatePlaneAddress(builder, location, *plane);
+  return LLVM::AddressOfOp::create(
+      builder, location, LLVM::LLVMPointerType::get(builder.getContext()),
+      global);
+}
+
+void setNativeAccessWindow(Operation *operation, DenseI64ArrayAttr window) {
+  assert(schedule::isValidStateWindow(window.asArrayRef()) &&
+         "malformed state access window");
+  if (auto load = dyn_cast<schedule::NativeStateLoadOp>(operation))
+    load.setWindowAttr(window);
+  else if (auto store = dyn_cast<schedule::NativeStateStoreOp>(operation))
+    store.setWindowAttr(window);
+  else
+    schedule::set<schedule::Field::EvalStateAccessBytes>(operation, window);
+}
+
+void setNativeAccessWrittenBits(Operation *operation, DenseI64ArrayAttr bits) {
+  assert(schedule::isValidStateWrittenBits(bits.asArrayRef()) &&
+         "malformed written bits");
+  if (auto store = dyn_cast<schedule::NativeStateStoreOp>(operation))
+    store.setWrittenBitsAttr(bits);
+  else
+    schedule::set<schedule::Field::EvalUnknownWriteRange>(operation, bits);
+}
+
+void setNativeLatchDestination(Operation *operation) {
+  if (auto load = dyn_cast<schedule::NativeStateLoadOp>(operation))
+    load.setLatchDestination(true);
+  else if (auto store = dyn_cast<schedule::NativeStateStoreOp>(operation))
+    store.setLatchDestination(true);
+  else
+    schedule::set<schedule::Field::EvalPreserveNbaUnknown>(
+        operation, UnitAttr::get(operation->getContext()));
+}
+
+void setNativeSummaryReported(Operation *operation) {
+  if (auto store = dyn_cast<schedule::NativeStateStoreOp>(operation))
+    store.setSummaryReported(true);
+  else
+    schedule::set<schedule::Field::EvalUnknownSummaryReported>(
+        operation, UnitAttr::get(operation->getContext()));
 }
 
 void setNativeMemoryOwner(Operation *operation, IntegerAttr owner) {

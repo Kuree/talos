@@ -1,5 +1,6 @@
 //===- SimulationStatePlaneLowering.cpp - Native state planes --------===//
 
+#include "NativeStateAccess.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleEnums.h"
@@ -151,10 +152,23 @@ resolveDirectStaticStateRange(Value handle, unsigned width,
 }
 
 struct DirectPackedPlane {
+  /// The span's address in another global; null for a canonical plane,
+  /// whose span `plane` addresses at `byteOffset` through typed accesses.
   Value address;
   IntegerType spanType;
   Value span;
   unsigned bitOffset;
+  std::optional<schedule::StatePlane> plane = std::nullopt;
+  uint64_t byteOffset = 0;
+
+  /// Write the span.
+  void store(OpBuilder &builder, Location location, Value value) const {
+    if (plane)
+      schedule::NativeStateStoreOp::create(builder, location, value, *plane,
+                                           Value{}, byteOffset, 1);
+    else
+      LLVM::StoreOp::create(builder, location, value, address, 1);
+  }
 };
 
 DirectPackedPlane
@@ -317,9 +331,9 @@ static void annotateCanonicalAccess(Operation *operation, uint64_t rootOffset,
   // IEEE 1800-2023 11.5.1: the selector is contained or explicitly clamped
   // before this access. Include its complete physical window, not merely
   // the logical write mask, so adjacent packed fields cannot go stale.
-  schedule::set<schedule::Field::EvalStateAccessBytes>(
-      operation, DenseI64ArrayAttr::get(operation->getContext(),
-                                        {int64_t(begin), int64_t(end)}));
+  setNativeAccessWindow(operation,
+                        DenseI64ArrayAttr::get(operation->getContext(),
+                                               {int64_t(begin), int64_t(end)}));
 }
 
 Value loadDynamicPackedWindow(ConversionPatternRewriter &rewriter,
@@ -337,13 +351,25 @@ Value loadDynamicPackedWindow(ConversionPatternRewriter &rewriter,
   Value firstBit =
       arith::AndIOp::create(rewriter, location, absolute,
                             llvmConstant(rewriter, location, i64, uint64_t{7}));
-  Value base =
-      LLVM::AddressOfOp::create(rewriter, location, pointer, globalName);
-  Value address = LLVM::GEPOp::create(rewriter, location, pointer, i8, base,
-                                      ValueRange{byteOffset});
+  // A canonical plane's window is read by typed accesses; another global's
+  // through its address.
+  std::optional<schedule::StatePlane> plane =
+      schedule::getStatePlaneOfGlobal(globalName);
+  Value address;
+  if (!plane) {
+    Value base =
+        LLVM::AddressOfOp::create(rewriter, location, pointer, globalName);
+    address = LLVM::GEPOp::create(rewriter, location, pointer, i8, base,
+                                  ValueRange{byteOffset});
+  }
   auto loadSpan = [&](unsigned spanWidth) {
     IntegerType spanType = rewriter.getIntegerType(spanWidth);
-    Value span = LLVM::LoadOp::create(rewriter, location, spanType, address, 1);
+    Value span =
+        plane ? schedule::NativeStateLoadOp::create(
+                    rewriter, location, spanType, *plane, byteOffset, 0, 1)
+                    .getResult()
+              : LLVM::LoadOp::create(rewriter, location, spanType, address, 1)
+                    .getResult();
     annotateCanonicalAccess(span.getDefiningOp(), range.rootOffset,
                             range.rootWidth, spanWidth);
     Value firstBitShift =
@@ -360,8 +386,7 @@ Value loadDynamicPackedWindow(ConversionPatternRewriter &rewriter,
                : LLVM::TruncOp::create(rewriter, location, resultType, shifted)
                      .getResult();
   };
-  if (globalName == "__talos_state_value" ||
-      globalName == "__talos_state_unknown")
+  if (schedule::getStatePlaneOfGlobal(globalName))
     if (unsigned nativeWidth =
             getNativePackedWindowWidth(resultType.getWidth()))
       return loadSpan(nativeWidth);
@@ -445,15 +470,21 @@ Value loadDirectDynamicPackedPlane(ConversionPatternRewriter &rewriter,
                      range.rootOffset + range.localOffset));
     auto storageType = rewriter.getIntegerType(unit->width);
     Type pointer = LLVM::LLVMPointerType::get(rewriter.getContext());
-    Value base =
-        LLVM::AddressOfOp::create(rewriter, location, pointer, globalName);
     Value byte = arith::ShRUIOp::create(
         rewriter, location, absolute, llvmConstant(rewriter, location, i64, 3));
-    Value address =
-        LLVM::GEPOp::create(rewriter, location, pointer, rewriter.getI8Type(),
-                            base, ValueRange{byte});
-    Value storage =
-        LLVM::LoadOp::create(rewriter, location, storageType, address, 1);
+    Value storage;
+    if (auto plane = schedule::getStatePlaneOfGlobal(globalName)) {
+      storage = schedule::NativeStateLoadOp::create(
+          rewriter, location, storageType, *plane, byte, 0, 1);
+    } else {
+      Value base =
+          LLVM::AddressOfOp::create(rewriter, location, pointer, globalName);
+      Value address =
+          LLVM::GEPOp::create(rewriter, location, pointer, rewriter.getI8Type(),
+                              base, ValueRange{byte});
+      storage =
+          LLVM::LoadOp::create(rewriter, location, storageType, address, 1);
+    }
     if (range.inBounds)
       annotateCanonicalAccess(storage.getDefiningOp(), range.rootOffset,
                               range.rootWidth, storageType.getWidth());
@@ -635,6 +666,13 @@ DirectPackedPlane loadDirectPackedPlane(OpBuilder &builder, Location location,
     byteCount = unit->width / 8;
   }
   IntegerType spanType = builder.getIntegerType(byteCount * 8);
+  if (auto plane = schedule::getStatePlaneOfGlobal(globalName)) {
+    Value span;
+    if (read)
+      span = schedule::NativeStateLoadOp::create(builder, location, spanType,
+                                                 *plane, Value{}, firstByte, 1);
+    return {Value{}, spanType, span, firstBit, plane, firstByte};
+  }
   Value base =
       LLVM::AddressOfOp::create(builder, location, pointer, globalName);
   if (globalName.starts_with("__talos_continuous_"))
@@ -682,7 +720,7 @@ Value storeDirectPackedPlane(OpBuilder &builder, Location location, Value input,
         inputType == plane.spanType
             ? input
             : LLVM::ZExtOp::create(builder, location, plane.spanType, input);
-    LLVM::StoreOp::create(builder, location, extended, plane.address, 1);
+    plane.store(builder, location, extended);
     if (!trackChange)
       return llvmConstant(builder, location, builder.getI1Type(), 0);
     Value old = extractDirectPackedPlane(builder, location, plane, inputType);
@@ -715,7 +753,7 @@ Value storeDirectPackedPlane(OpBuilder &builder, Location location, Value input,
   Value updated = arith::OrIOp::create(
       builder, location, preserved,
       arith::AndIOp::create(builder, location, extended, mask));
-  LLVM::StoreOp::create(builder, location, updated, plane.address, 1);
+  plane.store(builder, location, updated);
   if (!trackChange)
     return llvmConstant(builder, location, builder.getI1Type(), 0);
   Value old = extractDirectPackedPlane(builder, location, plane, inputType);
@@ -888,8 +926,7 @@ Value loadStatePlane(ConversionPatternRewriter &rewriter, Location location,
     Type pointer = LLVM::LLVMPointerType::get(rewriter.getContext());
     IntegerType i32 = rewriter.getI32Type();
     IntegerType i64 = rewriter.getI64Type();
-    Value base =
-        LLVM::AddressOfOp::create(rewriter, location, pointer, globalName);
+    Value base = detail::createGlobalAddress(rewriter, location, globalName);
     Value out = beginTemporary(rewriter, location, resultType, 1);
     Value contextAddress = LLVM::AddressOfOp::create(
         rewriter, location, pointer, "__talos_current_context");
@@ -1004,8 +1041,7 @@ Value storeStatePlane(ConversionPatternRewriter &rewriter, Location location,
     IntegerType i8 = rewriter.getI8Type();
     IntegerType i32 = rewriter.getI32Type();
     IntegerType i64 = rewriter.getI64Type();
-    Value base =
-        LLVM::AddressOfOp::create(rewriter, location, pointer, globalName);
+    Value base = detail::createGlobalAddress(rewriter, location, globalName);
     Value in = beginTemporary(rewriter, location, inputType, 1);
     LLVM::StoreOp::create(rewriter, location, input, in, 1);
     Value changed = beginTemporary(rewriter, location, i8, 1);
@@ -1198,12 +1234,8 @@ bool emitDirectDynamicPackedStore(
     mask = arith::SelectOp::create(
         rewriter, location, valid, mask,
         llvmConstant(rewriter, location, windowType, 0));
-    auto store = [&](StringRef plane, Value input) {
-      Value base =
-          LLVM::AddressOfOp::create(rewriter, location, pointer, plane);
-      Value address =
-          LLVM::GEPOp::create(rewriter, location, pointer, rewriter.getI8Type(),
-                              base, ValueRange{byte});
+    // Typed accesses to a plane's window at the dynamic byte.
+    auto store = [&](schedule::StatePlane statePlane, Value input) {
       Value positioned = input
                              ? resize(input, windowType)
                              : llvmConstant(rewriter, location, windowType, 0);
@@ -1222,8 +1254,8 @@ bool emitDirectDynamicPackedStore(
         bool readOld = !wholeUnit || needsNotification;
         Value old = llvmConstant(rewriter, location, windowType, 0);
         if (readOld) {
-          auto load =
-              LLVM::LoadOp::create(rewriter, location, spanType, address, 1);
+          auto load = schedule::NativeStateLoadOp::create(
+              rewriter, location, spanType, statePlane, byte, 0, 1);
           annotateCanonicalAccess(load, range->rootOffset, range->rootWidth,
                                   width);
           old = resize(load, windowType);
@@ -1238,18 +1270,18 @@ bool emitDirectDynamicPackedStore(
                   rewriter, location, mask,
                   arith::XOrIOp::create(rewriter, location, old, positioned)));
         }
-        auto write = LLVM::StoreOp::create(
-            rewriter, location, resize(updated, spanType), address, 1);
+        auto write = schedule::NativeStateStoreOp::create(
+            rewriter, location, resize(updated, spanType), statePlane, byte, 0,
+            1);
         annotateCanonicalAccess(write, range->rootOffset, range->rootWidth,
                                 width);
         // The clipped mask preserves every bit outside the root, including
         // neighboring bits in the first and last byte. Retain that proof for
         // promotion bookkeeping even though the byte address is dynamic.
-        if (plane == "__talos_state_unknown")
-          schedule::set<schedule::Field::EvalUnknownWriteRange>(
-              write,
-              rewriter.getDenseI64ArrayAttr(
-                  {int64_t(range->rootOffset), int64_t(range->rootWidth)}));
+        if (statePlane == schedule::StatePlane::Unknown)
+          setNativeAccessWrittenBits(write, rewriter.getDenseI64ArrayAttr(
+                                                {int64_t(range->rootOffset),
+                                                 int64_t(range->rootWidth)}));
         return std::pair<Value, Value>{
             resize(arith::ShRUIOp::create(rewriter, location, old, shift),
                    inputType),
@@ -1286,12 +1318,12 @@ bool emitDirectDynamicPackedStore(
       rewriter.setInsertionPointToStart(join);
       return std::pair<Value, Value>{old, updated};
     };
-    auto [oldValue, newValue] = store("__talos_state_value", value);
+    auto [oldValue, newValue] = store(schedule::StatePlane::Value, value);
     Value oldUnknown = llvmConstant(rewriter, location, inputType, 0);
     Value newUnknown = oldUnknown;
     if (!twoState)
       std::tie(oldUnknown, newUnknown) =
-          store("__talos_state_unknown", unknown);
+          store(schedule::StatePlane::Unknown, unknown);
     if (needsNotification) {
       Value context = LLVM::LoadOp::create(
           rewriter, location, pointer,

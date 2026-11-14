@@ -1,5 +1,6 @@
 //===- SimulationPromotionReadiness.cpp - Shared knownness scan ----------===//
 
+#include "NativeStateAccess.h"
 #include "SimulationAOTPlanning.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Conversion/Passes.h"
@@ -127,7 +128,8 @@ LogicalResult materializeNativeRoutePromotionScan(
   builder.setInsertionPointToStart(entry);
   Value pendingBase = address(pendingName), ownerBase = address(ownerName),
         rangeBase = address(rangeName),
-        state = address("__talos_state_unknown");
+        state = detail::createStatePlaneAddress(builder, loc,
+                                                schedule::StatePlane::Unknown);
   if (!dirtyName.empty())
     LLVM::StoreOp::create(builder, loc, llvmConstant(builder, loc, i8, 0),
                           address(dirtyName), 1);
@@ -390,7 +392,8 @@ materializePromotionReadiness(ModuleOp module, ArrayRef<uint64_t> owners,
   Value owner = entry->getArgument(0);
   Value ownerBase = address(ownerTable.getSymName());
   Value rangeBase = address(rangeTable.getSymName());
-  Value state = address("__talos_state_unknown");
+  Value state = detail::createStatePlaneAddress(builder, loc,
+                                                schedule::StatePlane::Unknown);
   Value hintBase = address(hintTable.getSymName());
   Value hintIndex = arith::MulIOp::create(builder, loc, owner, constant(2));
   Value hintWordAddress = gep(hintBase, i64, hintIndex);
@@ -803,8 +806,8 @@ LogicalResult materializeNativeKernelPromotionReadiness(
       LLVM::CondBrOp::create(builder, loc, valid, known, fresh);
       builder.setInsertionPointToStart(fresh);
     }
-    Value state = LLVM::AddressOfOp::create(builder, loc, pointer,
-                                            "__talos_state_unknown");
+    Value state = detail::createStatePlaneAddress(
+        builder, loc, schedule::StatePlane::Unknown);
     Value any = llvmConstant(builder, loc, builder.getI64Type(), 0);
     for (size_t i = 0; i != remainder.size(); i += 2) {
       bool single = remainder[i] & singleWordScanTag;

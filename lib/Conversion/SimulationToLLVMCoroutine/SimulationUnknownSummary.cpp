@@ -143,6 +143,9 @@ public:
   StringRef getArgument() const final {
     return "publish-native-unknown-summary";
   }
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<LLVM::LLVMDialect, schedule::ScheduleDialect>();
+  }
 
   void runOnOperation() override {
     LLVM::LLVMFuncOp function = getOperation();
@@ -249,8 +252,8 @@ private:
     Type ptr = LLVM::LLVMPointerType::get(builder.getContext());
     Value bytes;
     if (write.pointer) {
-      Value base =
-          LLVM::AddressOfOp::create(builder, location, ptr, unknownPlaneName);
+      Value base = detail::createStatePlaneAddress(
+          builder, location, schedule::StatePlane::Unknown);
       bytes = LLVM::SubOp::create(
           builder, location,
           LLVM::PtrToIntOp::create(builder, location, i64, write.pointer),

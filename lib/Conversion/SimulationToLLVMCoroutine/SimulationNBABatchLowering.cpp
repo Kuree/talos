@@ -1,5 +1,6 @@
 //===- SimulationNBABatchLowering.cpp - Certified private NBA regions -----===//
 
+#include "NativeStateAccess.h"
 #include "SimulationEvalReadySet.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
@@ -57,8 +58,8 @@ public:
     store(c(0), stages);
     store(c(0), commits);
     store(c(0), changed);
-    valuePlane = address(layout.getValue());
-    unknownPlane = address(layout.getUnknown());
+    valuePlane = base(layout.getValue());
+    unknownPlane = base(layout.getUnknown());
     dirty = address(layout.getDirty());
     summary = address(layout.getSummary());
     std::map<uint32_t, SmallVector<schedule::NativeNBACommitOp>> words;
@@ -228,17 +229,39 @@ private:
     return arith::ShRUIOp::create(b, loc, c(UINT64_MAX),
                                   band(sub(c(64), width), c(63)));
   }
+  /// A layout global: a canonical state plane, accessed through typed state
+  /// operations, or any other global, accessed through its address.
+  struct PlaneBase {
+    std::optional<schedule::StatePlane> plane;
+    Value address;
+  };
+  PlaneBase base(FlatSymbolRefAttr name) {
+    if (auto plane = schedule::getStatePlaneOfGlobal(name.getValue()))
+      return {*plane, Value()};
+    return {std::nullopt, address(name)};
+  }
   // Avoid widening the canonical state or losing adjacent packed bits.
   struct Plane {
-    Value address, packed, shift;
+    /// The global and the window's dynamic or static byte offset.
+    PlaneBase base;
+    Value dynamicByte;
+    uint64_t staticByte;
+    Value packed, shift;
     IntegerType type;
   };
-  Plane plane(Value base, Value offset, std::optional<uint64_t> fixed,
-              unsigned width) {
+  Value windowAddress(const PlaneBase &base, Value dynamicByte,
+                      uint64_t staticByte) {
+    Value byte = dynamicByte ? dynamicByte : c(staticByte);
+    return LLVM::GEPOp::create(b, loc, ptr, b.getI8Type(), base.address,
+                               ValueRange{byte});
+  }
+  Plane plane(const PlaneBase &base, Value offset,
+              std::optional<uint64_t> fixed, unsigned width) {
     Value byte, shift;
+    uint64_t staticByte = 0;
     unsigned bits;
     if (fixed) {
-      byte = c(*fixed / 8);
+      staticByte = *fixed / 8;
       shift = c(*fixed % 8);
       bits = ((*fixed % 8 + width + 7) / 8) * 8;
     } else {
@@ -248,10 +271,13 @@ private:
       bits = 72;
     }
     auto type = b.getIntegerType(bits);
-    Value addr =
-        LLVM::GEPOp::create(b, loc, ptr, b.getI8Type(), base, ValueRange{byte});
-    Value packed = LLVM::LoadOp::create(b, loc, type, addr, 1);
-    return {addr, packed, resize(shift, type), type};
+    Value packed =
+        base.plane
+            ? Value(schedule::NativeStateLoadOp::create(
+                  b, loc, type, *base.plane, byte, staticByte, 1))
+            : Value(LLVM::LoadOp::create(
+                  b, loc, type, windowAddress(base, byte, staticByte), 1));
+    return {base, byte, staticByte, packed, resize(shift, type), type};
   }
   Value unpack(const Plane &p, Value writeMask) {
     return band(resize(arith::ShRUIOp::create(b, loc, p.packed, p.shift), i64),
@@ -269,7 +295,12 @@ private:
         bor(band(p.packed, inverse),
             arith::ShLIOp::create(
                 b, loc, resize(band(value, writeMask), p.type), p.shift));
-    LLVM::StoreOp::create(b, loc, next, p.address, 1);
+    if (p.base.plane)
+      schedule::NativeStateStoreOp::create(b, loc, next, *p.base.plane,
+                                           p.dynamicByte, p.staticByte, 1);
+    else
+      LLVM::StoreOp::create(
+          b, loc, next, windowAddress(p.base, p.dynamicByte, p.staticByte), 1);
   }
   Value commitChunk(Value offset, std::optional<uint64_t> fixed,
                     unsigned maxWidth, Value width, Value writeMask,
@@ -450,7 +481,8 @@ private:
   IntegerType i64, i32;
   LLVM::LLVMPointerType ptr;
   Block *done = nullptr;
-  Value valuePlane, unknownPlane, dirty, summary, stages, commits, changed;
+  PlaneBase valuePlane, unknownPlane;
+  Value dirty, summary, stages, commits, changed;
   std::map<uint32_t, Value> ready;
   SmallVector<PromotableAllocationOpInterface> allocations;
 };

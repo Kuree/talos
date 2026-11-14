@@ -1,5 +1,5 @@
 // RUN: talos-opt %s --materialize-native-group-promotion-readiness --materialize-native-promotion-range-index | FileCheck %s
-// RUN: talos-opt %s --materialize-native-group-promotion-readiness --materialize-native-promotion-range-index | %llvm_dist/bin/mlir-opt --convert-arith-to-llvm --convert-cf-to-llvm | talos-translate --mlir-to-llvmir | %llvm_dist/bin/opt -passes=verify -disable-output
+// RUN: talos-opt %s --materialize-native-group-promotion-readiness --materialize-native-promotion-range-index | talos-opt --pass-pipeline='builtin.module(llvm.func(lower-native-state-access))' | %llvm_dist/bin/mlir-opt --convert-arith-to-llvm --convert-cf-to-llvm | talos-translate --mlir-to-llvmir | %llvm_dist/bin/opt -passes=verify -disable-output
 
 // LRM 6.3.1: a knownness query tests exactly the union of required bits.
 // Three one-bit ranges in one physical word need one load with their ORed
