@@ -1,5 +1,6 @@
 //===- RandSolveWideTest.cpp - Wide residual solver tests ----------------===//
 
+#include "../lib/RandSamplePlan.h"
 #include "../lib/RuntimeInternal.h"
 #include "talos/Runtime/Runtime.h"
 
@@ -66,12 +67,19 @@ struct WeightedRecord {
   uint32_t flags;
 };
 
+struct PriorityInput {
+  uint32_t instruction;
+  std::vector<uint64_t> references, arguments;
+  uint32_t maskCapture = 0;
+};
+
 std::vector<uint8_t> program(uint32_t aggregateWidth, uint32_t captureCount,
                              std::vector<Instruction> instructions,
                              uint32_t flags = 0,
                              std::vector<DomainRecord> domains = {},
                              std::vector<SolveBeforeEdge> edges = {},
-                             std::vector<WeightedRecord> weighted = {}) {
+                             std::vector<WeightedRecord> weighted = {},
+                             std::vector<PriorityInput> priorityInputs = {}) {
   std::vector<uint64_t> literals;
   for (Instruction &instruction : instructions) {
     if (instruction.opcode != TALOS_RT_RANDOM_PUSH_LITERAL_V1)
@@ -113,8 +121,16 @@ std::vector<uint8_t> program(uint32_t aggregateWidth, uint32_t captureCount,
                           : 0u);
     }
   }
-  if (flags & TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY)
-    append32(bytes, 0);
+  if (flags & TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY) {
+    append32(bytes, priorityInputs.size());
+    for (const auto &input : priorityInputs) {
+      append32(bytes, input.instruction);
+      append32(bytes, input.maskCapture);
+      for (const auto &row : {input.references, input.arguments})
+        for (uint64_t word : row)
+          append64(bytes, word);
+    }
+  }
   if (flags & TALOS_RT_RANDOM_PROGRAM_EXACT_WEIGHTED) {
     uint32_t groups = 0;
     for (const auto &record : weighted)
@@ -772,6 +788,304 @@ TEST_F(RandSolveWideTest, RejectsNonContiguousSoftPriorities) {
 }
 
 #ifdef TALOS_TEST_COMPILED_SAMPLER
+talos::runtime::SamplerResult sampleFunctionStage(
+    const std::vector<uint8_t> &bytes, const std::vector<uint64_t> &start,
+    const std::vector<uint64_t> &mask, const std::vector<uint64_t> &captures,
+    const std::vector<uint32_t> &widths, talos_rt_random_state_v1 &state,
+    std::vector<uint64_t> &assignment,
+    talos::runtime::FunctionStageSampleRequest &stage,
+    uint64_t disabledBlocks = 0) {
+  return talos::runtime::sampleRandomPlan(
+      bytes.data(), bytes.size(), start.data(), mask.data(), start.size(),
+      disabledBlocks, captures.data(), widths.data(), widths.size(),
+      assignment.data(), &state, nullptr, 0, nullptr, nullptr, &stage);
+}
+
+TEST_F(RandSolveWideTest, YieldedFunctionStagesMatchWholeCallFailureSemantics) {
+  using talos::runtime::FunctionStageSampleRequest;
+  using talos::runtime::SamplerResult;
+  const uint32_t flags = TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM |
+                         TALOS_RT_RANDOM_PROGRAM_HAS_SOLVE_BEFORE |
+                         TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY;
+  const std::vector<uint64_t> lower{UINT64_MAX, UINT64_MAX, 3},
+      argument{0, 0, 4}, all{UINT64_MAX, UINT64_MAX, 7};
+  auto opaque = program(131, 1,
+                        {{TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 130},
+                         {TALOS_RT_RANDOM_PUSH_CAPTURE_V1, 130},
+                         {TALOS_RT_RANDOM_EQ_V1, 1},
+                         {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 0},
+                         {TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 130},
+                         {TALOS_RT_RANDOM_LOGICAL_NOT_V1, 1},
+                         {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 1}},
+                        flags, {}, {{argument, lower, 0, true}}, {},
+                        {{3, all, argument}, {6, lower, {0, 0, 0}}});
+  auto inlined = program(131, 0,
+                         {{TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 130},
+                          {TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 1, 0, 130},
+                          {TALOS_RT_RANDOM_CAST_V1, 130},
+                          {TALOS_RT_RANDOM_EQ_V1, 1},
+                          {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 0},
+                          {TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 130},
+                          {TALOS_RT_RANDOM_LOGICAL_NOT_V1, 1},
+                          {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 1}},
+                         flags, {}, {{argument, lower, 0, true}});
+  bool sawSuccess = false, sawFailure = false;
+  for (unsigned seed = 0; seed != 32; ++seed) {
+    talos_rt_random_state_v1 state;
+    talos_rt_v1_random_state_seed(&state, seed, 17);
+    const auto original = state;
+    std::vector<uint64_t> start{17, 23, 2}, assignment(3, UINT64_MAX),
+        captures(3, 0);
+    FunctionStageSampleRequest stage;
+    ASSERT_EQ(sampleFunctionStage(opaque, start, all, captures, {130}, state,
+                                  assignment, stage),
+              SamplerResult::Satisfiable);
+    EXPECT_FALSE(stage.complete);
+    EXPECT_EQ(stage.remainingMask, lower);
+    EXPECT_EQ(assignment[0], start[0]);
+    EXPECT_EQ(assignment[1], start[1]);
+    EXPECT_EQ(assignment[2] & 3, start[2]);
+    // Generated MLIR evaluates f(y) here, after y has been chosen and before
+    // any x-only constraint is considered. Its result is a live state capture.
+    captures[0] = (assignment[2] >> 2) & 1;
+    const auto chosen = assignment;
+    const auto afterArgument = state;
+    auto status =
+        sampleFunctionStage(opaque, chosen, stage.remainingMask, captures,
+                            {130}, state, assignment, stage);
+    uint64_t expected[3] = {}, expectedState = 0;
+    uint32_t success = 0;
+    ASSERT_EQ(talos_rt_v1_random_solve_wide_modes_state(
+                  context, inlined.data(), inlined.size(), start.data(),
+                  all.data(), 3, 0, 1, original.state, original.increment,
+                  nullptr, 0, nullptr, 0, expected, &success, &expectedState),
+              TALOS_RT_OK);
+    ASSERT_EQ(status, success ? SamplerResult::Satisfiable
+                              : SamplerResult::Unsatisfiable);
+    if (success) {
+      sawSuccess = true;
+      EXPECT_TRUE(stage.complete);
+      EXPECT_EQ(stage.remainingMask, (std::vector<uint64_t>{0, 0, 0}));
+      EXPECT_EQ(assignment, (std::vector<uint64_t>(expected, expected + 3)));
+      EXPECT_EQ(state.state, expectedState);
+    } else {
+      sawFailure = true;
+      EXPECT_EQ(assignment, chosen);
+      EXPECT_EQ(state.state, afterArgument.state);
+      EXPECT_EQ(stage.remainingMask, lower);
+      EXPECT_FALSE(stage.complete);
+      EXPECT_EQ(expectedState, original.state);
+    }
+  }
+  EXPECT_TRUE(sawSuccess);
+  EXPECT_TRUE(sawFailure);
+}
+
+TEST_F(RandSolveWideTest, YieldedFunctionOnlyConstraintNeedsFinalEmptyStage) {
+  using talos::runtime::FunctionStageSampleRequest;
+  using talos::runtime::SamplerResult;
+  auto bytes = program(1, 1,
+                       {{TALOS_RT_RANDOM_PUSH_CAPTURE_V1, 1},
+                        {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, UINT32_MAX}},
+                       TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM |
+                           TALOS_RT_RANDOM_PROGRAM_HAS_SOLVE_BEFORE |
+                           TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY,
+                       {}, {}, {}, {{1, {1}, {1}}});
+  talos_rt_random_state_v1 state{17, 3};
+  std::vector<uint64_t> assignment{UINT64_MAX};
+  FunctionStageSampleRequest stage;
+  // f(y) == 1 cannot be checked with the placeholder before choosing y.
+  ASSERT_EQ(
+      sampleFunctionStage(bytes, {0}, {1}, {0}, {64}, state, assignment, stage),
+      SamplerResult::Satisfiable);
+  EXPECT_EQ(stage.remainingMask, std::vector<uint64_t>{0});
+  EXPECT_FALSE(stage.complete);
+  auto chosen = assignment;
+  auto afterArgument = state;
+  // An empty remaining mask is not permission to commit: f(y) may fail.
+  ASSERT_EQ(sampleFunctionStage(bytes, chosen, stage.remainingMask, {0}, {64},
+                                state, assignment, stage),
+            SamplerResult::Unsatisfiable);
+  EXPECT_EQ(assignment, chosen);
+  EXPECT_EQ(state.state, afterArgument.state);
+  EXPECT_FALSE(stage.complete);
+  ASSERT_EQ(sampleFunctionStage(bytes, chosen, stage.remainingMask, {1}, {64},
+                                state, assignment, stage),
+            SamplerResult::Satisfiable);
+  EXPECT_TRUE(stage.complete);
+  EXPECT_EQ(assignment, chosen);
+  EXPECT_EQ(state.state, afterArgument.state);
+}
+
+TEST_F(RandSolveWideTest, YieldedThreeStageChainPreservesExplicitProjections) {
+  using talos::runtime::FunctionStageSampleRequest;
+  using talos::runtime::SamplerResult;
+  // c/d -> b=f(c,d) -> a=g(b), with c solved before d under !(c && d).
+  // Explicit ordering makes (c,d) conditionally uniform, so compare exact
+  // replay against the existing all-in-one sampler rather than just checking
+  // legal assignments. The fields deliberately cross three machine words.
+  const uint32_t flags = TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM |
+                         TALOS_RT_RANDOM_PROGRAM_HAS_SOLVE_BEFORE |
+                         TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY;
+  const std::vector<uint64_t> a{1, 0, 0}, b{0, 2, 0}, c{0, 0, 1}, d{0, 0, 4},
+      cd{0, 0, 5}, bcd{0, 2, 5}, ab{1, 2, 0}, all{1, 2, 5}, zero{0, 0, 0};
+  const std::vector<SolveBeforeEdge> edges{
+      {c, d, 0}, {c, b, 1, true}, {d, b, 1, true}, {b, a, 2, true}};
+  auto opaque =
+      program(131, 2,
+              {{TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 1, 0, 128},
+               {TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 1, 0, 130},
+               {TALOS_RT_RANDOM_LOGICAL_AND_V1, 1},
+               {TALOS_RT_RANDOM_LOGICAL_NOT_V1, 1},
+               {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 0},
+               {TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 1, 0, 65},
+               {TALOS_RT_RANDOM_PUSH_CAPTURE_V1, 1},
+               {TALOS_RT_RANDOM_EQ_V1, 1},
+               {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 1},
+               {TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 1},
+               {TALOS_RT_RANDOM_PUSH_CAPTURE_V1, 1, 0, 1},
+               {TALOS_RT_RANDOM_EQ_V1, 1},
+               {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 2}},
+              flags, {}, edges, {}, {{4, cd, zero}, {8, bcd, cd}, {12, ab, b}});
+  auto inlined = program(131, 0,
+                         {{TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 1, 0, 128},
+                          {TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 1, 0, 130},
+                          {TALOS_RT_RANDOM_LOGICAL_AND_V1, 1},
+                          {TALOS_RT_RANDOM_LOGICAL_NOT_V1, 1},
+                          {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 0},
+                          {TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 1, 0, 65},
+                          {TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 1, 0, 128},
+                          {TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 1, 0, 130},
+                          {TALOS_RT_RANDOM_BIT_XOR_V1, 1},
+                          {TALOS_RT_RANDOM_EQ_V1, 1},
+                          {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 1},
+                          {TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 1},
+                          {TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 1, 0, 65},
+                          {TALOS_RT_RANDOM_EQ_V1, 1},
+                          {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 2}},
+                         flags, {}, edges);
+  for (unsigned seed = 0; seed != 16; ++seed) {
+    talos_rt_random_state_v1 state;
+    talos_rt_v1_random_state_seed(&state, seed, 17);
+    const auto original = state;
+    const std::vector<uint64_t> start{19, 23, 3};
+    std::vector<uint64_t> assignment(3, UINT64_MAX), captures{0, 0};
+    FunctionStageSampleRequest stage;
+    ASSERT_EQ(sampleFunctionStage(opaque, start, all, captures, {64, 64}, state,
+                                  assignment, stage),
+              SamplerResult::Satisfiable);
+    EXPECT_EQ(stage.remainingMask, ab);
+    EXPECT_FALSE(stage.complete);
+    EXPECT_EQ(assignment[0], start[0]);
+    EXPECT_EQ(assignment[1], start[1]);
+    const auto sampled = state;
+    captures[0] = (assignment[2] ^ (assignment[2] >> 2)) & 1;
+    auto chosen = assignment;
+    ASSERT_EQ(sampleFunctionStage(opaque, chosen, stage.remainingMask, captures,
+                                  {64, 64}, state, assignment, stage),
+              SamplerResult::Satisfiable);
+    EXPECT_EQ(stage.remainingMask, a);
+    EXPECT_FALSE(stage.complete);
+    EXPECT_EQ(assignment[0], start[0]);
+    EXPECT_EQ((assignment[1] >> 1) & 1, captures[0]);
+    captures[1] = (assignment[1] >> 1) & 1;
+    chosen = assignment;
+    ASSERT_EQ(sampleFunctionStage(opaque, chosen, stage.remainingMask, captures,
+                                  {64, 64}, state, assignment, stage),
+              SamplerResult::Satisfiable);
+    EXPECT_EQ(stage.remainingMask, zero);
+    EXPECT_TRUE(stage.complete);
+    EXPECT_EQ(assignment[0] & 1, captures[1]);
+    EXPECT_EQ(state.state, sampled.state);
+    uint64_t expected[3] = {}, expectedState = 0;
+    uint32_t success = 0;
+    ASSERT_EQ(talos_rt_v1_random_solve_wide_modes_state(
+                  context, inlined.data(), inlined.size(), start.data(),
+                  all.data(), 3, 0, 1, original.state, original.increment,
+                  nullptr, 0, nullptr, 0, expected, &success, &expectedState),
+              TALOS_RT_OK);
+    ASSERT_EQ(success, 1u);
+    EXPECT_EQ(assignment, std::vector<uint64_t>(expected, expected + 3));
+    EXPECT_EQ(state.state, expectedState);
+    for (size_t word = 0; word != start.size(); ++word)
+      EXPECT_EQ(assignment[word] & ~all[word], start[word] & ~all[word]);
+  }
+}
+
+TEST_F(RandSolveWideTest, YieldedFunctionStagesKeepPreferencesIndependent) {
+  using talos::runtime::FunctionStageSampleRequest;
+  using talos::runtime::SamplerResult;
+  auto bytes = program(2, 1,
+                       {{TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 1, 0, 1},
+                        {TALOS_RT_RANDOM_END_SOFT_V1, 1, 0, UINT32_MAX, 0},
+                        {TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 1},
+                        {TALOS_RT_RANDOM_PUSH_CAPTURE_V1, 1},
+                        {TALOS_RT_RANDOM_EQ_V1, 1},
+                        {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 0},
+                        {TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 1},
+                        {TALOS_RT_RANDOM_LOGICAL_NOT_V1, 1},
+                        {TALOS_RT_RANDOM_END_SOFT_V1, 1, 0, UINT32_MAX, 1}},
+                       TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM |
+                           TALOS_RT_RANDOM_PROGRAM_HAS_SOLVE_BEFORE |
+                           TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY |
+                           TALOS_RT_RANDOM_PROGRAM_HAS_SOFT,
+                       {}, {{{2}, {1}, 0, true}}, {},
+                       {{1, {2}, {0}}, {5, {3}, {2}}, {8, {1}, {0}}});
+  talos_rt_random_state_v1 state{17, 3};
+  std::vector<uint64_t> assignment{UINT64_MAX};
+  FunctionStageSampleRequest stage;
+  ASSERT_EQ(
+      sampleFunctionStage(bytes, {0}, {3}, {0}, {64}, state, assignment, stage),
+      SamplerResult::Satisfiable);
+  EXPECT_EQ(assignment[0], 2u);
+  EXPECT_EQ(stage.remainingMask, std::vector<uint64_t>{1});
+  EXPECT_FALSE(stage.complete);
+  const auto chosen = assignment;
+  ASSERT_EQ(sampleFunctionStage(bytes, chosen, stage.remainingMask, {1}, {64},
+                                state, assignment, stage),
+            SamplerResult::Satisfiable);
+  EXPECT_EQ(assignment[0], 3u);
+  EXPECT_TRUE(stage.complete);
+}
+
+TEST_F(RandSolveWideTest, YieldedFunctionStagesRespectDynamicGuardInventories) {
+  using talos::runtime::FunctionStageSampleRequest;
+  using talos::runtime::SamplerResult;
+  auto bytes = program(2, 4,
+                       {{TALOS_RT_RANDOM_PUSH_CAPTURE_V1, 1, 0, 1},
+                        {TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 1},
+                        {TALOS_RT_RANDOM_PUSH_CAPTURE_V1, 1},
+                        {TALOS_RT_RANDOM_EQ_V1, 1},
+                        {TALOS_RT_RANDOM_LOGICAL_IMPLIES_V1, 1},
+                        {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 0}},
+                       TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM |
+                           TALOS_RT_RANDOM_PROGRAM_HAS_SOLVE_BEFORE |
+                           TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY |
+                           TALOS_RT_RANDOM_PROGRAM_HAS_GUARD_INPUT_MASKS,
+                       {}, {{{2}, {1}, 0, true}}, {}, {{5, {3}, {2}, 3}});
+  talos_rt_random_state_v1 state{17, 3};
+  std::vector<uint64_t> assignment{UINT64_MAX};
+  FunctionStageSampleRequest stage;
+  ASSERT_EQ(sampleFunctionStage(bytes, {0}, {3}, {0, 0, 0, 0}, {64, 64, 64, 64},
+                                state, assignment, stage),
+            SamplerResult::Satisfiable);
+  EXPECT_TRUE(stage.complete);
+  EXPECT_EQ(stage.remainingMask, std::vector<uint64_t>{0});
+  ASSERT_EQ(sampleFunctionStage(bytes, {0}, {3}, {0, 1, 3, 2}, {64, 64, 64, 64},
+                                state, assignment, stage),
+            SamplerResult::Satisfiable);
+  EXPECT_FALSE(stage.complete);
+  EXPECT_EQ(stage.remainingMask, std::vector<uint64_t>{1});
+  const auto chosen = assignment;
+  const uint64_t argument = assignment[0] >> 1;
+  ASSERT_EQ(sampleFunctionStage(bytes, chosen, stage.remainingMask,
+                                {argument, 1, 3, 2}, {64, 64, 64, 64}, state,
+                                assignment, stage),
+            SamplerResult::Satisfiable);
+  EXPECT_EQ(assignment[0], argument * 3);
+  EXPECT_TRUE(stage.complete);
+}
+
 TEST_F(RandSolveWideTest, FunctionArgumentStagesPreserveWideFailureSemantics) {
   auto bytes = program(131, 0,
                        {{TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 130},

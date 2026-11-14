@@ -1637,7 +1637,7 @@ public:
               const std::vector<SolveOrderEdge> &edges, const uint64_t *start,
               const uint64_t *mutableMask, size_t wordCount,
               uint64_t disabledBlocks, talos_rt_random_state_v1 &state,
-              uint64_t *output) {
+              uint64_t *output, FunctionStageSampleRequest *yieldStage) {
     OrderMask arguments(wordCount, 0);
     for (const PriorityInput *input : hardInputs)
       if (input)
@@ -1737,6 +1737,18 @@ public:
               (assignment[physicalBits[bit] / 64] >> (physicalBits[bit] % 64)) &
               1;
         }
+      if (yieldStage) {
+        OrderMask remaining(mutableMask, mutableMask + wordCount);
+        for (size_t word = 0; word != wordCount; ++word)
+          remaining[word] &= ~stages[stage][word];
+        // Allocate the continuation before publishing any part of this
+        // tentative sample. The final swap and scalar copies cannot throw.
+        yieldStage->remainingMask.swap(remaining);
+        yieldStage->complete = stage + 1 == stages.size();
+        std::copy(assignment.begin(), assignment.end(), output);
+        state = nextState;
+        return SamplerResult::Satisfiable;
+      }
     }
     std::copy(assignment.begin(), assignment.end(), output);
     state = nextState;
@@ -1768,7 +1780,8 @@ SamplerResult sampleRandomPlan(
     const uint32_t *captureWidths, size_t captureCount, uint64_t *assignment,
     talos_rt_random_state_v1 *randomState, const uint64_t *orderedMasks,
     size_t orderedLayerCount, CyclicSampleRequest *cyclic,
-    const random::SamplerPlanView *validatedPlan) {
+    const random::SamplerPlanView *validatedPlan,
+    FunctionStageSampleRequest *functionStage) {
   if (programSize < TALOS_RT_RANDOM_PROGRAM_HEADER_SIZE ||
       read32(program + 16) != captureCount ||
       !(read32(program + 20) & TALOS_RT_RANDOM_PROGRAM_HAS_SAMPLER_PLAN))
@@ -1792,6 +1805,8 @@ SamplerResult sampleRandomPlan(
       (flags & TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY) != 0;
   bool dynamicMasks =
       (flags & TALOS_RT_RANDOM_PROGRAM_HAS_GUARD_INPUT_MASKS) != 0;
+  if (functionStage && (!functionPriority || cyclic))
+    return SamplerResult::Unavailable;
   if (assignmentWords != std::max<uint64_t>(1, (uint64_t(width) + 63) / 64) ||
       ((flags & TALOS_RT_RANDOM_PROGRAM_HAS_DIST) && !weighted) ||
       (weighted &&
@@ -2227,7 +2242,7 @@ SamplerResult sampleRandomPlan(
     return f.prioritized(booleanBits, physicalBits, priorityHard, soft,
                          hardInputs, softInputs, priorityDomains, edges, start,
                          mutableMask, assignmentWords, constraintMask,
-                         *randomState, assignment);
+                         *randomState, assignment, functionStage);
   }
   bool hasSoft = std::any_of(soft.begin(), soft.end(),
                              [](ID predicate) { return predicate != missing; });

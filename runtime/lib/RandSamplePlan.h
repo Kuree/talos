@@ -35,6 +35,17 @@ struct CyclicSampleRequest {
   std::vector<uint8_t> domain;
 };
 
+/// Yield after the first function-priority stage. The caller evaluates the
+/// newly ready pure functions against the tentative assignment, updates their
+/// state captures, and resumes with this remaining mutable mask. Publication
+/// of fields and RNG remains the caller's responsibility until every stage
+/// succeeds. An unsuccessful request changes neither this result nor RNG.
+struct FunctionStageSampleRequest {
+  std::vector<uint64_t> remainingMask;
+  // A zero remaining mask can still precede a final function-result check.
+  bool complete = false;
+};
+
 /// Sample the compiler-generated plan after binding state and frozen inputs.
 /// Exact arbitrary-precision counts support uniform and weighted projections.
 /// Failure commits neither assignments nor object-local RNG state.
@@ -48,5 +59,6 @@ SamplerResult sampleRandomPlan(
     talos_rt_random_state_v1 *randomState = nullptr,
     const uint64_t *orderedMasks = nullptr, size_t orderedLayerCount = 0,
     CyclicSampleRequest *cyclic = nullptr,
-    const random::SamplerPlanView *validatedPlan = nullptr);
+    const random::SamplerPlanView *validatedPlan = nullptr,
+    FunctionStageSampleRequest *functionStage = nullptr);
 } // namespace talos::runtime
