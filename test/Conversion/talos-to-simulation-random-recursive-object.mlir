@@ -167,6 +167,8 @@ module {
 // the root's single assignment and randomizes existing container elements.
 // Every handle remains unchanged. A null intermediate object or a disabled
 // rand handle/leaf removes only that descendant from the mutable set.
+// Snapshot loads follow non-null frozen links; their modes are conjoined
+// with the final field mode instead of replacing the snapshot with zero.
 // CHECK-LABEL: simulation.func private @{{unit_[0-9]+}}{{.*}}simulation.hierarchical_name = "top"
 // CHECK: %[[MIDDLE_REF:.*]] = simulation.class.field_ref {{.*}}[@__talos_class_s32_root_field_0]
 // CHECK: %[[MIDDLE:.*]] = simulation.managed.load %[[MIDDLE_REF]]
@@ -175,12 +177,13 @@ module {
 // CHECK: ^[[MIDDLE_ACTIVE]]:
 // CHECK: %[[MIDDLE_MODE_REF:.*]] = simulation.class.field_ref %[[MIDDLE]][@__talos_class_s18_middle_field___talos_rand_mode]
 // CHECK: %[[MIDDLE_MODES:.*]] = simulation.managed.load %[[MIDDLE_MODE_REF]]
-// CHECK: arith.andi %[[MIDDLE_MODES]], {{.*}}1
+// CHECK: %[[EDGE_MODE:.*]] = arith.andi %[[MIDDLE_MODES]], {{.*}}1
+// CHECK: %[[EDGE_ENABLED:.*]] = arith.cmpi eq, %[[EDGE_MODE]],
 // CHECK: %[[LEAF_REF:.*]] = simulation.class.field_ref %[[MIDDLE]][@__talos_class_s18_middle_field_0]
 // CHECK: %[[LEAF:.*]] = simulation.managed.load %[[LEAF_REF]]
 // CHECK: %[[LEAF_NULL:.*]] = simulation.managed.is_null %[[LEAF]]
-// CHECK: arith.andi {{.*}}, {{.*}} : i1
-// CHECK: cf.cond_br {{.*}}, ^[[LEAF_ACTIVE:bb[0-9]+]], ^[[VALUE_MERGE]]({{.*}}%false{{.*}})
+// CHECK: %[[LEAF_PRESENT:.*]] = arith.xori %[[LEAF_NULL]],
+// CHECK: cf.cond_br %[[LEAF_PRESENT]], ^[[LEAF_ACTIVE:bb[0-9]+]], ^[[VALUE_MERGE]]({{.*}}%false{{.*}})
 // CHECK: ^[[VALUE_MERGE]]({{.*}}, %[[PATH_ENABLED:.*]]: i1):
 // CHECK: arith.andi {{.*}}, %[[PATH_ENABLED]] : i1
 // CHECK: ^[[LEAF_ACTIVE]]:
@@ -188,7 +191,10 @@ module {
 // CHECK: simulation.managed.load %[[X_REF]]
 // CHECK: %[[LEAF_MODE_REF:.*]] = simulation.class.field_ref %[[LEAF]][@__talos_class_s3_leaf_field___talos_rand_mode]
 // CHECK: %[[LEAF_MODES:.*]] = simulation.managed.load %[[LEAF_MODE_REF]]
-// CHECK: arith.andi %[[LEAF_MODES]], {{.*}}1
+// CHECK: %[[FIELD_MODE:.*]] = arith.andi %[[LEAF_MODES]], {{.*}}1
+// CHECK: %[[FIELD_ENABLED:.*]] = arith.cmpi eq, %[[FIELD_MODE]],
+// CHECK: %[[MUTABLE:.*]] = arith.andi %[[FIELD_ENABLED]], %[[EDGE_ENABLED]] : i1
+// CHECK: cf.br ^[[VALUE_MERGE]]({{.*}}, %[[MUTABLE]] : i32, i1)
 // CHECK: %[[COMMIT_MIDDLE:.*]] = simulation.managed.load %[[MIDDLE_REF]]
 // CHECK: %[[COMMIT_LEAF_REF:.*]] = simulation.class.field_ref %[[COMMIT_MIDDLE]][@__talos_class_s18_middle_field_0]
 // CHECK: %[[COMMIT_LEAF:.*]] = simulation.managed.load %[[COMMIT_LEAF_REF]]

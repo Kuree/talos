@@ -2162,6 +2162,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         auto concreteType =
             cast<sim::ClassHandleType>(property.nestedObjectType);
         FlatSymbolRefAttr objectModeField = property.nestedModeField;
+        Value pathEnabled;
         for (const ObjectPathElement &element : property.nestedObjectPath) {
           Type modeReferenceType = sim::ManagedRefType::get(
               function.getContext(), i64, concreteType.getClassName());
@@ -2175,6 +2176,11 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
           Value edgeEnabled =
               arith::CmpIOp::create(builder, location, arith::CmpIPredicate::eq,
                                     edgeModeBit, constant64(0));
+          pathEnabled = pathEnabled
+                            ? arith::AndIOp::create(builder, location,
+                                                    pathEnabled, edgeEnabled)
+                                  .getResult()
+                            : edgeEnabled;
           Type edgeReferenceType = sim::ManagedRefType::get(
               function.getContext(), element.storageType,
               concreteType.getClassName());
@@ -2189,10 +2195,10 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
               builder, location, edgeNull,
               arith::ConstantOp::create(builder, location, builder.getI1Type(),
                                         builder.getBoolAttr(true)));
-          Value edgeActive = arith::AndIOp::create(builder, location,
-                                                   edgeEnabled, edgeNonNull);
           Block *edgeBlock = addBlock();
-          cf::CondBranchOp::create(builder, location, edgeActive, edgeBlock,
+          // Frozen links still have an object identity and state values.
+          // Only null links stop the snapshot; modes control mutation below.
+          cf::CondBranchOp::create(builder, location, edgeNonNull, edgeBlock,
                                    ValueRange{}, nullBlock, ValueRange{});
           setCurrent(edgeBlock);
           object = *loadedEdge;
@@ -2225,6 +2231,9 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         Value childEnabled =
             arith::CmpIOp::create(builder, location, arith::CmpIPredicate::eq,
                                   childModeBit, constant64(0));
+        if (pathEnabled)
+          childEnabled = arith::AndIOp::create(builder, location, childEnabled,
+                                               pathEnabled);
         if (failed(value))
           return failure();
         if (property.isContainerSize) {
@@ -2642,6 +2651,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     uint32_t rightOffset;
     unsigned width;
     Value active;
+    Value sameObject;
   };
   SmallVector<AliasEquality> aliasEqualities;
   auto sameObjectOccurrence = [](const Property &left, const Property &right) {
@@ -2683,7 +2693,8 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
                                 left.nestedObjectID, right.nestedObjectID);
       aliasEqualities.push_back(
           {propertyOffsets[leftIndex], propertyOffsets[rightIndex], left.width,
-           arith::AndIOp::create(builder, location, bothEnabled, sameID)});
+           arith::AndIOp::create(builder, location, bothEnabled, sameID),
+           sameID});
     }
   }
   Value fixedAssignment = arith::AndIOp::create(
@@ -6797,7 +6808,70 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     }
     return success();
   };
-  llvm::DenseMap<Operation *, SmallVector<const SoftDisable *>> softDisablers;
+  struct SoftDisabler {
+    const SoftDisable *declaration;
+    // Empty for a direct reference. Aliased paths discard the preference
+    // only while the two captured handles identify the same non-null object.
+    Value aliasMatch;
+    uint32_t aliasCapture = 0;
+  };
+  llvm::DenseMap<Operation *, SmallVector<SoftDisabler>> softDisablers;
+  llvm::DenseMap<std::pair<unsigned, unsigned>, Value> aliasObjects;
+  if (!softDisables.empty()) {
+    llvm::DenseMap<uint64_t, unsigned> propertiesByOffset;
+    for (auto [index, offset] : llvm::enumerate(propertyOffsets))
+      propertiesByOffset[offset] = index;
+    for (const AliasEquality &alias : aliasEqualities)
+      aliasObjects[{propertiesByOffset.lookup(alias.leftOffset),
+                    propertiesByOffset.lookup(alias.rightOffset)}] =
+          alias.sameObject;
+  }
+  llvm::DenseMap<std::pair<unsigned, unsigned>, Value> softAliasMatches;
+  auto aliasReferenceMatch = [&](const SoftReference &target,
+                                 const SoftReference &reference) -> Value {
+    if (target.symbol || reference.symbol || !target.width ||
+        !reference.width || aliasObjects.empty() ||
+        target.offset >= assignmentWidth || reference.offset >= assignmentWidth)
+      return {};
+    auto propertyAt = [&](uint64_t offset) -> unsigned {
+      return llvm::upper_bound(propertyOffsets, offset) -
+             propertyOffsets.begin() - 1;
+    };
+    unsigned targetProperty = propertyAt(target.offset);
+    uint64_t targetBase = propertyOffsets[targetProperty];
+    uint64_t targetEnd = target.offset + target.width - targetBase;
+    // A disable target denotes one variable or a selected path within it.
+    if (targetEnd > planned[targetProperty].width)
+      return {};
+    Value matches;
+    uint64_t referenceEnd = reference.offset + reference.width;
+    for (unsigned index = propertyAt(reference.offset);
+         index < planned.size() && propertyOffsets[index] < referenceEnd;
+         ++index) {
+      uint64_t base = propertyOffsets[index];
+      uint64_t begin = std::max(reference.offset, base) - base;
+      uint64_t end = std::min(referenceEnd, base + planned[index].width) - base;
+      if (target.offset - targetBase >= end || begin >= targetEnd)
+        continue;
+      std::pair<unsigned, unsigned> key = std::minmax(targetProperty, index);
+      auto identity = aliasObjects.find(key);
+      if (identity == aliasObjects.end())
+        continue;
+      Value &same = softAliasMatches[key];
+      if (!same) {
+        Value nonNull = arith::CmpIOp::create(
+            builder, location, arith::CmpIPredicate::ne,
+            planned[key.first].nestedObjectID, constant64(0));
+        same = guardAnd(identity->second, nonNull);
+      }
+      matches = matches ? guardOr(matches, same) : same;
+    }
+    return matches;
+  };
+  llvm::DenseMap<Operation *, SmallVector<SoftReference>> softReferences;
+  if (!softDisables.empty())
+    for (auto [soft, order] : softDeclarationOrder)
+      softReferences[soft] = collectSoftReferences(soft);
   for (const SoftDisable &disable : softDisables) {
     SmallVector<Operation *> targets = getChildren(disable.source);
     if (targets.size() != 1) {
@@ -6816,24 +6890,46 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     for (auto [soft, order] : softDeclarationOrder) {
       if (order >= disable.declarationOrder)
         continue;
-      SmallVector<SoftReference> references = collectSoftReferences(soft);
-      if (llvm::any_of(references, [&](const SoftReference &reference) {
-            if (target.symbol || reference.symbol)
-              return target.symbol && target.symbol == reference.symbol;
-            return target.offset < reference.offset + reference.width &&
-                   reference.offset < target.offset + target.width;
-          }))
-        softDisablers[soft].push_back(&disable);
+      Value aliases;
+      bool direct = false;
+      for (const SoftReference &reference : softReferences[soft]) {
+        bool overlaps = [&]() {
+          if (target.symbol || reference.symbol)
+            return target.symbol && target.symbol == reference.symbol;
+          return target.offset < reference.offset + reference.width &&
+                 reference.offset < target.offset + target.width;
+        }();
+        if (overlaps) {
+          direct = true;
+          break;
+        }
+        if (Value match = aliasReferenceMatch(target, reference))
+          aliases = aliases ? guardOr(aliases, match) : match;
+      }
+      if (direct) {
+        softDisablers[soft].push_back({&disable, {}});
+      } else if (aliases) {
+        uint32_t capture = static_cast<uint32_t>(programCaptures.size());
+        programCaptures.push_back(
+            arith::ExtUIOp::create(builder, location, i64, aliases));
+        softDisablers[soft].push_back({&disable, aliases, capture});
+      }
     }
   }
 
   auto emitSoftDisablers = [&](Operation *soft) -> LogicalResult {
-    for (const SoftDisable *disable : softDisablers.lookup(soft)) {
+    for (const SoftDisabler &disabler : softDisablers.lookup(soft)) {
+      const SoftDisable *disable = disabler.declaration;
       if (disable->block == TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1)
         emitLiteral(true);
       else
         instruction(TALOS_RT_RANDOM_PUSH_CONSTRAINT_ENABLED_V1, 1, false,
                     disable->block);
+      if (disabler.aliasMatch) {
+        instruction(TALOS_RT_RANDOM_PUSH_CAPTURE_V1, 1, false,
+                    disabler.aliasCapture);
+        instruction(TALOS_RT_RANDOM_LOGICAL_AND_V1, 1);
+      }
       for (auto [guard, positive] : disable->guards) {
         if (failed(emitProgramExpression(guard)))
           return failure();
@@ -6968,9 +7064,9 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
                     softPriorities.lookup(soft));
         APInt inputs = priorityInputs(soft);
         APInt arguments = priorityArguments(soft);
-        for (const SoftDisable *disable : softDisablers.lookup(soft)) {
-          inputs |= priorityInputs(disable->source);
-          arguments |= priorityArguments(disable->source);
+        for (const SoftDisabler &disabler : softDisablers.lookup(soft)) {
+          inputs |= priorityInputs(disabler.declaration->source);
+          arguments |= priorityArguments(disabler.declaration->source);
         }
         if (failed(recordPriorityInputs(std::move(inputs), std::move(arguments),
                                         soft)))
@@ -7161,13 +7257,19 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         }
       }
       if (plan.softSource)
-        for (const SoftDisable *disable :
+        for (const SoftDisabler &disabler :
              softDisablers.lookup(plan.softSource)) {
+          const SoftDisable *disable = disabler.declaration;
           if (disable->block == TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1)
             emitLiteral(true);
           else
             instruction(TALOS_RT_RANDOM_PUSH_CONSTRAINT_ENABLED_V1, 1, false,
                         disable->block);
+          if (disabler.aliasMatch) {
+            instruction(TALOS_RT_RANDOM_PUSH_CAPTURE_V1, 1, false,
+                        disabler.aliasCapture);
+            instruction(TALOS_RT_RANDOM_LOGICAL_AND_V1, 1);
+          }
           for (auto [guard, positive] : disable->guards)
             if (failed(emitGuard(guard, positive)))
               return failure();
@@ -9605,7 +9707,9 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
           result = safetyOnly ? *valid : guardAnd(result, *valid);
         }
         if (softTarget)
-          for (const SoftDisable *disable : softDisablers.lookup(softTarget)) {
+          for (const SoftDisabler &disabler :
+               softDisablers.lookup(softTarget)) {
+            const SoftDisable *disable = disabler.declaration;
             Value enabled = arith::ConstantOp::create(
                 builder, location, builder.getI1Type(),
                 builder.getBoolAttr(true));
@@ -9617,6 +9721,8 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
                                               arith::CmpIPredicate::eq,
                                               selected, constant64(0));
             }
+            if (disabler.aliasMatch)
+              enabled = guardAnd(enabled, disabler.aliasMatch);
             for (auto [guard, positive] : disable->guards) {
               FailureOr<SafeConstraintValue> value = safeConstraintValue(guard);
               if (failed(value))
