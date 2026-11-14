@@ -963,6 +963,41 @@ TEST_F(RandSolveWideTest, UniformSparseComponentWithWideFreeAndFrozenFields) {
   EXPECT_EQ(assignment[0] | assignment[1] | assignment[2], 0u);
 }
 
+TEST_F(RandSolveWideTest, RanksLargeFreeCubeAroundFrozenGaps) {
+  auto bytes = program(513, 1,
+                       {{TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 1, 0, 512},
+                        {TALOS_RT_RANDOM_PUSH_CAPTURE_V1, 1, 0, 0},
+                        {TALOS_RT_RANDOM_EQ_V1, 1},
+                        {TALOS_RT_RANDOM_END_HARD_V1, 1, 0,
+                         TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1}},
+                       TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM);
+  uint64_t start[9] = {}, mutableMask[9], assignment[9] = {};
+  std::fill_n(mutableMask, 8, UINT64_MAX);
+  mutableMask[8] = 1;
+  start[4] = UINT64_C(0x12345678abcdef01);
+  mutableMask[4] = 0;
+  uint64_t state = 71, capture = 0, freeOnes = 0, freeZeros = 0;
+  uint32_t captureWidth = 1, success = 0;
+  // One constrained bit and 448 free bits, separated by a frozen word.
+  // Local input order crosses a radix byte boundary and has a gap; both the
+  // rank cardinality and returned rank exceed the inline count storage.
+  for (unsigned iteration = 0; iteration != 64; ++iteration) {
+    capture = iteration & 1;
+    ASSERT_EQ(talos_rt_v1_random_solve_wide_modes_state(
+                  context, bytes.data(), bytes.size(), start, mutableMask, 9, 0,
+                  1, state, 15, &capture, 1, &captureWidth, 1, assignment,
+                  &success, &state),
+              TALOS_RT_OK);
+    ASSERT_EQ(success, 1u);
+    EXPECT_EQ(assignment[8], capture);
+    EXPECT_EQ(assignment[4], start[4]);
+    freeOnes |= assignment[1];
+    freeZeros |= ~assignment[1];
+  }
+  EXPECT_EQ(freeOnes, UINT64_MAX);
+  EXPECT_EQ(freeZeros, UINT64_MAX);
+}
+
 TEST_F(RandSolveWideTest, SolvesWideSystemFunctionsWithCaptureBoundaries) {
   std::vector<uint8_t> bytes =
       program(128, 2,

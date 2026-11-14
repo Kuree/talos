@@ -323,6 +323,11 @@ struct LocalRelation {
 
   LocalRelation(const BooleanCircuit &source, ID relation, NodeScratch &scratch,
                 const std::vector<size_t> &extra = {}) {
+    struct Input {
+      size_t original;
+      ID node;
+    };
+    std::vector<Input> inputs;
     const auto &nodes = source.getNodes();
     scratch.begin(nodes.size());
     scratch.mark(0);
@@ -346,15 +351,47 @@ struct LocalRelation {
         continue;
       }
       if (nodes[node].opcode == PlanOpcode::RandomBit)
-        originals.push_back(nodes[node].b);
+        inputs.push_back({nodes[node].b, node});
       else
         valid = false;
       reached.push_back(node);
     }
-    originals.insert(originals.end(), extra.begin(), extra.end());
-    std::sort(originals.begin(), originals.end());
-    originals.erase(std::unique(originals.begin(), originals.end()),
-                    originals.end());
+    for (size_t original : extra)
+      inputs.push_back({original, missing});
+    // Input order defines exact ranks. Use radix ordering for large supports
+    // and a fixed-size comparison-sort leaf, so canonicalization is linear
+    // in the graph and its inputs, even for very wide free fields. Recording
+    // each source node also avoids a binary search per input when emitting
+    // the shape below.
+    if (inputs.size() <= 32) {
+      std::sort(inputs.begin(), inputs.end(),
+                [](Input a, Input b) { return a.original < b.original; });
+    } else {
+      size_t highest = 0;
+      for (Input input : inputs)
+        highest = std::max(highest, input.original);
+      std::vector<Input> ordered(inputs.size());
+      for (unsigned shift = 0; highest; shift += 8, highest >>= 8) {
+        std::array<size_t, 256> offsets{};
+        for (Input input : inputs)
+          ++offsets[(input.original >> shift) & 255];
+        size_t offset = 0;
+        for (size_t &bucket : offsets) {
+          size_t count = bucket;
+          bucket = offset;
+          offset += count;
+        }
+        for (Input input : inputs)
+          ordered[offsets[(input.original >> shift) & 255]++] = input;
+        inputs.swap(ordered);
+      }
+    }
+    for (Input input : inputs) {
+      if (originals.empty() || originals.back() != input.original)
+        originals.push_back(input.original);
+      if (input.node != missing)
+        scratch.value(input.node) = ID(originals.size() - 1);
+    }
     auto rename = [&](ID id) { return scratch.value(id / 2) ^ (id & 1); };
     shape.reserve(reached.size() * 3 + 2);
     shape.push_back(uint32_t(originals.size()));
@@ -362,10 +399,7 @@ struct LocalRelation {
       const auto &plan = nodes[reached[position]];
       if (plan.opcode == PlanOpcode::RandomBit) {
         shape.push_back(0);
-        shape.push_back(
-            uint32_t(std::lower_bound(originals.begin(), originals.end(),
-                                      size_t(plan.b)) -
-                     originals.begin()));
+        shape.push_back(scratch.value(reached[position]));
       } else {
         shape.push_back(1);
         shape.push_back(rename(plan.a));
