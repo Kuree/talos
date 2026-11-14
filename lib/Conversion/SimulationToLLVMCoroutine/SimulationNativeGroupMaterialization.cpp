@@ -17,6 +17,8 @@
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
 
 #include "mlir/Analysis/CallGraph.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/Transforms/InlinerInterfaceImpl.h"
 #include "mlir/IR/Dominance.h"

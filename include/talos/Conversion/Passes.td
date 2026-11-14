@@ -332,7 +332,9 @@ def MaterializeTalosNativeEvalGroupsPass
     materialize-native-eval-group-bodies, which lowers schedule actions and
     verifies the eval call closure before promoting residual groups.
   }];
-  let dependentDialects = ["mlir::LLVM::LLVMDialect"];
+  let dependentDialects = ["mlir::LLVM::LLVMDialect",
+                           "mlir::arith::ArithDialect",
+                           "mlir::cf::ControlFlowDialect"];
 }
 
 def FoldNativeScalarValuesPass
@@ -439,7 +441,9 @@ def FinalizeNativeLLVMPass
     materialize-native-eval-transactions and finalize-native-functions. Each
     stage expects the output of the previous one.
   }];
-  let dependentDialects = ["mlir::LLVM::LLVMDialect"];
+  let dependentDialects = ["mlir::LLVM::LLVMDialect",
+                           "mlir::arith::ArithDialect",
+                           "mlir::cf::ControlFlowDialect"];
 }
 
 def FinalizeNativeLLVMWrappersPass
@@ -465,7 +469,9 @@ def MaterializeNativeEvalRoutesPass
     clones the two-state NBA commit variants that call sites ask for, and
     materializes observer and DPI export thunks.
   }];
-  let dependentDialects = ["mlir::LLVM::LLVMDialect"];
+  let dependentDialects = ["mlir::LLVM::LLVMDialect",
+                           "mlir::arith::ArithDialect",
+                           "mlir::cf::ControlFlowDialect"];
 }
 
 def PublishNativeProofsPass
@@ -489,7 +495,9 @@ def MaterializeNativeEvalGroupBodiesPass
     schedule actions and verifies the generated eval call closure before it
     promotes the residual groups' state to SSA, function by function.
   }];
-  let dependentDialects = ["mlir::LLVM::LLVMDialect"];
+  let dependentDialects = ["mlir::LLVM::LLVMDialect",
+                           "mlir::arith::ArithDialect",
+                           "mlir::cf::ControlFlowDialect"];
 }
 
 def MaterializeNativeEvalTransactionsPass

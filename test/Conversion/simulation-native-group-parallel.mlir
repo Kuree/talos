@@ -173,8 +173,19 @@ module {
 // Workers lower an independent group's schedule actions. The runtime entry
 // points those calls name are declared at the group's ordered turn, as is the
 // whole lowering of a group whose unspecialized batch adds a root table, so
-// serial and concurrent materialization build the same module.
+// serial and concurrent materialization build the same module. The input
+// holds no arith or cf operation: the pass itself loads the dialects that
+// action and batch lowering create.
+#batch = #schedule.nba_batch_layout<plan = @plan, value = @value, unknown = @unknown, dirty = @dirty, summary = @summary, ingress = @ingress, bitCount = 256, rootCount = 66, capacity = 130>
+#aux = #schedule.nba_commit_layout<offset = 232, width = 8, accumulator = @aux, slots = [], consumers = []>
 module {
+  llvm.mlir.global external @plan() : i8
+  llvm.mlir.global external @value() : !llvm.array<40 x i8>
+  llvm.mlir.global external @unknown() : !llvm.array<40 x i8>
+  llvm.mlir.global external @dirty() : !llvm.array<2 x i64>
+  llvm.mlir.global external @summary() : i64
+  llvm.mlir.global external @ingress() : !llvm.array<8 x i64>
+  llvm.mlir.global external @aux() : !llvm.array<136 x i8>
   llvm.mlir.global external @changed() : i8
   llvm.func @first() attributes {schedule.eval.infallible} {
     llvm.return
@@ -183,12 +194,15 @@ module {
     llvm.return
   }
   // CHECK-DAG: llvm.func @talos_rt_v1_scheduler_static_transition(
+  // CHECK-DAG: llvm.func @talos_rt_v1_static_nba_batch_guard(
   // CHECK-DAG: llvm.func @talos_rt_v1_static_nba_commit_batch(
   // CHECK-DAG: llvm.mlir.global internal constant @__talos_nba_batch_roots
   // CHECK-LABEL: llvm.func @lowered(
   // CHECK-NOT: llvm.call @first
   // CHECK: llvm.call @talos_rt_v1_scheduler_static_transition(
-  // CHECK-NOT: schedule.
+  // CHECK: llvm.call @talos_rt_v1_static_nba_batch_guard(
+  // CHECK-NOT: schedule.nba
+  // CHECK-NOT: schedule.transition
   // CHECK: llvm.return
   llvm.func @lowered(%ctx: !llvm.ptr) attributes {schedule.eval.ranked_members = array<i32: 0, 1>} {
     llvm.call @first() {schedule.eval.group_member = 0 : i32} : () -> ()
@@ -196,6 +210,12 @@ module {
     %one = llvm.mlir.constant(1 : i64) : i64
     schedule.transition %ctx, %zero, %zero, %zero, %one, %zero {static_state = 1 : i64, width = 1 : i64} : (!llvm.ptr, i64, i64, i64, i64, i64) -> ()
     llvm.call @second() {schedule.eval.group_member = 1 : i32} : () -> ()
+    %region = llvm.mlir.constant(2 : i32) : i32
+    %changed = llvm.mlir.addressof @changed : !llvm.ptr
+    %status = schedule.nba.batch %ctx, %region, %changed {
+      schedule.nba.commit 2 {layout = #aux}
+      schedule.nba.yield
+    } {layout = #batch} : (!llvm.ptr, i32, !llvm.ptr) -> i32
     llvm.return
   }
   // CHECK-LABEL: llvm.func @deferred(
