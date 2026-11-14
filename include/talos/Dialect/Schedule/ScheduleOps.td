@@ -894,6 +894,19 @@ def NativeScratchOp : ScheduleNativeOp<"scratch", [MemoryEffects<[MemAlloc]>]> {
 // global so symbol-use queries still see it, and may only appear in a
 // function. Accesses are neither volatile nor atomic. finalize-native-functions
 // lowers them to the LLVM accesses they stand for.
+//
+// What native passes need to know about an access is a property:
+// - window: the conservative physical bytes [begin, end) a bounds-checked
+//   access with a dynamic offset may touch, including its packing padding;
+// - written_bits (stores): for a store whose byte address is dynamic, the
+//   canonical bits [begin, begin + width) its mask can change, as
+//   [begin, width];
+// - latch_destination: the access reads or writes the destination of a
+//   per-site NBA latch, whose unknown bits fixed-root proofs do not cover, so
+//   the fast two-state NBA commit keeps it;
+// - summary_reported (stores): the writer reports the roots this store
+//   changes to the unknown summary itself;
+// - owner: the activation-group member whose activation performs the access.
 def StateAccessValue : AnyTypeOf<[AnySignlessInteger,
                                   VectorOfAnyRankOf<[AnySignlessInteger]>]>;
 
@@ -927,7 +940,10 @@ def NativeStateLoadOp : ScheduleNativeOp<"state.load", [
                            [MemRead]>:$global,
                        Optional<I64>:$dynamic_offset,
                        I64Attr:$static_offset,
-                       IntValidAlignment<I64Attr>:$alignment);
+                       IntValidAlignment<I64Attr>:$alignment,
+                       OptionalAttr<DenseI64ArrayAttr>:$window,
+                       UnitAttr:$latch_destination,
+                       OptionalAttr<I32Attr>:$owner);
   let results = (outs StateAccessValue:$result);
   let assemblyFormat = [{
     $global `[` custom<StateOffset>($dynamic_offset, $static_offset) `]`
@@ -940,6 +956,9 @@ def NativeStateLoadOp : ScheduleNativeOp<"state.load", [
                                  "uint64_t":$alignment)>];
   let extraClassDeclaration = [{
     ::talos::schedule::StatePlane getPlane();
+    /// The byte offset when it is constant: the static offset, plus a
+    /// dynamic one defined by a constant.
+    std::optional<uint64_t> getConstantOffset();
   }];
   let hasFolder = 1;
   let hasVerifier = 1;
@@ -957,7 +976,12 @@ def NativeStateStoreOp : ScheduleNativeOp<"state.store", [
                            [MemWrite]>:$global,
                        Optional<I64>:$dynamic_offset,
                        I64Attr:$static_offset,
-                       IntValidAlignment<I64Attr>:$alignment);
+                       IntValidAlignment<I64Attr>:$alignment,
+                       OptionalAttr<DenseI64ArrayAttr>:$window,
+                       OptionalAttr<DenseI64ArrayAttr>:$written_bits,
+                       UnitAttr:$latch_destination,
+                       UnitAttr:$summary_reported,
+                       OptionalAttr<I32Attr>:$owner);
   let assemblyFormat = [{
     $value `,` $global `[` custom<StateOffset>($dynamic_offset, $static_offset)
     `]` attr-dict `:` type($value)
@@ -969,6 +993,9 @@ def NativeStateStoreOp : ScheduleNativeOp<"state.store", [
                                  "uint64_t":$alignment)>];
   let extraClassDeclaration = [{
     ::talos::schedule::StatePlane getPlane();
+    /// The byte offset when it is constant: the static offset, plus a
+    /// dynamic one defined by a constant.
+    std::optional<uint64_t> getConstantOffset();
   }];
   let hasFolder = 1;
   let hasVerifier = 1;

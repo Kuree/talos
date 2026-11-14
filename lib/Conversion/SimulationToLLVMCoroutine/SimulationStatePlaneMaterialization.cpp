@@ -336,7 +336,16 @@ void eliminateTwoStateUnknownPlane(ModuleOp module) {
     }
   llvm::DenseSet<Value> pointers;
   SmallVector<Value> worklist;
-  module.walk([&](LLVM::AddressOfOp address) {
+  module.walk([&](Operation *operation) {
+    auto plane = dyn_cast<schedule::NativeStateAddressOp>(operation);
+    if (plane && plane.getPlane() == schedule::StatePlane::Unknown) {
+      pointers.insert(plane.getResult());
+      worklist.push_back(plane.getResult());
+      return;
+    }
+    auto address = dyn_cast<LLVM::AddressOfOp>(operation);
+    if (!address)
+      return;
     if (names.contains(address.getGlobalName())) {
       pointers.insert(address.getResult());
       worklist.push_back(address.getResult());
@@ -386,7 +395,17 @@ void eliminateTwoStateUnknownPlane(ModuleOp module) {
   SmallVector<Operation *> erase;
   module.walk([&](Operation *op) {
     OpBuilder builder(op);
-    if (auto load = dyn_cast<LLVM::LoadOp>(op)) {
+    // The unknown plane is all zero: its reads are zero, its writes vanish.
+    if (auto load = dyn_cast<schedule::NativeStateLoadOp>(op)) {
+      if (load.getPlane() == schedule::StatePlane::Unknown) {
+        load.getResult().replaceAllUsesWith(
+            LLVM::ZeroOp::create(builder, op->getLoc(), load.getType()));
+        erase.push_back(op);
+      }
+    } else if (auto store = dyn_cast<schedule::NativeStateStoreOp>(op)) {
+      if (store.getPlane() == schedule::StatePlane::Unknown)
+        erase.push_back(op);
+    } else if (auto load = dyn_cast<LLVM::LoadOp>(op)) {
       if (pointers.contains(load.getAddr())) {
         load.getResult().replaceAllUsesWith(
             LLVM::ZeroOp::create(builder, op->getLoc(), load.getType()));

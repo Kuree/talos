@@ -59,7 +59,7 @@
 // DIRECT-NEXT: %[[NEW:.*]] = llvm.or %[[OLD]], %[[OUTBIT]]
 // DIRECT-NEXT: llvm.store %[[NEW]], %[[SUMMARY]]
 // DIRECT: ^[[COPY]]:
-// DIRECT-NOT: %[[PLANE]]
+// DIRECT-NOT: %[[PLANE]]{{[^0-9]}}
 // DIRECT: llvm.return
 // DIRECT: llvm.func @main(
 // DIRECT: llvm.call @talos_rt_v1_native_state_bind_unknown_summary(

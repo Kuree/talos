@@ -12,13 +12,13 @@
 // CHECK-DAG: %[[UPPER:.*]] = llvm.mlir.constant(2147483648 : i62)
 // CHECK-DAG: %[[MISMATCH:.*]] = llvm.mlir.constant(false)
 // CHECK-DAG: %[[LIMIT:.*]] = llvm.mlir.constant(66036 : i32)
-// CHECK-DAG: %[[UNKNOWN:.*]] = llvm.mlir.addressof @__talos_state_unknown
 // CHECK-NOT: llvm.{{store|call}}
 // CHECK: %[[OLD:.*]] = llvm.load
 // CHECK-NOT: llvm.{{load|store|call}}
 // CHECK: %[[NEXT:.*]] = llvm.add %[[OLD]],
 // CHECK-NOT: llvm.{{store|call}}
-// CHECK: %[[PLANE:.*]] = llvm.getelementptr %[[UNKNOWN]][8]
+// CHECK: %[[UNKNOWN:.*]] = llvm.mlir.addressof @__talos_state_unknown
+// CHECK-NEXT: %[[PLANE:.*]] = llvm.getelementptr %[[UNKNOWN]][8]
 // CHECK-NEXT: llvm.load %[[PLANE]]
 // CHECK-NOT: llvm.{{store|call}}
 // CHECK: llvm.cond_br %[[MISMATCH]],

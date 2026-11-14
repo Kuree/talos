@@ -1,5 +1,6 @@
 //===- SimulationNativeGroupMaterialization.cpp - Native group bodies ----===//
 
+#include "NativeStateAccess.h"
 #include "NativeSymbolUses.h"
 #include "SimulationAOTPlanning.h"
 #include "SimulationEvalReadySet.h"
@@ -237,25 +238,6 @@ promoteScalarSlots(ArrayRef<PromotableAllocationOpInterface> allocations,
   return success();
 }
 
-std::optional<uint64_t> staticByteOffset(Value pointer) {
-  uint64_t bytes = 0;
-  while (auto gep = pointer.getDefiningOp<LLVM::GEPOp>()) {
-    if (!gep.getElemType().isInteger(8) || gep.getIndices().size() != 1)
-      return std::nullopt;
-    APInt constant;
-    auto index = gep.getIndices()[0];
-    if (auto integer = dyn_cast<IntegerAttr>(index))
-      constant = integer.getValue();
-    else if (!matchPattern(cast<Value>(index), m_ConstantInt(&constant)))
-      return std::nullopt;
-    if (constant.isNegative() || constant.getActiveBits() > 64 ||
-        constant.getZExtValue() > UINT64_MAX - bytes)
-      return std::nullopt;
-    bytes += constant.getZExtValue();
-    pointer = gep.getBase();
-  }
-  return bytes;
-}
 
 using NativeByteFootprint = SmallVector<std::pair<uint64_t, uint64_t>, 2>;
 struct NativeStateFootprint {
@@ -302,19 +284,15 @@ buildNativeStateFootprints(ModuleOp module,
             metadataOnly.contains(function.getSymName()))
           return;
         NativeStateFootprint &result = locals[index].accesses;
-        auto memory = [&](Operation *operation, Value pointer,
+        auto memory = [&](const NativeAddress &access,
                           std::optional<uint64_t> bytes) {
-          Value root = pointer;
-          while (auto gep = root.getDefiningOp<LLVM::GEPOp>())
-            root = gep.getBase();
-          if (root.getDefiningOp<LLVM::AllocaOp>())
+          if (access.isLocal())
             return;
-          auto address = root.getDefiningOp<LLVM::AddressOfOp>();
-          if (!address || !globalTypes.contains(address.getGlobalName())) {
+          if (access.global.empty() || !globalTypes.contains(access.global)) {
             result.exact = false;
             return;
           }
-          StringRef global = address.getGlobalName();
+          StringRef global = access.global;
           if (global != "__talos_state_value" &&
               global != "__talos_state_unknown")
             return;
@@ -322,11 +300,10 @@ buildNativeStateFootprints(ModuleOp module,
             result.exact = false;
             return;
           }
-          auto offset = staticByteOffset(pointer);
+          auto offset = access.offset;
           auto array =
               dyn_cast<LLVM::LLVMArrayType>(globalTypes.lookup(global));
-          auto interval =
-              schedule::get<schedule::Field::EvalStateAccessBytes>(operation);
+          DenseI64ArrayAttr interval = access.window;
           if (array && interval && interval.size() == 2 && interval[0] >= 0 &&
               interval[1] > interval[0]) {
             uint64_t begin = interval[0];
@@ -355,18 +332,11 @@ buildNativeStateFootprints(ModuleOp module,
               locals[index].callees.push_back(*call.getCallee());
             else
               result.exact = false;
-          } else if (auto load = dyn_cast<LLVM::LoadOp>(operation)) {
-            auto type = dyn_cast<IntegerType>(load.getType());
-            memory(operation, load.getAddr(),
-                   type && type.getWidth() % 8 == 0
-                       ? std::optional<uint64_t>(type.getWidth() / 8)
-                       : std::nullopt);
-          } else if (auto store = dyn_cast<LLVM::StoreOp>(operation)) {
-            auto type = dyn_cast<IntegerType>(store.getValue().getType());
-            memory(operation, store.getAddr(),
-                   type && type.getWidth() % 8 == 0
-                       ? std::optional<uint64_t>(type.getWidth() / 8)
-                       : std::nullopt);
+          } else if (auto access = getNativeMemoryAccess(operation)) {
+            auto type = dyn_cast<IntegerType>(access->type);
+            memory(*access, type && type.getWidth() % 8 == 0
+                                ? std::optional<uint64_t>(type.getWidth() / 8)
+                                : std::nullopt);
           } else if (isa<LLVM::MemcpyOp, LLVM::MemsetOp>(operation)) {
             Value length = isa<LLVM::MemcpyOp>(operation)
                                ? cast<LLVM::MemcpyOp>(operation).getLen()
@@ -376,10 +346,13 @@ buildNativeStateFootprints(ModuleOp module,
                 bytes.getActiveBits() > 64)
               result.exact = false;
             else if (auto copy = dyn_cast<LLVM::MemcpyOp>(operation)) {
-              memory(operation, copy.getDst(), bytes.getZExtValue());
-              memory(operation, copy.getSrc(), bytes.getZExtValue());
+              memory(describeNativeAddress(operation, copy.getDst()),
+                     bytes.getZExtValue());
+              memory(describeNativeAddress(operation, copy.getSrc()),
+                     bytes.getZExtValue());
             } else
-              memory(operation, cast<LLVM::MemsetOp>(operation).getDst(),
+              memory(describeNativeAddress(
+                         operation, cast<LLVM::MemsetOp>(operation).getDst()),
                      bytes.getZExtValue());
           } else if (!isa<LLVM::ReturnOp, LLVM::AllocaOp>(operation) &&
                      !isMemoryEffectFree(operation))
@@ -483,7 +456,7 @@ LogicalResult promoteGroupReadyWords(LLVM::LLVMFuncOp function,
         supported = false;
         break;
       }
-      auto bytes = staticByteOffset(pointer);
+      auto bytes = getConstantByteOffset(pointer);
       if (!bytes || *bytes % 8) {
         // Hierarchical ready lookup can select a word dynamically. Keep that
         // exact access on authoritative storage and treat it as a boundary.
@@ -591,19 +564,15 @@ promoteGroupState(LLVM::LLVMFuncOp function,
   DenseMap<Operation *, Footprint> boundaryFootprints;
   DenseMap<Operation *, uint64_t> operationOrder;
   uint64_t nextOperation = 0;
-  auto pointerFootprint = [&](Value pointer, uint64_t bytes,
-                              Footprint &footprint) {
-    Value root = pointer;
-    while (auto gep = root.getDefiningOp<LLVM::GEPOp>())
-      root = gep.getBase();
-    if (root.getDefiningOp<LLVM::AllocaOp>())
+  auto accessFootprint = [&](const NativeAddress &access, uint64_t bytes,
+                             Footprint &footprint) {
+    if (access.isLocal())
       return true;
-    auto address = root.getDefiningOp<LLVM::AddressOfOp>();
-    if (!address || !globalTypes.contains(address.getGlobalName()))
+    if (access.global.empty() || !globalTypes.contains(access.global))
       return false;
-    if (address.getGlobalName() != name)
+    if (access.global != name)
       return true;
-    auto offset = staticByteOffset(pointer);
+    auto offset = access.offset;
     if (!offset || *offset > array.getNumElements() ||
         bytes > array.getNumElements() - *offset)
       return false;
@@ -640,9 +609,8 @@ promoteGroupState(LLVM::LLVMFuncOp function,
     }
     if (isa<LLVM::InvokeOp, LLVM::InlineAsmOp>(operation))
       supported = false;
-    auto load = dyn_cast<LLVM::LoadOp>(operation);
-    auto store = dyn_cast<LLVM::StoreOp>(operation);
-    if (!load && !store) {
+    std::optional<NativeMemoryAccess> access = getNativeMemoryAccess(operation);
+    if (!access) {
       // Intrinsics and future memory operations must not silently bypass
       // publication. Unknown control effects cannot be resumed locally.
       // Local memory intrinsics cannot observe canonical state. Preserve
@@ -657,14 +625,14 @@ promoteGroupState(LLVM::LLVMFuncOp function,
                      bytes.getActiveBits() <= 64;
         if (exact) {
           if (auto set = dyn_cast<LLVM::MemsetOp>(operation))
-            exact =
-                pointerFootprint(set.getDst(), bytes.getZExtValue(), footprint);
+            exact = accessFootprint(describeNativeAddress(set, set.getDst()),
+                                    bytes.getZExtValue(), footprint);
           else {
             auto copy = cast<LLVM::MemcpyOp>(operation);
-            exact = pointerFootprint(copy.getDst(), bytes.getZExtValue(),
-                                     footprint) &&
-                    pointerFootprint(copy.getSrc(), bytes.getZExtValue(),
-                                     footprint);
+            exact = accessFootprint(describeNativeAddress(copy, copy.getDst()),
+                                    bytes.getZExtValue(), footprint) &&
+                    accessFootprint(describeNativeAddress(copy, copy.getSrc()),
+                                    bytes.getZExtValue(), footprint);
           }
         }
         if (!exact || !footprint.empty())
@@ -682,44 +650,31 @@ promoteGroupState(LLVM::LLVMFuncOp function,
       }
       return;
     }
-    Value pointer = load ? load.getAddr() : store.getAddr();
-    Value root = pointer;
-    while (auto gep = root.getDefiningOp<LLVM::GEPOp>())
-      root = gep.getBase();
-    auto address = root.getDefiningOp<LLVM::AddressOfOp>();
-    if (!address || !globalTypes.contains(address.getGlobalName())) {
+    if (access->global.empty() || !globalTypes.contains(access->global)) {
       // A returned pointer or an indirect context access may alias canonical
       // state. Local allocation addresses are the only non-global exception.
-      if (!root.getDefiningOp<LLVM::AllocaOp>())
+      if (!access->isLocal())
         boundaries.insert(operation);
       return;
     }
-    if (address.getGlobalName() != name)
+    if (access->global != name)
       return;
-    auto owner =
-        ::talos::schedule::get<::talos::schedule::Field::EvalGroupOwner>(
-            operation);
-    auto type = dyn_cast<IntegerType>(load ? load.getType()
-                                           : store.getValue().getType());
-    auto offset = staticByteOffset(pointer);
-    bool plain =
-        load ? !load.getVolatile_() &&
-                   load.getOrdering() == LLVM::AtomicOrdering::not_atomic
-             : !store.getVolatile_() &&
-                   store.getOrdering() == LLVM::AtomicOrdering::not_atomic;
-    if ((!owner && !activation) || !plain || !type || type.getWidth() % 8 ||
-        !offset) {
+    IntegerAttr owner = access->owner;
+    auto type = dyn_cast<IntegerType>(access->type);
+    auto offset = access->offset;
+    bool load = !access->isWrite(), store = access->isWrite();
+    if ((!owner && !activation) || !access->plain || !type ||
+        type.getWidth() % 8 || !offset) {
       boundaries.insert(operation);
       Footprint footprint;
-      auto bytes =
-          schedule::get<schedule::Field::EvalStateAccessBytes>(operation);
+      DenseI64ArrayAttr bytes = access->window;
       if (bytes && bytes.size() == 2 && bytes[0] >= 0 && bytes[1] > bytes[0]) {
         uint64_t begin = bytes[0];
         uint64_t end = std::min(uint64_t(bytes[1]), array.getNumElements());
         if (begin < end)
           boundaryFootprints.try_emplace(operation, Footprint{{begin, end}});
       } else if (type && type.getWidth() % 8 == 0 && offset &&
-                 pointerFootprint(pointer, type.getWidth() / 8, footprint))
+                 accessFootprint(*access, type.getWidth() / 8, footprint))
         boundaryFootprints.try_emplace(operation, std::move(footprint));
       return;
     }
@@ -734,9 +689,9 @@ promoteGroupState(LLVM::LLVMFuncOp function,
     range.operations.push_back(operation);
     if (owner)
       range.owners.insert(owner.getUInt());
-    range.read |= bool(load);
-    range.written |= bool(store);
-    range.stores += bool(store);
+    range.read |= load;
+    range.written |= store;
+    range.stores += store;
   });
   // The global address must never escape into an opaque memory operation.
   // Calls are handled at boundaries, but storing the pointer or passing it
@@ -746,9 +701,11 @@ promoteGroupState(LLVM::LLVMFuncOp function,
   // memory access is an unknown alias and already forces a boundary above.
   SmallVector<Value> pending;
   llvm::DenseSet<Value> seen;
-  function.walk([&](LLVM::AddressOfOp address) {
-    if (address.getGlobalName() == name)
-      pending.push_back(address.getResult());
+  function.walk([&](Operation *operation) {
+    if (isa<LLVM::AddressOfOp, schedule::NativeStateAddressOp>(operation))
+      if (FlatSymbolRefAttr global = getAddressedGlobal(operation);
+          global.getValue() == name)
+        pending.push_back(operation->getResult(0));
   });
   while (!pending.empty() && supported) {
     Value pointer = pending.pop_back_val();
@@ -852,7 +809,7 @@ promoteGroupState(LLVM::LLVMFuncOp function,
     definitions.insert(&function.getBody().front());
     for (Range *range : window.ranges)
       for (Operation *operation : range->operations)
-        if (isa<LLVM::StoreOp>(operation))
+        if (isNativeMemoryStore(operation))
           definitions.insert(operation->getBlock());
     uint64_t relevantBoundaries = 0;
     for (Operation *boundary : boundaries) {
@@ -920,16 +877,14 @@ promoteGroupState(LLVM::LLVMFuncOp function,
     for (Range *range : window->ranges)
       for (Operation *operation : range->operations) {
         builder.setInsertionPoint(operation);
-        auto load = dyn_cast<LLVM::LoadOp>(operation);
-        auto store = dyn_cast<LLVM::StoreOp>(operation);
-        Value pointer = load ? load.getAddr() : store.getAddr();
-        uint64_t byte = *staticByteOffset(pointer) - window->offset;
+        NativeMemoryAccess access = *getNativeMemoryAccess(operation);
+        uint64_t byte = *access.offset - window->offset;
         unsigned bits = cast<IntegerType>(range->type).getWidth();
         unsigned shift = littleEndian.value_or(true)
                              ? byte * 8
                              : type.getWidth() - byte * 8 - bits;
         Value value;
-        if (load) {
+        if (!access.isWrite()) {
           value = LLVM::LoadOp::create(builder, operation->getLoc(), type,
                                        local, 1);
           if (shift)
@@ -939,9 +894,9 @@ promoteGroupState(LLVM::LLVMFuncOp function,
           if (bits != type.getWidth())
             value = LLVM::TruncOp::create(builder, operation->getLoc(),
                                           range->type, value);
-          load.replaceAllUsesWith(value);
+          operation->getResult(0).replaceAllUsesWith(value);
         } else {
-          value = store.getValue();
+          value = access.stored;
           if (bits != type.getWidth()) {
             value =
                 LLVM::ZExtOp::create(builder, operation->getLoc(), type, value);
@@ -1097,18 +1052,14 @@ materializeNativeEvalValueInterface(LLVM::LLVMFuncOp function,
     LLVM::StoreOp::create(builder, location, argument, local, 1);
     for (Operation *operation : lane.accesses) {
       builder.setInsertionPoint(operation);
-      auto load = dyn_cast<LLVM::LoadOp>(operation);
-      auto store = dyn_cast<LLVM::StoreOp>(operation);
-      auto narrow =
-          cast<IntegerType>(load ? load.getType() : store.getValue().getType());
-      uint64_t byte =
-          *staticByteOffset(load ? load.getAddr() : store.getAddr()) -
-          lane.begin;
+      NativeMemoryAccess access = *getNativeMemoryAccess(operation);
+      auto narrow = cast<IntegerType>(access.type);
+      uint64_t byte = *access.offset - lane.begin;
       unsigned shift = littleEndian ? byte * 8
                                     : cast<IntegerType>(type).getWidth() -
                                           byte * 8 - narrow.getWidth();
       Value value;
-      if (load) {
+      if (!access.isWrite()) {
         value =
             LLVM::LoadOp::create(builder, operation->getLoc(), type, local, 1);
         if (shift)
@@ -1118,9 +1069,9 @@ materializeNativeEvalValueInterface(LLVM::LLVMFuncOp function,
         if (narrow != type)
           value = LLVM::TruncOp::create(builder, operation->getLoc(), narrow,
                                         value);
-        load.replaceAllUsesWith(value);
+        operation->getResult(0).replaceAllUsesWith(value);
       } else {
-        value = store.getValue();
+        value = access.stored;
         if (narrow != type) {
           value =
               LLVM::ZExtOp::create(builder, operation->getLoc(), type, value);
@@ -1240,23 +1191,15 @@ LogicalResult materializeNativeEvalValueCalls(
     caller.walk([&](LLVM::CallOp call) { calls.push_back(call); });
     NativeStateFootprint callerAccesses{true, {}, {}};
     caller.walk([&](Operation *operation) {
-      auto load = dyn_cast<LLVM::LoadOp>(operation);
-      auto store = dyn_cast<LLVM::StoreOp>(operation);
-      if (!load && !store)
+      auto access = getNativeMemoryAccess(operation);
+      if (!access)
         return;
-      Value pointer = load ? load.getAddr() : store.getAddr(), root = pointer;
-      while (auto gep = root.getDefiningOp<LLVM::GEPOp>())
-        root = gep.getBase();
-      auto address = root.getDefiningOp<LLVM::AddressOfOp>();
-      auto type = dyn_cast<IntegerType>(load ? load.getType()
-                                             : store.getValue().getType());
-      auto offset = staticByteOffset(pointer);
-      if (address && type && offset && type.getWidth() % 8 == 0 &&
-          (address.getGlobalName() == "__talos_state_value" ||
-           address.getGlobalName() == "__talos_state_unknown"))
-        (address.getGlobalName() == "__talos_state_value"
-             ? callerAccesses.value
-             : callerAccesses.unknown)
+      auto plane = getStatePlaneOfAccess(*access);
+      auto type = dyn_cast<IntegerType>(access->type);
+      auto offset = access->offset;
+      if (plane && type && offset && type.getWidth() % 8 == 0)
+        (*plane == schedule::StatePlane::Value ? callerAccesses.value
+                                               : callerAccesses.unknown)
             .emplace_back(*offset, *offset + type.getWidth() / 8);
     });
     normalizeNativeByteFootprint(callerAccesses.value);
@@ -1298,17 +1241,13 @@ LogicalResult materializeNativeEvalValueCalls(
         auto cutPlane = [&](StringRef plane) -> NativeByteFootprint & {
           return plane == "__talos_state_value" ? cuts.value : cuts.unknown;
         };
+        auto cutWholePlane = [&](StringRef plane) {
+          auto array = cast<LLVM::LLVMArrayType>(globalTypes.lookup(plane));
+          cutPlane(plane).emplace_back(0, array.getNumElements());
+        };
         auto cutPointer = [&](Value pointer) {
-          while (auto gep = pointer.getDefiningOp<LLVM::GEPOp>())
-            pointer = gep.getBase();
-          auto address = pointer.getDefiningOp<LLVM::AddressOfOp>();
-          if (!address || (address.getGlobalName() != "__talos_state_value" &&
-                           address.getGlobalName() != "__talos_state_unknown"))
-            return;
-          auto array = cast<LLVM::LLVMArrayType>(
-              globalTypes.lookup(address.getGlobalName()));
-          cutPlane(address.getGlobalName())
-              .emplace_back(0, array.getNumElements());
+          if (auto plane = getStatePlaneRoot(pointer))
+            cutWholePlane(schedule::getStatePlaneGlobalName(*plane));
         };
         // Freeze cuts once, rather than rescanning the complete body for every
         // lane. Nested readers, intrinsics and dynamic/atomic accesses cannot
@@ -1332,50 +1271,33 @@ LogicalResult materializeNativeEvalValueCalls(
             cutPointer(set.getDst());
             return;
           }
-          auto load = dyn_cast<LLVM::LoadOp>(operation);
-          auto store = dyn_cast<LLVM::StoreOp>(operation);
-          if (!load && !store)
+          auto access = getNativeMemoryAccess(operation);
+          if (!access || !getStatePlaneOfAccess(*access))
             return;
-          Value pointer = load ? load.getAddr() : store.getAddr(),
-                root = pointer;
-          while (auto gep = root.getDefiningOp<LLVM::GEPOp>())
-            root = gep.getBase();
-          auto address = root.getDefiningOp<LLVM::AddressOfOp>();
-          if (!address || (address.getGlobalName() != "__talos_state_value" &&
-                           address.getGlobalName() != "__talos_state_unknown"))
-            return;
-          auto offset = staticByteOffset(pointer);
-          auto type = dyn_cast<IntegerType>(load ? load.getType()
-                                                 : store.getValue().getType());
+          StringRef plane = access->global;
+          auto offset = access->offset;
+          auto type = dyn_cast<IntegerType>(access->type);
           auto array = dyn_cast_or_null<LLVM::LLVMArrayType>(
-              globalTypes.lookup(address.getGlobalName()));
-          bool plain =
-              load
-                  ? !load.getVolatile_() &&
-                        load.getOrdering() == LLVM::AtomicOrdering::not_atomic
-                  : !store.getVolatile_() &&
-                        store.getOrdering() == LLVM::AtomicOrdering::not_atomic;
-          if (!offset || !plain) {
-            auto bytes =
-                schedule::get<schedule::Field::EvalStateAccessBytes>(operation);
+              globalTypes.lookup(plane));
+          if (!offset || !access->plain) {
+            DenseI64ArrayAttr bytes = access->window;
             if (bytes && bytes.size() == 2 && bytes[0] >= 0 &&
                 bytes[1] > bytes[0])
-              cutPlane(address.getGlobalName())
-                  .emplace_back(bytes[0], bytes[1]);
+              cutPlane(plane).emplace_back(bytes[0], bytes[1]);
             else if (offset && type && type.getWidth() % 8 == 0)
-              cutPlane(address.getGlobalName())
-                  .emplace_back(*offset, *offset + type.getWidth() / 8);
+              cutPlane(plane).emplace_back(*offset,
+                                           *offset + type.getWidth() / 8);
             else
-              cutPointer(pointer);
+              cutWholePlane(plane);
             return;
           }
           if (type && type.getWidth() % 8 == 0 && array &&
               *offset <= array.getNumElements() &&
               type.getWidth() / 8 <= array.getNumElements() - *offset)
-            ranges.push_back({address.getGlobalName(),
+            ranges.push_back({plane,
                               *offset,
                               *offset + type.getWidth() / 8,
-                              bool(store),
+                              access->isWrite(),
                               {operation}});
         });
         llvm::sort(ranges, [](const auto &a, const auto &b) {
@@ -1434,10 +1356,7 @@ LogicalResult materializeNativeEvalValueCalls(
             continue;
           uint64_t growth = 12 + 8 * callee.getBody().getBlocks().size();
           for (auto *operation : lane.accesses) {
-            Type type =
-                isa<LLVM::LoadOp>(operation)
-                    ? cast<LLVM::LoadOp>(operation).getType()
-                    : cast<LLVM::StoreOp>(operation).getValue().getType();
+            Type type = getNativeMemoryAccess(operation)->type;
             if (cast<IntegerType>(type).getWidth() !=
                 (lane.end - lane.begin) * 8)
               growth += 5;
@@ -1667,8 +1586,8 @@ inlineGroupBody(LLVM::LLVMFuncOp function, const SymbolTable &symbols,
                         postInsertBlock->getIterator(), mapping);
       for (Block &block : *source)
         for (Operation &operation : *mapping.lookup(&block)) {
-          if (owner && isa<LLVM::LoadOp, LLVM::StoreOp>(operation))
-            schedule::set<schedule::Field::EvalGroupOwner>(&operation, owner);
+          if (owner && isNativeMemoryAccess(&operation))
+            setNativeMemoryOwner(&operation, owner);
           if (auto child = dyn_cast<LLVM::CallOp>(operation)) {
             if (owner)
               ::talos::schedule::set<::talos::schedule::Field::EvalGroupMember>(

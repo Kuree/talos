@@ -1,5 +1,14 @@
 // RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-compute-fusion,talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o %t.llvm.mlir
 // RUN: FileCheck %s --check-prefix=PLAN < %t.llvm.mlir
+// RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-compute-fusion,talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' --mlir-print-ir-before=lower-native-state-access -o /dev/null 2>&1 | FileCheck %s --check-prefix=OWNER
+
+// Typed accesses carry their group member until lowering.
+// Each member writes its own output byte.
+// OWNER-LABEL: llvm.func @__talos_eval_ranked_group_0(
+// OWNER: schedule.state.store %{{.*}}, @__talos_state_value[2] {alignment = 1 : i64, owner = 1 : i32} : i8
+// OWNER: schedule.state.store %{{.*}}, @__talos_state_value[3] {alignment = 1 : i64, owner = 2 : i32} : i8
+// OWNER: schedule.state.store %{{.*}}, @__talos_state_value[4] {alignment = 1 : i64, owner = 3 : i32} : i8
+// OWNER: schedule.state.store %{{.*}}, @__talos_state_value[5] {alignment = 1 : i64, owner = 4 : i32} : i8
 
 // The NBA producer stays outside the sweep. Independent ready consumers
 // share one group, keeping their individual activation predicates.
@@ -16,7 +25,7 @@
 // PLAN-NEXT: llvm.cond_br %[[ACTIVE]], ^[[ARM:bb[0-9]+]], ^[[JOIN:bb[0-9]+]](
 // PLAN-NEXT: ^[[ARM]]:
 // PLAN-NOT: llvm.store
-// PLAN: llvm.store {{.*}}schedule.eval.group_owner = 3 : i32
+// PLAN: llvm.store {{.*}} : i8, !llvm.ptr
 // PLAN-NOT: llvm.store
 // PLAN: ^[[JOIN]](
 // PLAN-LABEL: llvm.func @__talos_eval_dispatch_v1(

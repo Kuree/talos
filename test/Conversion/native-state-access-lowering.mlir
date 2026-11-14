@@ -2,37 +2,54 @@
 
 // Typed state accesses become the LLVM accesses they stand for: the plane's
 // address, byte GEPs to the window, and a load or store of the same
-// alignment, with the access's native tags.
+// alignment. Their properties served native passes before this point; LLVM
+// needs none of them, while other dialects' annotations stay. A plane's
+// address and a window's address are each taken once per block, at their
+// first use.
 module {
   llvm.mlir.global internal @__talos_state_value(dense<0> : tensor<16xi8>) : !llvm.array<16 x i8>
   llvm.mlir.global internal @__talos_state_unknown(dense<0> : tensor<16xi8>) : !llvm.array<16 x i8>
   llvm.func @use(!llvm.ptr)
   // CHECK-LABEL: llvm.func @access(
-  // CHECK-SAME: %[[V:.*]]: i64, %[[DYN:.*]]: i64)
-  // CHECK: llvm.mlir.addressof @__talos_state_value {schedule.eval.group_owner = 1 : i32} : !llvm.ptr
-  // CHECK: %[[UBASE:.*]] = llvm.mlir.addressof @__talos_state_unknown : !llvm.ptr
+  // CHECK-SAME: %[[V:.*]]: i64, %[[DYN:.*]]: i64, %[[C:.*]]: i1)
+  // CHECK-NEXT: %[[VBASE:.*]] = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
+  // CHECK-NEXT: %[[UBASE:.*]] = llvm.mlir.addressof @__talos_state_unknown : !llvm.ptr
   // CHECK-NEXT: %[[UADDR:.*]] = llvm.getelementptr %[[UBASE]][4] : (!llvm.ptr) -> !llvm.ptr, i8
-  // CHECK-NEXT: %[[X:.*]] = llvm.load %[[UADDR]] {alignment = 1 : i64, schedule.eval.group_owner = 3 : i32} : !llvm.ptr -> i8
-  // CHECK: %[[VBASE:.*]] = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
+  // CHECK-NEXT: %[[X:.*]] = llvm.load %[[UADDR]] {alignment = 1 : i64, test.tag} : !llvm.ptr -> i8
   // CHECK-NEXT: %[[VADDR:.*]] = llvm.getelementptr %[[VBASE]][%[[DYN]]] : (!llvm.ptr, i64) -> !llvm.ptr, i8
-  // CHECK-NEXT: llvm.store %[[V]], %[[VADDR]] {alignment = 8 : i64, schedule.eval.unknown_write_range = array<i64: 0, 64>} : i64, !llvm.ptr
-  // CHECK: %[[WBASE:.*]] = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
-  // CHECK-NEXT: %[[WDYN:.*]] = llvm.getelementptr %[[WBASE]][%[[DYN]]] : (!llvm.ptr, i64) -> !llvm.ptr, i8
-  // CHECK-NEXT: %[[WADDR:.*]] = llvm.getelementptr %[[WDYN]][8] : (!llvm.ptr) -> !llvm.ptr, i8
+  // CHECK-NEXT: llvm.store %[[V]], %[[VADDR]] {alignment = 8 : i64} : i64, !llvm.ptr
+  // CHECK-NEXT: %[[WADDR:.*]] = llvm.getelementptr %[[VADDR]][8] : (!llvm.ptr) -> !llvm.ptr, i8
   // CHECK-NEXT: llvm.load %[[WADDR]] {alignment = 8 : i64} : !llvm.ptr -> i64
+  // The same window in the same block shares its address.
+  // CHECK-NEXT: llvm.store %[[V]], %[[WADDR]] {alignment = 8 : i64} : i64, !llvm.ptr
   // An offset past the GEP's constant range is an i64 index.
-  // CHECK: %[[FBASE:.*]] = llvm.mlir.addressof @__talos_state_value : !llvm.ptr
   // CHECK-NEXT: %[[FAR:.*]] = llvm.mlir.constant(300000000 : i64) : i64
-  // CHECK-NEXT: %[[FADDR:.*]] = llvm.getelementptr %[[FBASE]][%[[FAR]]] : (!llvm.ptr, i64) -> !llvm.ptr, i8
+  // CHECK-NEXT: %[[FADDR:.*]] = llvm.getelementptr %[[VBASE]][%[[FAR]]] : (!llvm.ptr, i64) -> !llvm.ptr, i8
   // CHECK-NEXT: llvm.load %[[FADDR]] {alignment = 1 : i64} : !llvm.ptr -> i8
-  llvm.func @access(%v: i64, %dyn: i64) -> i8 {
-    %a = schedule.state.address @__talos_state_value {schedule.eval.group_owner = 1 : i32} : !llvm.ptr
-    %x = schedule.state.load @__talos_state_unknown[4] {alignment = 1 : i64, schedule.eval.group_owner = 3 : i32} : i8
-    schedule.state.store %v, @__talos_state_value[%dyn] {alignment = 8 : i64, schedule.eval.unknown_write_range = array<i64: 0, 64>} : i64
+  // Offset zero is the plane's address.
+  // CHECK-NEXT: llvm.load %[[VBASE]] {alignment = 1 : i64} : !llvm.ptr -> i8
+  // CHECK-NEXT: llvm.call @use(%[[VBASE]])
+  // Another block takes its own addresses.
+  // CHECK: ^bb1:
+  // CHECK-NEXT: %[[UBASE2:.*]] = llvm.mlir.addressof @__talos_state_unknown : !llvm.ptr
+  // CHECK-NEXT: %[[UADDR2:.*]] = llvm.getelementptr %[[UBASE2]][4] : (!llvm.ptr) -> !llvm.ptr, i8
+  // CHECK-NEXT: llvm.store %{{.*}}, %[[UADDR2]] {alignment = 1 : i64} : i8, !llvm.ptr
+  llvm.func @access(%v: i64, %dyn: i64, %c: i1) -> i8 {
+    %a = schedule.state.address @__talos_state_value : !llvm.ptr
+    %x = schedule.state.load @__talos_state_unknown[4] {alignment = 1 : i64, owner = 3 : i32, test.tag} : i8
+    schedule.state.store %v, @__talos_state_value[%dyn] {alignment = 8 : i64, window = array<i64: 0, 16>, written_bits = array<i64: 0, 64>, latch_destination} : i64
     %w = schedule.state.load @__talos_state_value[%dyn + 8] {alignment = 8 : i64} : i64
+    schedule.state.store %v, @__talos_state_value[%dyn + 8] {alignment = 8 : i64} : i64
     %f = schedule.state.load @__talos_state_value[300000000] {alignment = 1 : i64} : i8
+    %z = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
     llvm.call @use(%a) : (!llvm.ptr) -> ()
     %s = llvm.add %x, %f : i8
-    llvm.return %s : i8
+    %t = llvm.add %s, %z : i8
+    llvm.cond_br %c, ^bb1, ^bb2
+  ^bb1:
+    schedule.state.store %t, @__talos_state_unknown[4] {alignment = 1 : i64} : i8
+    llvm.br ^bb2
+  ^bb2:
+    llvm.return %t : i8
   }
 }

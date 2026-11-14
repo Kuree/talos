@@ -1,6 +1,16 @@
 // RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o %t.llvm.mlir 2> %t.trace
 // RUN: FileCheck %s --check-prefix=PLAN < %t.llvm.mlir
 // RUN: FileCheck %s --check-prefix=TRACE < %t.trace
+// RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' --mlir-print-ir-before=lower-native-state-access -o /dev/null 2>&1 | FileCheck %s --check-prefix=OWNER
+
+// Typed accesses carry their group member until lowering.
+// Each copy writes its own byte, in rank order.
+// OWNER-LABEL: llvm.func @__talos_eval_ranked_group_0(
+// OWNER: schedule.state.store %{{.*}}, @__talos_state_value[1] {alignment = 1 : i64, owner = 0 : i32} : i8
+// OWNER: schedule.state.store %{{.*}}, @__talos_state_value[2] {alignment = 1 : i64, owner = 1 : i32} : i8
+// OWNER: schedule.state.store %{{.*}}, @__talos_state_value[3] {alignment = 1 : i64, owner = 2 : i32} : i8
+// OWNER: schedule.state.store %{{.*}}, @__talos_state_value[4] {alignment = 1 : i64, owner = 3 : i32} : i8
+// OWNER: schedule.state.store %{{.*}}, @__talos_state_value[5] {alignment = 1 : i64, owner = 4 : i32} : i8
 
 // A periodic source feeds continuous copies. The copies share one ranked
 // computation body under the shared dispatcher, with no indirect call or
@@ -18,19 +28,19 @@
 // PLAN-NOT: llvm.switch
 // PLAN-NOT: llvm.call
 // PLAN: llvm.add
-// PLAN: llvm.store {{.*}}schedule.eval.group_owner = 0 : i32
+// PLAN: llvm.store {{.*}} : i8, !llvm.ptr
 // PLAN-NOT: llvm.call
 // PLAN: llvm.add
-// PLAN: llvm.store {{.*}}schedule.eval.group_owner = 1 : i32
+// PLAN: llvm.store {{.*}} : i8, !llvm.ptr
 // PLAN-NOT: llvm.call
 // PLAN: llvm.add
-// PLAN: llvm.store {{.*}}schedule.eval.group_owner = 2 : i32
+// PLAN: llvm.store {{.*}} : i8, !llvm.ptr
 // PLAN-NOT: llvm.call
 // PLAN: llvm.add
-// PLAN: llvm.store {{.*}}schedule.eval.group_owner = 3 : i32
+// PLAN: llvm.store {{.*}} : i8, !llvm.ptr
 // PLAN-NOT: llvm.call
 // PLAN: llvm.add
-// PLAN: llvm.store {{.*}}schedule.eval.group_owner = 4 : i32
+// PLAN: llvm.store {{.*}} : i8, !llvm.ptr
 // PLAN-NOT: llvm.switch
 // PLAN-NOT: llvm.call
 // PLAN: llvm.return

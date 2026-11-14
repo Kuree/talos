@@ -18,6 +18,12 @@ namespace talos::schedule {
 llvm::StringRef getStatePlaneGlobalName(StatePlane plane);
 /// The state plane a global holds, if it is one.
 std::optional<StatePlane> getStatePlaneOfGlobal(llvm::StringRef name);
+/// Whether `range` is a well-formed state access `window`: physical bytes
+/// [begin, end) with 0 <= begin <= end.
+bool isValidStateWindow(llvm::ArrayRef<int64_t> range);
+/// Whether `range` is a well-formed `written_bits`: [begin, width] bits with
+/// begin >= 0 and width > 0.
+bool isValidStateWrittenBits(llvm::ArrayRef<int64_t> range);
 } // namespace talos::schedule
 #define GET_OP_CLASSES
 #include "talos/Dialect/Schedule/ScheduleOps.h.inc"

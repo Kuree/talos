@@ -24,15 +24,15 @@
 // GROUP-NOT: llvm.call
 // GROUP-NOT: llvm.switch
 // GROUP-NOT: @__talos_state_unknown
-// GROUP: llvm.store {{.*}}schedule.eval.group_owner = 0 : i32
+// GROUP: llvm.store {{.*}} : i8, !llvm.ptr
 // GROUP-NOT: llvm.call
 // GROUP-NOT: llvm.switch
 // GROUP-NOT: @__talos_state_unknown
-// GROUP: llvm.store {{.*}}schedule.eval.group_owner = 1 : i32
+// GROUP: llvm.store {{.*}} : i8, !llvm.ptr
 // GROUP-NOT: llvm.call
 // GROUP-NOT: llvm.switch
 // GROUP-NOT: @__talos_state_unknown
-// GROUP: llvm.store {{.*}}schedule.eval.group_owner = 2 : i32
+// GROUP: llvm.store {{.*}} : i8, !llvm.ptr
 // GROUP-NOT: llvm.call
 // GROUP-NOT: llvm.switch
 // GROUP-NOT: @__talos_state_unknown

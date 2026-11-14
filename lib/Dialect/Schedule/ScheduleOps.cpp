@@ -1,4 +1,5 @@
 #include "talos/Dialect/Schedule/ScheduleOps.h"
+#include "talos/Dialect/Schedule/ScheduleDialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
@@ -71,13 +72,51 @@ static FlatSymbolRefAttr getStatePlaneSymbol(MLIRContext *context,
   return FlatSymbolRefAttr::get(context, getStatePlaneGlobalName(plane));
 }
 
+bool isValidStateWindow(ArrayRef<int64_t> range) {
+  return range.size() == 2 && range[0] >= 0 && range[1] >= range[0];
+}
+
+bool isValidStateWrittenBits(ArrayRef<int64_t> range) {
+  return range.size() == 2 && range[0] >= 0 && range[1] > 0;
+}
+
 static LogicalResult verifyStateAccess(Operation *op, StringRef global) {
   if (!getStatePlaneOfGlobal(global))
     return op->emitOpError("names '") << global << "', no native state plane";
   // Only functions are lowered to LLVM accesses.
   if (!op->getParentOfType<FunctionOpInterface>())
     return op->emitOpError("must be in a function");
+  // What native passes need to know about an access is a property; other
+  // dialects may still annotate it.
+  for (NamedAttribute attribute : op->getDiscardableAttrs())
+    if (attribute.getNameDialect() &&
+        attribute.getNameDialect()->getNamespace() ==
+            ScheduleDialect::getDialectNamespace())
+      return op->emitOpError("carries the schedule fact '")
+             << attribute.getName() << "' as a property, not an attribute";
   return success();
+}
+
+static LogicalResult verifyRange(Operation *op, StringRef name,
+                                 DenseI64ArrayAttr range, bool width) {
+  if (range && !(width ? isValidStateWrittenBits(range.asArrayRef())
+                       : isValidStateWindow(range.asArrayRef())))
+    return op->emitOpError("has a malformed ") << name;
+  return success();
+}
+
+template <typename AccessOp>
+static std::optional<uint64_t> getConstantOffsetOf(AccessOp access) {
+  uint64_t base = access.getStaticOffset();
+  Value dynamicOffset = access.getDynamicOffset();
+  if (!dynamicOffset)
+    return base;
+  APInt constant;
+  if (!matchPattern(dynamicOffset, m_ConstantInt(&constant)) ||
+      constant.isNegative() || constant.getActiveBits() > 64 ||
+      constant.getZExtValue() > UINT64_MAX - base)
+    return std::nullopt;
+  return base + constant.getZExtValue();
 }
 
 // The plane global resolves where llvm.mlir.addressof of it would.
@@ -128,13 +167,19 @@ void NativeStateLoadOp::build(OpBuilder &builder, OperationState &state,
                               uint64_t staticOffset, uint64_t alignment) {
   build(builder, state, type, getStatePlaneSymbol(builder.getContext(), plane),
         dynamicOffset, builder.getI64IntegerAttr(staticOffset),
-        builder.getI64IntegerAttr(alignment));
+        builder.getI64IntegerAttr(alignment), /*window=*/DenseI64ArrayAttr{},
+        /*latch_destination=*/UnitAttr{}, /*owner=*/IntegerAttr{});
+}
+std::optional<uint64_t> NativeStateLoadOp::getConstantOffset() {
+  return getConstantOffsetOf(*this);
 }
 StatePlane NativeStateLoadOp::getPlane() {
   return *getStatePlaneOfGlobal(getGlobal());
 }
 LogicalResult NativeStateLoadOp::verify() {
-  return verifyStateAccess(*this, getGlobal());
+  if (failed(verifyStateAccess(*this, getGlobal())))
+    return failure();
+  return verifyRange(*this, "window", getWindowAttr(), /*width=*/false);
 }
 LogicalResult
 NativeStateLoadOp::verifySymbolUses(SymbolTableCollection &tables) {
@@ -152,13 +197,22 @@ void NativeStateStoreOp::build(OpBuilder &builder, OperationState &state,
   build(builder, state, value,
         getStatePlaneSymbol(builder.getContext(), plane), dynamicOffset,
         builder.getI64IntegerAttr(staticOffset),
-        builder.getI64IntegerAttr(alignment));
+        builder.getI64IntegerAttr(alignment), /*window=*/DenseI64ArrayAttr{},
+        /*written_bits=*/DenseI64ArrayAttr{}, /*latch_destination=*/UnitAttr{},
+        /*summary_reported=*/UnitAttr{}, /*owner=*/IntegerAttr{});
+}
+std::optional<uint64_t> NativeStateStoreOp::getConstantOffset() {
+  return getConstantOffsetOf(*this);
 }
 StatePlane NativeStateStoreOp::getPlane() {
   return *getStatePlaneOfGlobal(getGlobal());
 }
 LogicalResult NativeStateStoreOp::verify() {
-  return verifyStateAccess(*this, getGlobal());
+  if (failed(verifyStateAccess(*this, getGlobal())) ||
+      failed(verifyRange(*this, "window", getWindowAttr(), /*width=*/false)))
+    return failure();
+  return verifyRange(*this, "written_bits", getWrittenBitsAttr(),
+                     /*width=*/true);
 }
 LogicalResult
 NativeStateStoreOp::verifySymbolUses(SymbolTableCollection &tables) {

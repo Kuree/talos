@@ -1,4 +1,6 @@
 // RUN: talos-opt %s | talos-opt | FileCheck %s --check-prefix=ROUND
+// RUN: talos-opt %s --mlir-print-op-generic | talos-opt | FileCheck %s --check-prefix=ROUND
+// RUN: talos-opt %s --emit-bytecode | talos-opt | FileCheck %s --check-prefix=ROUND
 // RUN: talos-opt %s --pass-pipeline='builtin.module(llvm.func(cse))' | FileCheck %s --check-prefix=CSE
 // RUN: talos-opt %s --pass-pipeline='builtin.module(llvm.func(canonicalize))' | FileCheck %s --check-prefix=CANON
 // RUN: talos-opt %s --pass-pipeline='builtin.module(llvm.func(sccp))' | FileCheck %s --check-prefix=SCCP
@@ -8,17 +10,18 @@ module {
   llvm.mlir.global internal @__talos_state_unknown(dense<0> : tensor<16xi8>) : !llvm.array<16 x i8>
   llvm.func @use(!llvm.ptr)
 
-  // Accesses round-trip with a static offset, a dynamic one, or both.
+  // Accesses round-trip with a static offset, a dynamic one, or both, and
+  // with their properties, through custom and generic syntax and bytecode.
   // ROUND-LABEL: llvm.func @round(
   // ROUND: schedule.state.address @__talos_state_value : !llvm.ptr
-  // ROUND: schedule.state.load @__talos_state_unknown[4] {alignment = 1 : i64, schedule.eval.group_owner = 3 : i32} : i8
+  // ROUND: schedule.state.load @__talos_state_unknown[4] {alignment = 1 : i64, latch_destination, owner = 3 : i32, window = array<i64: 4, 5>} : i8
   // ROUND: schedule.state.load @__talos_state_value[%{{.*}}] {alignment = 1 : i64} : i8
-  // ROUND: schedule.state.store %{{.*}}, @__talos_state_value[%{{.*}} + 8] {alignment = 8 : i64} : i64
+  // ROUND: schedule.state.store %{{.*}}, @__talos_state_value[%{{.*}} + 8] {alignment = 8 : i64, latch_destination, owner = 1 : i32, summary_reported, window = array<i64: 0, 16>, written_bits = array<i64: 64, 64>} : i64
   llvm.func @round(%v: i64, %d: i64) -> i8 {
     %a = schedule.state.address @__talos_state_value : !llvm.ptr
-    %x = schedule.state.load @__talos_state_unknown[4] {alignment = 1 : i64, schedule.eval.group_owner = 3 : i32} : i8
+    %x = schedule.state.load @__talos_state_unknown[4] {alignment = 1 : i64, owner = 3 : i32, window = array<i64: 4, 5>, latch_destination} : i8
     %y = schedule.state.load @__talos_state_value[%d] {alignment = 1 : i64} : i8
-    schedule.state.store %v, @__talos_state_value[%d + 8] {alignment = 8 : i64} : i64
+    schedule.state.store %v, @__talos_state_value[%d + 8] {alignment = 8 : i64, window = array<i64: 0, 16>, written_bits = array<i64: 64, 64>, summary_reported, latch_destination, owner = 1 : i32} : i64
     llvm.call @use(%a) : (!llvm.ptr) -> ()
     %s = llvm.add %x, %y : i8
     llvm.return %s : i8

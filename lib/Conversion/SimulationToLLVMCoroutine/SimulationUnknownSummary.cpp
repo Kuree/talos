@@ -13,6 +13,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "NativeStateAccess.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 
@@ -107,30 +108,32 @@ struct UnknownSummaryWriteInputs {
   bool patterned = false;
 };
 
-/// The byte offset of `pointer` from the plane, when every step is a
+/// The byte offset of `pointer` from the unknown plane, when every step is a
 /// constant byte GEP.
 std::optional<uint64_t> constantByteOffset(Value pointer) {
-  uint64_t bytes = 0;
-  while (auto gep = pointer.getDefiningOp<LLVM::GEPOp>()) {
-    if (!gep.getElemType().isInteger(8) || gep.getIndices().size() != 1)
-      return std::nullopt;
-    APInt constant;
-    auto index = gep.getIndices()[0];
-    if (auto integer = dyn_cast<IntegerAttr>(index))
-      constant = integer.getValue();
-    else if (!matchPattern(cast<Value>(index), m_ConstantInt(&constant)))
-      return std::nullopt;
-    if (constant.isNegative() || constant.getActiveBits() > 64 ||
-        constant.getZExtValue() > UINT64_MAX - bytes)
-      return std::nullopt;
-    bytes += constant.getZExtValue();
-    pointer = gep.getBase();
-  }
-  if (auto address = pointer.getDefiningOp<LLVM::AddressOfOp>();
-      !address || address.getGlobalName() != unknownPlaneName)
+  if (getStatePlaneRoot(pointer) != schedule::StatePlane::Unknown)
     return std::nullopt;
-  return bytes;
+  return getConstantByteOffset(pointer);
 }
+
+/// Where a write lands in the unknown plane: its constant byte offset when
+/// static, and how to compute its byte offset when it is not.
+struct PlaneWrite {
+  std::optional<uint64_t> bytes;
+  /// The address of an LLVM write; null for a typed store.
+  Value pointer;
+  /// The offsets of a typed store.
+  Value dynamicOffset;
+  uint64_t staticOffset = 0;
+  /// The bits a dynamic write may change, when its producer declared them.
+  DenseI64ArrayAttr writtenBits;
+
+  /// An LLVM write of `pointer`.
+  static PlaneWrite of(Operation *write, Value pointer) {
+    return {constantByteOffset(pointer), pointer, {}, 0,
+            schedule::get<schedule::Field::EvalUnknownWriteRange>(write)};
+  }
+};
 
 class PublishNativeUnknownSummaryPass final
     : public PassWrapper<PublishNativeUnknownSummaryPass,
@@ -160,9 +163,17 @@ public:
     SmallVector<Operation *> writes, escapes;
     SmallVector<Value> pending;
     DenseSet<Value> seen;
-    function.walk([&](LLVM::AddressOfOp address) {
-      if (address.getGlobalName() == unknownPlaneName)
-        pending.push_back(address.getResult());
+    function.walk([&](Operation *operation) {
+      if (auto store = dyn_cast<schedule::NativeStateStoreOp>(operation)) {
+        if (store.getPlane() == schedule::StatePlane::Unknown)
+          writes.push_back(store);
+      } else if (auto plane = dyn_cast<schedule::NativeStateAddressOp>(operation)) {
+        if (plane.getPlane() == schedule::StatePlane::Unknown)
+          pending.push_back(plane.getResult());
+      } else if (auto address = dyn_cast<LLVM::AddressOfOp>(operation)) {
+        if (address.getGlobalName() == unknownPlaneName)
+          pending.push_back(address.getResult());
+      }
     });
     while (!pending.empty()) {
       Value pointer = pending.pop_back_val();
@@ -230,18 +241,29 @@ private:
     }
   }
 
-  /// Report `bitWidth` bits at `pointer` through the runtime, which finds
+  /// Report `bitWidth` bits of `write` through the runtime, which finds
   /// their roots.
-  void markThroughRuntime(OpBuilder &builder, Location location, Value pointer,
-                          Value bitWidth) {
+  void markThroughRuntime(OpBuilder &builder, Location location,
+                          const PlaneWrite &write, Value bitWidth) {
     Type i64 = builder.getI64Type();
     Type ptr = LLVM::LLVMPointerType::get(builder.getContext());
-    Value base =
-        LLVM::AddressOfOp::create(builder, location, ptr, unknownPlaneName);
-    Value bytes = LLVM::SubOp::create(
-        builder, location,
-        LLVM::PtrToIntOp::create(builder, location, i64, pointer),
-        LLVM::PtrToIntOp::create(builder, location, i64, base));
+    Value bytes;
+    if (write.pointer) {
+      Value base =
+          LLVM::AddressOfOp::create(builder, location, ptr, unknownPlaneName);
+      bytes = LLVM::SubOp::create(
+          builder, location,
+          LLVM::PtrToIntOp::create(builder, location, i64, write.pointer),
+          LLVM::PtrToIntOp::create(builder, location, i64, base));
+    } else if (!write.dynamicOffset) {
+      bytes = llvmConstant(builder, location, i64, write.staticOffset);
+    } else {
+      bytes = write.dynamicOffset;
+      if (write.staticOffset)
+        bytes = LLVM::AddOp::create(
+            builder, location, bytes,
+            llvmConstant(builder, location, i64, write.staticOffset));
+    }
     Value bitOffset = LLVM::ShlOp::create(
         builder, location, bytes, llvmConstant(builder, location, i64, 3));
     Value context = LLVM::LoadOp::create(
@@ -310,7 +332,7 @@ private:
   /// X/Z bits among them. `exact` is cleared when the write may land on
   /// pattern bits it cannot be compared with: a dynamic write into a root
   /// with a pattern, or an unresolved one while some root has a pattern.
-  std::optional<ArrayRef<Root>> resolve(Operation *write, Value pointer,
+  std::optional<ArrayRef<Root>> resolve(const PlaneWrite &write,
                                         uint64_t bits, APInt &tracked,
                                         APInt &pattern, bool &exact) {
     tracked = pattern = APInt::getZero(bits);
@@ -322,7 +344,7 @@ private:
       if (low < high)
         mask.setBits(low - begin, high - begin);
     };
-    if (std::optional<uint64_t> bytes = constantByteOffset(pointer)) {
+    if (std::optional<uint64_t> bytes = write.bytes) {
       uint64_t begin = 8 * *bytes;
       ArrayRef<Root> roots = inputs->overlapping(begin, begin + bits);
       for (const Root &root : roots) {
@@ -334,8 +356,7 @@ private:
     }
     tracked.setAllBits();
     // A generated dynamic store records its clipped destination range.
-    if (auto range =
-            schedule::get<schedule::Field::EvalUnknownWriteRange>(write);
+    if (DenseI64ArrayAttr range = write.writtenBits;
         range && range.size() == 2 && range[0] >= 0 && range[1] > 0 &&
         static_cast<uint64_t>(range[0]) <=
             UINT64_MAX - static_cast<uint64_t>(range[1])) {
@@ -356,15 +377,31 @@ private:
   void instrument(OpBuilder &builder, Operation *write) {
     Location location = write->getLoc();
     Type i64 = builder.getI64Type();
-    if (auto store = dyn_cast<LLVM::StoreOp>(write)) {
-      // The writer already reported this store's roots itself.
-      if (schedule::has<schedule::Field::EvalUnknownSummaryReported>(store)) {
-        schedule::remove<schedule::Field::EvalUnknownSummaryReported>(store);
-        return;
+    if (isa<LLVM::StoreOp, schedule::NativeStateStoreOp>(write)) {
+      Value value;
+      PlaneWrite at;
+      if (auto store = dyn_cast<schedule::NativeStateStoreOp>(write)) {
+        // The writer already reported this store's roots itself.
+        if (store.getSummaryReported()) {
+          store.setSummaryReported(false);
+          return;
+        }
+        value = store.getValue();
+        at.bytes = getNativeMemoryAccess(store)->offset;
+        at.dynamicOffset = store.getDynamicOffset();
+        at.staticOffset = store.getStaticOffset();
+        at.writtenBits = store.getWrittenBitsAttr();
+      } else {
+        auto raw = cast<LLVM::StoreOp>(write);
+        if (schedule::has<schedule::Field::EvalUnknownSummaryReported>(raw)) {
+          schedule::remove<schedule::Field::EvalUnknownSummaryReported>(raw);
+          return;
+        }
+        value = raw.getValue();
+        at = PlaneWrite::of(raw, raw.getAddr());
       }
-      Value value = store.getValue();
       auto type = dyn_cast<IntegerType>(value.getType());
-      builder.setInsertionPointAfter(store);
+      builder.setInsertionPointAfter(write);
       if (!type) {
         // Not a canonical packed word: report it unconditionally.
         markAll(builder, location);
@@ -372,8 +409,8 @@ private:
       }
       APInt tracked, pattern, constant;
       bool exact;
-      std::optional<ArrayRef<Root>> roots = resolve(
-          store, store.getAddr(), type.getWidth(), tracked, pattern, exact);
+      std::optional<ArrayRef<Root>> roots =
+          resolve(at, type.getWidth(), tracked, pattern, exact);
       if (roots && (roots->empty() || tracked.isZero()))
         return;
       if (exact && matchPattern(value, m_ConstantInt(&constant)) &&
@@ -386,7 +423,7 @@ private:
           markRoots(builder, location, *roots);
         else
           markThroughRuntime(
-              builder, location, store.getAddr(),
+              builder, location, at,
               llvmConstant(builder, location, i64, type.getWidth()));
       });
       return;
@@ -402,8 +439,9 @@ private:
       APInt tracked, pattern;
       bool exact = !inputs->patterned;
       std::optional<ArrayRef<Root>> roots =
-          constantLength ? resolve(set, set.getDst(), 8 * length.getZExtValue(),
-                                   tracked, pattern, exact)
+          constantLength ? resolve(PlaneWrite::of(set, set.getDst()),
+                                   8 * length.getZExtValue(), tracked, pattern,
+                                   exact)
                          : std::nullopt;
       if (roots && (roots->empty() || tracked.isZero()))
         return;
@@ -418,7 +456,7 @@ private:
         if (roots)
           markRoots(builder, location, *roots);
         else
-          markThroughRuntime(builder, location, set.getDst(),
+          markThroughRuntime(builder, location, PlaneWrite::of(set, set.getDst()),
                              bitLength(builder, location, set.getLen()));
       });
       return;
@@ -434,8 +472,9 @@ private:
     APInt tracked, pattern;
     bool exact = !inputs->patterned;
     std::optional<ArrayRef<Root>> roots =
-        constantLength ? resolve(write, destination, 8 * length.getZExtValue(),
-                                 tracked, pattern, exact)
+        constantLength ? resolve(PlaneWrite::of(write, destination),
+                                 8 * length.getZExtValue(), tracked, pattern,
+                                 exact)
                        : std::nullopt;
     if (roots && (roots->empty() || tracked.isZero()))
       return;
@@ -485,7 +524,7 @@ private:
       if (roots)
         markRoots(builder, location, *roots);
       else
-        markThroughRuntime(builder, location, destination,
+        markThroughRuntime(builder, location, PlaneWrite::of(write, destination),
                            bitLength(builder, location, lengthValue));
     });
   }

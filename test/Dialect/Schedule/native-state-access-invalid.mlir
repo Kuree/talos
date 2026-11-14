@@ -86,3 +86,70 @@ module {
     llvm.return %x : f32
   }
 }
+
+// -----
+
+// What native passes need to know about an access is a property.
+module {
+  llvm.mlir.global internal @__talos_state_value(0 : i8) : i8
+  llvm.func @discardable_tag() -> i8 {
+    // expected-error @below {{carries the schedule fact}}
+    %x = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64, schedule.eval.group_owner = 3 : i32} : i8
+    llvm.return %x : i8
+  }
+}
+
+// -----
+
+module {
+  llvm.mlir.global internal @__talos_state_value(0 : i8) : i8
+  llvm.func @bad_window(%v: i8, %d: i64) {
+    // expected-error @below {{has a malformed window}}
+    schedule.state.store %v, @__talos_state_value[%d] {alignment = 1 : i64, window = array<i64: 8, 4>} : i8
+    llvm.return
+  }
+}
+
+// -----
+
+module {
+  llvm.mlir.global internal @__talos_state_unknown(0 : i8) : i8
+  llvm.func @bad_written_bits(%v: i8, %d: i64) {
+    // expected-error @below {{has a malformed written_bits}}
+    schedule.state.store %v, @__talos_state_unknown[%d] {alignment = 1 : i64, written_bits = array<i64: 8, 0>} : i8
+    llvm.return
+  }
+}
+
+// -----
+
+module {
+  llvm.mlir.global internal @__talos_state_value(0 : i8) : i8
+  llvm.func @negative_window() -> i8 {
+    // expected-error @below {{has a malformed window}}
+    %x = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64, window = array<i64: -1, 1>} : i8
+    llvm.return %x : i8
+  }
+}
+
+// -----
+
+module {
+  llvm.mlir.global internal @__talos_state_value(0 : i8) : i8
+  llvm.func @wide_owner() -> i8 {
+    // expected-error @below {{owner}}
+    %x = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64, owner = 3 : i64} : i8
+    llvm.return %x : i8
+  }
+}
+
+// -----
+
+// Other dialects may still annotate an access.
+module {
+  llvm.mlir.global internal @__talos_state_value(0 : i8) : i8
+  llvm.func @foreign_attribute() -> i8 {
+    %x = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64, test.tag} : i8
+    llvm.return %x : i8
+  }
+}

@@ -103,8 +103,8 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
 // value this activation stored (IEEE 1800-2023 4.7, 4.9.3).
 // COMPACT-LABEL: llvm.func @state_fields(
 // COMPACT-SAME: %[[A:[a-z0-9]+]]: i32
-// COMPACT: llvm.mlir.constant(-8589934591 : i96)
-// COMPACT: %[[STATE:.*]] = llvm.mlir.addressof @__talos_state_value
+// COMPACT-DAG: llvm.mlir.constant(-8589934591 : i96)
+// COMPACT-DAG: %[[STATE:.*]] = llvm.mlir.addressof @__talos_state_value
 // COMPACT: llvm.load %[[STATE]] {{.*}} -> i96
 // COMPACT-NOT: llvm.load {{.*}} -> i96
 // COMPACT-NOT: llvm.xor

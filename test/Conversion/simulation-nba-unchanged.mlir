@@ -6,14 +6,16 @@
 // partial store must ignore its neighboring bits. LRM 4.3, 4.6, 4.9.4, 10.4.2.
 // PROOF: talos native unchanged NBA roots: 2/3
 // LOWER-LABEL: llvm.func @writer.__talos_coro_ramp(
-// LOWER: llvm.mlir.addressof @__talos_state_value
-// LOWER: llvm.mlir.addressof @__talos_state_unknown
+// LOWER: %[[VALUE:.*]] = llvm.mlir.addressof @__talos_state_value
+// LOWER-NEXT: llvm.load %[[VALUE]]
+// LOWER: %[[UNKNOWN:.*]] = llvm.mlir.addressof @__talos_state_unknown
+// LOWER-NEXT: llvm.load %[[UNKNOWN]]
 // LOWER: %[[DELTA:.*]] = llvm.and
-// LOWER: llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1
-// LOWER: %[[PENDING:.*]] = llvm.and
-// LOWER: %[[NEEDED:.*]] = llvm.or %[[DELTA]], %[[PENDING]]
-// LOWER: llvm.icmp "ne" %[[NEEDED]],
-// LOWER: llvm.cond_br {{.*}}, ^[[STAGE:bb[0-9]+]], ^[[DONE:bb[0-9]+]]
+// LOWER: llvm.load {{.*}}schedule.eval.pending_dirty_root
+// LOWER-NEXT: %[[PENDING:.*]] = llvm.and
+// LOWER-NEXT: %[[NEEDED:.*]] = llvm.or %[[DELTA]], %[[PENDING]]
+// LOWER-NEXT: llvm.icmp "ne" %[[NEEDED]],
+// LOWER-NEXT: llvm.cond_br {{.*}}, ^[[STAGE:bb[0-9]+]], ^[[DONE:bb[0-9]+]]
 // LOWER-NEXT: ^[[STAGE]]:
 // LOWER: llvm.mlir.addressof @__talos_aot_nba_accumulator_0
 // LOWER: llvm.br ^[[DONE]]

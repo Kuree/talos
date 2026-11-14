@@ -8,9 +8,8 @@
 
 // The mirror drive stores only its net bit (byte 0), in both planes.
 // CHECK-LABEL: llvm.func @mirror(
-// CHECK: %[[NET:.*]] = llvm.mlir.constant(0 : i64) : i64
-// CHECK: %[[NV:.*]] = llvm.getelementptr %{{.*}}[%[[NET]]]
-// CHECK: %[[NU:.*]] = llvm.getelementptr %{{.*}}[%[[NET]]]
+// CHECK: %[[NV:.*]] = llvm.mlir.addressof @__talos_state_value
+// CHECK: %[[NU:.*]] = llvm.mlir.addressof @__talos_state_unknown
 // CHECK: llvm.store %{{.*}}, %[[NV]]
 // CHECK: llvm.store %{{.*}}, %[[NU]]
 // CHECK-NOT: llvm.store
@@ -18,10 +17,9 @@
 
 // An unmarked drive stores its slot (byte 4), then the net.
 // CHECK-LABEL: llvm.func @plain(
-// CHECK: %[[SLOT:.*]] = llvm.mlir.constant(4 : i64) : i64
-// CHECK: %[[SV:.*]] = llvm.getelementptr %{{.*}}[%[[SLOT]]]
+// CHECK: %[[SV:.*]] = llvm.getelementptr %{{.*}}[4]
 // CHECK: llvm.store %{{.*}}, %[[SV]]
-// CHECK: %[[SU:.*]] = llvm.getelementptr %{{.*}}[%[[SLOT]]]
+// CHECK: %[[SU:.*]] = llvm.getelementptr %{{.*}}[4]
 // CHECK: llvm.store %{{.*}}, %[[SU]]
 // CHECK-COUNT-2: llvm.store
 // CHECK-NOT: llvm.store
@@ -30,8 +28,7 @@
 // The mark is re-proved on the native IR: this sequential-UDP-style body
 // reads its own slot, so the drive keeps storing it (byte 5).
 // CHECK-LABEL: llvm.func @state(
-// CHECK: %[[STATE:.*]] = llvm.mlir.constant(5 : i64) : i64
-// CHECK: %[[SV:.*]] = llvm.getelementptr %{{.*}}[%[[STATE]]]
+// CHECK: %[[SV:.*]] = llvm.getelementptr %{{.*}}[5]
 // CHECK: llvm.store %{{.*}}, %[[SV]]
 // CHECK: llvm.return
 

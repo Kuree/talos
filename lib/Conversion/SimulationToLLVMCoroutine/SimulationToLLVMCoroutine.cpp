@@ -1,5 +1,6 @@
 //===- SimulationToLLVMCoroutine.cpp - Native process coroutines ---------===//
 
+#include "NativeStateAccess.h"
 #include "talos/Conversion/SimulationToLLVMCoroutine.h"
 #include "../SimulationToSchedule/NativePipeline.h"
 #include "talos/Dialect/Native/NativeDialect.h"
@@ -3949,45 +3950,30 @@ FailureOr<bool> materializeEvalNBACommitVariants(ModuleOp module,
   fastClone.getBody().front().getArgument(2).replaceAllUsesWith(
       detail::llvmConstant(builder, fastClone.getLoc(), builder.getI32Type(),
                            2));
-  SmallVector<LLVM::LoadOp> canonicalUnknownLoads;
-  SmallVector<LLVM::StoreOp> canonicalUnknownStores;
-  auto isUnknownPlaneAddress = [](Value address) {
-    while (address) {
-      if (auto global = address.getDefiningOp<LLVM::AddressOfOp>())
-        return global.getGlobalName() == "__talos_state_unknown";
-      if (auto gep = address.getDefiningOp<LLVM::GEPOp>()) {
-        address = gep.getBase();
-        continue;
-      }
-      return false;
-    }
-    return false;
-  };
+  SmallVector<Operation *> canonicalUnknownLoads, canonicalUnknownStores;
   fastClone.walk([&](Operation *operation) {
     // Fixed-root promotion evidence says nothing about a per-site latch's
     // selected destination. It can overwrite previously unknown bits, even
     // when its new value is known and the fixed dirty bitmap is empty. Keep
     // both planes for these publications until a separate destination proof
     // exists; preserving only the value would leave stale canonical X bits.
-    if (::talos::schedule::has<
-            ::talos::schedule::Field::EvalPreserveNbaUnknown>(operation))
+    auto access = detail::getNativeMemoryAccess(operation);
+    if (!access || detail::isNativeLatchDestination(operation) ||
+        detail::getStatePlaneOfAccess(*access) !=
+            schedule::StatePlane::Unknown)
       return;
-    if (auto load = dyn_cast<LLVM::LoadOp>(operation);
-        load && isUnknownPlaneAddress(load.getAddr()))
-      canonicalUnknownLoads.push_back(load);
-    else if (auto store = dyn_cast<LLVM::StoreOp>(operation);
-             store && isUnknownPlaneAddress(store.getAddr()))
-      canonicalUnknownStores.push_back(store);
+    (access->isWrite() ? canonicalUnknownStores : canonicalUnknownLoads)
+        .push_back(operation);
   });
-  for (LLVM::LoadOp load : canonicalUnknownLoads) {
+  for (Operation *load : canonicalUnknownLoads) {
     builder.setInsertionPoint(load);
-    load.replaceAllUsesWith(
-        LLVM::ZeroOp::create(builder, load.getLoc(), load.getType())
-            .getResult());
-    load.erase();
+    load->replaceAllUsesWith(
+        LLVM::ZeroOp::create(builder, load->getLoc(),
+                             load->getResult(0).getType()));
+    load->erase();
   }
-  for (LLVM::StoreOp store : canonicalUnknownStores)
-    store.erase();
+  for (Operation *store : canonicalUnknownStores)
+    store->erase();
   // Keep the generated eval loop's hottest call boundaries on an I-cache line
   // regardless of unrelated runtime/string table growth: their placement at
   // the target's minimum function alignment would make steady-state
@@ -4020,8 +4006,7 @@ FailureOr<bool> materializeEvalNBACommitVariants(ModuleOp module,
         function->setAttr("passthrough", builder.getArrayAttr(attributes));
     }
     function.walk([](Operation *operation) {
-      ::talos::schedule::remove<
-          ::talos::schedule::Field::EvalPreserveNbaUnknown>(operation);
+      detail::clearNativeLatchDestination(operation);
     });
   }
 

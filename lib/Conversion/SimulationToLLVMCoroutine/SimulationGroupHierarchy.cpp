@@ -4,6 +4,7 @@
 #include "talos/Dialect/Schedule/ScheduleEnums.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
+#include "talos/Dialect/Schedule/ScheduleOps.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
 
 #include "mlir/IR/IRMapping.h"
@@ -23,7 +24,8 @@ bool reproducibleSetup(Operation *operation) {
   // Pure/speculatable alone does not authorize duplication: e.g. freeze of
   // poison captures one value which must remain correlated across children.
   // Generated entries need only constants and static address construction.
-  return isa<LLVM::ConstantOp, LLVM::AddressOfOp, LLVM::GEPOp>(operation);
+  return isa<LLVM::ConstantOp, LLVM::AddressOfOp, LLVM::GEPOp,
+             schedule::NativeStateAddressOp>(operation);
 }
 
 /// An entry is an executable readiness load, not an inferred graph rank.

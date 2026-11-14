@@ -211,11 +211,11 @@ module attributes {
 // TWO-STATE: llvm.call @__talos_aot_static_nba_commit_two_state_fast_v1
 // TWO-STATE: llvm.call @__talos_aot_static_nba_commit_two_state_v1
 // TWO-STATE-LABEL: llvm.func internal @__talos_aot_static_nba_commit_two_state_v1
-// TWO-STATE: %[[CANON_UNKNOWN:.*]] = llvm.mlir.addressof @__talos_state_unknown
 // TWO-STATE: %[[CANON_ACC:.*]] = llvm.mlir.addressof @__talos_aot_nba_accumulator_0
 // TWO-STATE: llvm.getelementptr %[[CANON_ACC]][32]
 // TWO-STATE-NEXT: {{.*}} = llvm.mlir.zero : i64
-// TWO-STATE: llvm.getelementptr %[[CANON_UNKNOWN]]
+// TWO-STATE: %[[CANON_UNKNOWN:.*]] = llvm.mlir.addressof @__talos_state_unknown
+// TWO-STATE-NEXT: llvm.load %[[CANON_UNKNOWN]]
 // TWO-STATE-LABEL: llvm.func internal @__talos_aot_static_nba_commit_two_state_fast_v1
 // TWO-STATE-SAME: alignment = 128 : i64
 // The production materializer specializes the clone to the steady two-state
@@ -223,11 +223,11 @@ module attributes {
 // actual pass-pipeline check: widening it back to the packed 64-bit fallback
 // would reintroduce the adjacent-byte read/modify/write on the hot path.
 // TWO-STATE: llvm.mlir.constant(2 : i32) : i32
-// TWO-STATE: %[[FAST_UNKNOWN:.*]] = llvm.mlir.addressof @__talos_state_unknown
+// TWO-STATE-NOT: @__talos_state_unknown
 // TWO-STATE: %[[FAST_ACC:.*]] = llvm.mlir.addressof @__talos_aot_nba_accumulator_0
 // TWO-STATE: llvm.getelementptr %[[FAST_ACC]][32]
 // TWO-STATE-NEXT: {{.*}} = llvm.mlir.zero : i64
-// TWO-STATE: %[[FAST_VALUE_ADDR:.*]] = llvm.getelementptr {{.*}}[0]
+// TWO-STATE: %[[FAST_VALUE_ADDR:.*]] = llvm.mlir.addressof @__talos_state_value
 // TWO-STATE-NEXT: %[[FAST_OLD8:.*]] = llvm.load %[[FAST_VALUE_ADDR]] {{.*}} : !llvm.ptr -> i8
 // TWO-STATE: %[[FAST_NEW8:.*]] = llvm.trunc {{.*}} : i64 to i8
 // TWO-STATE: llvm.store %[[FAST_NEW8]], {{.*}} {{.*}} : i8, !llvm.ptr
@@ -238,7 +238,6 @@ module attributes {
 // TWO-STATE: %[[BIT_OLD8:.*]] = llvm.load {{.*}} {{.*}} : !llvm.ptr -> i8
 // TWO-STATE: %[[BIT_NEW8:.*]] = llvm.trunc {{.*}} : i64 to i8
 // TWO-STATE: llvm.store %[[BIT_NEW8]], {{.*}} {{.*}} : i8, !llvm.ptr
-// TWO-STATE: %[[FAST_UNKNOWN_ADDR:.*]] = llvm.getelementptr %[[FAST_UNKNOWN]]
-// TWO-STATE-NOT: llvm.load %[[FAST_UNKNOWN_ADDR]]
-// TWO-STATE-NOT: llvm.store {{.*}}, %[[FAST_UNKNOWN_ADDR]]
+// The fast variant neither reads nor writes the unknown plane.
+// TWO-STATE-NOT: @__talos_state_unknown
 // TWO-STATE: llvm.return

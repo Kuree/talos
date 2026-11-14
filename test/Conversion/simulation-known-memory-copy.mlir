@@ -5,15 +5,13 @@
 // IEEE 1800-2023 6.3.1/4.6: when the executing path proves both the read and
 // old destination known, a memory-backed copy leaves the unknown plane alone.
 // Do not materialize a temporary zero unknown buffer before optimization;
-// the unused plane address must disappear during LLVM optimization.
+// nothing reads or writes the unknown plane, so its unused address is gone
+// before LLVM export.
 // A known RHS alone must still clear an unproved destination's old X/Z bits;
 // an entirely unproved copy retains both planes.
 // LOWER-LABEL: llvm.func @known(
 // LOWER-NOT: llvm.intr.memset
-// LOWER: %[[UBASE:.*]] = llvm.mlir.addressof @__talos_state_unknown
-// LOWER-NEXT: %[[UNUSED_U:.*]] = llvm.getelementptr %[[UBASE]]
-// LOWER-NOT: llvm.intr.memset
-// LOWER-NOT: %[[UNUSED_U]]{{[, )]}}
+// LOWER-NOT: @__talos_state_unknown
 // LOWER: llvm.return
 // LOWER-LABEL: llvm.func @known_dynamic(
 // LOWER-NOT: @__talos_state_unknown

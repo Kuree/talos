@@ -443,7 +443,8 @@ def FinalizeNativeLLVMPass
   }];
   let dependentDialects = ["mlir::LLVM::LLVMDialect",
                            "mlir::arith::ArithDialect",
-                           "mlir::cf::ControlFlowDialect"];
+                           "mlir::cf::ControlFlowDialect",
+                           "talos::schedule::ScheduleDialect"];
 }
 
 def FinalizeNativeLLVMWrappersPass
@@ -510,14 +511,36 @@ def MaterializeNativeEvalTransactionsPass
   let dependentDialects = ["mlir::LLVM::LLVMDialect"];
 }
 
+def RaiseNativeStateAccessPass
+    : Pass<"raise-native-state-access", "mlir::LLVM::LLVMFuncOp"> {
+  let summary = "Type the LLVM-form native state-plane accesses of a function";
+  let description = [{
+    Replaces llvm.mlir.addressof of a canonical state plane with
+    schedule.state.address, and a plain LLVM load or store of that address,
+    or of one byte GEP of it by a constant or an i64 offset, with
+    schedule.state.load or schedule.state.store of the same alignment. The
+    producers' tags become the typed access's properties: state access bytes
+    become `window`, an unknown write range `written_bits`, a reported unknown
+    summary `summary_reported`, a preserved NBA unknown `latch_destination`
+    and a group owner `owner`. An access stays in LLVM form when it carries
+    any other discardable attribute or a tag its property does not admit,
+    when it is volatile, atomic or has alias metadata, or when its address is
+    a GEP with flags, a non-byte GEP or a chain of GEPs. GEPs and plane
+    addresses left unused are erased. Bridges producers that still emit the
+    LLVM form.
+  }];
+  let dependentDialects = ["talos::schedule::ScheduleDialect"];
+}
 def LowerNativeStateAccessPass
     : Pass<"lower-native-state-access", "mlir::LLVM::LLVMFuncOp"> {
   let summary = "Lower typed native state-plane accesses to LLVM memory accesses";
   let description = [{
     Replaces schedule.state.address with llvm.mlir.addressof of its plane, and
-    schedule.state.load/store with a byte GEP from that address and an LLVM
-    load or store of the same alignment, keeping the access's native tags.
-    Runs first in finalize-native-functions.
+    schedule.state.load/store with an LLVM load or store of the same
+    alignment through byte GEPs by the dynamic and the static offset. A
+    plane's address and a window's address are taken once per block, at
+    their first use. The typed accesses' properties served the native passes
+    before this point and are dropped. Runs first in finalize-native-functions.
   }];
   let dependentDialects = ["mlir::LLVM::LLVMDialect"];
 }
@@ -551,7 +574,8 @@ def ConvertPreparedSimProcessesToLLVMCoroutinesPass
     "mlir::func::FuncDialect",
     "mlir::LLVM::LLVMDialect",
     "mlir::math::MathDialect",
-    "mlir::scf::SCFDialect"
+    "mlir::scf::SCFDialect",
+    "talos::schedule::ScheduleDialect"
   ];
 }
 

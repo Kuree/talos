@@ -1,3 +1,4 @@
+#include "NativeStateAccess.h"
 #include "SimulationAOTPlanning.h"
 #include "SimulationEvalReadySet.h"
 #include "mlir/IR/Dominance.h"
@@ -98,24 +99,25 @@ bool isBoundary(Operation *op, const std::map<Key, unsigned> &keys,
       root = gep.getBase();
     if (root.getDefiningOp<LLVM::AllocaOp>())
       return true;
-    auto address = root.getDefiningOp<LLVM::AddressOfOp>();
-    if (!address || !globals(address))
+    // A state plane's base names its global; another address must resolve.
+    FlatSymbolRefAttr global = detail::getAddressedGlobal(root);
+    if (auto address = root.getDefiningOp<LLVM::AddressOfOp>();
+        address && !globals(address))
       return false;
-    return llvm::none_of(keys, [&](const auto &entry) {
-      return entry.first.global == address.getGlobalName();
-    });
+    return global && llvm::none_of(keys, [&](const auto &entry) {
+             return entry.first.global == global.getValue();
+           });
   };
-  auto load = dyn_cast<LLVM::LoadOp>(op);
-  auto store = dyn_cast<LLVM::StoreOp>(op);
-  if (load || store) {
-    bool plain =
-        load ? !load.getVolatile_() &&
-                   load.getOrdering() == LLVM::AtomicOrdering::not_atomic
-             : !store.getVolatile_() &&
-                   store.getOrdering() == LLVM::AtomicOrdering::not_atomic;
-    if (!plain)
+  if (auto access = detail::getNativeMemoryAccess(op)) {
+    if (!access->plain)
       return true;
-    return !disjoint(load ? load.getAddr() : store.getAddr());
+    // A typed state access names its plane, a global distinct from every
+    // ready set.
+    if (access->isTyped())
+      return llvm::any_of(keys, [&](const auto &entry) {
+        return entry.first.global == access->global;
+      });
+    return !disjoint(access->pointer);
   }
   if (auto set = dyn_cast<LLVM::MemsetOp>(op))
     return set.getIsVolatile() || !disjoint(set.getDst());

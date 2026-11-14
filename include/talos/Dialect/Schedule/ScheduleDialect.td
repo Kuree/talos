@@ -3,7 +3,7 @@
 include "mlir/IR/DialectBase.td"
 def ScheduleDialect : Dialect {
   let name = "schedule";
-  let usePropertiesForAttributes = 0;
+  let usePropertiesForAttributes = 1;
   let cppNamespace = "::talos::schedule";
   let summary = "Simulation execution plans and native scheduler actions";
   let description = [{

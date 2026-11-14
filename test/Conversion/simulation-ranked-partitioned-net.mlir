@@ -35,7 +35,7 @@
 // GROUP-NOT: llvm.switch
 // GROUP-NOT: @__talos_state_unknown
 // GROUP: %[[NET0:.*]] = llvm.getelementptr %[[STATE]][4]
-// GROUP-NEXT: %[[OLD0:.*]] = llvm.load %[[NET0]] {{.*}}schedule.eval.group_owner = 0 : i32
+// GROUP-NEXT: %[[OLD0:.*]] = llvm.load %[[NET0]]
 // GROUP: %[[KEPT0:.*]] = llvm.and %[[OLD0]], %[[LOW]] : i8
 // GROUP-NEXT: %[[MERGED0:.*]] = llvm.or %[[KEPT0]], %{{.*}} : i8
 // GROUP-NEXT: llvm.store %[[MERGED0]], %[[NET0]]
@@ -43,16 +43,16 @@
 // GROUP-NOT: llvm.switch
 // GROUP-NOT: @__talos_state_unknown
 // GROUP: %[[NET1:.*]] = llvm.getelementptr %[[STATE]][4]
-// GROUP-NEXT: %[[OLD1:.*]] = llvm.load %[[NET1]] {{.*}}schedule.eval.group_owner = 1 : i32
+// GROUP-NEXT: %[[OLD1:.*]] = llvm.load %[[NET1]]
 // GROUP: %[[KEPT1:.*]] = llvm.and %[[OLD1]], %[[HIGH]] : i8
 // GROUP-NEXT: %[[MERGED1:.*]] = llvm.or %[[KEPT1]], %{{.*}} : i8
 // GROUP-NEXT: llvm.store %[[MERGED1]], %[[NET1]]
 // GROUP-NOT: llvm.call
 // GROUP-NOT: llvm.switch
 // GROUP-NOT: @__talos_state_unknown
-// GROUP: llvm.store {{.*}}schedule.eval.group_owner = 2 : i32
-// GROUP: llvm.store {{.*}}schedule.eval.group_owner = 2 : i32
-// GROUP: llvm.store {{.*}}schedule.eval.group_owner = 3 : i32
+// GROUP: llvm.store {{.*}} : i8, !llvm.ptr
+// GROUP: llvm.store {{.*}} : i8, !llvm.ptr
+// GROUP: llvm.store {{.*}} : i8, !llvm.ptr
 // GROUP-NOT: llvm.call
 // GROUP-NOT: llvm.switch
 // GROUP-NOT: @__talos_state_unknown

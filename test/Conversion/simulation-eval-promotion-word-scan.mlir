@@ -45,12 +45,10 @@
 // STORE-NOT: __talos_eval_promotion_publish_{{unknown|window}}_v1
 // STORE: llvm.func
 
-// Four-state clocks have real unknown-plane accesses, but their bytes are
-// outside every value-domain certificate. Keep their canonical semantics
-// without emitting guards or proof publications in the generated clock loop.
+// Four-state clock bytes are outside every value-domain certificate. Keep
+// their canonical semantics without emitting guards or proof publications in
+// the generated clock loop.
 // CLOCK-LABEL: llvm.func @__talos_aot_schedule_run_v1(
-// CLOCK-NOT: llvm.call preserve_mostcc @__talos_eval_promotion_publish_{{unknown|window}}_v1
-// CLOCK: llvm.mlir.addressof @__talos_state_unknown
 // CLOCK-NOT: llvm.call preserve_mostcc @__talos_eval_promotion_publish_{{unknown|window}}_v1
 // CLOCK: llvm.func
 

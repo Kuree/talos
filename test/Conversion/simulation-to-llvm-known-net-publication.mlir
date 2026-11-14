@@ -69,8 +69,7 @@ module attributes {
 // The raw high byte is at plane byte 7; the resolved net high byte is at 3.
 // Only the raw unknown plane is accessed. No resolved-net U load/store remains.
 // OFF: %[[RAW_U:.*]] = llvm.mlir.addressof @__talos_state_unknown
-// OFF: %[[RAW_BYTE:.*]] = llvm.mlir.constant(7 : i64)
-// OFF: %[[RAW_PTR:.*]] = llvm.getelementptr %[[RAW_U]][%[[RAW_BYTE]]]
+// OFF: %[[RAW_PTR:.*]] = llvm.getelementptr %[[RAW_U]][7]
 // OFF: llvm.store %{{.*}}, %[[RAW_PTR]]
 // OFF-NOT: llvm.mlir.addressof @__talos_state_unknown
 // OFF-NOT: llvm.getelementptr %[[RAW_U]]

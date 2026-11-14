@@ -12,9 +12,9 @@
 
 // 80-bit destination at byte 11: chunks [88, 152) and [152, 168).
 // CHECK-LABEL: llvm.func @copy.__talos_eval_body_0(
-// CHECK: llvm.getelementptr %{{.*}}[11]
 // CHECK: %[[UNKNOWN:.*]] = llvm.mlir.addressof @__talos_state_unknown
-// CHECK-NEXT: %[[DST:.*]] = llvm.getelementptr %[[UNKNOWN]][11]
+// CHECK: llvm.getelementptr %{{.*}}[11]
+// CHECK: %[[DST:.*]] = llvm.getelementptr %[[UNKNOWN]][11]
 // CHECK: %[[OLD:.*]] = llvm.load %{{.*}} -> i64
 // CHECK: %[[NEW:.*]] = llvm.load %{{.*}} -> i64
 // CHECK: %[[DELTA:.*]] = llvm.xor %[[OLD]], %[[NEW]] : i64
@@ -27,9 +27,9 @@
 // CHECK: llvm.call preserve_mostcc @__talos_eval_promotion_publish_window_v1
 // CHECK: "llvm.intr.memcpy"(%[[DST]],
 // 600-bit destination at byte 96: nine words in a loop, then a 24-bit tail.
-// CHECK: llvm.getelementptr %{{.*}}[96]
 // CHECK: %[[WIDE_UNKNOWN:.*]] = llvm.mlir.addressof @__talos_state_unknown
-// CHECK-NEXT: %[[WIDE:.*]] = llvm.getelementptr %[[WIDE_UNKNOWN]][96]
+// CHECK: llvm.getelementptr %{{.*}}[96]
+// CHECK: %[[WIDE:.*]] = llvm.getelementptr %[[WIDE_UNKNOWN]][96]
 // CHECK: llvm.icmp "ult" %{{.*}}, %{{.*}} : i64
 // CHECK: llvm.load %{{.*}} -> i64
 // CHECK: llvm.load %{{.*}} -> i64
