@@ -99,6 +99,12 @@ static void populateSimulationCoroutineBodyToLLVMPatterns(
 #define GEN_PASS_DEF_PREPARENATIVELLVMFUNCTIONSPASS
 #define GEN_PASS_DEF_CONVERTNATIVEFUNCTIONBODYPASS
 #define GEN_PASS_DEF_FINALIZENATIVELLVMPASS
+#define GEN_PASS_DEF_FINALIZENATIVELLVMWRAPPERSPASS
+#define GEN_PASS_DEF_MATERIALIZENATIVEEVALROUTESPASS
+#define GEN_PASS_DEF_PUBLISHNATIVEPROOFSPASS
+#define GEN_PASS_DEF_MATERIALIZENATIVEEVALGROUPBODIESPASS
+#define GEN_PASS_DEF_MATERIALIZENATIVEEVALTRANSACTIONSPASS
+#define GEN_PASS_DEF_FINALIZENATIVEFUNCTIONSPASS
 #include "talos/Conversion/Passes.h.inc"
 
 namespace {
@@ -4400,8 +4406,30 @@ public:
   }
 };
 
-class FinalizeNativeLLVMPass final
-    : public impl::FinalizeNativeLLVMPassBase<FinalizeNativeLLVMPass> {
+/// Reports how long each step of a native stage takes, when the module asks
+/// for timing diagnostics.
+class NativeStepTiming {
+public:
+  explicit NativeStepTiming(ModuleOp module)
+      : enabled(native::has<native::DebugTiming>(module)),
+        last(std::chrono::steady_clock::now()) {}
+  void mark(StringRef name) {
+    if (!enabled)
+      return;
+    auto now = std::chrono::steady_clock::now();
+    llvm::errs() << "talos native preparation timing: " << name << ": "
+                 << std::chrono::duration<double>(now - last).count() << " s\n";
+    last = now;
+  }
+
+private:
+  bool enabled;
+  std::chrono::steady_clock::time_point last;
+};
+
+class FinalizeNativeLLVMWrappersPass final
+    : public impl::FinalizeNativeLLVMWrappersPassBase<
+          FinalizeNativeLLVMWrappersPass> {
 public:
   void runOnOperation() override {
     ModuleOp module = getOperation();
@@ -4410,17 +4438,7 @@ public:
       module.emitError("native LLVM finalization requires a target layout");
       return signalPassFailure();
     }
-    bool detailedTiming = native::has<native::DebugTiming>(module);
-    auto lastTiming = std::chrono::steady_clock::now();
-    auto markTiming = [&](StringRef name) {
-      if (!detailedTiming)
-        return;
-      auto now = std::chrono::steady_clock::now();
-      llvm::errs() << "talos native preparation timing: " << name << ": "
-                   << std::chrono::duration<double>(now - lastTiming).count()
-                   << " s\n";
-      lastTiming = now;
-    };
+    NativeStepTiming timing(module);
     LowerToLLVMOptions options(&getContext());
     options.dataLayout = inputs.layout;
     LLVMTypeConverter converter(&getContext(), options);
@@ -4452,7 +4470,7 @@ public:
       signalPassFailure();
       return;
     }
-    markTiming("wrapper conversion");
+    timing.mark("wrapper conversion");
     SmallVector<UnrealizedConversionCastOp> unrealizedCasts =
         analysis::collectInWalkOrder<UnrealizedConversionCastOp>(module);
     SmallVector<UnrealizedConversionCastOp> remainingCasts;
@@ -4463,22 +4481,32 @@ public:
       signalPassFailure();
       return;
     }
-    markTiming("conversion cast reconciliation");
+    timing.mark("conversion cast reconciliation");
+  }
+};
+
+class MaterializeNativeEvalRoutesPass final
+    : public impl::MaterializeNativeEvalRoutesPassBase<
+          MaterializeNativeEvalRoutesPass> {
+public:
+  void runOnOperation() override {
+    ModuleOp module = getOperation();
+    NativeStepTiming timing(module);
     if (failed(materializeEvalFunctionRoutes(module))) {
       signalPassFailure();
       return;
     }
-    markTiming("eval function route materialization");
+    timing.mark("eval function route materialization");
     if (failed(detail::materializeNativePromotionRangeIndex(module))) {
       signalPassFailure();
       return;
     }
-    markTiming("promotion range index materialization");
+    timing.mark("promotion range index materialization");
     if (failed(materializeEvalTwoStateNBACommit(module))) {
       signalPassFailure();
       return;
     }
-    markTiming("two-state NBA commit materialization");
+    timing.mark("two-state NBA commit materialization");
     if (failed(materializeNativeObserverThunks(module))) {
       signalPassFailure();
       return;
@@ -4487,7 +4515,16 @@ public:
       signalPassFailure();
       return;
     }
-    markTiming("observer and DPI thunk materialization");
+    timing.mark("observer and DPI thunk materialization");
+  }
+};
+
+class PublishNativeProofsPass final
+    : public impl::PublishNativeProofsPassBase<PublishNativeProofsPass> {
+public:
+  void runOnOperation() override {
+    ModuleOp module = getOperation();
+    NativeStepTiming timing(module);
     if (failed(detail::prepareNativeProofPublicationInputs(
             module, getAnalysisManager())) ||
         failed(detail::prepareNativeUnknownSummaryPublication(
@@ -4505,12 +4542,22 @@ public:
       signalPassFailure();
       return;
     }
-    markTiming("promotion write materialization");
+    timing.mark("promotion write materialization");
+  }
+};
+
+class MaterializeNativeEvalGroupBodiesPass final
+    : public impl::MaterializeNativeEvalGroupBodiesPassBase<
+          MaterializeNativeEvalGroupBodiesPass> {
+public:
+  void runOnOperation() override {
+    ModuleOp module = getOperation();
+    NativeStepTiming timing(module);
     auto groupPromotions =
         detail::materializeNativeEvalGroupBodies(module, getAnalysisManager());
     if (failed(groupPromotions))
       return signalPassFailure();
-    markTiming("native activation group materialization");
+    timing.mark("native activation group materialization");
     if (failed(lowerNativeScheduleActionsToLLVM(module)))
       return signalPassFailure();
     // A design the automatic scheduler planned for eval can still need a
@@ -4533,7 +4580,7 @@ public:
       signalPassFailure();
       return;
     }
-    markTiming("eval call closure verification");
+    timing.mark("eval call closure verification");
     if (!(*groupPromotions)->diagnostics.empty()) {
       OpPassManager promotion(ModuleOp::getOperationName());
       promotion.nest<LLVM::LLVMFuncOp>().addPass(
@@ -4541,16 +4588,42 @@ public:
       if (failed(runPipeline(promotion, module)))
         return signalPassFailure();
     }
+    // Results have independent ownership beyond the analysis manager's
+    // pipeline lifetime. Workers only publish into their own stable slots.
+    for (const auto &diagnostic : (*groupPromotions)->diagnostics)
+      llvm::errs() << diagnostic;
+    timing.mark("residual group promotion");
+  }
+};
+
+class MaterializeNativeEvalTransactionsPass final
+    : public impl::MaterializeNativeEvalTransactionsPassBase<
+          MaterializeNativeEvalTransactionsPass> {
+public:
+  void runOnOperation() override {
+    ModuleOp module = getOperation();
+    NativeStepTiming timing(module);
     if (failed(detail::materializeNativeEvalTransactions(module)))
       return signalPassFailure();
     detail::eliminateTwoStateUnknownPlane(module);
-    markTiming("native eval transaction materialization");
+    timing.mark("native eval transaction materialization");
     schedule::cacheNativePureCones(module);
+    timing.mark("pure cone caching");
+  }
+};
+
+class FinalizeNativeFunctionsPass final
+    : public impl::FinalizeNativeFunctionsPassBase<
+          FinalizeNativeFunctionsPass> {
+public:
+  void runOnOperation() override {
+    ModuleOp module = getOperation();
+    NativeStepTiming timing(module);
     auto partitionInventory =
         detail::prepareNativePartitionManifest(module, getAnalysisManager());
     if (failed(partitionInventory))
       return signalPassFailure();
-    markTiming("post-conversion materialization");
+    timing.mark("partition manifest inventory");
     // The remaining rewrites only inspect and mutate one function. Run them
     // as a nested pass so MLIR owns scheduling and the single-threaded path
     // uses precisely the same transformation.
@@ -4579,10 +4652,6 @@ public:
       signalPassFailure();
       return;
     }
-    // Results have independent ownership beyond the analysis manager's
-    // pipeline lifetime. Workers only publish into their own stable slots.
-    for (const auto &diagnostic : (*groupPromotions)->diagnostics)
-      llvm::errs() << diagnostic;
     if (*partitionInventory && failed(detail::publishNativePartitionManifest(
                                    module, **partitionInventory)))
       return signalPassFailure();
@@ -4593,16 +4662,27 @@ public:
     native::remove<native::DisableTwoStateSpecialization>(module);
     native::remove<native::TwoState>(module);
     native::remove<native::DebugTiming>(module);
-    markTiming("native function finalization");
+    timing.mark("native function finalization");
     if (failed(verify(module)))
       signalPassFailure();
     else
-      markTiming("final verification");
+      timing.mark("final verification");
+  }
+};
+
+class FinalizeNativeLLVMPass final
+    : public impl::FinalizeNativeLLVMPassBase<FinalizeNativeLLVMPass> {
+public:
+  void runOnOperation() override {
+    OpPassManager pipeline(ModuleOp::getOperationName());
+    buildNativeLLVMFinalizationPipeline(pipeline);
+    if (failed(runPipeline(pipeline, getOperation())))
+      signalPassFailure();
   }
 };
 
 // Keep the original module entry point as a composition for existing explicit
-// pipelines; production exposes the same three stages to the pass manager.
+// pipelines; production exposes the same stages to the pass manager.
 class ConvertPreparedSimProcessesToLLVMCoroutinesPass final
     : public impl::ConvertPreparedSimProcessesToLLVMCoroutinesPassBase<
           ConvertPreparedSimProcessesToLLVMCoroutinesPass> {
@@ -4612,7 +4692,7 @@ public:
     pipeline.addPass(createPrepareNativeLLVMFunctionsPass());
     pipeline.nest<LLVM::LLVMFuncOp>().addPass(
         createConvertNativeFunctionBodyPass());
-    pipeline.addPass(createFinalizeNativeLLVMPass());
+    buildNativeLLVMFinalizationPipeline(pipeline);
     if (failed(runPipeline(pipeline, getOperation())))
       signalPassFailure();
   }

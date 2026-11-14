@@ -1,9 +1,10 @@
-// RUN: %talos -O1 %s --dump-ir-before=finalize-native-llvm --dump-ir-path=%t.mlirbc -o %t.exe 2>&1 | FileCheck %s --check-prefix=BEFORE
+// RUN: %talos -O1 %s --dump-ir-before=finalize-native-llvm-wrappers --dump-ir-path=%t.mlirbc -o %t.exe 2>&1 | FileCheck %s --check-prefix=BEFORE
 // RUN: talos-opt %t.mlirbc --finalize-native-llvm -o /dev/null
 // RUN: %talos -O1 --compile-threads=1 %s --dump-ir-after=talos-sim-build-compute-graph --dump-ir-path=%t.mlir -o %t.exe 2>&1 | FileCheck %s --check-prefix=AFTER
 // RUN: FileCheck %s --check-prefix=GRAPH < %t.mlir
 // RUN: not %talos -O1 %s --dump-ir-before=talos-sim-build-compute-graph --dump-ir-path=%t.unused -o %t.exe 2>&1 | FileCheck %s --check-prefix=NESTED
 // RUN: not %talos -O1 %s --dump-ir-path=%t.unused -o %t.exe 2>&1 | FileCheck %s --check-prefix=NOPASS
+// RUN: not %talos -O1 %s --dump-ir-before=finalize-native-llvm --dump-ir-path=%t.unused -o %t.exe 2>&1 | FileCheck %s --check-prefix=MISSING
 
 module top;
   logic clk = 0, q = 0;
@@ -12,9 +13,11 @@ module top;
   initial #10 $finish;
 endmodule
 
-// BEFORE: dumped IR before finalize-native-llvm to '{{.*}}.mlirbc'
+// BEFORE: dumped IR before finalize-native-llvm-wrappers to '{{.*}}.mlirbc'
 // AFTER: dumped IR after talos-sim-build-compute-graph to '{{.*}}.mlir'
 // GRAPH: simulation.design @
 // GRAPH-SAME: compute_graph
 // NESTED: error: --dump-ir-before=talos-sim-build-compute-graph names a pass nested on 'simulation.design'; add --compile-threads=1
 // NOPASS: error: --dump-ir-path needs --dump-ir-before or --dump-ir-after
+// A composite pass the native pipeline expands into its stages never runs.
+// MISSING: error: --dump-ir-before=finalize-native-llvm names no pass of this compile

@@ -64,7 +64,15 @@ void buildSimulationToLLVMCoroutinePipeline(mlir::OpPassManager &manager,
   manager.addPass(createPrepareNativeLLVMFunctionsPass());
   manager.nest<mlir::LLVM::LLVMFuncOp>().addPass(
       createConvertNativeFunctionBodyPass());
-  manager.addPass(createFinalizeNativeLLVMPass());
+  buildNativeLLVMFinalizationPipeline(manager);
+}
+void buildNativeLLVMFinalizationPipeline(mlir::OpPassManager &manager) {
+  manager.addPass(createFinalizeNativeLLVMWrappersPass());
+  manager.addPass(createMaterializeNativeEvalRoutesPass());
+  manager.addPass(createPublishNativeProofsPass());
+  manager.addPass(createMaterializeNativeEvalGroupBodiesPass());
+  manager.addPass(createMaterializeNativeEvalTransactionsPass());
+  manager.addPass(createFinalizeNativeFunctionsPass());
 }
 void registerSimulationToLLVMCoroutinePipeline() {
   struct Options : mlir::PassPipelineOptions<Options> {

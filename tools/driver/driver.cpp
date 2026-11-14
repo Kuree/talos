@@ -1128,6 +1128,17 @@ static int executeCompilation(const InputArgList &args,
                           "--dump-ir-after");
     valid = false;
   }
+  // A dump ends the compile at its pass, so a compile that finishes ran no
+  // pass the dump names.
+  auto reportUndumpedPass = [&] {
+    if (!irDump.enabled())
+      return false;
+    std::string requested = !irDump.before.empty()
+                                ? "--dump-ir-before=" + irDump.before
+                                : "--dump-ir-after=" + irDump.after;
+    emitDriverError(requested + " names no pass of this compile");
+    return true;
+  };
   std::string coverageConfigContents;
   if (StringRef path = args.getLastArgValue(OPT_coverage_config_EQ);
       !path.empty())
@@ -1605,7 +1616,7 @@ static int executeCompilation(const InputArgList &args,
       talos::schedule::set<talos::schedule::Field::EvalClosureRetryAllowed>(
           *module, UnitAttr::get(&context));
     if (succeeded(talos::driver::emitTargetOutput(*module, nativeOptions)))
-      return 0;
+      return reportUndumpedPass() ? 1 : 0;
     if (talos::schedule::has<talos::schedule::Field::EvalClosureRejected>(
             *module)) {
       if (nativeOptions.timing)
@@ -1678,6 +1689,8 @@ static int executeCompilation(const InputArgList &args,
     output.os() << assembly;
     output.os() << '\n';
   }
+  if (reportUndumpedPass())
+    return 1;
   output.keep();
   return 0;
 }

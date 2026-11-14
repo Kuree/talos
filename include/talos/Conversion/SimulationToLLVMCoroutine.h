@@ -38,6 +38,9 @@ void buildSimulationToLLVMCoroutinePipeline(mlir::OpPassManager &manager,
                                             bool nativeWords = true,
                                             bool nativeAggregates = true);
 void registerSimulationToLLVMCoroutinePipeline();
+/// Add the native LLVM finalization stages, in order, after
+/// convert-native-function-body-to-llvm.
+void buildNativeLLVMFinalizationPipeline(mlir::OpPassManager &manager);
 
 /// Lower executable schedule actions after their effect-aware optimization.
 /// A caller lowering many functions of one module passes `symbols`, a cache

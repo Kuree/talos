@@ -328,7 +328,9 @@ def MaterializeTalosNativeEvalGroupsPass
     are specialized and the canonical bytecode fallback is frozen. Preserves
     activation predicates and publishes SSA state at retained boundaries.
     Run before computing the final native partition manifest. The coroutine
-    conversion invokes the same materializer at that point in its pipeline.
+    conversion runs the same materializer in
+    materialize-native-eval-group-bodies, which lowers schedule actions and
+    verifies the eval call closure before promoting residual groups.
   }];
   let dependentDialects = ["mlir::LLVM::LLVMDialect"];
 }
@@ -430,6 +432,85 @@ def AddressNativeStateThroughBasesPass
 def FinalizeNativeLLVMPass
     : Pass<"finalize-native-llvm", "mlir::ModuleOp"> {
   let summary = "Finalize native scheduling, proofs and LLVM partition manifests";
+  let description = [{
+    Runs, in order, the native LLVM finalization stages:
+    finalize-native-llvm-wrappers, materialize-native-eval-routes,
+    publish-native-proofs, materialize-native-eval-group-bodies,
+    materialize-native-eval-transactions and finalize-native-functions. Each
+    stage expects the output of the previous one.
+  }];
+  let dependentDialects = ["mlir::LLVM::LLVMDialect"];
+}
+
+def FinalizeNativeLLVMWrappersPass
+    : Pass<"finalize-native-llvm-wrappers", "mlir::ModuleOp"> {
+  let summary = "Convert the module-level wrappers left after body conversion";
+  let description = [{
+    First native LLVM finalization stage, after
+    convert-native-function-body-to-llvm; requires the module's target data
+    layout. Converts only the module children that still hold operations that
+    are not yet legal (LLVM IR, readiness actions, byte addresses and
+    conversion casts are), and reconciles the conversion casts of staged
+    runtime types.
+  }];
+  let dependentDialects = ["mlir::LLVM::LLVMDialect"];
+}
+
+def MaterializeNativeEvalRoutesPass
+    : Pass<"materialize-native-eval-routes", "mlir::ModuleOp"> {
+  let summary = "Bind eval routes, NBA commit variants and native thunks";
+  let description = [{
+    Native LLVM finalization stage: binds each generated eval call to its
+    selected two- or four-state body, builds the promotion range index,
+    clones the two-state NBA commit variants that call sites ask for, and
+    materializes observer and DPI export thunks.
+  }];
+  let dependentDialects = ["mlir::LLVM::LLVMDialect"];
+}
+
+def PublishNativeProofsPass
+    : Pass<"publish-native-proofs", "mlir::ModuleOp"> {
+  let summary = "Publish unknown-plane writes to native proofs and summaries";
+  let description = [{
+    Native LLVM finalization stage: each function publishes its unknown-plane
+    writes to the unknown summary and to the native proofs that depend on
+    them, as a nested llvm.func pipeline, then the promotion windows are
+    materialized.
+  }];
+  let dependentDialects = ["mlir::LLVM::LLVMDialect"];
+}
+
+def MaterializeNativeEvalGroupBodiesPass
+    : Pass<"materialize-native-eval-group-bodies", "mlir::ModuleOp"> {
+  let summary = "Materialize activation group bodies and lower schedule actions";
+  let description = [{
+    Native LLVM finalization stage: materializes ranked group bodies, as
+    talos-materialize-native-eval-groups does, then lowers the remaining
+    schedule actions and verifies the generated eval call closure before it
+    promotes the residual groups' state to SSA, function by function.
+  }];
+  let dependentDialects = ["mlir::LLVM::LLVMDialect"];
+}
+
+def MaterializeNativeEvalTransactionsPass
+    : Pass<"materialize-native-eval-transactions", "mlir::ModuleOp"> {
+  let summary = "Materialize eval transactions and drop a two-state unknown plane";
+  let description = [{
+    Native LLVM finalization stage: materializes native eval transactions,
+    removes the unknown plane of a two-state build, and caches pure cones.
+  }];
+  let dependentDialects = ["mlir::LLVM::LLVMDialect"];
+}
+
+def FinalizeNativeFunctionsPass
+    : Pass<"finalize-native-functions", "mlir::ModuleOp"> {
+  let summary = "Finalize native functions and publish partition manifests";
+  let description = [{
+    Last native LLVM finalization stage: finalizes every function as a nested
+    llvm.func pipeline, with constant-branch threading, canonicalization and
+    CSE in optimized modules, publishes the partition manifest, drops the
+    native compilation options from the module and verifies it.
+  }];
   let dependentDialects = ["mlir::LLVM::LLVMDialect"];
 }
 
