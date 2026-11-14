@@ -1,5 +1,6 @@
 #include "talos/Dialect/Schedule/ScheduleDialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/Transforms/InliningUtils.h"
@@ -35,11 +36,22 @@ struct ReadyInlinerInterface final : DialectInlinerInterface {
     // Cloning preserves ordered accesses to the same pending set. Regions
     // are formed after body inlining; other schedule actions retain their
     // existing callable/activation restrictions.
+    // State-plane accesses are plain memory accesses.
     return isa<NativeReadyReadOp, NativeReadyUpdateOp, NativeReadyCommitOp,
-               NativeReadyMergeOp>(op);
+               NativeReadyMergeOp, NativeStateAddressOp, NativeStateLoadOp,
+               NativeStateStoreOp>(op);
   }
 };
 } // namespace
+Operation *ScheduleDialect::materializeConstant(OpBuilder &builder,
+                                               Attribute value, Type type,
+                                               Location loc) {
+  auto plane = dyn_cast<StatePlaneAttr>(value);
+  if (plane && type == LLVM::LLVMPointerType::get(builder.getContext()))
+    return NativeStateAddressOp::create(builder, loc, plane.getValue());
+  return nullptr;
+}
+
 void ScheduleDialect::initialize() {
   addInterfaces<ReadyInlinerInterface>();
   addOperations<

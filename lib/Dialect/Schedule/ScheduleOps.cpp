@@ -1,5 +1,6 @@
 #include "talos/Dialect/Schedule/ScheduleOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/OpImplementation.h"
@@ -13,7 +14,161 @@
 #include "llvm/ADT/TypeSwitch.h"
 using namespace mlir;
 #define GET_OP_CLASSES
+namespace talos::schedule {
+// `[16]`, `[%d]` or `[%d + 16]`.
+static ParseResult
+parseStateOffset(OpAsmParser &parser,
+                 std::optional<OpAsmParser::UnresolvedOperand> &dynamicOffset,
+                 IntegerAttr &staticOffset) {
+  uint64_t offset = 0;
+  OpAsmParser::UnresolvedOperand operand;
+  OptionalParseResult parsed = parser.parseOptionalOperand(operand);
+  if (parsed.has_value()) {
+    if (failed(*parsed))
+      return failure();
+    dynamicOffset = operand;
+    if (succeeded(parser.parseOptionalPlus()) && parser.parseInteger(offset))
+      return failure();
+  } else if (parser.parseInteger(offset)) {
+    return failure();
+  }
+  staticOffset = parser.getBuilder().getI64IntegerAttr(offset);
+  return success();
+}
+
+static void printStateOffset(OpAsmPrinter &printer, Operation *,
+                             Value dynamicOffset, IntegerAttr staticOffset) {
+  uint64_t offset = staticOffset.getValue().getZExtValue();
+  if (!dynamicOffset) {
+    printer << offset;
+    return;
+  }
+  printer << dynamicOffset;
+  if (offset)
+    printer << " + " << offset;
+}
+
+} // namespace talos::schedule
+
 #include "talos/Dialect/Schedule/ScheduleOps.cpp.inc"
+
+namespace talos::schedule {
+StringRef getStatePlaneGlobalName(StatePlane plane) {
+  return plane == StatePlane::Value ? "__talos_state_value"
+                                    : "__talos_state_unknown";
+}
+
+std::optional<StatePlane> getStatePlaneOfGlobal(StringRef name) {
+  if (name == "__talos_state_value")
+    return StatePlane::Value;
+  if (name == "__talos_state_unknown")
+    return StatePlane::Unknown;
+  return std::nullopt;
+}
+
+static FlatSymbolRefAttr getStatePlaneSymbol(MLIRContext *context,
+                                             StatePlane plane) {
+  return FlatSymbolRefAttr::get(context, getStatePlaneGlobalName(plane));
+}
+
+static LogicalResult verifyStateAccess(Operation *op, StringRef global) {
+  if (!getStatePlaneOfGlobal(global))
+    return op->emitOpError("names '") << global << "', no native state plane";
+  // Only functions are lowered to LLVM accesses.
+  if (!op->getParentOfType<FunctionOpInterface>())
+    return op->emitOpError("must be in a function");
+  return success();
+}
+
+// The plane global resolves where llvm.mlir.addressof of it would.
+static LogicalResult verifyStatePlaneUse(Operation *op,
+                                         FlatSymbolRefAttr global,
+                                         SymbolTableCollection &tables) {
+  if (!tables.lookupNearestSymbolFrom<LLVM::GlobalOp>(op, global))
+    return op->emitOpError("must reference the llvm.mlir.global of its plane");
+  return success();
+}
+
+// A constant dynamic offset joins the static one.
+template <typename AccessOp>
+static bool foldConstantOffset(AccessOp access, Attribute dynamicOffset) {
+  auto constant = dyn_cast_or_null<IntegerAttr>(dynamicOffset);
+  if (!constant)
+    return false;
+  uint64_t base = access.getStaticOffset();
+  uint64_t added = constant.getValue().getZExtValue();
+  if (added > UINT64_MAX - base)
+    return false;
+  access.setStaticOffset(base + added);
+  access.getDynamicOffsetMutable().clear();
+  return true;
+}
+
+void NativeStateAddressOp::build(OpBuilder &builder, OperationState &state,
+                                 StatePlane plane) {
+  build(builder, state, LLVM::LLVMPointerType::get(builder.getContext()),
+        getStatePlaneSymbol(builder.getContext(), plane));
+}
+StatePlane NativeStateAddressOp::getPlane() {
+  return *getStatePlaneOfGlobal(getGlobal());
+}
+LogicalResult NativeStateAddressOp::verify() {
+  return verifyStateAccess(*this, getGlobal());
+}
+LogicalResult
+NativeStateAddressOp::verifySymbolUses(SymbolTableCollection &tables) {
+  return verifyStatePlaneUse(*this, getGlobalAttr(), tables);
+}
+OpFoldResult NativeStateAddressOp::fold(FoldAdaptor) {
+  return StatePlaneAttr::get(getContext(), getPlane());
+}
+
+void NativeStateLoadOp::build(OpBuilder &builder, OperationState &state,
+                              Type type, StatePlane plane, Value dynamicOffset,
+                              uint64_t staticOffset, uint64_t alignment) {
+  build(builder, state, type, getStatePlaneSymbol(builder.getContext(), plane),
+        dynamicOffset, builder.getI64IntegerAttr(staticOffset),
+        builder.getI64IntegerAttr(alignment));
+}
+StatePlane NativeStateLoadOp::getPlane() {
+  return *getStatePlaneOfGlobal(getGlobal());
+}
+LogicalResult NativeStateLoadOp::verify() {
+  return verifyStateAccess(*this, getGlobal());
+}
+LogicalResult
+NativeStateLoadOp::verifySymbolUses(SymbolTableCollection &tables) {
+  return verifyStatePlaneUse(*this, getGlobalAttr(), tables);
+}
+OpFoldResult NativeStateLoadOp::fold(FoldAdaptor adaptor) {
+  return foldConstantOffset(*this, adaptor.getDynamicOffset()) ? getResult()
+                                                               : nullptr;
+}
+
+void NativeStateStoreOp::build(OpBuilder &builder, OperationState &state,
+                               Value value, StatePlane plane,
+                               Value dynamicOffset, uint64_t staticOffset,
+                               uint64_t alignment) {
+  build(builder, state, value,
+        getStatePlaneSymbol(builder.getContext(), plane), dynamicOffset,
+        builder.getI64IntegerAttr(staticOffset),
+        builder.getI64IntegerAttr(alignment));
+}
+StatePlane NativeStateStoreOp::getPlane() {
+  return *getStatePlaneOfGlobal(getGlobal());
+}
+LogicalResult NativeStateStoreOp::verify() {
+  return verifyStateAccess(*this, getGlobal());
+}
+LogicalResult
+NativeStateStoreOp::verifySymbolUses(SymbolTableCollection &tables) {
+  return verifyStatePlaneUse(*this, getGlobalAttr(), tables);
+}
+LogicalResult NativeStateStoreOp::fold(FoldAdaptor adaptor,
+                                       SmallVectorImpl<OpFoldResult> &) {
+  return success(foldConstantOffset(*this, adaptor.getDynamicOffset()));
+}
+} // namespace talos::schedule
 namespace talos::schedule {
 static LogicalResult verifyNativeUnpackedWord(Operation *op, Type input,
                                               Type result) {

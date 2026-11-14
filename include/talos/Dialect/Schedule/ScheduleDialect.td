@@ -18,6 +18,9 @@ def ScheduleDialect : Dialect {
     lowering after simulation values and handles acquire physical layouts.
   }];
   let useDefaultAttributePrinterParser = 1;
+  // State-plane addresses fold to their plane symbol, like
+  // llvm.mlir.addressof, and are rematerialized as state-plane addresses.
+  let hasConstantMaterializer = 1;
   // Canonicalization of native predicates materializes arith constants.
   let dependentDialects = ["::mlir::arith::ArithDialect"];
 }

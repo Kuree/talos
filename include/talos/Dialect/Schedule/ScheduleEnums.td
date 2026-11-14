@@ -249,4 +249,16 @@ def SimNativeSchedulerMode
   let cppNamespace = "::talos::schedule";
 }
 
+// The two canonical planes of native design state: values, and the X/Z
+// (unknown) bits beside them.
+def StatePlaneValue : I32EnumAttrCase<"Value", 0, "value">;
+def StatePlaneUnknown : I32EnumAttrCase<"Unknown", 1, "unknown">;
+def StatePlaneEnum
+    : I32EnumAttr<"StatePlane", "canonical native state plane", [
+        StatePlaneValue, StatePlaneUnknown
+      ]> {
+  let cppNamespace = "::talos::schedule";
+  let genSpecializedAttr = 0;
+}
+
 #endif

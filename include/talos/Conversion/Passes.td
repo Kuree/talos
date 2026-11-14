@@ -510,6 +510,18 @@ def MaterializeNativeEvalTransactionsPass
   let dependentDialects = ["mlir::LLVM::LLVMDialect"];
 }
 
+def LowerNativeStateAccessPass
+    : Pass<"lower-native-state-access", "mlir::LLVM::LLVMFuncOp"> {
+  let summary = "Lower typed native state-plane accesses to LLVM memory accesses";
+  let description = [{
+    Replaces schedule.state.address with llvm.mlir.addressof of its plane, and
+    schedule.state.load/store with a byte GEP from that address and an LLVM
+    load or store of the same alignment, keeping the access's native tags.
+    Runs first in finalize-native-functions.
+  }];
+  let dependentDialects = ["mlir::LLVM::LLVMDialect"];
+}
+
 def FinalizeNativeFunctionsPass
     : Pass<"finalize-native-functions", "mlir::ModuleOp"> {
   let summary = "Finalize native functions and publish partition manifests";

@@ -352,5 +352,12 @@ def SchedulePeriodicAliasAttr : ScheduleAttr<"PeriodicAlias", "periodic_alias"> 
   let genVerifyDecl = 1;
 }
 
+// The constant a state-plane address folds to. It names the plane rather
+// than its global, so it cannot be confused with the address of another
+// global that holds the same symbol.
+def StatePlaneAttr : EnumAttr<ScheduleDialect, StatePlaneEnum, "state_plane"> {
+  let assemblyFormat = "`<` $value `>`";
+}
+
 include "talos/Dialect/Schedule/ScheduleRecords.td"
 #endif

@@ -10,6 +10,15 @@
 #include "talos/Dialect/Simulation/SimulationAttrs.h"
 #include "talos/Dialect/Simulation/SimulationResources.h"
 #include "talos/Dialect/Simulation/SimulationTypes.h"
+#include "mlir/IR/SymbolTable.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
+#include <optional>
+namespace talos::schedule {
+/// The global that holds a canonical native state plane.
+llvm::StringRef getStatePlaneGlobalName(StatePlane plane);
+/// The state plane a global holds, if it is one.
+std::optional<StatePlane> getStatePlaneOfGlobal(llvm::StringRef name);
+} // namespace talos::schedule
 #define GET_OP_CLASSES
 #include "talos/Dialect/Schedule/ScheduleOps.h.inc"
 namespace talos::schedule {

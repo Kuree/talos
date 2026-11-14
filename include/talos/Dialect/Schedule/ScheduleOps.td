@@ -5,6 +5,7 @@ include "talos/Dialect/Simulation/SimulationAttrs.td"
 include "talos/Dialect/Simulation/SimulationTypes.td"
 include "talos/Dialect/Simulation/SimulationResources.td"
 include "mlir/IR/SymbolInterfaces.td"
+include "mlir/Interfaces/SideEffectInterfaces.td"
 include "mlir/Interfaces/ControlFlowInterfaces.td"
 include "mlir/Interfaces/CallInterfaces.td"
 include "mlir/Interfaces/ViewLikeInterface.td"
@@ -886,6 +887,93 @@ def NativeScratchOp : ScheduleNativeOp<"scratch", [MemoryEffects<[MemAlloc]>]> {
   let assemblyFormat = "$size attr-dict";
   let hasVerifier = 1;
 }
+// Native design state lives in two byte planes, the values and the X/Z bits
+// beside them (IEEE 1800-2023 6.3.1). These operations name the plane they
+// access, so native passes recognize state accesses by operation rather than
+// by tracing addresses to the planes' globals. Each refers to its plane's
+// global so symbol-use queries still see it, and may only appear in a
+// function. Accesses are neither volatile nor atomic. finalize-native-functions
+// lowers them to the LLVM accesses they stand for.
+def StateAccessValue : AnyTypeOf<[AnySignlessInteger,
+                                  VectorOfAnyRankOf<[AnySignlessInteger]>]>;
+
+def NativeStateAddressOp : ScheduleNativeOp<"state.address", [
+    Pure, ConstantLike, DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let summary = "base address of a canonical native state plane";
+  let description = [{
+    The address of the first byte of a state plane, for accesses that leave
+    typed state operations: runtime calls, bulk copies and pointer selects.
+    Like `llvm.mlir.addressof`, it is a constant; it folds to its plane.
+  }];
+  let arguments = (ins FlatSymbolRefAttr:$global);
+  let results = (outs LLVM_DefaultPointer:$result);
+  let assemblyFormat = "$global attr-dict `:` qualified(type($result))";
+  let builders = [OpBuilder<(ins "::talos::schedule::StatePlane":$plane)>];
+  let extraClassDeclaration = [{
+    ::talos::schedule::StatePlane getPlane();
+  }];
+  let hasFolder = 1;
+  let hasVerifier = 1;
+}
+
+def NativeStateLoadOp : ScheduleNativeOp<"state.load", [
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let summary = "read a window of a canonical native state plane";
+  let description = [{
+    Reads the bytes of the plane starting at byte `static_offset` plus the
+    optional `dynamic_offset` as one value, with the given alignment.
+  }];
+  let arguments = (ins Arg<FlatSymbolRefAttr, "the plane's global",
+                           [MemRead]>:$global,
+                       Optional<I64>:$dynamic_offset,
+                       I64Attr:$static_offset,
+                       IntValidAlignment<I64Attr>:$alignment);
+  let results = (outs StateAccessValue:$result);
+  let assemblyFormat = [{
+    $global `[` custom<StateOffset>($dynamic_offset, $static_offset) `]`
+    attr-dict `:` type($result)
+  }];
+  let builders = [OpBuilder<(ins "::mlir::Type":$type,
+                                 "::talos::schedule::StatePlane":$plane,
+                                 "::mlir::Value":$dynamicOffset,
+                                 "uint64_t":$staticOffset,
+                                 "uint64_t":$alignment)>];
+  let extraClassDeclaration = [{
+    ::talos::schedule::StatePlane getPlane();
+  }];
+  let hasFolder = 1;
+  let hasVerifier = 1;
+}
+
+def NativeStateStoreOp : ScheduleNativeOp<"state.store", [
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let summary = "write a window of a canonical native state plane";
+  let description = [{
+    Writes `value` to the bytes of the plane starting at byte `static_offset`
+    plus the optional `dynamic_offset`, with the given alignment.
+  }];
+  let arguments = (ins StateAccessValue:$value,
+                       Arg<FlatSymbolRefAttr, "the plane's global",
+                           [MemWrite]>:$global,
+                       Optional<I64>:$dynamic_offset,
+                       I64Attr:$static_offset,
+                       IntValidAlignment<I64Attr>:$alignment);
+  let assemblyFormat = [{
+    $value `,` $global `[` custom<StateOffset>($dynamic_offset, $static_offset)
+    `]` attr-dict `:` type($value)
+  }];
+  let builders = [OpBuilder<(ins "::mlir::Value":$value,
+                                 "::talos::schedule::StatePlane":$plane,
+                                 "::mlir::Value":$dynamicOffset,
+                                 "uint64_t":$staticOffset,
+                                 "uint64_t":$alignment)>];
+  let extraClassDeclaration = [{
+    ::talos::schedule::StatePlane getPlane();
+  }];
+  let hasFolder = 1;
+  let hasVerifier = 1;
+}
+
 def NativeByteAddressOp : ScheduleNativeOp<"bytes.address", [Pure]> {
   let summary = "immutable bytes awaiting executable reachability";
   let arguments = (ins StrAttr:$name, StrAttr:$value, I64Attr:$alignment);

@@ -4232,7 +4232,9 @@ public:
       target->addLegalOp<
           schedule::NativeByteAddressOp, schedule::NativeReadyReadOp,
           schedule::NativeReadyUpdateOp, schedule::NativeReadyCommitOp,
-          schedule::NativeReadyMergeOp, UnrealizedConversionCastOp>();
+          schedule::NativeReadyMergeOp, schedule::NativeStateAddressOp,
+          schedule::NativeStateLoadOp, schedule::NativeStateStoreOp,
+          UnrealizedConversionCastOp>();
       target->markUnknownOpDynamicallyLegal([](Operation *operation) {
         return isa<LLVM::LLVMFuncOp>(operation);
       });
@@ -4454,7 +4456,9 @@ public:
     target.addLegalOp<
         ModuleOp, UnrealizedConversionCastOp, schedule::NativeByteAddressOp,
         schedule::NativeReadyReadOp, schedule::NativeReadyUpdateOp,
-        schedule::NativeReadyCommitOp, schedule::NativeReadyMergeOp>();
+        schedule::NativeReadyCommitOp, schedule::NativeReadyMergeOp,
+        schedule::NativeStateAddressOp, schedule::NativeStateLoadOp,
+        schedule::NativeStateStoreOp>();
     target.markUnknownOpDynamicallyLegal(
         [](Operation *operation) { return isa<LLVM::LLVMFuncOp>(operation); });
     FrozenRewritePatternSet frozenPatterns(std::move(patterns));
@@ -4632,6 +4636,9 @@ public:
       return signalPassFailure();
     OpPassManager finalization(ModuleOp::getOperationName());
     auto &functions = finalization.nest<LLVM::LLVMFuncOp>();
+    // Function finalization and LLVM translation see state accesses as the
+    // LLVM memory accesses they stand for.
+    functions.addPass(createLowerNativeStateAccessPass());
     if (*partitionInventory)
       functions.addPass(detail::createInventoryNativeFunctionSymbolsPass());
     functions.addPass(detail::createNativeFunctionFinalizationPass());
