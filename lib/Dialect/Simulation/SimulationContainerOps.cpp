@@ -47,6 +47,11 @@ namespace talos::sim {
 bool containsFourStateLeaf(Type type) {
   if (isa<LogicType>(type))
     return true;
+  // Every element of an array has the array's element type, so one element
+  // decides, however many there are.
+  if (isa<PackedArrayType, UnpackedArrayType>(type))
+    return getAggregateNumElements(type) &&
+           containsFourStateLeaf(getAggregateElementType(type, 0));
   if (!isAggregateType(type))
     return false;
   for (unsigned index = 0, end = getAggregateNumElements(type); index < end;

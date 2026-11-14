@@ -283,16 +283,7 @@ unsigned getUnknownPlaneWork(Operation *op) {
       .Default([](Operation *) { return 1; });
 }
 
-bool hasUnknownPlane(Type type) {
-  if (isa<sim::LogicType>(type))
-    return true;
-  if (!sim::isAggregateType(type))
-    return false;
-  for (unsigned index = 0; index < sim::getAggregateNumElements(type); ++index)
-    if (hasUnknownPlane(sim::getAggregateElementType(type, index)))
-      return true;
-  return false;
-}
+bool hasUnknownPlane(Type type) { return sim::containsFourStateLeaf(type); }
 
 bool isConstantInRangeSelection(Operation *op) {
   if (auto extract = dyn_cast<sim::SimLogicDynExtractOp>(op)) {

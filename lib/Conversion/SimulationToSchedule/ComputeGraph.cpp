@@ -951,22 +951,8 @@ collectFragmentEffects(const ProgramAnalysis &analysis,
 /// hold X or Z. Continuation operands are excluded: they are the frame the
 /// *next* fragment receives, and that fragment proves them itself.
 bool fragmentIsTwoState(const StateDomainAnalysis &stateDomains, Block &block) {
-  auto containsFourStateLeaf = [&](Type type) {
-    std::function<bool(Type)> visit = [&](Type nested) {
-      if (isa<sim::LogicType>(nested))
-        return true;
-      if (!sim::isAggregateType(nested))
-        return false;
-      for (unsigned index = 0; index < sim::getAggregateNumElements(nested);
-           ++index)
-        if (visit(sim::getAggregateElementType(nested, index)))
-          return true;
-      return false;
-    };
-    return visit(type);
-  };
   for (BlockArgument argument : block.getArguments())
-    if (containsFourStateLeaf(argument.getType()) &&
+    if (hasUnknownPlane(argument.getType()) &&
         !stateDomains.isTwoStateWithInductiveRoots(argument))
       return false;
   // Only the suspension terminator gets to pass an unproven value along: it
@@ -985,12 +971,11 @@ bool fragmentIsTwoState(const StateDomainAnalysis &stateDomains, Block &block) {
           forwarded.insert(value);
     }
     for (Value operand : operation.getOperands())
-      if (!forwarded.contains(operand) &&
-          containsFourStateLeaf(operand.getType()) &&
+      if (!forwarded.contains(operand) && hasUnknownPlane(operand.getType()) &&
           !stateDomains.isTwoStateWithInductiveRoots(operand))
         return false;
     for (Value result : operation.getResults())
-      if (containsFourStateLeaf(result.getType()) &&
+      if (hasUnknownPlane(result.getType()) &&
           !stateDomains.isTwoStateWithInductiveRoots(result))
         return false;
   }
