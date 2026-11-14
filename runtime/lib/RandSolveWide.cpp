@@ -437,6 +437,7 @@ bool parseWideProgram(const uint8_t *bytes, size_t size, WideProgram &result,
                  TALOS_RT_RANDOM_PROGRAM_HAS_DIST |
                  TALOS_RT_RANDOM_PROGRAM_EXACT_WEIGHTED |
                  TALOS_RT_RANDOM_PROGRAM_HAS_GUARD_INPUT_MASKS |
+                 TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_EDGE_ORIGINS |
                  TALOS_RT_RANDOM_PROGRAM_HAS_SAMPLER_PLAN |
                  TALOS_RT_RANDOM_PROGRAM_HAS_REAL |
                  TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY)) != 0)
@@ -449,7 +450,9 @@ bool parseWideProgram(const uint8_t *bytes, size_t size, WideProgram &result,
     return false;
   bool dynamicMasks =
       (flags & TALOS_RT_RANDOM_PROGRAM_HAS_GUARD_INPUT_MASKS) != 0;
-  if (dynamicMasks && !encodedPriority)
+  bool origins =
+      (flags & TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_EDGE_ORIGINS) != 0;
+  if ((dynamicMasks || origins) && !encodedPriority)
     return false;
   if (encodedOrder && !(flags & (TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM |
                                  TALOS_RT_RANDOM_PROGRAM_EXACT_WEIGHTED)))
@@ -484,22 +487,22 @@ bool parseWideProgram(const uint8_t *bytes, size_t size, WideProgram &result,
     expectedSize = solveRecordsOffset + solveEdgeCount * solveRecordSize;
   }
   bool sourceFunctionArguments = false;
+  talos::runtime::PriorityInputs priorityInputs;
   if (encodedPriority) {
     if (expectedSize > size)
       return false;
     size_t offset = expectedSize;
-    talos::runtime::PriorityInputs inputs;
     if (!talos::runtime::readPriorityInputs(
             bytes, size, TALOS_RT_RANDOM_PROGRAM_HEADER_SIZE_V2,
-            instructionCount, result.aggregateWidth, offset, inputs,
+            instructionCount, result.aggregateWidth, offset, priorityInputs,
             captureCount, dynamicMasks))
       return false;
     expectedSize = offset;
-    for (const auto &input : inputs)
+    for (const auto &input : priorityInputs)
       sourceFunctionArguments |= std::any_of(
           input.second.arguments.begin(), input.second.arguments.end(),
           [](uint64_t word) { return word != 0; });
-    for (const auto &input : inputs)
+    for (const auto &input : priorityInputs)
       if (input.second.maskCapture) {
         maskCaptures.push_back(input.second.maskCapture - 1);
         maskCaptures.push_back(input.second.maskCapture);
@@ -731,6 +734,7 @@ bool parseWideProgram(const uint8_t *bytes, size_t size, WideProgram &result,
   if (encodedOrder) {
     const uint8_t *cursor = bytes + solveRecordsOffset;
     bool sawFunctionEdge = false;
+    bool sawOrigin = false;
     for (uint32_t index = 0; index != solveEdgeCount; ++index) {
       SolveBeforeEdge edge{WideValue(result.aggregateWidth),
                            WideValue(result.aggregateWidth), 0};
@@ -744,15 +748,17 @@ bool parseWideProgram(const uint8_t *bytes, size_t size, WideProgram &result,
       edge.functionPriority =
           (reserved & TALOS_RT_RANDOM_SOLVE_EDGE_FUNCTION_PRIORITY) != 0;
       sawFunctionEdge |= edge.functionPriority;
+      sawOrigin |= (reserved >> TALOS_RT_RANDOM_SOLVE_EDGE_ORIGIN_SHIFT) != 0;
       cursor += TALOS_RT_RANDOM_SOLVE_EDGE_TAIL_SIZE_V2;
       uint64_t upperMask = highMask(result.aggregateWidth);
       if (!truth(edge.beforeMask) || !truth(edge.afterMask) ||
           (edge.beforeMask.words.back() & ~upperMask) != 0 ||
           (edge.afterMask.words.back() & ~upperMask) != 0 ||
           intersects(edge.beforeMask, edge.afterMask) ||
-          (reserved &
-           ~(encodedPriority ? TALOS_RT_RANDOM_SOLVE_EDGE_FUNCTION_PRIORITY
-                             : 0u)) != 0 ||
+          (!encodedPriority && reserved != 0) ||
+          !talos::runtime::validateSolveEdgeOrigin(
+              reserved, origins, edge.constraintBlock, priorityInputs, bytes,
+              TALOS_RT_RANDOM_PROGRAM_HEADER_SIZE_V2, true) ||
           (edge.constraintBlock != TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1 &&
            edge.constraintBlock >= 64))
         return false;
@@ -761,9 +767,10 @@ bool parseWideProgram(const uint8_t *bytes, size_t size, WideProgram &result,
     WideValue all(result.aggregateWidth);
     std::fill(all.words.begin(), all.words.end(), UINT64_MAX);
     normalize(all);
-    if ((encodedPriority && !sawFunctionEdge && !sourceFunctionArguments) ||
+    if ((origins && !sawOrigin) ||
+        (encodedPriority && !sawFunctionEdge && !sourceFunctionArguments) ||
         !talos::runtime::validateSolveOrderDeclarations(
-            toSolveOrderEdges(result.solveEdges), all.words))
+            toSolveOrderEdges(result.solveEdges), all.words, dynamicMasks))
       return false;
   }
 

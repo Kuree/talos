@@ -15,6 +15,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <tuple>
 
 using namespace mlir;
 
@@ -361,13 +362,15 @@ LogicalResult freezeRandomConstraintPriorityInputs(
   };
   if (failed(guardInputs(root)))
     return failure();
-  SmallVector<std::pair<APInt, APInt>> functionOrder;
+  SmallVector<std::tuple<APInt, APInt, uint64_t>> functionOrder;
+  uint64_t nextSource = 0;
   bool functionArgumentsPresent = false;
   root->walk([&](Operation *expression) {
     if (!isa<semantic::SVExpressionConstraintOp,
              semantic::SVUniquenessConstraintOp,
              semantic::SVDisableSoftConstraintOp>(expression))
       return;
+    uint64_t source = nextSource++;
     SmallVector<APInt> arguments;
     SmallVector<APInt> nonArguments;
     APInt referencedInputs = APInt::getZero(orderingWidth);
@@ -477,19 +480,22 @@ LogicalResult freezeRandomConstraintPriorityInputs(
     }
     for (const APInt &before : arguments)
       for (const APInt &after : nonArguments)
-        if ((before & after).isZero() &&
-            !llvm::is_contained(functionOrder, std::make_pair(before, after)))
-          functionOrder.emplace_back(before, after);
+        // Each path inventory is already unique within this source atom.
+        if ((before & after).isZero())
+          functionOrder.emplace_back(before, after, source);
   });
   if (!functionOrder.empty() || functionArgumentsPresent) {
     SmallVector<Attribute> encoded;
-    encoded.reserve(functionOrder.size() * 2);
-    for (auto [before, after] : functionOrder) {
-      encoded.push_back(builder.getIntegerAttr(
-          builder.getIntegerType(orderingWidth), before));
-      encoded.push_back(
-          builder.getIntegerAttr(builder.getIntegerType(orderingWidth), after));
-    }
+    encoded.reserve(functionOrder.size());
+    for (auto &[before, after, source] : functionOrder)
+      encoded.push_back(builder.getDictionaryAttr(
+          {builder.getNamedAttr(
+               "before", builder.getIntegerAttr(
+                             builder.getIntegerType(orderingWidth), before)),
+           builder.getNamedAttr(
+               "after", builder.getIntegerAttr(
+                            builder.getIntegerType(orderingWidth), after)),
+           builder.getNamedAttr("source", builder.getI64IntegerAttr(source))}));
     sim::set<sim::metadata::RandomFunctionOrder>(root,
                                                  builder.getArrayAttr(encoded));
   }

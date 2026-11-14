@@ -17,6 +17,8 @@
 #include <memory>
 #include <numeric>
 #include <optional>
+#include <set>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -1805,6 +1807,10 @@ SamplerResult sampleRandomPlan(
       (flags & TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY) != 0;
   bool dynamicMasks =
       (flags & TALOS_RT_RANDOM_PROGRAM_HAS_GUARD_INPUT_MASKS) != 0;
+  bool origins =
+      (flags & TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_EDGE_ORIGINS) != 0;
+  if (origins && !functionPriority)
+    return SamplerResult::Invalid;
   if (functionStage && (!functionPriority || cyclic))
     return SamplerResult::Unavailable;
   if (assignmentWords != std::max<uint64_t>(1, (uint64_t(width) + 63) / 64) ||
@@ -2202,6 +2208,15 @@ SamplerResult sampleRandomPlan(
     const uint8_t *cursor =
         program + offset + TALOS_RT_RANDOM_SOLVE_EDGE_HEADER_SIZE;
     std::vector<SolveOrderEdge> edges;
+    std::set<std::tuple<uint32_t, bool, OrderMask, OrderMask>> seenEdges;
+    auto appendEdge = [&](SolveOrderEdge edge) {
+      if (seenEdges
+              .emplace(edge.block, edge.functionPriority, edge.before,
+                       edge.after)
+              .second)
+        edges.push_back(std::move(edge));
+    };
+    bool sawOrigin = false;
     for (uint32_t index = 0; index != count; ++index) {
       SolveOrderEdge edge;
       for (OrderMask *mask : {&edge.before, &edge.after})
@@ -2210,35 +2225,56 @@ SamplerResult sampleRandomPlan(
           cursor += 8;
         }
       edge.block = read32(cursor);
+      uint32_t edgeFlags = read32(cursor + 4);
       edge.functionPriority =
-          (read32(cursor + 4) & TALOS_RT_RANDOM_SOLVE_EDGE_FUNCTION_PRIORITY) !=
-          0;
+          (edgeFlags & TALOS_RT_RANDOM_SOLVE_EDGE_FUNCTION_PRIORITY) != 0;
+      uint32_t origin = edgeFlags >> TALOS_RT_RANDOM_SOLVE_EDGE_ORIGIN_SHIFT;
+      sawOrigin |= origin != 0;
+      if (!validateSolveEdgeOrigin(edgeFlags, origins, edge.block, sourceInputs,
+                                   program, header, wide))
+        return SamplerResult::Invalid;
       cursor += 8;
-      if (dynamicMasks && edge.functionPriority) {
-        bool live = false;
-        for (const auto &entry : sourceInputs) {
-          const PriorityInput &input = entry.second;
-          // The same enabled atom must retain both endpoints of an implicit
-          // edge. A different call with the same argument does not activate
-          // an edge whose guarded constraint was eliminated.
-          uint32_t block = read32(program + header + size_t(entry.first) * 16 +
-                                  (wide ? 8 : 4));
-          if (block != TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1 &&
-              ((constraintMask >> block) & 1))
-            continue;
+      if ((dynamicMasks || origin) && edge.functionPriority) {
+        auto appendLive = [&](uint32_t index, const PriorityInput &input) {
+          // Retain only the paths that coexist in one enabled source atom.
+          // A live selected-bit call cannot activate the remaining bits of
+          // an inactive whole-field edge and merge unrelated order nodes.
+          uint32_t block =
+              read32(program + header + size_t(index) * 16 + (wide ? 8 : 4));
+          if (block != edge.block ||
+              (block != TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1 &&
+               ((constraintMask >> block) & 1)))
+            return;
+          SolveOrderEdge filtered{OrderMask(assignmentWords),
+                                  OrderMask(assignmentWords), edge.block, true};
           bool before = false, after = false;
           for (size_t word = 0; word != assignmentWords; ++word) {
-            before |= (input.arguments[word] & edge.before[word]) != 0;
-            after |= (input.references[word] & ~input.arguments[word] &
-                      edge.after[word]) != 0;
+            filtered.before[word] = input.arguments[word] & edge.before[word];
+            // An owned edge already identifies its nonargument target.
+            // Another call may also use that target as an argument in the
+            // same atom; subtracting the union would erase a real chain or
+            // circular dependency. Legacy edges lack this source identity.
+            filtered.after[word] =
+                input.references[word] & edge.after[word] &
+                (origin ? UINT64_MAX : ~input.arguments[word]);
+            before |= filtered.before[word] != 0;
+            after |= filtered.after[word] != 0;
           }
-          live |= before && after;
+          if (before && after)
+            appendEdge(std::move(filtered));
+        };
+        if (origin) {
+          appendLive(origin - 1, sourceInputs.find(origin - 1)->second);
+        } else {
+          for (const auto &entry : sourceInputs)
+            appendLive(entry.first, entry.second);
         }
-        if (!live)
-          continue;
+        continue;
       }
-      edges.push_back(std::move(edge));
+      appendEdge(std::move(edge));
     }
+    if (origins && !sawOrigin)
+      return SamplerResult::Invalid;
     return f.prioritized(booleanBits, physicalBits, priorityHard, soft,
                          hardInputs, softInputs, priorityDomains, edges, start,
                          mutableMask, assignmentWords, constraintMask,

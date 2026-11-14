@@ -2775,11 +2775,14 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     APInt afterMask;
     uint32_t constraintBlock;
     bool functionPriority = false;
+    Operation *source = nullptr;
+    uint32_t origin = 0;
 
     bool operator==(const SolveBeforeEdge &other) const {
       return beforeMask == other.beforeMask && afterMask == other.afterMask &&
              constraintBlock == other.constraintBlock &&
-             functionPriority == other.functionPriority;
+             functionPriority == other.functionPriority &&
+             source == other.source;
     }
   };
   SmallVector<APInt> propertyMasks;
@@ -2791,12 +2794,12 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     solvePropertyOffset += property.width;
   }
   SmallVector<SolveBeforeEdge> solveBeforeEdges;
-  llvm::DenseSet<std::tuple<APInt, APInt, uint32_t, uint8_t>>
+  llvm::DenseSet<std::tuple<APInt, APInt, uint32_t, uint8_t, Operation *>>
       solveBeforeEdgeKeys;
   auto appendSolveBeforeEdge = [&](const SolveBeforeEdge &edge) {
     if (solveBeforeEdgeKeys
             .insert({edge.beforeMask, edge.afterMask, edge.constraintBlock,
-                     static_cast<uint8_t>(edge.functionPriority)})
+                     static_cast<uint8_t>(edge.functionPriority), edge.source})
             .second)
       solveBeforeEdges.push_back(edge);
   };
@@ -2866,12 +2869,47 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     if (Attribute order = sim::get<sim::metadata::RandomFunctionOrder>(root)) {
       hasSolveBefore = true;
       hasFunctionPriority = true;
+      SmallVector<Operation *> sources;
+      root->walk([&](Operation *node) {
+        if (isa<semantic::SVExpressionConstraintOp,
+                semantic::SVUniquenessConstraintOp,
+                semantic::SVDisableSoftConstraintOp>(node))
+          sources.push_back(node);
+      });
+      SmallVector<Operation *> edgeSources;
       SmallVector<APInt> pairs;
       if (auto dense = dyn_cast<DenseI64ArrayAttr>(order)) {
         for (int64_t value : dense.asArrayRef())
           pairs.emplace_back(assignmentWidth, static_cast<uint64_t>(value));
       } else if (auto array = dyn_cast<ArrayAttr>(order)) {
         for (Attribute value : array) {
+          if (auto record = dyn_cast<DictionaryAttr>(value)) {
+            auto before = record.getAs<IntegerAttr>("before");
+            auto after = record.getAs<IntegerAttr>("after");
+            auto source = record.getAs<IntegerAttr>("source");
+            if (!before || !after || !source || record.size() != 3 ||
+                before.getValue().getActiveBits() > assignmentWidth ||
+                after.getValue().getActiveBits() > assignmentWidth ||
+                source.getValue().isNegative() ||
+                source.getValue().getActiveBits() > 64 ||
+                source.getValue().getZExtValue() >= sources.size() ||
+                pairs.size() != edgeSources.size() * 2) {
+              emitError(getSemanticLocation(root))
+                  << "constraint function ordering source metadata is "
+                     "malformed";
+              return failure();
+            }
+            pairs.push_back(before.getValue().zextOrTrunc(assignmentWidth));
+            pairs.push_back(after.getValue().zextOrTrunc(assignmentWidth));
+            edgeSources.push_back(sources[source.getValue().getZExtValue()]);
+            continue;
+          }
+          if (!edgeSources.empty()) {
+            emitError(getSemanticLocation(root))
+                << "constraint function ordering mixes source records and "
+                   "masks";
+            return failure();
+          }
           auto integer = dyn_cast<IntegerAttr>(value);
           if (!integer ||
               integer.getValue().getActiveBits() > assignmentWidth) {
@@ -2904,7 +2942,9 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         }
         hasSolveBefore = true;
         hasFunctionPriority = true;
-        SolveBeforeEdge edge{beforeMask, afterMask, solveConstraintBlock, true};
+        SolveBeforeEdge edge{beforeMask, afterMask, solveConstraintBlock, true,
+                             edgeSources.empty() ? nullptr
+                                                 : edgeSources[pair / 2]};
         appendSolveBeforeEdge(edge);
       }
     }
@@ -3076,20 +3116,42 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     }
     return layers;
   };
-  // Whether the active ordering can contain a cycle that disabling constraint
-  // blocks removes. The runtime solver then orders the active edges.
+  // Whether block modes or constraint guards can remove a declared cycle.
+  // The runtime solver then orders only the surviving edges.
   bool modeDependentSolveCycle = false;
   if (hasSolveBefore) {
     std::optional<SmallVector<APInt>> layers =
         computeSolveLayers(solveBeforeEdges);
     if (!layers) {
+      // Classify source atoms in one traversal, only for cyclic graphs.
+      // An unrelated guarded call cannot defer an unguarded implicit cycle.
+      llvm::SmallPtrSet<Operation *, 16> guardedSources;
+      if (hasFunctionPriority)
+        for (Operation *root : children) {
+          llvm::DenseMap<Operation *, bool> guarded;
+          root->walk<WalkOrder::PreOrder>([&](Operation *node) {
+            Operation *parent = node->getParentOp();
+            bool inGuard = node != root && guarded.lookup(parent);
+            if (node != root &&
+                isa<semantic::SVConditionalConstraintOp,
+                    semantic::SVImplicationConstraintOp>(parent)) {
+              auto parts = getChildren(parent);
+              inGuard |= !parts.empty() && node != parts.front();
+            }
+            guarded[node] = inGuard;
+            if (inGuard && isa<semantic::SVExpressionConstraintOp,
+                               semantic::SVUniquenessConstraintOp,
+                               semantic::SVDisableSoftConstraintOp>(node))
+              guardedSources.insert(node);
+          });
+        }
       // IEEE 1800-2023 18.9: randomize() considers only active constraint
       // blocks, so a cycle is an error only when every edge on it is active.
-      // A cycle declared within one constraint block, or among the inline
-      // constraints and the blocks no constraint_mode() call can disable, is
-      // reported here. Any other cycle depends on constraint_mode() and is
-      // left to the runtime solver, which orders only the active edges and
-      // reports an active cycle.
+      // Guarded function calls also lose their implicit edges when their
+      // constraints are eliminated (18.5.12), even within one block. Defer
+      // those edges to the runtime's captured input inventories. Explicit
+      // cycles within a block, or among permanently enabled blocks and inline
+      // constraints, remain errors here.
       auto fixedModesAttr =
           sim::get<sim::metadata::RandomFixedConstraintModes>(op);
       uint64_t fixedModes =
@@ -3097,6 +3159,8 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
       SmallVector<SolveBeforeEdge> alwaysActiveEdges;
       llvm::MapVector<uint32_t, SmallVector<SolveBeforeEdge>> blockEdges;
       for (const SolveBeforeEdge &edge : solveBeforeEdges) {
+        if (edge.functionPriority && guardedSources.contains(edge.source))
+          continue;
         if (edge.constraintBlock == TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1 ||
             ((fixedModes >> edge.constraintBlock) & 1) != 0)
           alwaysActiveEdges.push_back(edge);
@@ -5916,6 +5980,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     uint32_t maskCapture = 0;
   };
   SmallVector<PriorityInputRecord> priorityInputRecords;
+  llvm::DenseMap<Operation *, uint32_t> prioritySourceInstructions;
   // Summarize immutable subtrees once. Safe captures and plane projections
   // request these inventories at every node; walking each complete subtree
   // again would make a nested constraint quadratic in its lowered size.
@@ -7163,6 +7228,8 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
           hasDynamicGuardInputs = true;
         }
       }
+      if (source)
+        prioritySourceInstructions[source] = programInstructions.size() - 1;
       priorityInputRecords.push_back(
           {static_cast<uint32_t>(programInstructions.size() - 1),
            std::move(inputs), std::move(arguments), maskCapture});
@@ -7440,6 +7507,21 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
       }
     }
   }
+  if (hasFunctionPriority)
+    for (const SoftDisable &disable : softDisables) {
+      APInt arguments = priorityArguments(disable.source);
+      if (arguments.isZero())
+        continue;
+      // A disable has no predicate of its own, but function calls in its
+      // guards still order variables in this block. Give those edges a
+      // neutral source row rather than borrowing an affected soft row.
+      emitLiteral(true);
+      instruction(TALOS_RT_RANDOM_END_HARD_V1, 1, false, disable.block);
+      if (failed(recordPriorityInputs(priorityInputs(disable.source),
+                                      std::move(arguments), disable.source)))
+        return failure();
+      emittedHard = true;
+    }
   for (auto [index, property] : llvm::enumerate(planned)) {
     if (!isa<FloatType>(property.type))
       continue;
@@ -7688,7 +7770,22 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     for (unsigned index = 0; index != 8; ++index)
       program.push_back(static_cast<uint8_t>(value >> (index * 8)));
   };
+  bool hasFunctionEdgeOrigins = false;
+  for (SolveBeforeEdge &edge : solveBeforeEdges)
+    if (edge.source) {
+      auto found = prioritySourceInstructions.find(edge.source);
+      if (found == prioritySourceInstructions.end() ||
+          found->second >= (UINT32_MAX >> 1)) {
+        emitError(location)
+            << "constraint function ordering source was not encoded";
+        return failure();
+      }
+      edge.origin = found->second + 1;
+      hasFunctionEdgeOrigins = true;
+    }
   uint32_t programFlags = emittedSoft ? TALOS_RT_RANDOM_PROGRAM_HAS_SOFT : 0;
+  if (hasFunctionEdgeOrigins)
+    programFlags |= TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_EDGE_ORIGINS;
   if (hasRealProgram)
     programFlags |= TALOS_RT_RANDOM_PROGRAM_HAS_REAL;
 #ifdef TALOS_ENABLE_Z3
@@ -7810,9 +7907,10 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         }
       }
       append32(edge.constraintBlock);
-      append32(edge.functionPriority
-                   ? TALOS_RT_RANDOM_SOLVE_EDGE_FUNCTION_PRIORITY
-                   : 0u);
+      append32((edge.functionPriority
+                    ? TALOS_RT_RANDOM_SOLVE_EDGE_FUNCTION_PRIORITY
+                    : 0u) |
+               (edge.origin << TALOS_RT_RANDOM_SOLVE_EDGE_ORIGIN_SHIFT));
     }
   }
   if (hasFunctionPriority) {

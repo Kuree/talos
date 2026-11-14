@@ -99,6 +99,24 @@ struct SolveOrderEdge {
   bool functionPriority = false;
 };
 
+// Origin indices name validated source records and must stay within their
+// owning constraint block. Explicit edges never carry a function origin.
+inline bool validateSolveEdgeOrigin(uint32_t edgeFlags, bool origins,
+                                    uint32_t block,
+                                    const PriorityInputs &inputs,
+                                    const uint8_t *program, size_t header,
+                                    bool wide) {
+  bool function =
+      (edgeFlags & TALOS_RT_RANDOM_SOLVE_EDGE_FUNCTION_PRIORITY) != 0;
+  uint32_t origin = edgeFlags >> TALOS_RT_RANDOM_SOLVE_EDGE_ORIGIN_SHIFT;
+  if (!origin)
+    return true;
+  if (!origins || !function || inputs.find(origin - 1) == inputs.end())
+    return false;
+  return orderRead32(program + header + size_t(origin - 1) * 16 +
+                     (wide ? 8 : 4)) == block;
+}
+
 inline bool orderIntersects(const OrderMask &a, const OrderMask &b) {
   for (size_t word = 0; word != a.size(); ++word)
     if ((a[word] & b[word]) != 0)
@@ -243,9 +261,12 @@ buildSolveOrderLayers(const std::vector<SolveOrderEdge> &edges,
 /// it is enabled, so declared metadata is invalid only for a cycle within one
 /// block or within the unmaskable inline edges. A cycle spanning blocks is an
 /// error only once all of them are enabled, and is reported at solve time.
+/// Guarded function edges are likewise checked after the live input masks
+/// have eliminated inactive calls, including calls within the same block.
 inline bool
 validateSolveOrderDeclarations(const std::vector<SolveOrderEdge> &edges,
-                               const OrderMask &mutableMask) {
+                               const OrderMask &mutableMask,
+                               bool guardedFunctions = false) {
   std::vector<uint32_t> blocks;
   for (const SolveOrderEdge &edge : edges)
     if (std::find(blocks.begin(), blocks.end(), edge.block) == blocks.end())
@@ -255,7 +276,7 @@ validateSolveOrderDeclarations(const std::vector<SolveOrderEdge> &edges,
   for (uint32_t block : blocks) {
     declared.clear();
     for (const SolveOrderEdge &edge : edges)
-      if (edge.block == block)
+      if (edge.block == block && !(guardedFunctions && edge.functionPriority))
         declared.push_back(edge);
     if (!buildSolveOrderLayers(declared, mutableMask, 0, false, layers))
       return false;

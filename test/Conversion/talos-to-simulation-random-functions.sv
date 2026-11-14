@@ -11,7 +11,8 @@
 // program. Its rand `bias` read remains a pre-solve capture, while the actual
 // argument `y` remains a candidate variable. The implicit y-before-x edge sets
 // the solve-order and function-priority flags without a source solve-before
-// constraint. The argument constraints are solved in a separate stage.
+// constraint, and retain each edge's source origin. The argument constraints
+// are solved in a separate stage.
 // SUCCESS-LABEL: simulation.func private @unit_1
 // SUCCESS: simulation.managed.load
 // SUCCESS: arith.addi
@@ -20,7 +21,7 @@
 // SUCCESS-SAME: "ODR1\01\00\18\00\0A\00\00\00
 // The repeated state argument reuses one capture. The constant in-range
 // select s[0] cannot fail, so no creation-validity capture is needed.
-// SUCCESS-SAME: \01\00\00\00b\02\00\00
+// SUCCESS-SAME: \01\00\00\00b\0A\00\00
 // The two path masks for s.b -> s.a are preserved instead of collapsing to
 // the containing property: s starts at bit 6, so the masks are 0xc0 and 0x300.
 // SUCCESS-SAME: \C0\00\00\00\00\00\00\00\00\03\00\00\00\00\00\00

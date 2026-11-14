@@ -62,6 +62,8 @@ mlir::FailureOr<std::optional<RandomConstraintPath>> getRandomConstraintPath(
         propertyForExpression);
 
 /// Preserve source dependencies before function expansion or simplification.
+/// Function-order records retain their owning constraint atom's postorder
+/// index in the root; function expansion preserves these constraint nodes.
 mlir::LogicalResult freezeRandomConstraintPriorityInputs(
     mlir::Operation *root, llvm::ArrayRef<uint64_t> propertyOffsets,
     uint64_t totalWidth, mlir::Builder &builder,

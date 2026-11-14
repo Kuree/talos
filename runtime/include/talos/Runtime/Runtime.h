@@ -5395,6 +5395,11 @@ struct talos_rt_random_state_v1 {
 // Typed IEEE operations require an exact compiled plan and stateful uniform
 // sampling. They are never evaluated by the legacy integral interpreter.
 #define TALOS_RT_RANDOM_PROGRAM_HAS_REAL UINT32_C(1024)
+// Implicit edge flag bits 1..31 encode one plus the originating END_HARD or
+// END_SOFT instruction index. Only that atom's live source masks can activate
+// the edge; another atom cannot borrow its argument path grouping.
+// Requires HAS_FUNCTION_PRIORITY. Zero leaves an edge without an origin.
+#define TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_EDGE_ORIGINS UINT32_C(2048)
 #define TALOS_RT_RANDOM_SOLVE_EDGE_HEADER_SIZE UINT16_C(4)
 #define TALOS_RT_RANDOM_SOLVE_EDGE_SIZE UINT16_C(24)
 // V2 edges contain ceil(aggregate_width/64) little-endian words for each
@@ -5402,8 +5407,10 @@ struct talos_rt_random_state_v1 {
 // Their record size is 16 * assignment_word_count + this fixed tail.
 #define TALOS_RT_RANDOM_SOLVE_EDGE_TAIL_SIZE_V2 UINT16_C(8)
 // In priority programs the final edge word carries these flags instead of
-// being reserved. Explicit ordering edges use zero; argument edges use one.
+// being reserved. Explicit ordering edges use zero; argument edges set bit0.
+// HAS_FUNCTION_EDGE_ORIGINS optionally assigns the upper31 bits to an origin.
 #define TALOS_RT_RANDOM_SOLVE_EDGE_FUNCTION_PRIORITY UINT32_C(1)
+#define TALOS_RT_RANDOM_SOLVE_EDGE_ORIGIN_SHIFT 1
 // Priority programs follow their solve edges with a count and optional source
 // input records: end-instruction index, reserved word, and two assignment
 // mask rows for referenced variables and function argument variables. Count

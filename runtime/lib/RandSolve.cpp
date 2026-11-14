@@ -617,6 +617,7 @@ randomSolveModesImpl(talos_rt_context *context, const uint8_t *program,
                           TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM |
                           TALOS_RT_RANDOM_PROGRAM_EXACT_WEIGHTED |
                           TALOS_RT_RANDOM_PROGRAM_HAS_GUARD_INPUT_MASKS |
+                          TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_EDGE_ORIGINS |
                           TALOS_RT_RANDOM_PROGRAM_HAS_SAMPLER_PLAN |
                           TALOS_RT_RANDOM_PROGRAM_HAS_REAL |
                           TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY)) != 0)
@@ -641,7 +642,9 @@ randomSolveModesImpl(talos_rt_context *context, const uint8_t *program,
         (programFlags & TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY) != 0;
     bool dynamicMasks =
         (programFlags & TALOS_RT_RANDOM_PROGRAM_HAS_GUARD_INPUT_MASKS) != 0;
-    if (dynamicMasks && !encodedPriority)
+    bool origins =
+        (programFlags & TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_EDGE_ORIGINS) != 0;
+    if ((dynamicMasks || origins) && !encodedPriority)
       return TALOS_RT_INVALID_ARGUMENT;
     if (encodedPriority &&
         (!encodedSolveBefore ||
@@ -658,18 +661,18 @@ randomSolveModesImpl(talos_rt_context *context, const uint8_t *program,
                             TALOS_RT_RANDOM_SOLVE_EDGE_SIZE;
     }
     bool sourceFunctionArguments = false;
+    talos::runtime::PriorityInputs priorityInputs;
     if (encodedPriority) {
       if (instructionEnd > programSize)
         return TALOS_RT_INVALID_ARGUMENT;
       size_t offset = instructionEnd;
-      talos::runtime::PriorityInputs inputs;
       if (!talos::runtime::readPriorityInputs(
               program, programSize, TALOS_RT_RANDOM_PROGRAM_HEADER_SIZE,
-              instructionCount, aggregateWidth, offset, inputs, captureCount,
-              dynamicMasks))
+              instructionCount, aggregateWidth, offset, priorityInputs,
+              captureCount, dynamicMasks))
         return TALOS_RT_INVALID_ARGUMENT;
       instructionEnd = offset;
-      for (const auto &input : inputs)
+      for (const auto &input : priorityInputs)
         sourceFunctionArguments |= std::any_of(
             input.second.arguments.begin(), input.second.arguments.end(),
             [](uint64_t word) { return word != 0; });
@@ -752,6 +755,7 @@ randomSolveModesImpl(talos_rt_context *context, const uint8_t *program,
                TALOS_RT_RANDOM_SOLVE_EDGE_HEADER_SIZE;
       uint64_t aggregateMask = widthMask(aggregateWidth);
       bool sawFunctionEdge = false;
+      bool sawOrigin = false;
       for (uint32_t index = 0; index != solveEdgeCount; ++index) {
         SolveBeforeEdge edge{read64(cursor), read64(cursor + 8),
                              read32(cursor + 16)};
@@ -759,23 +763,25 @@ randomSolveModesImpl(talos_rt_context *context, const uint8_t *program,
         edge.functionPriority =
             (reserved & TALOS_RT_RANDOM_SOLVE_EDGE_FUNCTION_PRIORITY) != 0;
         sawFunctionEdge |= edge.functionPriority;
+        sawOrigin |= (reserved >> TALOS_RT_RANDOM_SOLVE_EDGE_ORIGIN_SHIFT) != 0;
         cursor += TALOS_RT_RANDOM_SOLVE_EDGE_SIZE;
         if (edge.beforeMask == 0 || edge.afterMask == 0 ||
             (edge.beforeMask & ~aggregateMask) != 0 ||
             (edge.afterMask & ~aggregateMask) != 0 ||
             (edge.beforeMask & edge.afterMask) != 0 ||
-            (reserved &
-             ~(encodedPriority ? TALOS_RT_RANDOM_SOLVE_EDGE_FUNCTION_PRIORITY
-                               : 0u)) != 0 ||
+            (!encodedPriority && reserved != 0) ||
+            !talos::runtime::validateSolveEdgeOrigin(
+                reserved, origins, edge.constraintBlock, priorityInputs,
+                program, TALOS_RT_RANDOM_PROGRAM_HEADER_SIZE, false) ||
             (edge.constraintBlock != TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1 &&
              edge.constraintBlock >= 64))
           return TALOS_RT_INVALID_ARGUMENT;
         solveEdges.push_back(edge);
       }
-      if ((!encodedPriority && solveEdges.empty()) ||
+      if ((origins && !sawOrigin) || (!encodedPriority && solveEdges.empty()) ||
           (encodedPriority && !sawFunctionEdge && !sourceFunctionArguments) ||
           !talos::runtime::validateSolveOrderDeclarations(
-              toSolveOrderEdges(solveEdges), {aggregateMask}))
+              toSolveOrderEdges(solveEdges), {aggregateMask}, dynamicMasks))
         return TALOS_RT_INVALID_ARGUMENT;
     }
 

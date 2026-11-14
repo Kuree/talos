@@ -53,6 +53,7 @@ struct SolveBeforeEdge {
   std::vector<uint64_t> after;
   uint32_t block = TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1;
   bool functionPriority = false;
+  uint32_t origin = 0;
 };
 
 struct WeightedRecord {
@@ -95,6 +96,9 @@ std::vector<uint8_t> program(uint32_t aggregateWidth, uint32_t captureCount,
   append32(bytes, aggregateWidth);
   append32(bytes, static_cast<uint32_t>(instructions.size()));
   append32(bytes, captureCount);
+  for (const auto &edge : edges)
+    if (edge.origin)
+      flags |= TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_EDGE_ORIGINS;
   append32(bytes, flags);
   append32(bytes, static_cast<uint32_t>(literals.size()));
   append32(bytes, 0);
@@ -116,9 +120,11 @@ std::vector<uint8_t> program(uint32_t aggregateWidth, uint32_t captureCount,
       for (uint64_t word : edge.after)
         append64(bytes, word);
       append32(bytes, edge.block);
-      append32(bytes, edge.functionPriority
-                          ? TALOS_RT_RANDOM_SOLVE_EDGE_FUNCTION_PRIORITY
-                          : 0u);
+      append32(bytes,
+               (edge.functionPriority
+                    ? TALOS_RT_RANDOM_SOLVE_EDGE_FUNCTION_PRIORITY
+                    : 0u) |
+                   (edge.origin << TALOS_RT_RANDOM_SOLVE_EDGE_ORIGIN_SHIFT));
     }
   }
   if (flags & TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY) {
@@ -788,23 +794,39 @@ TEST_F(RandSolveWideTest, RejectsNonContiguousSoftPriorities) {
 }
 
 #ifdef TALOS_TEST_COMPILED_SAMPLER
-TEST_F(RandSolveWideTest, FunctionStageABIChecksOnlyLiveGuardedOrderEdges) {
-  // Both blocks are enabled, but a false state guard eliminates the second
+static void checkGuardedFunctionStageCycle(talos_rt_context *context,
+                                           uint32_t secondBlock,
+                                           bool implicit) {
+  // Both predicates are enabled, but a false state guard eliminates the second
   // atom and its y -> x function edge. The remaining x -> y ordering is legal.
-  auto bytes = program(2, 4,
-                       {{TALOS_RT_RANDOM_PUSH_LITERAL_V1, 1, 0, 0, 0, {1}},
-                        {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 0},
-                        {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 1, 0, 0, 0, {1}},
-                        {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 1}},
-                       TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM |
-                           TALOS_RT_RANDOM_PROGRAM_HAS_SOLVE_BEFORE |
-                           TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY |
-                           TALOS_RT_RANDOM_PROGRAM_HAS_GUARD_INPUT_MASKS,
-                       {}, {{{1}, {2}, 0, true}, {{2}, {1}, 1, true}}, {},
-                       {{1, {3}, {1}, 1}, {3, {3}, {2}, 3}});
+  auto bytes =
+      program(2, 4,
+              {{TALOS_RT_RANDOM_PUSH_LITERAL_V1, 1, 0, 0, 0, {1}},
+               {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 0},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 1, 0, 0, 0, {1}},
+               {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, secondBlock}},
+              TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM |
+                  TALOS_RT_RANDOM_PROGRAM_HAS_SOLVE_BEFORE |
+                  TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY |
+                  TALOS_RT_RANDOM_PROGRAM_HAS_GUARD_INPUT_MASKS,
+              {}, {{{1}, {2}, 0, implicit}, {{2}, {1}, secondBlock, implicit}},
+              {}, {{1, {3}, {1}, 1}, {3, {3}, {2}, 3}});
   uint64_t start = 0, mask = 3, captures[] = {3, 1, 0, 0};
   uint32_t widths[] = {2, 2, 2, 2}, success = 0, complete = 0;
   uint64_t assignment = 0, remaining = 0, next = 0;
+  if (!implicit) {
+    EXPECT_EQ(talos_rt_v1_random_function_stage(
+                  context, bytes.data(), bytes.size(), &start, &mask, 1, 0, 1,
+                  17, 3, captures, 4, widths, 4, &assignment, &success, &next,
+                  &remaining, &complete),
+              TALOS_RT_INVALID_ARGUMENT);
+    EXPECT_EQ(success, 0u);
+    EXPECT_EQ(remaining, 0u);
+    EXPECT_EQ(complete, 0u);
+    EXPECT_EQ(next, 17u);
+    EXPECT_EQ(context->schedulerFinishStatus, TALOS_RT_OK);
+    return;
+  }
   ASSERT_EQ(talos_rt_v1_random_function_stage(
                 context, bytes.data(), bytes.size(), &start, &mask, 1, 0, 1, 17,
                 3, captures, 4, widths, 4, &assignment, &success, &next,
@@ -836,6 +858,197 @@ TEST_F(RandSolveWideTest, FunctionStageABIChecksOnlyLiveGuardedOrderEdges) {
   EXPECT_EQ(complete, 0u);
   EXPECT_EQ(next, 17u);
   EXPECT_EQ(context->schedulerFinishStatus, TALOS_RT_FATAL);
+}
+
+TEST_F(RandSolveWideTest, FunctionStageABIChecksOnlyLiveGuardedOrderEdges) {
+  checkGuardedFunctionStageCycle(context, 1, true);
+}
+
+TEST_F(RandSolveWideTest, FunctionStageABIChecksGuardedCyclesWithinOneBlock) {
+  checkGuardedFunctionStageCycle(context, 0, true);
+}
+
+TEST_F(RandSolveWideTest, GuardMasksDoNotHideExplicitCycleDeclarations) {
+  checkGuardedFunctionStageCycle(context, 0, false);
+}
+
+TEST_F(RandSolveWideTest, GuardedFunctionEdgesKeepOnlyLiveSelectedBits) {
+  // Inactive whole-b -> whole-a must not coalesce the two independent live
+  // edges b[0] -> a[0] and a[1] -> b[1] into an artificial cycle.
+  auto bytes = program(
+      4, 6,
+      {{TALOS_RT_RANDOM_PUSH_LITERAL_V1, 1, 0, 0, 0, {1}},
+       {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 0},
+       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 1, 0, 0, 0, {1}},
+       {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 0},
+       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 1, 0, 0, 0, {1}},
+       {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 0}},
+      TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM |
+          TALOS_RT_RANDOM_PROGRAM_HAS_SOLVE_BEFORE |
+          TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY |
+          TALOS_RT_RANDOM_PROGRAM_HAS_GUARD_INPUT_MASKS,
+      {}, {{{12}, {3}, 0, true}, {{4}, {1}, 0, true}, {{2}, {8}, 0, true}}, {},
+      {{1, {15}, {12}, 1}, {3, {5}, {4}, 3}, {5, {10}, {2}, 5}});
+  uint64_t start = 0, mask = 15, captures[] = {0, 0, 5, 4, 10, 2};
+  uint32_t widths[] = {4, 4, 4, 4, 4, 4}, success = 0, complete = 0;
+  uint64_t assignment = 0, remaining = 0, next = 0;
+  auto invoke = [&] {
+    return talos_rt_v1_random_function_stage(
+        context, bytes.data(), bytes.size(), &start, &mask, 1, 0, 1, 17, 3,
+        captures, 6, widths, 6, &assignment, &success, &next, &remaining,
+        &complete);
+  };
+  ASSERT_EQ(invoke(), TALOS_RT_OK);
+  EXPECT_EQ(success, 1u);
+  EXPECT_EQ(remaining, 9u);
+  EXPECT_EQ(complete, 0u);
+  EXPECT_EQ(context->schedulerFinishStatus, TALOS_RT_OK);
+  captures[0] = 15;
+  captures[1] = 12;
+  ASSERT_EQ(invoke(), TALOS_RT_OK);
+  EXPECT_EQ(success, 0u);
+  EXPECT_EQ(remaining, 0u);
+  EXPECT_EQ(next, 17u);
+  EXPECT_EQ(context->schedulerFinishStatus, TALOS_RT_FATAL);
+}
+
+TEST_F(RandSolveWideTest, GuardedFunctionEdgesRetainPartiallyLiveTargets) {
+  // b -> whole-a has only a[1] live outside function arguments: a[0] is
+  // another argument of the same atom. Keep b -> a[1] before a[1] -> c;
+  // full-mask containment would drop this edge and sample a[1] too early.
+  auto bytes = program(4, 4,
+                       {{TALOS_RT_RANDOM_PUSH_LITERAL_V1, 1, 0, 0, 0, {1}},
+                        {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 0},
+                        {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 1, 0, 0, 0, {1}},
+                        {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 0}},
+                       TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM |
+                           TALOS_RT_RANDOM_PROGRAM_HAS_SOLVE_BEFORE |
+                           TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY |
+                           TALOS_RT_RANDOM_PROGRAM_HAS_GUARD_INPUT_MASKS,
+                       {}, {{{4}, {3}, 0, true}, {{2}, {8}, 0, true}}, {},
+                       {{1, {7}, {5}, 1}, {3, {10}, {2}, 3}});
+  uint64_t start = 0, mask = 15, captures[] = {7, 5, 10, 2};
+  uint32_t widths[] = {4, 4, 4, 4}, success = 0, complete = 0;
+  uint64_t assignment = 0, remaining = 0, next = 0;
+  ASSERT_EQ(talos_rt_v1_random_function_stage(
+                context, bytes.data(), bytes.size(), &start, &mask, 1, 0, 1, 17,
+                3, captures, 4, widths, 4, &assignment, &success, &next,
+                &remaining, &complete),
+            TALOS_RT_OK);
+  EXPECT_EQ(success, 1u);
+  EXPECT_EQ(remaining, 11u);
+  EXPECT_EQ(complete, 0u);
+  EXPECT_EQ(context->schedulerFinishStatus, TALOS_RT_OK);
+}
+
+TEST_F(RandSolveWideTest, FunctionEdgeOriginsPreserveSeparateArgumentPaths) {
+  // An inactive whole-b -> a edge must not borrow combine(b[0], b[1])'s
+  // identical union masks. Its live origin has separate argument paths,
+  // allowing the explicit b[0] before b[1] projection within that stage.
+  auto bytes = program(3, 4,
+                       {{TALOS_RT_RANDOM_PUSH_LITERAL_V1, 1, 0, 0, 0, {1}},
+                        {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 0},
+                        {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 1, 0, 0, 0, {1}},
+                        {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 0}},
+                       TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM |
+                           TALOS_RT_RANDOM_PROGRAM_HAS_SOLVE_BEFORE |
+                           TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY |
+                           TALOS_RT_RANDOM_PROGRAM_HAS_GUARD_INPUT_MASKS,
+                       {},
+                       {{{2}, {4}, 0},
+                        {{6}, {1}, 0, true, 2},
+                        {{2}, {1}, 0, true, 4},
+                        {{4}, {1}, 0, true, 4}},
+                       {}, {{1, {7}, {6}, 1}, {3, {7}, {6}, 3}});
+  uint64_t start = 0, mask = 7, captures[] = {0, 0, 7, 6};
+  uint32_t widths[] = {3, 3, 3, 3}, success = 0, complete = 0;
+  uint64_t assignment = 0, remaining = 0, next = 0;
+  ASSERT_EQ(talos_rt_v1_random_function_stage(
+                context, bytes.data(), bytes.size(), &start, &mask, 1, 0, 1, 17,
+                3, captures, 4, widths, 4, &assignment, &success, &next,
+                &remaining, &complete),
+            TALOS_RT_OK);
+  EXPECT_EQ(success, 1u);
+  EXPECT_EQ(remaining, 1u);
+  EXPECT_EQ(context->schedulerFinishStatus, TALOS_RT_OK);
+}
+
+TEST_F(RandSolveWideTest, FunctionOriginsKeepTargetsUsedByAnotherCall) {
+  // The same atom contains c -> b and b -> a. Both b and c are arguments,
+  // but b's after-role must survive so c is sampled in the first stage.
+  auto bytes = program(3, 0,
+                       {{TALOS_RT_RANDOM_PUSH_LITERAL_V1, 1, 0, 0, 0, {1}},
+                        {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 0}},
+                       TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM |
+                           TALOS_RT_RANDOM_PROGRAM_HAS_SOLVE_BEFORE |
+                           TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY,
+                       {}, {{{4}, {2}, 0, true, 2}, {{2}, {1}, 0, true, 2}}, {},
+                       {{1, {7}, {6}}});
+  uint64_t start = 0, mask = 7, assignment = 0, remaining = 0, next = 0;
+  uint32_t success = 0, complete = 0;
+  ASSERT_EQ(talos_rt_v1_random_function_stage(
+                context, bytes.data(), bytes.size(), &start, &mask, 1, 0, 1, 17,
+                3, nullptr, 0, nullptr, 0, &assignment, &success, &next,
+                &remaining, &complete),
+            TALOS_RT_OK);
+  EXPECT_EQ(success, 1u);
+  EXPECT_EQ(remaining, 3u);
+  EXPECT_EQ(complete, 0u);
+}
+
+TEST_F(RandSolveWideTest, FunctionOriginsRetainCyclesWithinOneAtom) {
+  auto bytes = program(2, 2,
+                       {{TALOS_RT_RANDOM_PUSH_LITERAL_V1, 1, 0, 0, 0, {1}},
+                        {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 0}},
+                       TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM |
+                           TALOS_RT_RANDOM_PROGRAM_HAS_SOLVE_BEFORE |
+                           TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY |
+                           TALOS_RT_RANDOM_PROGRAM_HAS_GUARD_INPUT_MASKS,
+                       {}, {{{1}, {2}, 0, true, 2}, {{2}, {1}, 0, true, 2}}, {},
+                       {{1, {3}, {3}, 1}});
+  uint64_t start = 0, mask = 3, captures[] = {3, 3};
+  uint32_t widths[] = {2, 2}, success = 1, complete = 1;
+  uint64_t assignment = 0, remaining = 0, next = 0;
+  ASSERT_EQ(talos_rt_v1_random_function_stage(
+                context, bytes.data(), bytes.size(), &start, &mask, 1, 0, 1, 17,
+                3, captures, 2, widths, 2, &assignment, &success, &next,
+                &remaining, &complete),
+            TALOS_RT_OK);
+  EXPECT_EQ(success, 0u);
+  EXPECT_EQ(remaining, 0u);
+  EXPECT_EQ(next, 17u);
+  EXPECT_EQ(context->schedulerFinishStatus, TALOS_RT_FATAL);
+}
+
+TEST_F(RandSolveWideTest, RejectsMalformedFunctionEdgeOrigins) {
+  auto reject = [&](uint32_t origin, bool implicit, uint32_t block) {
+    auto bytes =
+        program(2, 0,
+                {{TALOS_RT_RANDOM_PUSH_LITERAL_V1, 1, 0, 0, 0, {1}},
+                 {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 0}},
+                TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM |
+                    TALOS_RT_RANDOM_PROGRAM_HAS_SOLVE_BEFORE |
+                    TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY,
+                {}, {{{1}, {2}, block, implicit, origin}}, {}, {{1, {3}, {1}}});
+    uint64_t start = 0, mask = 3, assignment = UINT64_MAX, remaining = 9,
+             next = 0;
+    uint32_t success = 1, complete = 1;
+    EXPECT_EQ(talos_rt_v1_random_function_stage(
+                  context, bytes.data(), bytes.size(), &start, &mask, 1, 0, 1,
+                  17, 3, nullptr, 0, nullptr, 0, &assignment, &success, &next,
+                  &remaining, &complete),
+              TALOS_RT_INVALID_ARGUMENT);
+    // Invalid metadata leaves the word buffers unpublished.
+    EXPECT_EQ(assignment, UINT64_MAX);
+    EXPECT_EQ(success, 0u);
+    EXPECT_EQ(remaining, 9u);
+    EXPECT_EQ(complete, 0u);
+    EXPECT_EQ(next, 17u);
+  };
+  reject(3, true, 0);  // Beyond the instruction stream.
+  reject(1, true, 0);  // A literal has no source record.
+  reject(2, false, 0); // An explicit edge cannot name a function origin.
+  reject(2, true, 1);  // Origin belongs to another constraint block.
 }
 
 TEST_F(RandSolveWideTest, FunctionStageABIValidatesAndClearsFailureOutputs) {
