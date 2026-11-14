@@ -16,6 +16,7 @@
 #include <map>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -492,6 +493,182 @@ private:
   std::list<Entry> entries;
 };
 
+constexpr size_t maxUniformCacheBytes = size_t{4} << 20;
+
+/// The complete bindings of an ordinary uniform request. Include frozen bits
+/// rather than the previous mutable assignment, which does not affect the
+/// relation. Capture widths delimit their words and participate in identity.
+std::optional<std::vector<uint64_t>>
+uniformBindings(size_t programSize, const uint64_t *start,
+                const uint64_t *mutableMask, size_t assignmentWords,
+                uint64_t constraintMask, const uint64_t *captures,
+                const uint32_t *captureWidths, size_t captureCount) {
+  if (programSize > maxUniformCacheBytes / 2)
+    return std::nullopt;
+  size_t limit = (maxUniformCacheBytes - programSize) / sizeof(uint64_t);
+  if (limit < 3 || assignmentWords > (limit - 3) / 2 ||
+      captureCount > (limit - 3 - assignmentWords * 2) / 2)
+    return std::nullopt;
+  std::vector<uint64_t> result;
+  result.reserve(3 + assignmentWords * 2 + captureCount * 2);
+  result.insert(result.end(), {constraintMask, assignmentWords, captureCount});
+  for (size_t word = 0; word != assignmentWords; ++word) {
+    result.push_back(mutableMask[word]);
+    result.push_back(start[word] & ~mutableMask[word]);
+  }
+  size_t offset = 0;
+  for (size_t capture = 0; capture != captureCount; ++capture) {
+    uint32_t width = captureWidths ? captureWidths[capture] : 64;
+    size_t words = (uint64_t(width) + 63) / 64;
+    if (result.size() == limit || words > limit - result.size() - 1)
+      return std::nullopt;
+    result.push_back(width);
+    result.insert(result.end(), captures + offset, captures + offset + words);
+    offset += words;
+  }
+  return result;
+}
+
+/// The final independent projections, in draw order, after all modes, frozen
+/// bits and soft preferences have specialized an unordered uniform request.
+/// No borrowed circuit, program address or RNG state is retained here.
+struct UniformSelection {
+  struct Part {
+    std::vector<unsigned> physical;
+    ModelSampler sampler;
+  };
+  std::vector<uint64_t> bindings;
+  std::vector<Part> parts;
+  size_t programSize;
+  size_t partBytes = 0;
+  bool available = true;
+
+  size_t storageBytes() const {
+    size_t bytes = sizeof(*this) + programSize +
+                   bindings.capacity() * sizeof(uint64_t) +
+                   parts.capacity() * sizeof(Part) + partBytes;
+    return bytes;
+  }
+
+  void append(const std::vector<size_t> &originals,
+              const std::vector<unsigned> &physicalBits,
+              const ModelSampler &sampler) {
+    if (!available)
+      return;
+    size_t bytes = storageBytes();
+    if (bytes >= maxUniformCacheBytes ||
+        originals.size() > (maxUniformCacheBytes - bytes) / sizeof(unsigned)) {
+      disable();
+      return;
+    }
+    size_t remaining =
+        maxUniformCacheBytes - bytes - originals.size() * sizeof(unsigned);
+    auto snapshot = sampler.sampler(remaining);
+    if (!snapshot) {
+      disable();
+      return;
+    }
+    std::vector<unsigned> physical;
+    physical.reserve(originals.size());
+    for (size_t input : originals)
+      physical.push_back(physicalBits[input]);
+    partBytes +=
+        physical.capacity() * sizeof(unsigned) + snapshot->storageBytes();
+    parts.push_back({std::move(physical), std::move(*snapshot)});
+    if (storageBytes() > maxUniformCacheBytes)
+      disable();
+  }
+
+  void sample(const uint64_t *start, const uint64_t *mutableMask,
+              size_t assignmentWords, unsigned width,
+              talos_rt_random_state_v1 &state, uint64_t *assignment) const {
+    talos_rt_random_state_v1 nextState = state;
+    std::vector<uint64_t> words(assignmentWords);
+    for (size_t word = 0; word != assignmentWords; ++word)
+      words[word] = start[word] & ~mutableMask[word];
+    for (const Part &part : parts) {
+      auto values = part.sampler.assignment(
+          ModelCount::randomBelow(part.sampler.count(), nextState));
+      for (size_t input = 0; input != values.size(); ++input)
+        if (values[input]) {
+          unsigned physical = part.physical[input];
+          words[physical / 64] |= uint64_t{1} << (physical % 64);
+        }
+    }
+    if (width % 64)
+      words.back() &= (uint64_t{1} << (width % 64)) - 1;
+    std::copy(words.begin(), words.end(), assignment);
+    state = nextState;
+  }
+
+private:
+  void disable() {
+    available = false;
+    partBytes = 0;
+    std::vector<Part>().swap(parts);
+  }
+};
+
+/// Repeated ordinary requests avoid circuit specialization and partitioning
+/// as well as counting. Compare owned program bytes and every binding exactly;
+/// even a caller that mutates or reuses a buffer cannot select stale tables.
+class UniformSelectionCache {
+public:
+  const UniformSelection *find(const uint8_t *program, size_t programSize,
+                               const std::vector<uint64_t> &bindings) {
+    for (auto entry = entries.begin(); entry != entries.end(); ++entry)
+      if (entry->program.size() == programSize &&
+          entry->selection.bindings == bindings &&
+          std::memcmp(entry->program.data(), program, programSize) == 0) {
+        entries.splice(entries.begin(), entries, entry);
+        return &entries.front().selection;
+      }
+    return nullptr;
+  }
+
+  /// One-off state changes should not copy rank tables. This bounded history
+  /// only controls admission; fingerprint collisions can cause extra copies
+  /// but never replace the exact comparison used to select a cached request.
+  bool repeated(const uint8_t *program, size_t programSize,
+                const std::vector<uint64_t> &bindings) {
+    uint64_t hash = reinterpret_cast<uintptr_t>(program) ^ programSize;
+    for (uint64_t word : bindings)
+      hash = random::IntegerHash()(hash ^ word);
+    bool found = std::find(recent.begin(), recent.end(), hash) != recent.end();
+    recent[nextRecent] = hash;
+    nextRecent = (nextRecent + 1) % recent.size();
+    return found;
+  }
+
+  void remember(const uint8_t *program, UniformSelection selection) {
+    if (!selection.available)
+      return;
+    std::vector<uint8_t> bytes(program, program + selection.programSize);
+    size_t size = sizeof(Entry) + 2 * sizeof(void *) + bytes.capacity() +
+                  selection.storageBytes();
+    if (size > maxUniformCacheBytes)
+      return;
+    while (!entries.empty() && (entries.size() >= maxEntries ||
+                                usedBytes > maxUniformCacheBytes - size)) {
+      usedBytes -= entries.back().bytes;
+      entries.pop_back();
+    }
+    entries.push_front({std::move(bytes), std::move(selection), size});
+    usedBytes += size;
+  }
+
+private:
+  static constexpr size_t maxEntries = 32;
+  struct Entry {
+    std::vector<uint8_t> program;
+    UniformSelection selection;
+    size_t bytes;
+  };
+  size_t usedBytes = 0, nextRecent = 0;
+  std::array<uint64_t, 128> recent{};
+  std::list<Entry> entries;
+};
+
 /// The runtime handles Boolean cofactors and exact ranks only. Arithmetic
 /// expressions and their validity predicates were lowered by compiler Z3.
 class Formula {
@@ -781,6 +958,8 @@ public:
       ModelCount count = sampler->count();
       if (count.zero())
         return SamplerResult::Unsatisfiable;
+      if (prepared)
+        prepared->append(local.originals, physicalBits, *sampler);
       std::vector<bool> value =
           sampler->assignment(ModelCount::randomBelow(count, state));
       for (size_t input = 0; input != local.originals.size(); ++input) {
@@ -1577,6 +1756,7 @@ public:
   std::vector<FreeField> freeFields;
   random::FlatMap<ID, size_t> freeFieldIndex;
   std::vector<size_t> ordinals;
+  UniformSelection *prepared = nullptr;
 };
 
 } // namespace
@@ -1618,6 +1798,25 @@ SamplerResult sampleRandomPlan(
        (!(flags & TALOS_RT_RANDOM_PROGRAM_HAS_DIST) || functionPriority)) ||
       !exact || !randomState || (orderedLayerCount && !orderedMasks))
     return SamplerResult::Unavailable;
+  thread_local UniformSelectionCache uniformCache;
+  std::optional<UniformSelection> prepared;
+  if (uniform && !weighted && !functionPriority && !cyclic &&
+      !orderedLayerCount && !(flags & TALOS_RT_RANDOM_PROGRAM_HAS_DIST)) {
+    auto bindings =
+        uniformBindings(fullProgramSize, start, mutableMask, assignmentWords,
+                        constraintMask, captures, captureWidths, captureCount);
+    if (bindings) {
+      if (const auto *selection =
+              uniformCache.find(program, fullProgramSize, *bindings)) {
+        selection->sample(start, mutableMask, assignmentWords, width,
+                          *randomState, assignment);
+        return SamplerResult::Satisfiable;
+      }
+      if (uniformCache.repeated(program, fullProgramSize, *bindings))
+        prepared.emplace(
+            UniformSelection{std::move(*bindings), {}, fullProgramSize});
+    }
+  }
   std::vector<size_t> captureOffsets(captureCount);
   for (size_t capture = 1; capture < captureCount; ++capture)
     captureOffsets[capture] =
@@ -1820,6 +2019,7 @@ SamplerResult sampleRandomPlan(
     }
   }
   Formula f(circuit, booleanBits);
+  f.prepared = prepared ? &*prepared : nullptr;
   f.physicalBits = physicalBits;
   f.auxiliarySupport = std::move(auxiliarySupport);
   std::vector<Formula::FreeField> freeFields;
@@ -2097,6 +2297,21 @@ SamplerResult sampleRandomPlan(
                       retainedSoft, constraintMask, captures, captureWidths,
                       captureOffsets, start, mutableMask, *randomState,
                       orderedMasks, orderedLayerCount, assignment);
+  if (prepared) {
+    // Cache admission allocates too. Keep the sample tentative until both
+    // sampling and admission finish, just as the uncached solver does.
+    talos_rt_random_state_v1 nextState = *randomState;
+    std::vector<uint64_t> words(assignmentWords);
+    SamplerResult result =
+        f.ordered(width, start, mutableMask, nextState, orderedMasks,
+                  orderedLayerCount, words.data());
+    if (result == SamplerResult::Satisfiable) {
+      uniformCache.remember(program, std::move(*prepared));
+      std::copy(words.begin(), words.end(), assignment);
+      *randomState = nextState;
+    }
+    return result;
+  }
   return f.ordered(width, start, mutableMask, *randomState, orderedMasks,
                    orderedLayerCount, assignment);
 }

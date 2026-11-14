@@ -1882,6 +1882,80 @@ TEST_F(RandSolveTest, UniformResidualUsesWholeJointSetInsteadOfCyclicGaps) {
 }
 
 #ifdef TALOS_TEST_COMPILED_SAMPLER
+TEST_F(RandSolveTest, PreparedSamplesTrackProgramBytesAndFrozenBindings) {
+  auto bytes = program(16, 1,
+                       {{TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 8},
+                        {TALOS_RT_RANDOM_PUSH_CAPTURE_V1, 8, 0, 0},
+                        {TALOS_RT_RANDOM_EQ_V1, 1},
+                        {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 0}});
+  bytes[20] |= TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM;
+  appendTestSamplerPlan(bytes);
+  talos::random::SamplerPlanView plan;
+  ASSERT_TRUE(talos::random::readSamplerPlan(bytes.data(), bytes.size(),
+                                             nullptr, plan));
+  size_t root = size_t(plan.roots - bytes.data()) + 4;
+  size_t comparison = TALOS_RT_RANDOM_PROGRAM_HEADER_SIZE + 2 * 16;
+  uint64_t capture = 7, assignment = 0, nextState = 0;
+  uint32_t success = 0;
+  auto draw = [&](uint64_t start, uint64_t mask) {
+    return talos_rt_v1_random_solve_modes_state(
+        context, bytes.data(), bytes.size(), start, mask, 0, 1, 71, 15,
+        &capture, 1, &assignment, &success, &nextState);
+  };
+  uint64_t original = 0, originalState = 0;
+  for (unsigned iteration = 0; iteration != 4; ++iteration) {
+    ASSERT_EQ(draw(0, 65535), TALOS_RT_OK);
+    ASSERT_EQ(success, 1u);
+    EXPECT_EQ(assignment & 255, capture);
+    if (iteration == 0) {
+      original = assignment;
+      originalState = nextState;
+    } else {
+      EXPECT_EQ(assignment, original);
+      EXPECT_EQ(nextState, originalState);
+    }
+  }
+  // Reuse the same address with a different valid program and plan. Exact
+  // program bytes, rather than buffer identity, must select the rank table.
+  bytes[comparison] = TALOS_RT_RANDOM_NE_V1;
+  bytes[root] ^= 1;
+  for (unsigned iteration = 0; iteration != 4; ++iteration) {
+    ASSERT_EQ(draw(0, 65535), TALOS_RT_OK);
+    ASSERT_EQ(success, 1u);
+    EXPECT_NE(assignment & 255, capture);
+  }
+  // Every invocation still validates the bundle, including a warm one.
+  uint8_t high = bytes[root + 3];
+  bytes[root + 3] |= 128;
+  EXPECT_EQ(draw(0, 65535), TALOS_RT_INVALID_ARGUMENT);
+  EXPECT_EQ(success, 0u);
+  EXPECT_EQ(nextState, 71u);
+  bytes[root + 3] = high;
+  bytes[root] ^= 1;
+  bytes[comparison] = TALOS_RT_RANDOM_EQ_V1;
+  ASSERT_EQ(draw(0, 65535), TALOS_RT_OK);
+  EXPECT_EQ(assignment, original);
+  EXPECT_EQ(nextState, originalState);
+  for (uint64_t frozen : {UINT64_C(0xa500), UINT64_C(0xb600)}) {
+    for (unsigned iteration = 0; iteration != 4; ++iteration) {
+      capture = 3 + iteration;
+      ASSERT_EQ(draw(frozen, 255), TALOS_RT_OK);
+      ASSERT_EQ(success, 1u);
+      EXPECT_EQ(assignment, frozen | capture);
+    }
+  }
+  for (unsigned iteration = 0; iteration != 4; ++iteration) {
+    ASSERT_EQ(draw(0xa506, 0), TALOS_RT_OK);
+    EXPECT_EQ(success, 1u);
+    EXPECT_EQ(assignment, 0xa506u);
+    EXPECT_EQ(nextState, 71u);
+    ASSERT_EQ(draw(0xa507, 0), TALOS_RT_OK);
+    EXPECT_EQ(success, 0u);
+    EXPECT_EQ(assignment, 0u);
+    EXPECT_EQ(nextState, 71u);
+  }
+}
+
 TEST_F(RandSolveTest, RepeatedSamplesFollowLiveCapturesModesAndFrozenValues) {
   auto bytes = program(16, 1,
                        {{TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 8, 0, 0},
