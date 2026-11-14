@@ -7,6 +7,7 @@
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallString.h"
 
 #include <functional>
 #include <limits>
@@ -724,8 +725,17 @@ private:
     return type ? getSemanticBitstreamWidth(type.getValue()) : std::nullopt;
   }
 
+  std::optional<uint64_t> integralWidth(Operation *source) const {
+    auto type = source->getAttrOfType<TypeAttr>("semantic_type");
+    if (!type)
+      return std::nullopt;
+    if (isa<semantic::TimeType>(type.getValue()))
+      return 64;
+    return getSemanticPackedWidth(type.getValue());
+  }
+
   FailureOr<ParsedConstant> scalarConstant(Operation *source) {
-    auto bitWidth = width(source);
+    auto bitWidth = integralWidth(source);
     if (!bitWidth || *bitWidth == 0 ||
         *bitWidth > std::numeric_limits<unsigned>::max())
       return failure();
@@ -782,7 +792,10 @@ private:
         type.getValue(), getSemanticLocation(source), function);
     if (failed(normalized))
       return failure();
-    if (isa<IntegerType>(sim::getPackedScalarType(*normalized))) {
+    Type scalar = sim::getPackedScalarType(*normalized);
+    if (!scalar)
+      return failure();
+    if (isa<IntegerType>(scalar)) {
       value.value &= ~value.unknown;
       value.unknown.clearAllBits();
     }
@@ -803,7 +816,7 @@ private:
                               bool exactWidth) const {
     while (isa<semantic::SVConversionExpressionOp>(source)) {
       auto operands = getChildren(source);
-      auto convertedWidth = width(source);
+      auto convertedWidth = integralWidth(source);
       if (operands.size() != 1 || !convertedWidth ||
           (exactWidth ? *convertedWidth != declaredWidth
                       : *convertedWidth < declaredWidth))
@@ -811,9 +824,133 @@ private:
       source = operands.front();
     }
     return isa<semantic::SVNamedValueExpressionOp>(source) &&
-                   width(source) == declaredWidth
+                   integralWidth(source) == declaredWidth
                ? symbol(source)
                : nullptr;
+  }
+
+  bool writesVariable(Operation *body, Operation *variable) const {
+    bool writes = false;
+    body->walk([&](Operation *node) {
+      bool update = isa<semantic::SVAssignmentExpressionOp>(node);
+      if (auto unary = dyn_cast<semantic::SVUnaryExpressionOp>(node))
+        update |=
+            unary.getOperatorKind() ==
+                semantic::SVUnaryOperator::Preincrement ||
+            unary.getOperatorKind() ==
+                semantic::SVUnaryOperator::Predecrement ||
+            unary.getOperatorKind() ==
+                semantic::SVUnaryOperator::Postincrement ||
+            unary.getOperatorKind() == semantic::SVUnaryOperator::Postdecrement;
+      auto targets = getChildren(node);
+      if (update && !targets.empty())
+        targets.front()->walk(
+            [&](Operation *target) { writes |= symbol(target) == variable; });
+      else if (isa<semantic::SVVariableDeclStatementOp>(node))
+        writes |= symbol(node) == variable;
+    });
+    return writes;
+  }
+
+  struct CountedLoop {
+    Operation *variable;
+    // The value before every iteration, including the final false test.
+    SmallVector<APInt> values;
+  };
+
+  std::optional<CountedLoop> countedLoop(Operation *condition, Operation *step,
+                                         Operation *body,
+                                         const Environment &environment) {
+    auto unary = dyn_cast<semantic::SVUnaryExpressionOp>(step);
+    bool increment =
+        unary &&
+        (unary.getOperatorKind() == semantic::SVUnaryOperator::Preincrement ||
+         unary.getOperatorKind() == semantic::SVUnaryOperator::Postincrement);
+    bool decrement =
+        unary &&
+        (unary.getOperatorKind() == semantic::SVUnaryOperator::Predecrement ||
+         unary.getOperatorKind() == semantic::SVUnaryOperator::Postdecrement);
+    auto targets = unary ? getChildren(step) : SmallVector<Operation *>{};
+    Operation *variable =
+        targets.size() == 1 ? symbol(targets.front()) : nullptr;
+    if ((!increment && !decrement) || !variable ||
+        !writable.contains(variable) ||
+        !isa<semantic::SVNamedValueExpressionOp>(targets.front()) ||
+        writesVariable(body, variable))
+      return std::nullopt;
+    Operation *initial = environment.lookup(variable);
+    if (!initial || initial == unassignedStaticResult)
+      return std::nullopt;
+    FailureOr<APInt> value = constant(initial);
+    auto declaredWidth = width(variable);
+    if (failed(value) || !declaredWidth ||
+        value->getBitWidth() != *declaredWidth)
+      return std::nullopt;
+    auto comparison = dyn_cast<semantic::SVBinaryExpressionOp>(condition);
+    auto operands =
+        comparison ? getChildren(condition) : SmallVector<Operation *>{};
+    if (operands.size() != 2 || width(operands[0]) != width(operands[1]))
+      return std::nullopt;
+    unsigned variableIndex =
+        selectedVariable(operands[0], *declaredWidth, false) == variable ? 0
+                                                                         : 1;
+    Operation *selected = operands[variableIndex];
+    if (selectedVariable(selected, *declaredWidth, false) != variable)
+      return std::nullopt;
+    FailureOr<APInt> endpoint = constant(operands[1 - variableIndex]);
+    if (failed(endpoint))
+      return std::nullopt;
+    using Binary = semantic::SVBinaryOperator;
+    auto kind = comparison.getOperatorKind();
+    if (kind != Binary::LessThan && kind != Binary::LessThanEqual &&
+        kind != Binary::GreaterThan && kind != Binary::GreaterThanEqual &&
+        kind != Binary::Equality && kind != Binary::Inequality)
+      return std::nullopt;
+    SmallVector<Operation *> conversions;
+    while (isa<semantic::SVConversionExpressionOp>(selected)) {
+      conversions.push_back(selected);
+      selected = getChildren(selected).front();
+    }
+    bool signedComparison = llvm::all_of(operands, [](Operation *operand) {
+      auto type = operand->getAttrOfType<TypeAttr>("semantic_type");
+      return type && isSignedSemanticType(type.getValue());
+    });
+    CountedLoop result{variable, {}};
+    // Simulate only the counter, at its declared modular width. This proves
+    // termination without assuming mathematical integers: wrapping inclusive
+    // bounds can run forever. No body operations are cloned during the proof.
+    for (uint64_t iteration = 0; iteration <= maxUnrolledIterations;
+         ++iteration) {
+      result.values.push_back(*value);
+      APInt tested = *value;
+      Operation *source = selected;
+      for (Operation *conversion : llvm::reverse(conversions)) {
+        auto type = source->getAttrOfType<TypeAttr>("semantic_type");
+        if (!type)
+          return std::nullopt;
+        tested = isSignedSemanticType(type.getValue())
+                     ? tested.sextOrTrunc(*width(conversion))
+                     : tested.zextOrTrunc(*width(conversion));
+        source = conversion;
+      }
+      const APInt &lhs = variableIndex == 0 ? tested : *endpoint;
+      const APInt &rhs = variableIndex == 0 ? *endpoint : tested;
+      bool less = signedComparison ? lhs.slt(rhs) : lhs.ult(rhs);
+      bool greater = signedComparison ? lhs.sgt(rhs) : lhs.ugt(rhs);
+      bool active = kind == Binary::LessThan           ? less
+                    : kind == Binary::LessThanEqual    ? !greater
+                    : kind == Binary::GreaterThan      ? greater
+                    : kind == Binary::GreaterThanEqual ? !less
+                    : kind == Binary::Equality         ? lhs == rhs
+                                                       : lhs != rhs;
+      if (!active)
+        return result;
+      if (increment)
+        ++*value;
+      else
+        --*value;
+    }
+    return std::nullopt;
   }
 
   std::optional<uint64_t> shiftLoopBound(Operation *condition, Operation *step,
@@ -872,30 +1009,7 @@ private:
     }
     if (!nonzeroTest)
       return std::nullopt;
-    bool writesVariant = false;
-    body->walk([&](Operation *node) {
-      if (isa<semantic::SVAssignmentExpressionOp,
-              semantic::SVUnaryExpressionOp>(node)) {
-        bool update = isa<semantic::SVAssignmentExpressionOp>(node);
-        if (auto unary = dyn_cast<semantic::SVUnaryExpressionOp>(node))
-          update |= unary.getOperatorKind() ==
-                        semantic::SVUnaryOperator::Preincrement ||
-                    unary.getOperatorKind() ==
-                        semantic::SVUnaryOperator::Predecrement ||
-                    unary.getOperatorKind() ==
-                        semantic::SVUnaryOperator::Postincrement ||
-                    unary.getOperatorKind() ==
-                        semantic::SVUnaryOperator::Postdecrement;
-        auto targets = getChildren(node);
-        if (update && !targets.empty())
-          targets.front()->walk([&](Operation *target) {
-            writesVariant |= symbol(target) == variable;
-          });
-      } else if (isa<semantic::SVVariableDeclStatementOp>(node)) {
-        writesVariant |= symbol(node) == variable;
-      }
-    });
-    if (writesVariant)
+    if (writesVariable(body, variable))
       return std::nullopt;
     uint64_t shiftBits = amount->getZExtValue();
     uint64_t bound = declaredWidth / shiftBits +
@@ -1056,27 +1170,31 @@ private:
       Operation *step = children[initializerCount + 1];
       Operation *body = children.back();
       std::optional<uint64_t> bound = shiftLoopBound(condition, step, body);
-      if (!bound)
-        return failure();
+      std::optional<CountedLoop> counted;
       SmallVector<Operation *> initializers =
           expressionStatements(ArrayRef(children).take_front(initializerCount));
       SmallVector<Operation *> steps = expressionStatements({step});
       std::function<FailureOr<Operation *>(uint64_t, Environment &)> iterate;
       iterate = [&](uint64_t remaining,
                     Environment &values) -> FailureOr<Operation *> {
-        // The validated step clears every bit after this many iterations.
-        // The only admitted condition then evaluates false, without a read
-        // that could introduce an error or a function side effect.
+        if (counted) {
+          const APInt &counter = counted->values[*bound - remaining];
+          SmallString<32> digits;
+          counter.toString(digits, 16, false);
+          values[counted->variable] = literal(
+              statement,
+              counted->variable->getAttrOfType<TypeAttr>("semantic_type"),
+              std::to_string(counter.getBitWidth()) + "'h" +
+                  digits.str().str());
+        }
+        // Both admitted loops prove the final condition false. Its only
+        // operands are a local counter and constants, so omitting that test
+        // cannot suppress an evaluation error or a side effect.
         if (remaining == 0)
           return next(values);
         if (remainingUnrollBudget == 0)
           return failure();
         --remainingUnrollBudget;
-        FailureOr<Operation *> predicate = expression(condition, values);
-        if (failed(predicate))
-          return failure();
-        Environment trueValues = values;
-        Environment falseValues = values;
         Continuation advance = [&](Environment &updated) {
           return execute(
               steps, updated,
@@ -1086,6 +1204,15 @@ private:
               loop);
         };
         LoopContext current{next, advance};
+        // Constant counters keep their exact value in each iteration. Avoid
+        // emitting a branch and cloning the continuation for a known test.
+        if (counted)
+          return execute({body}, values, advance, &current);
+        FailureOr<Operation *> predicate = expression(condition, values);
+        if (failed(predicate))
+          return failure();
+        Environment trueValues = values;
+        Environment falseValues = values;
         FailureOr<Operation *> yes =
             execute({body}, trueValues, advance, &current);
         FailureOr<Operation *> no = next(falseValues);
@@ -1097,6 +1224,12 @@ private:
       return execute(
           initializers, environment,
           [&](Environment &initialized) {
+            if (!bound) {
+              counted = countedLoop(condition, step, body, initialized);
+              if (!counted)
+                return FailureOr<Operation *>(failure());
+              bound = counted->values.size() - 1;
+            }
             return iterate(*bound, initialized);
           },
           loop);
