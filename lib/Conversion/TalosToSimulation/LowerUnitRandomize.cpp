@@ -2119,6 +2119,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
   Value currentAssignment = zeroAssignment;
   Value mutableMask = zeroAssignment;
   SmallVector<Value> propertyEnabled;
+  SmallVector<Value> propertyMutableMasks;
   bool hasArrayElementModes =
       llvm::any_of(planned, [](const Property &property) {
         return static_cast<bool>(property.elementModeReference);
@@ -2523,6 +2524,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     if (activeElementMask)
       enabledMask = arith::AndIOp::create(builder, location, enabledMask,
                                           activeElementMask);
+    propertyMutableMasks.push_back(enabledMask);
     mutableMask =
         arith::OrIOp::create(builder, location, mutableMask, enabledMask);
     currentOffset += property.width;
@@ -2652,6 +2654,8 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     unsigned width;
     Value active;
     Value sameObject;
+    unsigned leftProperty;
+    unsigned rightProperty;
   };
   SmallVector<AliasEquality> aliasEqualities;
   auto sameObjectOccurrence = [](const Property &left, const Property &right) {
@@ -2694,7 +2698,60 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
       aliasEqualities.push_back(
           {propertyOffsets[leftIndex], propertyOffsets[rightIndex], left.width,
            arith::AndIOp::create(builder, location, bothEnabled, sameID),
-           sameID});
+           sameID, static_cast<unsigned>(leftIndex), rightIndex});
+    }
+  }
+  if (!aliasEqualities.empty()) {
+    // One live path makes the actual field random through every alias.
+    // Keep each physical view's mask in its own range and translate it with
+    // SSA shifts, avoiding an aggregate-width literal for every alias pair.
+    llvm::DenseMap<unsigned, Value> aliasDistances;
+    for (const AliasEquality &alias : aliasEqualities) {
+      unsigned left = alias.leftProperty, right = alias.rightProperty;
+      unsigned distance = alias.rightOffset - alias.leftOffset;
+      Value &shift = aliasDistances[distance];
+      if (!shift) {
+        shift = constant64(distance);
+        if (assignmentType != i64)
+          shift =
+              arith::ExtUIOp::create(builder, location, assignmentType, shift);
+      }
+      Value fromRight = arith::ShRUIOp::create(
+          builder, location, propertyMutableMasks[right], shift);
+      Value fromLeft = arith::ShLIOp::create(builder, location,
+                                             propertyMutableMasks[left], shift);
+      auto transfer = [&](Value original, Value incoming) -> Value {
+        return arith::OrIOp::create(
+            builder, location, original,
+            arith::SelectOp::create(builder, location, alias.sameObject,
+                                    incoming, zeroAssignment));
+      };
+      propertyMutableMasks[left] =
+          transfer(propertyMutableMasks[left], fromRight);
+      propertyMutableMasks[right] =
+          transfer(propertyMutableMasks[right], fromLeft);
+      Value anyEnabled = arith::OrIOp::create(
+          builder, location, propertyEnabled[left], propertyEnabled[right]);
+      for (unsigned index : {left, right})
+        propertyEnabled[index] =
+            arith::SelectOp::create(builder, location, alias.sameObject,
+                                    anyEnabled, propertyEnabled[index]);
+    }
+    // Alias candidates for a field form a complete graph in declaration
+    // order. The first member collects the whole live mask, and the last
+    // member carries that union to every remaining member in the same pass.
+    mutableMask = zeroAssignment;
+    for (Value fieldMask : propertyMutableMasks)
+      mutableMask =
+          arith::OrIOp::create(builder, location, mutableMask, fieldMask);
+    activeGuardBits =
+        arith::OrIOp::create(builder, location, activeGuardBits, mutableMask);
+    for (AliasEquality &alias : aliasEqualities) {
+      Value bothEnabled = arith::AndIOp::create(
+          builder, location, propertyEnabled[alias.leftProperty],
+          propertyEnabled[alias.rightProperty]);
+      alias.active = arith::AndIOp::create(builder, location, bothEnabled,
+                                           alias.sameObject);
     }
   }
   Value fixedAssignment = arith::AndIOp::create(
@@ -6817,15 +6874,10 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
   };
   llvm::DenseMap<Operation *, SmallVector<SoftDisabler>> softDisablers;
   llvm::DenseMap<std::pair<unsigned, unsigned>, Value> aliasObjects;
-  if (!softDisables.empty()) {
-    llvm::DenseMap<uint64_t, unsigned> propertiesByOffset;
-    for (auto [index, offset] : llvm::enumerate(propertyOffsets))
-      propertiesByOffset[offset] = index;
+  if (!softDisables.empty())
     for (const AliasEquality &alias : aliasEqualities)
-      aliasObjects[{propertiesByOffset.lookup(alias.leftOffset),
-                    propertiesByOffset.lookup(alias.rightOffset)}] =
+      aliasObjects[{alias.leftProperty, alias.rightProperty}] =
           alias.sameObject;
-  }
   llvm::DenseMap<std::pair<unsigned, unsigned>, Value> softAliasMatches;
   auto aliasReferenceMatch = [&](const SoftReference &target,
                                  const SoftReference &reference) -> Value {
