@@ -184,8 +184,12 @@ LogicalResult materializeNativeNBAStaticPublicationCalls(ModuleOp module) {
   InlinerInterface interface(module.getContext());
   SmallVector<LLVM::CallOp> calls;
   SmallVector<LLVM::LLVMFuncOp> callers;
+  // Every call of a publication barrier variant is a publication attempt.
   module.walk([&](LLVM::CallOp call) {
-    if (schedule::has<schedule::Field::EvalStaticNBAPublication>(call))
+    std::optional<StringRef> callee = call.getCallee();
+    if (callee && (*callee == staticNBAPublicationName ||
+                   *callee == staticNBAPublicationTwoStateName ||
+                   *callee == staticNBAPublicationFastName))
       calls.push_back(call);
   });
   uint64_t limit = schedule::getMaxInlineOperations(module);
@@ -201,7 +205,6 @@ LogicalResult materializeNativeNBAStaticPublicationCalls(ModuleOp module) {
       return call.emitError("static NBA publication requires a defined callee");
     if (!llvm::is_contained(callers, caller))
       callers.push_back(caller);
-    schedule::remove<schedule::Field::EvalStaticNBAPublication>(call);
     OpBuilder b(call);
     auto replaceWithConstant = [&](bool value) {
       call.getResult().replaceAllUsesWith(

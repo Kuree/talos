@@ -457,6 +457,12 @@ mlir::LLVM::LLVMFuncOp
 getOrDeclareLLVMFunction(mlir::ModuleOp module, llvm::StringRef name,
                          mlir::Type result,
                          mlir::ArrayRef<mlir::Type> arguments);
+/// Defines the function `name` as a copy of `source`, in place of a
+/// declaration callers already reference, and returns it; a function already
+/// defined is returned as it is. NBA barrier variants are defined this way.
+mlir::LLVM::LLVMFuncOp defineNBABarrierVariant(mlir::ModuleOp module,
+                                               mlir::LLVM::LLVMFuncOp source,
+                                               llvm::StringRef name);
 
 /// Materialize the checkpoint handoff tuple referenced by Eval checkpoint
 /// wrappers. Safe to call from both wrapper and accepted-plan construction.

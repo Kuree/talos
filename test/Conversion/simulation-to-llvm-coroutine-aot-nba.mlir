@@ -7,7 +7,7 @@
 // RUN: talos-opt %s \
 // RUN:   --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph{vpi=full},talos-sim-verify-compute-graph,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),convert-talos-sim-processes-to-llvm-coroutines)' \
 // RUN:   | FileCheck %s --check-prefix=DIRECT
-// RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-set-module-attributes{attrs="{schedule.native_scheduler = 3 : i32}"},simulation.design(talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),convert-talos-sim-processes-to-llvm-coroutines)' | FileCheck %s --check-prefix=TWO-STATE
+// RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-set-module-attributes{attrs="{schedule.native_scheduler = 3 : i32}"},simulation.design(talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),convert-talos-sim-processes-to-llvm-coroutines)' | FileCheck %s --check-prefix=TWO-STATE --implicit-check-not='llvm.func @__talos_aot_static_nba_commit_two_state_fast_v1(!llvm.ptr' --implicit-check-not='llvm.func @__talos_eval_static_nba_publication_two_state_fast_v1(!llvm.ptr'
 // RUN: talos-opt %s -o /dev/null \
 // RUN:   --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph,talos-sim-verify-compute-graph),test-talos-native-aot-analysis)' \
 // RUN:   2>&1 | FileCheck %s --check-prefix=PERIODIC-ANALYSIS
@@ -190,11 +190,8 @@ module attributes {
 // The transitional two-state barrier clears canonical unknown bits once; the
 // steady fast clone has no canonical unknown-plane memory access.  Both use a
 // zero staged unknown value.
-// NBA specialization follows call-site intent across generated coordinator
-// variants; lowering consumes the marker attributes instead of keying on
-// coordinator symbol names.
-// TWO-STATE-NOT: schedule.eval.use_fast_two_state_nba
-// TWO-STATE-NOT: schedule.eval.use_canonical_two_state_nba
+// Coordinators call the barrier variant of their value domain; no declared
+// variant remains undefined (an unresolved call).
 // Generated spawns are context-bound, so process construction reuses the
 // immutable design image validated by context creation instead of reparsing
 // it once per process.

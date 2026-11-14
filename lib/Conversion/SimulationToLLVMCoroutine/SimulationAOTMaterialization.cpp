@@ -1275,7 +1275,7 @@ FailureOr<bool> makeNativeEvalPlan(
   constexpr StringLiteral bindName = "__talos_aot_schedule_bind_v1";
   constexpr StringLiteral runName = "__talos_aot_schedule_run_v1";
   constexpr StringLiteral snapshotName = "__talos_aot_schedule_snapshot_v1";
-  constexpr StringLiteral nbaCommitName = "__talos_aot_static_nba_commit_v1";
+  constexpr StringLiteral nbaCommitName = staticNBACommitName;
   constexpr StringLiteral runtimeNBACommitName =
       "__talos_aot_runtime_nba_commit_v1";
   constexpr StringLiteral nbaKnownName = "__talos_eval_nba_known_v1";
@@ -5664,10 +5664,8 @@ FailureOr<bool> makeNativeEvalPlan(
       builder, location, TypeRange{i32},
       SymbolRefAttr::get(context, nbaCommitName),
       ValueRange{handoffEntry->getArgument(0), handoffEntry->getArgument(1),
-                 llvmConstant(builder, location, i32, 2),
+                 llvmConstant(builder, location, i32, TALOS_RT_REGION_NBA),
                  handoffEntry->getArgument(2)});
-  ::talos::schedule::set<::talos::schedule::Field::EvalKeepFourStateNba>(
-      fourStateCall, builder.getUnitAttr());
   LLVM::ReturnOp::create(builder, location, fourStateCall.getResult());
 
   builder.setInsertionPointToEnd(module.getBody());
@@ -7100,11 +7098,7 @@ FailureOr<bool> makeNativeEvalPlan(
     // The destination-known variant uses the same chosen representation.
     // Keeping an unrolled clone here would duplicate the footprint we just
     // bounded. Its domain specialization still happens after construction.
-    builder.setInsertionPointAfter(nbaCommit);
-    auto fast =
-        cast<LLVM::LLVMFuncOp>(builder.clone(*nbaCommit.getOperation()));
-    fast.setSymName("__talos_aot_static_nba_commit_two_state_fast_v1");
-    fast.setLinkage(LLVM::Linkage::Internal);
+    defineNBABarrierVariant(module, nbaCommit, staticNBACommitFastName);
   }
 
   // The generated coordinator consumes eval latches and publishes model

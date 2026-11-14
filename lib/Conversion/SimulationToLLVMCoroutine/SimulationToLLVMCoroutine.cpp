@@ -3872,20 +3872,26 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
   return success();
 }
 
-/// Clone the two-state variants of an NBA commit. Returns whether a separate
-/// canonical two-state variant exists; without one, canonical callers call
-/// the source. Two-state variants, and the source in place of the canonical
-/// one, get `twoStateAlignment` when it is nonzero.
-FailureOr<bool> materializeEvalNBACommitVariants(ModuleOp module,
-                                                 StringRef fourStateName,
-                                                 StringRef twoStateName,
-                                                 StringRef fastTwoStateName,
-                                                 bool keepOutOfLine,
-                                                 uint64_t twoStateAlignment) {
+/// Define the two-state variants of an NBA barrier from its source: the fast
+/// one always, and the canonical one when the source stages unknown data to
+/// zero. Without that, the canonical variant equals its source, and
+/// `redirects` maps its declared name to the source's for its callers.
+/// Two-state variants, and the source in place of the canonical one, get
+/// `twoStateAlignment` when it is nonzero.
+LogicalResult materializeEvalNBACommitVariants(
+    ModuleOp module, StringRef fourStateName, StringRef twoStateName,
+    StringRef fastTwoStateName, bool keepOutOfLine, uint64_t twoStateAlignment,
+    llvm::StringMap<StringRef> &redirects) {
   LLVM::LLVMFuncOp source =
       module.lookupSymbol<LLVM::LLVMFuncOp>(fourStateName);
-  if (!source)
-    return false;
+  if (!source || source.isExternal()) {
+    // A caller that named a variant needs its source.
+    for (StringRef variant : {twoStateName, fastTwoStateName})
+      if (auto declared = module.lookupSymbol<LLVM::LLVMFuncOp>(variant))
+        return declared.emitError("NBA barrier variant has no defined source ")
+               << fourStateName;
+    return success();
+  }
 
   OpBuilder builder(source);
   builder.setInsertionPointAfter(source);
@@ -3915,20 +3921,15 @@ FailureOr<bool> materializeEvalNBACommitVariants(ModuleOp module,
            "staged unknown load is not an NBA unknown field");
   });
   stagesUnknown &= !twoStateBuild;
+  // A variant defined here goes right after its source (the canonical one
+  // before the fast one); an earlier definition of the fast one stays.
+  LLVM::LLVMFuncOp fastClone =
+      detail::defineNBABarrierVariant(module, source, fastTwoStateName);
   LLVM::LLVMFuncOp clone;
-  if (stagesUnknown) {
-    clone = cast<LLVM::LLVMFuncOp>(builder.clone(*source.getOperation()));
-    clone.setSymName(twoStateName);
-    clone.setLinkage(LLVM::Linkage::Internal);
-    builder.setInsertionPointAfter(clone);
-  }
-
-  auto fastClone = module.lookupSymbol<LLVM::LLVMFuncOp>(fastTwoStateName);
-  if (!fastClone) {
-    fastClone = cast<LLVM::LLVMFuncOp>(builder.clone(*source.getOperation()));
-    fastClone.setSymName(fastTwoStateName);
-    fastClone.setLinkage(LLVM::Linkage::Internal);
-  }
+  if (stagesUnknown)
+    clone = detail::defineNBABarrierVariant(module, source, twoStateName);
+  else
+    redirects[twoStateName] = fourStateName;
   SmallVector<LLVM::LoadOp> stagedUnknownLoads;
   for (auto variant : {clone, fastClone})
     if (variant)
@@ -3954,7 +3955,7 @@ FailureOr<bool> materializeEvalNBACommitVariants(ModuleOp module,
   builder.setInsertionPointToStart(&fastClone.getBody().front());
   fastClone.getBody().front().getArgument(2).replaceAllUsesWith(
       detail::llvmConstant(builder, fastClone.getLoc(), builder.getI32Type(),
-                           2));
+                           TALOS_RT_REGION_NBA));
   SmallVector<Operation *> canonicalUnknownLoads, canonicalUnknownStores;
   fastClone.walk([&](Operation *operation) {
     // Fixed-root promotion evidence says nothing about a per-site latch's
@@ -4019,111 +4020,50 @@ FailureOr<bool> materializeEvalNBACommitVariants(ModuleOp module,
     ::talos::schedule::remove<
         ::talos::schedule::Field::EvalTwoStateZeroUnknown>(load);
   });
-  return static_cast<bool>(clone);
+  return success();
 }
 
 LogicalResult materializeEvalTwoStateNBACommit(ModuleOp module) {
-  constexpr StringLiteral fourStateName = "__talos_aot_static_nba_commit_v1";
-  constexpr StringLiteral twoStateName =
-      "__talos_aot_static_nba_commit_two_state_v1";
-  constexpr StringLiteral fastTwoStateName =
-      "__talos_aot_static_nba_commit_two_state_fast_v1";
-  FailureOr<bool> commitHasCanonical = materializeEvalNBACommitVariants(
-      module, fourStateName, twoStateName, fastTwoStateName,
-      /*keepOutOfLine=*/true, /*twoStateAlignment=*/128);
-  if (failed(commitHasCanonical))
+  llvm::StringMap<StringRef> redirects;
+  if (failed(materializeEvalNBACommitVariants(
+          module, detail::staticNBACommitName,
+          detail::staticNBACommitTwoStateName, detail::staticNBACommitFastName,
+          /*keepOutOfLine=*/true, /*twoStateAlignment=*/128, redirects)) ||
+      failed(materializeEvalNBACommitVariants(
+          module, detail::staticNBAPublicationName,
+          detail::staticNBAPublicationTwoStateName,
+          detail::staticNBAPublicationFastName, /*keepOutOfLine=*/false,
+          /*twoStateAlignment=*/0, redirects)))
     return failure();
-  FailureOr<bool> publicationHasCanonical = materializeEvalNBACommitVariants(
-      module, detail::staticNBAPublicationName,
-      detail::staticNBAPublicationTwoStateName,
-      detail::staticNBAPublicationFastName, /*keepOutOfLine=*/false,
-      /*twoStateAlignment=*/0);
-  if (failed(publicationHasCanonical))
-    return failure();
-  // Specialization is carried entirely by call-site intent.  Validate and
-  // consume the phase-local markers so a renamed or newly outlined
-  // coordinator cannot silently retain the wrong NBA implementation.
-  auto hasIntent = [](LLVM::CallOp call) {
-    return ::talos::schedule::has<
-               ::talos::schedule::Field::EvalUseFastTwoStateNba>(call) ||
-           ::talos::schedule::has<
-               ::talos::schedule::Field::EvalUseCanonicalTwoStateNba>(call) ||
-           ::talos::schedule::has<
-               ::talos::schedule::Field::EvalKeepFourStateNba>(call);
-  };
-  auto rewriteIntent = [&](LLVM::CallOp call) {
-    bool useFast = ::talos::schedule::has<
-        ::talos::schedule::Field::EvalUseFastTwoStateNba>(call);
-    bool useCanonical = ::talos::schedule::has<
-        ::talos::schedule::Field::EvalUseCanonicalTwoStateNba>(call);
-    bool keepFourState =
-        ::talos::schedule::has<::talos::schedule::Field::EvalKeepFourStateNba>(
-            call);
-    unsigned intents = useFast + useCanonical + keepFourState;
-    if (intents == 0)
-      return WalkResult::advance();
-    if (intents != 1)
-      return call.emitError("NBA call has conflicting specialization intents"),
-             WalkResult::interrupt();
+  // One walk over the barrier calls: callers of a canonical variant equal to
+  // its source call the source, and a fast variant runs only in the NBA
+  // region its specialization assumes.
+  WalkResult calls = module.walk([&](LLVM::CallOp call) {
     std::optional<StringRef> callee = call.getCallee();
     if (!callee)
-      return call.emitError("NBA specialization requires a direct call"),
-             WalkResult::interrupt();
-    bool publication = ::talos::schedule::has<
-        ::talos::schedule::Field::EvalStaticNBAPublication>(call);
-    StringRef sourceName =
-        publication ? detail::staticNBAPublicationName : fourStateName;
-    StringRef canonicalName =
-        publication ? detail::staticNBAPublicationTwoStateName : twoStateName;
-    // Without staged unknown loads, the source is the canonical variant.
-    StringRef canonicalCallee =
-        (publication ? *publicationHasCanonical : *commitHasCanonical)
-            ? canonicalName
-            : sourceName;
-    StringRef fastName =
-        publication ? detail::staticNBAPublicationFastName : fastTwoStateName;
-    bool expectedSource = *callee == sourceName;
-    bool expectedCanonical = *callee == canonicalName;
-    bool expectedFast = *callee == fastName;
-    if (useFast) {
-      if (!expectedSource && !expectedCanonical && !expectedFast)
-        return call.emitError("fast two-state NBA intent is attached to an "
-                              "unrelated callee"),
-               WalkResult::interrupt();
-      auto region = call.getArgOperands()[2].getDefiningOp<LLVM::ConstantOp>();
-      auto regionValue =
-          region ? dyn_cast<IntegerAttr>(region.getValue()) : IntegerAttr{};
-      if (!regionValue || regionValue.getInt() != 2)
-        return call.emitError("fast two-state NBA intent requires the NBA "
-                              "execution region"),
-               WalkResult::interrupt();
-      call.setCallee(fastName);
-      ::talos::schedule::remove<
-          ::talos::schedule::Field::EvalUseFastTwoStateNba>(call);
+      return WalkResult::advance();
+    if (auto redirect = redirects.find(*callee); redirect != redirects.end()) {
+      call.setCallee(redirect->second);
       return WalkResult::advance();
     }
-    if (useCanonical) {
-      if (!expectedSource && !expectedCanonical && !expectedFast)
-        return call.emitError("canonical two-state NBA intent is attached to "
-                              "an unrelated callee"),
-               WalkResult::interrupt();
-      call.setCallee(canonicalCallee);
-      ::talos::schedule::remove<
-          ::talos::schedule::Field::EvalUseCanonicalTwoStateNba>(call);
+    if (*callee != detail::staticNBACommitFastName &&
+        *callee != detail::staticNBAPublicationFastName)
       return WalkResult::advance();
-    }
-    if (!expectedSource)
-      return call.emitError("four-state NBA intent is attached to an "
-                            "unrelated callee"),
-             WalkResult::interrupt();
-    ::talos::schedule::remove<::talos::schedule::Field::EvalKeepFourStateNba>(
-        call);
-    return WalkResult::advance();
-  };
-  for (LLVM::CallOp call :
-       analysis::collectInWalkOrder<LLVM::CallOp>(module, hasIntent))
-    if (rewriteIntent(call).wasInterrupted())
-      return failure();
+    APInt region;
+    if (call.getArgOperands().size() > 2 &&
+        matchPattern(call.getArgOperands()[2], m_ConstantInt(&region)) &&
+        region == TALOS_RT_REGION_NBA)
+      return WalkResult::advance();
+    call.emitError("a fast two-state NBA barrier runs only in the NBA region");
+    return WalkResult::interrupt();
+  });
+  if (calls.wasInterrupted())
+    return failure();
+  for (const auto &redirect : redirects)
+    if (auto declared =
+            module.lookupSymbol<LLVM::LLVMFuncOp>(redirect.getKey()))
+      if (declared.isExternal())
+        declared.erase();
   return detail::materializeNativeNBAStaticPublicationCalls(module);
 }
 

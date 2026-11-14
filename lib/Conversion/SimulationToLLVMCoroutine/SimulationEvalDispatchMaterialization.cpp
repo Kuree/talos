@@ -32,7 +32,6 @@ constexpr StringLiteral promotionPendingMaskName =
 constexpr StringLiteral periodicTerminationName =
     "__talos_periodic_termination_v1";
 constexpr StringLiteral nbaDirtyRootsName = "__talos_aot_nba_dirty_roots_v1";
-constexpr StringLiteral nbaCommitName = "__talos_aot_static_nba_commit_v1";
 constexpr StringLiteral nbaKnownName = "__talos_eval_nba_known_v1";
 constexpr StringLiteral evalFourStateNBAHandoffName =
     "__talos_eval_four_state_nba_handoff_v1";
@@ -1849,16 +1848,20 @@ materializeNativeEvalDispatch(ModuleOp module,
     fastCoordinator.getBody().push_back(canonicalTwoStateCommit);
     fastCoordinator.getBody().push_back(fourStateCommit);
     fastCoordinator.getBody().push_back(commitJoin);
-    auto tryStaticPublication = [&](schedule::Field intent) {
+    // Each NBA barrier calls the variant of its value domain; the variants
+    // are declared here and defined from their source once it is complete.
+    auto barrierVariant = [&](StringRef name, Type result) {
+      getOrDeclareLLVMFunction(module, name, result,
+                               {pointer, pointer, i32, pointer});
+      return SymbolRefAttr::get(context, name);
+    };
+    auto tryStaticPublication = [&](StringRef variant) {
       auto attempt = LLVM::CallOp::create(
           builder, location, TypeRange{builder.getI1Type()},
-          SymbolRefAttr::get(context, staticNBAPublicationName),
+          barrierVariant(variant, builder.getI1Type()),
           ValueRange{fastEntry->getArgument(0), fastEntry->getArgument(1),
                      llvmConstant(builder, location, i32, TALOS_RT_REGION_NBA),
                      changed});
-      schedule::set<schedule::Field::EvalStaticNBAPublication>(
-          attempt, builder.getUnitAttr());
-      schedule::set(attempt, intent, builder.getUnitAttr());
       auto *fallback = new Block;
       fastCoordinator.getBody().push_back(fallback);
       cf::CondBranchOp::create(
@@ -1947,9 +1950,10 @@ materializeNativeEvalDispatch(ModuleOp module,
         LLVM::CallOp::create(
             builder, location, TypeRange{builder.getI1Type()},
             SymbolRefAttr::get(context, nbaKnownName),
-            ValueRange{llvmConstant(builder, location, i32, 2),
-                       llvmConstant(builder, location, builder.getI1Type(), 1),
-                       llvmConstant(builder, location, builder.getI1Type(), 1)})
+            ValueRange{
+                llvmConstant(builder, location, i32, TALOS_RT_REGION_NBA),
+                llvmConstant(builder, location, builder.getI1Type(), 1),
+                llvmConstant(builder, location, builder.getI1Type(), 1)})
             .getResult();
     cf::CondBranchOp::create(builder, location, fallbackNBAKnown, selectFastNBA,
                              ValueRange{}, fourStateCommit, ValueRange{});
@@ -1958,9 +1962,10 @@ materializeNativeEvalDispatch(ModuleOp module,
         LLVM::CallOp::create(
             builder, location, TypeRange{builder.getI1Type()},
             SymbolRefAttr::get(context, nbaKnownName),
-            ValueRange{llvmConstant(builder, location, i32, 2),
-                       llvmConstant(builder, location, builder.getI1Type(), 1),
-                       llvmConstant(builder, location, builder.getI1Type(), 0)})
+            ValueRange{
+                llvmConstant(builder, location, i32, TALOS_RT_REGION_NBA),
+                llvmConstant(builder, location, builder.getI1Type(), 1),
+                llvmConstant(builder, location, builder.getI1Type(), 0)})
             .getResult();
     cf::CondBranchOp::create(builder, location, canonicalNBAKnown, latchFastNBA,
                              ValueRange{}, canonicalTwoStateCommit,
@@ -1969,31 +1974,28 @@ materializeNativeEvalDispatch(ModuleOp module,
     markCurrentDirtyRootsFast();
     cf::BranchOp::create(builder, location, fastTwoStateCommit);
     builder.setInsertionPointToStart(fastTwoStateCommit);
-    tryStaticPublication(schedule::Field::EvalUseFastTwoStateNba);
+    tryStaticPublication(staticNBAPublicationFastName);
     auto fastTwoStateCall = LLVM::CallOp::create(
         builder, location, TypeRange{i32},
-        SymbolRefAttr::get(context, nbaCommitName),
+        barrierVariant(staticNBACommitFastName, i32),
         ValueRange{fastEntry->getArgument(0), fastEntry->getArgument(1),
-                   llvmConstant(builder, location, i32, 2), changed});
-    ::talos::schedule::set<::talos::schedule::Field::EvalUseFastTwoStateNba>(
-        fastTwoStateCall, builder.getUnitAttr());
+                   llvmConstant(builder, location, i32, TALOS_RT_REGION_NBA),
+                   changed});
     cf::BranchOp::create(builder, location, commitJoin,
                          ValueRange{fastTwoStateCall.getResult()});
     builder.setInsertionPointToStart(canonicalTwoStateCommit);
     markCurrentDirtyRootsFast();
-    tryStaticPublication(schedule::Field::EvalUseCanonicalTwoStateNba);
+    tryStaticPublication(staticNBAPublicationTwoStateName);
     auto canonicalTwoStateCall = LLVM::CallOp::create(
         builder, location, TypeRange{i32},
-        SymbolRefAttr::get(context, nbaCommitName),
+        barrierVariant(staticNBACommitTwoStateName, i32),
         ValueRange{fastEntry->getArgument(0), fastEntry->getArgument(1),
-                   llvmConstant(builder, location, i32, 2), changed});
-    ::talos::schedule::set<
-        ::talos::schedule::Field::EvalUseCanonicalTwoStateNba>(
-        canonicalTwoStateCall, builder.getUnitAttr());
+                   llvmConstant(builder, location, i32, TALOS_RT_REGION_NBA),
+                   changed});
     cf::BranchOp::create(builder, location, commitJoin,
                          ValueRange{canonicalTwoStateCall.getResult()});
     builder.setInsertionPointToStart(fourStateCommit);
-    tryStaticPublication(schedule::Field::EvalKeepFourStateNba);
+    tryStaticPublication(staticNBAPublicationName);
     Value fourStateStatus =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},

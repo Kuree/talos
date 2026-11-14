@@ -271,6 +271,18 @@ struct NativeEvalTransactionPlan {
   llvm::SmallVector<uint32_t> publicationRoots;
 };
 
+// The NBA barriers and their two-state variants. A caller names the variant
+// it needs; the variants are declared at their first call and defined from
+// their four-state source once every access of the source exists. Canonical
+// two-state variants zero the staged unknown data; fast ones also drop
+// canonical unknown-plane traffic outside per-site latch destinations and
+// run only in the NBA region.
+inline constexpr llvm::StringLiteral staticNBACommitName =
+    "__talos_aot_static_nba_commit_v1";
+inline constexpr llvm::StringLiteral staticNBACommitTwoStateName =
+    "__talos_aot_static_nba_commit_two_state_v1";
+inline constexpr llvm::StringLiteral staticNBACommitFastName =
+    "__talos_aot_static_nba_commit_two_state_fast_v1";
 inline constexpr llvm::StringLiteral staticNBAPublicationName =
     "__talos_eval_static_nba_publication_v1";
 inline constexpr llvm::StringLiteral staticNBAPublicationTwoStateName =

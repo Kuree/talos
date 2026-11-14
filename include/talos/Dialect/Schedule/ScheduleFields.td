@@ -89,8 +89,6 @@ def EvalInheritedTwoStateCheckpoint : ScheduleField<"EvalInheritedTwoStateCheckp
     "::mlir::UnitAttr">;
 def EvalInstanceCoordinator : ScheduleField<"EvalInstanceCoordinator", "schedule.eval.instance_coordinator",
     "::mlir::UnitAttr">;
-def EvalKeepFourStateNba : ScheduleField<"EvalKeepFourStateNba", "schedule.eval.keep_four_state_nba",
-    "::mlir::UnitAttr">;
 def EvalKernelProofDependencies : ScheduleField<"EvalKernelProofDependencies", "schedule.eval.kernel_proof_dependencies",
     "::mlir::ArrayAttr">;
 def EvalLocalPromotionRanges : ScheduleField<"EvalLocalPromotionRanges", "schedule.eval.local_promotion_ranges",
@@ -221,10 +219,6 @@ def EvalStateAccessBytes : ScheduleField<"EvalStateAccessBytes", "schedule.eval.
 // descriptor/root identity, exact canonical range, captured mask and region.
 def EvalTransactionRoots : ScheduleField<"EvalTransactionRoots", "schedule.eval.transaction_roots",
     "::mlir::ArrayAttr">;
-// A compile-time publication action list and its explicit acceptance result.
-// The call is inlined before canonical knownness/proof publication runs.
-def EvalStaticNBAPublication : ScheduleField<"EvalStaticNBAPublication", "schedule.eval.static_nba_publication",
-    "::mlir::UnitAttr">;
 // Semantic roles emitted at NBA lowering, rather than recovered from GEPs.
 def EvalPendingDirtyRoot : ScheduleField<"EvalPendingDirtyRoot", "schedule.eval.pending_dirty_root",
     "::mlir::IntegerAttr">;
@@ -240,10 +234,6 @@ def EvalPendingMaskAtCommit : ScheduleField<"EvalPendingMaskAtCommit", "schedule
     "::mlir::UnitAttr">;
 def EvalUnsupportedCheckpointOwner : ScheduleField<"EvalUnsupportedCheckpointOwner", "schedule.eval.unsupported_checkpoint_owner",
     "::mlir::StringAttr">;
-def EvalUseCanonicalTwoStateNba : ScheduleField<"EvalUseCanonicalTwoStateNba", "schedule.eval.use_canonical_two_state_nba",
-    "::mlir::UnitAttr">;
-def EvalUseFastTwoStateNba : ScheduleField<"EvalUseFastTwoStateNba", "schedule.eval.use_fast_two_state_nba",
-    "::mlir::UnitAttr">;
 def NativeAssumeCleanSpecialization : ScheduleField<"NativeAssumeCleanSpecialization", "schedule.native.assume_clean_specialization",
     "::mlir::UnitAttr">;
 def NativeCleanEvalBody : ScheduleField<"NativeCleanEvalBody", "schedule.native.clean_eval_body",

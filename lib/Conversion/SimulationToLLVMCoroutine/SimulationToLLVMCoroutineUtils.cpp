@@ -289,6 +289,25 @@ void endTemporary(OpBuilder &builder, Location location, Value storage) {
   LLVM::LifetimeEndOp::create(builder, location, storage);
 }
 
+LLVM::LLVMFuncOp defineNBABarrierVariant(ModuleOp module,
+                                         LLVM::LLVMFuncOp source,
+                                         StringRef name) {
+  if (Operation *symbol = module.lookupSymbol(name)) {
+    auto existing = cast<LLVM::LLVMFuncOp>(symbol);
+    if (!existing.isExternal())
+      return existing;
+    assert(existing.getFunctionType() == source.getFunctionType() &&
+           "a variant is declared with its source's type");
+    existing.erase();
+  }
+  OpBuilder builder(source);
+  builder.setInsertionPointAfter(source);
+  auto variant = cast<LLVM::LLVMFuncOp>(builder.clone(*source.getOperation()));
+  variant.setSymName(name);
+  variant.setLinkage(LLVM::Linkage::Internal);
+  return variant;
+}
+
 Value byteGEP(OpBuilder &builder, Location location, Value base,
               uint64_t offset) {
   // Past a state plane's base or a window of it is another window.
