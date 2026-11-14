@@ -734,11 +734,21 @@ private:
     return getSemanticPackedWidth(type.getValue());
   }
 
-  FailureOr<ParsedConstant> scalarConstant(Operation *source) {
+  // Match ordinary lowering: only the outer implicit operand conversion is
+  // context-determined (11.8.2). Assignment initialization and explicit casts
+  // extend by the source sign (11.8.3), including an unsigned destination.
+  FailureOr<ParsedConstant> scalarConstant(Operation *source,
+                                           bool contextDetermined = false) {
     auto bitWidth = integralWidth(source);
     if (!bitWidth || *bitWidth == 0 ||
         *bitWidth > std::numeric_limits<unsigned>::max())
       return failure();
+    if (auto spelling = getConstantSpelling(source)) {
+      auto parsed =
+          parseSVInteger(*spelling, *bitWidth, getSemanticLocation(source));
+      return succeeded(parsed) ? coerceConstant(source, *parsed)
+                               : FailureOr<ParsedConstant>(failure());
+    }
     if (isa<semantic::SVConversionExpressionOp>(source)) {
       auto operands = getChildren(source);
       if (operands.size() != 1)
@@ -748,6 +758,13 @@ private:
       if (failed(value) || !type)
         return failure();
       bool signExtend = isSignedSemanticType(type.getValue());
+      auto implicit = source->getAttrOfType<BoolAttr>("is_implicit");
+      if (contextDetermined && (!implicit || implicit.getValue())) {
+        auto target = source->getAttrOfType<TypeAttr>("semantic_type");
+        signExtend = isSignedSemanticType(target.getValue());
+      }
+      signExtend |=
+          isa<semantic::SVUnbasedUnsizedIntegerLiteralOp>(operands.front());
       value->value = signExtend ? value->value.sextOrTrunc(*bitWidth)
                                 : value->value.zextOrTrunc(*bitWidth);
       value->unknown = signExtend ? value->unknown.sextOrTrunc(*bitWidth)
@@ -760,7 +777,7 @@ private:
           (unary.getOperatorKind() != semantic::SVUnaryOperator::Plus &&
            unary.getOperatorKind() != semantic::SVUnaryOperator::Minus))
         return failure();
-      FailureOr<ParsedConstant> value = scalarConstant(operands.front());
+      FailureOr<ParsedConstant> value = scalarConstant(operands.front(), true);
       if (failed(value) || value->value.getBitWidth() != *bitWidth)
         return failure();
       if (unary.getOperatorKind() == semantic::SVUnaryOperator::Minus) {
@@ -773,14 +790,7 @@ private:
       }
       return coerceConstant(source, *value);
     }
-    std::optional<StringRef> spelling = getConstantSpelling(source);
-    if (!spelling)
-      return failure();
-    FailureOr<ParsedConstant> parsed =
-        parseSVInteger(*spelling, *bitWidth, getSemanticLocation(source));
-    if (failed(parsed))
-      return failure();
-    return coerceConstant(source, *parsed);
+    return failure();
   }
 
   FailureOr<ParsedConstant> coerceConstant(Operation *source,
@@ -802,8 +812,8 @@ private:
     return value;
   }
 
-  FailureOr<APInt> constant(Operation *source) {
-    FailureOr<ParsedConstant> value = scalarConstant(source);
+  FailureOr<APInt> constant(Operation *source, bool contextDetermined = false) {
+    FailureOr<ParsedConstant> value = scalarConstant(source, contextDetermined);
     if (failed(value) || !value->unknown.isZero())
       return failure();
     return value->value;
@@ -858,9 +868,12 @@ private:
     SmallVector<APInt> values;
   };
 
-  std::optional<CountedLoop> countedLoop(Operation *condition, Operation *step,
-                                         Operation *body,
-                                         const Environment &environment) {
+  struct CounterStep {
+    Operation *variable;
+    APInt delta;
+  };
+
+  std::optional<CounterStep> countedStep(Operation *step) {
     auto unary = dyn_cast<semantic::SVUnaryExpressionOp>(step);
     bool increment =
         unary &&
@@ -870,14 +883,77 @@ private:
         unary &&
         (unary.getOperatorKind() == semantic::SVUnaryOperator::Predecrement ||
          unary.getOperatorKind() == semantic::SVUnaryOperator::Postdecrement);
-    auto targets = unary ? getChildren(step) : SmallVector<Operation *>{};
-    Operation *variable =
-        targets.size() == 1 ? symbol(targets.front()) : nullptr;
-    if ((!increment && !decrement) || !variable ||
+    auto assignment = dyn_cast<semantic::SVAssignmentExpressionOp>(step);
+    auto targets = getChildren(step);
+    Operation *variable = targets.size() == (assignment ? 2u : 1u)
+                              ? symbol(targets.front())
+                              : nullptr;
+    if ((!increment && !decrement && !assignment) || !variable ||
         !writable.contains(variable) ||
-        !isa<semantic::SVNamedValueExpressionOp>(targets.front()) ||
-        writesVariable(body, variable))
+        !isa<semantic::SVNamedValueExpressionOp>(targets.front()))
       return std::nullopt;
+    auto declaredWidth = integralWidth(variable);
+    if (!declaredWidth || !*declaredWidth ||
+        *declaredWidth > std::numeric_limits<unsigned>::max())
+      return std::nullopt;
+    APInt delta(*declaredWidth, 1);
+    if (!assignment)
+      return CounterStep{variable, increment ? delta : -delta};
+    if (assignment.getAssignmentKind() !=
+            semantic::SVAssignmentKind::Blocking ||
+        assignment.getHasTimingControl())
+      return std::nullopt;
+    auto peel = [&](Operation *source) -> Operation * {
+      while (isa<semantic::SVConversionExpressionOp>(source)) {
+        auto operands = getChildren(source);
+        auto convertedWidth = integralWidth(source);
+        if (operands.size() != 1 || !convertedWidth ||
+            *convertedWidth < *declaredWidth)
+          return nullptr;
+        source = operands.front();
+      }
+      return source;
+    };
+    Operation *rhs = peel(targets.back());
+    auto binary = dyn_cast_if_present<semantic::SVBinaryExpressionOp>(rhs);
+    if (!binary || !integralWidth(rhs) || *integralWidth(rhs) < *declaredWidth)
+      return std::nullopt;
+    using Binary = semantic::SVBinaryOperator;
+    bool subtract = binary.getOperatorKind() == Binary::Subtract;
+    if (!subtract && binary.getOperatorKind() != Binary::Add)
+      return std::nullopt;
+    auto operands = getChildren(rhs);
+    if (operands.size() != 2 ||
+        integralWidth(operands[0]) != integralWidth(rhs) ||
+        integralWidth(operands[1]) != integralWidth(rhs))
+      return std::nullopt;
+    auto counter = [&](Operation *operand) {
+      Operation *source = peel(operand);
+      return source &&
+             (selectedVariable(operand, *declaredWidth, false) == variable ||
+              (isa<semantic::SVLValueReferenceExpressionOp>(source) &&
+               integralWidth(source) == declaredWidth));
+    };
+    unsigned counterIndex = counter(operands[0]) ? 0 : 1;
+    if (!counter(operands[counterIndex]) || (subtract && counterIndex != 0))
+      return std::nullopt;
+    FailureOr<APInt> amount = constant(operands[1 - counterIndex], true);
+    if (failed(amount))
+      return std::nullopt;
+    // Every intervening operation preserves the declared low bits. Integral
+    // addition/subtraction therefore advances by this modular delta even if
+    // the source arithmetic has a wider signed/unsigned context.
+    delta = amount->zextOrTrunc(*declaredWidth);
+    return CounterStep{variable, subtract ? -delta : delta};
+  }
+
+  std::optional<CountedLoop> countedLoop(Operation *condition, Operation *step,
+                                         Operation *body,
+                                         const Environment &environment) {
+    auto update = countedStep(step);
+    if (!update || writesVariable(body, update->variable))
+      return std::nullopt;
+    Operation *variable = update->variable;
     Operation *initial = environment.lookup(variable);
     if (!initial || initial == unassignedStaticResult)
       return std::nullopt;
@@ -897,7 +973,7 @@ private:
     Operation *selected = operands[variableIndex];
     if (selectedVariable(selected, *declaredWidth, false) != variable)
       return std::nullopt;
-    FailureOr<APInt> endpoint = constant(operands[1 - variableIndex]);
+    FailureOr<APInt> endpoint = constant(operands[1 - variableIndex], true);
     if (failed(endpoint))
       return std::nullopt;
     using Binary = semantic::SVBinaryOperator;
@@ -928,9 +1004,17 @@ private:
         auto type = source->getAttrOfType<TypeAttr>("semantic_type");
         if (!type)
           return std::nullopt;
-        tested = isSignedSemanticType(type.getValue())
-                     ? tested.sextOrTrunc(*width(conversion))
-                     : tested.zextOrTrunc(*width(conversion));
+        bool signExtend = isSignedSemanticType(type.getValue());
+        auto implicit = conversion->getAttrOfType<BoolAttr>("is_implicit");
+        // An explicit cast forms a self-determined boundary; inner casts
+        // retain their source rules even within an unsigned comparison.
+        if (conversion == operands[variableIndex] &&
+            (!implicit || implicit.getValue())) {
+          auto target = conversion->getAttrOfType<TypeAttr>("semantic_type");
+          signExtend = isSignedSemanticType(target.getValue());
+        }
+        tested = signExtend ? tested.sextOrTrunc(*width(conversion))
+                            : tested.zextOrTrunc(*width(conversion));
         source = conversion;
       }
       const APInt &lhs = variableIndex == 0 ? tested : *endpoint;
@@ -945,10 +1029,7 @@ private:
                                                        : lhs != rhs;
       if (!active)
         return result;
-      if (increment)
-        ++*value;
-      else
-        --*value;
+      *value += update->delta;
     }
     return std::nullopt;
   }
