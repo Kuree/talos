@@ -839,27 +839,35 @@ private:
                : nullptr;
   }
 
+  bool isUpdate(Operation *node) const {
+    if (isa<semantic::SVAssignmentExpressionOp>(node))
+      return true;
+    if (auto unary = dyn_cast<semantic::SVUnaryExpressionOp>(node)) {
+      using Unary = semantic::SVUnaryOperator;
+      auto kind = unary.getOperatorKind();
+      return kind == Unary::Preincrement || kind == Unary::Predecrement ||
+             kind == Unary::Postincrement || kind == Unary::Postdecrement;
+    }
+    return false;
+  }
+
   bool writesVariable(Operation *body, Operation *variable) const {
     bool writes = false;
     body->walk([&](Operation *node) {
-      bool update = isa<semantic::SVAssignmentExpressionOp>(node);
-      if (auto unary = dyn_cast<semantic::SVUnaryExpressionOp>(node))
-        update |=
-            unary.getOperatorKind() ==
-                semantic::SVUnaryOperator::Preincrement ||
-            unary.getOperatorKind() ==
-                semantic::SVUnaryOperator::Predecrement ||
-            unary.getOperatorKind() ==
-                semantic::SVUnaryOperator::Postincrement ||
-            unary.getOperatorKind() == semantic::SVUnaryOperator::Postdecrement;
       auto targets = getChildren(node);
-      if (update && !targets.empty())
+      if (isUpdate(node) && !targets.empty())
         targets.front()->walk(
             [&](Operation *target) { writes |= symbol(target) == variable; });
       else if (isa<semantic::SVVariableDeclStatementOp>(node))
         writes |= symbol(node) == variable;
     });
     return writes;
+  }
+
+  bool writesVariable(ArrayRef<Operation *> body, Operation *variable) const {
+    return llvm::any_of(body, [&](Operation *statement) {
+      return writesVariable(statement, variable);
+    });
   }
 
   struct CountedLoop {
@@ -948,8 +956,9 @@ private:
   }
 
   std::optional<CountedLoop> countedLoop(Operation *condition, Operation *step,
-                                         Operation *body,
-                                         const Environment &environment) {
+                                         ArrayRef<Operation *> body,
+                                         const Environment &environment,
+                                         bool postTest = false) {
     auto update = countedStep(step);
     if (!update || writesVariable(body, update->variable))
       return std::nullopt;
@@ -998,6 +1007,11 @@ private:
     for (uint64_t iteration = 0; iteration <= maxUnrolledIterations;
          ++iteration) {
       result.values.push_back(*value);
+      // A do...while body executes once before the first test (12.7.5).
+      if (postTest && iteration == 0) {
+        *value += update->delta;
+        continue;
+      }
       APInt tested = *value;
       Operation *source = selected;
       for (Operation *conversion : llvm::reverse(conversions)) {
@@ -1035,7 +1049,7 @@ private:
   }
 
   std::optional<uint64_t> shiftLoopBound(Operation *condition, Operation *step,
-                                         Operation *body) {
+                                         ArrayRef<Operation *> body) {
     auto assignment = dyn_cast<semantic::SVAssignmentExpressionOp>(step);
     auto operands = assignment ? getChildren(step) : SmallVector<Operation *>{};
     Operation *variable =
@@ -1076,18 +1090,18 @@ private:
     auto comparison = dyn_cast<semantic::SVBinaryExpressionOp>(condition);
     auto predicates =
         comparison ? getChildren(comparison) : SmallVector<Operation *>{};
-    if (!comparison ||
-        comparison.getOperatorKind() !=
-            semantic::SVBinaryOperator::Inequality ||
-        predicates.size() != 2)
-      return std::nullopt;
-    bool nonzeroTest = false;
-    for (unsigned index = 0; index != 2; ++index) {
-      FailureOr<APInt> zero = constant(predicates[1 - index]);
-      nonzeroTest |= selectedVariable(predicates[index], declaredWidth,
-                                      false) == variable &&
-                     succeeded(zero) && zero->isZero();
-    }
+    bool nonzeroTest =
+        selectedVariable(condition, declaredWidth, false) == variable;
+    if (comparison &&
+        comparison.getOperatorKind() ==
+            semantic::SVBinaryOperator::Inequality &&
+        predicates.size() == 2)
+      for (unsigned index = 0; index != 2; ++index) {
+        FailureOr<APInt> zero = constant(predicates[1 - index]);
+        nonzeroTest |= selectedVariable(predicates[index], declaredWidth,
+                                        false) == variable &&
+                       succeeded(zero) && zero->isZero();
+      }
     if (!nonzeroTest)
       return std::nullopt;
     if (writesVariable(body, variable))
@@ -1097,6 +1111,36 @@ private:
                      static_cast<uint64_t>(declaredWidth % shiftBits != 0);
     return bound <= maxUnrolledIterations ? std::optional<uint64_t>(bound)
                                           : std::nullopt;
+  }
+
+  // Expose only unconditional statements in the loop's sequential body. An
+  // update in a branch or a nested loop cannot establish progress for every
+  // iteration of the containing while loop.
+  void loopStatements(Operation *body, SmallVectorImpl<Operation *> &result) {
+    if (isa<semantic::SVStatementListOp>(body) ||
+        (isa<semantic::SVBlockStatementOp>(body) &&
+         cast<semantic::SVBlockStatementOp>(body).getBlockKind() ==
+             semantic::SVStatementBlockKind::Sequential)) {
+      for (Operation *child : getChildren(body))
+        loopStatements(child, result);
+      return;
+    }
+    result.push_back(body);
+  }
+
+  bool continuesLoop(Operation *statement) const {
+    bool found = false;
+    statement->walk<WalkOrder::PreOrder>([&](Operation *node) {
+      if (isa<semantic::SVForLoopStatementOp, semantic::SVWhileLoopStatementOp,
+              semantic::SVDoWhileLoopStatementOp,
+              semantic::SVRepeatLoopStatementOp,
+              semantic::SVForeachLoopStatementOp,
+              semantic::SVForeverLoopStatementOp>(node))
+        return WalkResult::skip();
+      found |= isa<semantic::SVContinueStatementOp>(node);
+      return WalkResult::advance();
+    });
+    return found;
   }
 
   SmallVector<Operation *> expressionStatements(ArrayRef<Operation *> values) {
@@ -1148,6 +1192,61 @@ private:
     if (!budget.spend(cloned))
       return failure();
     return cloned;
+  }
+
+  FailureOr<Operation *>
+  executeBoundedLoop(Operation *statement, Operation *condition,
+                     ArrayRef<Operation *> body, ArrayRef<Operation *> steps,
+                     uint64_t bound, const std::optional<CountedLoop> &counted,
+                     bool postTest, Environment &environment,
+                     const Continuation &next, LoopContext *enclosingLoop) {
+    std::function<FailureOr<Operation *>(uint64_t, Environment &)> iterate;
+    iterate = [&](uint64_t remaining,
+                  Environment &values) -> FailureOr<Operation *> {
+      if (counted) {
+        const APInt &counter = counted->values[bound - remaining];
+        SmallString<32> digits;
+        counter.toString(digits, 16, false);
+        values[counted->variable] = literal(
+            statement,
+            counted->variable->getAttrOfType<TypeAttr>("semantic_type"),
+            std::to_string(counter.getBitWidth()) + "'h" + digits.str().str());
+      }
+      // Both proofs establish that this final test is false. It reads only a
+      // local counter and constants, so omitting it cannot suppress an error
+      // or a side effect.
+      if (remaining == 0)
+        return next(values);
+      if (remainingUnrollBudget == 0)
+        return failure();
+      --remainingUnrollBudget;
+      Continuation advance = [&](Environment &updated) {
+        return execute(
+            steps, updated,
+            [&](Environment &stepped) {
+              return iterate(remaining - 1, stepped);
+            },
+            enclosingLoop);
+      };
+      LoopContext current{next, advance};
+      // Counted tests are known. A do...while also enters its first body
+      // unconditionally; every subsequent entry checks the preceding body's
+      // post-test before executing another iteration.
+      if (counted || (postTest && remaining == bound))
+        return execute(body, values, advance, &current);
+      FailureOr<Operation *> predicate = expression(condition, values);
+      if (failed(predicate))
+        return failure();
+      Environment trueValues = values;
+      Environment falseValues = values;
+      FailureOr<Operation *> yes = execute(body, trueValues, advance, &current);
+      FailureOr<Operation *> no = next(falseValues);
+      return succeeded(yes) && succeeded(no)
+                 ? FailureOr<Operation *>(
+                       branch(statement, *predicate, *yes, *no))
+                 : FailureOr<Operation *>(failure());
+    };
+    return iterate(bound, environment);
   }
 
   FailureOr<Operation *> execute(ArrayRef<Operation *> statements,
@@ -1250,70 +1349,116 @@ private:
       Operation *condition = children[initializerCount];
       Operation *step = children[initializerCount + 1];
       Operation *body = children.back();
-      std::optional<uint64_t> bound = shiftLoopBound(condition, step, body);
-      std::optional<CountedLoop> counted;
+      std::optional<uint64_t> bound = shiftLoopBound(condition, step, {body});
       SmallVector<Operation *> initializers =
           expressionStatements(ArrayRef(children).take_front(initializerCount));
       SmallVector<Operation *> steps = expressionStatements({step});
-      std::function<FailureOr<Operation *>(uint64_t, Environment &)> iterate;
-      iterate = [&](uint64_t remaining,
-                    Environment &values) -> FailureOr<Operation *> {
-        if (counted) {
-          const APInt &counter = counted->values[*bound - remaining];
-          SmallString<32> digits;
-          counter.toString(digits, 16, false);
-          values[counted->variable] = literal(
-              statement,
-              counted->variable->getAttrOfType<TypeAttr>("semantic_type"),
-              std::to_string(counter.getBitWidth()) + "'h" +
-                  digits.str().str());
-        }
-        // Both admitted loops prove the final condition false. Its only
-        // operands are a local counter and constants, so omitting that test
-        // cannot suppress an evaluation error or a side effect.
-        if (remaining == 0)
-          return next(values);
-        if (remainingUnrollBudget == 0)
-          return failure();
-        --remainingUnrollBudget;
-        Continuation advance = [&](Environment &updated) {
-          return execute(
-              steps, updated,
-              [&](Environment &stepped) {
-                return iterate(remaining - 1, stepped);
-              },
-              loop);
-        };
-        LoopContext current{next, advance};
-        // Constant counters keep their exact value in each iteration. Avoid
-        // emitting a branch and cloning the continuation for a known test.
-        if (counted)
-          return execute({body}, values, advance, &current);
-        FailureOr<Operation *> predicate = expression(condition, values);
-        if (failed(predicate))
-          return failure();
-        Environment trueValues = values;
-        Environment falseValues = values;
-        FailureOr<Operation *> yes =
-            execute({body}, trueValues, advance, &current);
-        FailureOr<Operation *> no = next(falseValues);
-        return succeeded(yes) && succeeded(no)
-                   ? FailureOr<Operation *>(
-                         branch(statement, *predicate, *yes, *no))
-                   : FailureOr<Operation *>(failure());
-      };
       return execute(
           initializers, environment,
           [&](Environment &initialized) {
+            std::optional<CountedLoop> counted;
             if (!bound) {
-              counted = countedLoop(condition, step, body, initialized);
+              counted = countedLoop(condition, step, {body}, initialized);
               if (!counted)
                 return FailureOr<Operation *>(failure());
               bound = counted->values.size() - 1;
             }
-            return iterate(*bound, initialized);
+            return executeBoundedLoop(statement, condition, {body}, steps,
+                                      *bound, counted, false, initialized, next,
+                                      loop);
           },
           loop);
+    }
+    if (isa<semantic::SVWhileLoopStatementOp,
+            semantic::SVDoWhileLoopStatementOp>(statement)) {
+      auto children = getChildren(statement);
+      if (children.size() != 2)
+        return failure();
+      Operation *condition = children.front();
+      SmallVector<Operation *> body;
+      loopStatements(children.back(), body);
+      bool postTest = isa<semantic::SVDoWhileLoopStatementOp>(statement);
+
+      // Each admitted condition selects at most two possible counters, one
+      // through each comparison operand. Filter candidates before scanning
+      // the body: unrelated updates must not introduce quadratic proof work.
+      llvm::SmallPtrSet<Operation *, 2> counters;
+      auto collectCounter = [&](Operation *operand) {
+        while (isa<semantic::SVConversionExpressionOp>(operand)) {
+          auto inputs = getChildren(operand);
+          if (inputs.size() != 1)
+            return;
+          operand = inputs.front();
+        }
+        if (isa<semantic::SVNamedValueExpressionOp>(operand))
+          if (Operation *variable = symbol(operand))
+            if (writable.contains(variable))
+              counters.insert(variable);
+      };
+      if (isa<semantic::SVBinaryExpressionOp>(condition)) {
+        auto operands = getChildren(condition);
+        if (operands.size() != 2)
+          return failure();
+        for (Operation *operand : operands)
+          collectCounter(operand);
+      } else {
+        collectCounter(condition);
+      }
+      struct Candidate {
+        Operation *variable;
+        Operation *step;
+        size_t index;
+      };
+      SmallVector<Candidate, 2> candidates;
+      bool prefixContinues = false;
+      for (auto [index, candidate] : llvm::enumerate(body)) {
+        bool skipsUpdate = prefixContinues;
+        prefixContinues |= continuesLoop(candidate);
+        auto operands = getChildren(candidate);
+        if (!isa<semantic::SVExpressionStatementOp>(candidate) ||
+            operands.size() != 1 || !isUpdate(operands.front()))
+          continue;
+        Operation *step = operands.front();
+        auto targets = getChildren(step);
+        Operation *variable =
+            !targets.empty() &&
+                    isa<semantic::SVNamedValueExpressionOp>(targets.front())
+                ? symbol(targets.front())
+                : nullptr;
+        if (!counters.contains(variable))
+          continue;
+        auto previous = llvm::find_if(candidates, [&](const Candidate &entry) {
+          return entry.variable == variable;
+        });
+        if (previous != candidates.end()) {
+          previous->step = nullptr;
+          continue;
+        }
+        // A continue before the update can skip progress altogether. Nested
+        // loops own their continues; a break or return exits this loop and
+        // therefore needs no progress proof.
+        candidates.push_back({variable, skipsUpdate ? nullptr : step, index});
+      }
+      for (const Candidate &candidate : candidates) {
+        if (!candidate.step)
+          continue;
+        SmallVector<Operation *> otherBody(body);
+        otherBody.erase(otherBody.begin() + candidate.index);
+        Operation *step = candidate.step;
+        std::optional<uint64_t> bound =
+            shiftLoopBound(condition, step, otherBody);
+        std::optional<CountedLoop> counted;
+        if (!bound) {
+          counted =
+              countedLoop(condition, step, otherBody, environment, postTest);
+          if (!counted)
+            continue;
+          bound = counted->values.size() - 1;
+        }
+        return executeBoundedLoop(statement, condition, body, {}, *bound,
+                                  counted, postTest, environment, next, loop);
+      }
+      return failure();
     }
     if (auto ret = dyn_cast<semantic::SVReturnStatementOp>(statement)) {
       auto values = getChildren(ret);
