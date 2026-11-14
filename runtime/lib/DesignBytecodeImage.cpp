@@ -1219,11 +1219,16 @@ bool validIntrinsic(const Image &image, const Function &function,
         return false;
     return true;
   case TALOS_RT_INTRINSIC_V1_RANDOM_SOLVE_WIDE_STATE:
-    if (signature.flags != 0 || site.inputCount < 7 || site.outputCount != 3 ||
-        !bytes(input(0)) || !twoStateBits(input(1)) ||
-        !twoStateBits(input(2), input(1)->width) ||
+  case TALOS_RT_INTRINSIC_V1_RANDOM_FUNCTION_STAGE: {
+    bool stage = signature.id == TALOS_RT_INTRINSIC_V1_RANDOM_FUNCTION_STAGE;
+    if (signature.flags != 0 || site.inputCount < 7 ||
+        site.outputCount != (stage ? 5u : 3u) || !bytes(input(0)) ||
+        !twoStateBits(input(1)) || !twoStateBits(input(2), input(1)->width) ||
         !twoStateBits(output(0), input(1)->width) ||
         !twoStateBits(output(1), 1) || !twoStateBits(output(2), 64))
+      return false;
+    if (stage && (!twoStateBits(output(3), input(1)->width) ||
+                  !twoStateBits(output(4), 1)))
       return false;
     for (uint32_t index = 3; index != 7; ++index)
       if (!twoStateBits(input(index), 64))
@@ -1232,6 +1237,7 @@ bool validIntrinsic(const Image &image, const Function &function,
       if (!twoStateBits(input(index)))
         return false;
     return true;
+  }
   case TALOS_RT_INTRINSIC_V1_RANDOM_CYCLE_SAMPLE:
     if (signature.flags != 0 || site.inputCount < 11 || site.outputCount != 6 ||
         !bytes(input(0)) || !twoStateBits(input(1)) ||

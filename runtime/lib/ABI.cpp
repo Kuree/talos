@@ -1218,6 +1218,13 @@ ABI_FUNCTION(talos_rt_v1_random_solve_wide_modes_state,
                                  uint64_t, uint64_t, uint64_t, uint64_t,
                                  const uint64_t *, uint64_t, const uint32_t *,
                                  uint64_t, uint64_t *, uint32_t *, uint64_t *));
+ABI_FUNCTION(talos_rt_v1_random_function_stage,
+             talos_rt_status (*)(talos_rt_context *, const uint8_t *, uint64_t,
+                                 const uint64_t *, const uint64_t *, uint64_t,
+                                 uint64_t, uint64_t, uint64_t, uint64_t,
+                                 const uint64_t *, uint64_t, const uint32_t *,
+                                 uint64_t, uint64_t *, uint32_t *, uint64_t *,
+                                 uint64_t *, uint32_t *));
 ABI_FUNCTION(talos_rt_v1_random_cycle_sample,
              talos_rt_status (*)(talos_rt_context *, const uint8_t *, uint64_t,
                                  const uint64_t *, const uint64_t *, uint64_t,

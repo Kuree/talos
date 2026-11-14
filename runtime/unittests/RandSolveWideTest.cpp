@@ -788,6 +788,163 @@ TEST_F(RandSolveWideTest, RejectsNonContiguousSoftPriorities) {
 }
 
 #ifdef TALOS_TEST_COMPILED_SAMPLER
+TEST_F(RandSolveWideTest, FunctionStageABIChecksOnlyLiveGuardedOrderEdges) {
+  // Both blocks are enabled, but a false state guard eliminates the second
+  // atom and its y -> x function edge. The remaining x -> y ordering is legal.
+  auto bytes = program(2, 4,
+                       {{TALOS_RT_RANDOM_PUSH_LITERAL_V1, 1, 0, 0, 0, {1}},
+                        {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 0},
+                        {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 1, 0, 0, 0, {1}},
+                        {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 1}},
+                       TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM |
+                           TALOS_RT_RANDOM_PROGRAM_HAS_SOLVE_BEFORE |
+                           TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY |
+                           TALOS_RT_RANDOM_PROGRAM_HAS_GUARD_INPUT_MASKS,
+                       {}, {{{1}, {2}, 0, true}, {{2}, {1}, 1, true}}, {},
+                       {{1, {3}, {1}, 1}, {3, {3}, {2}, 3}});
+  uint64_t start = 0, mask = 3, captures[] = {3, 1, 0, 0};
+  uint32_t widths[] = {2, 2, 2, 2}, success = 0, complete = 0;
+  uint64_t assignment = 0, remaining = 0, next = 0;
+  ASSERT_EQ(talos_rt_v1_random_function_stage(
+                context, bytes.data(), bytes.size(), &start, &mask, 1, 0, 1, 17,
+                3, captures, 4, widths, 4, &assignment, &success, &next,
+                &remaining, &complete),
+            TALOS_RT_OK);
+  EXPECT_EQ(success, 1u);
+  EXPECT_EQ(remaining, 2u);
+  EXPECT_EQ(complete, 0u);
+  EXPECT_EQ(context->schedulerFinishStatus, TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_random_solve_wide_modes_state(
+                context, bytes.data(), bytes.size(), &start, &mask, 1, 0, 1, 17,
+                3, captures, 4, widths, 4, &assignment, &success, &next),
+            TALOS_RT_OK);
+  EXPECT_EQ(success, 1u);
+  EXPECT_EQ(context->schedulerFinishStatus, TALOS_RT_OK);
+
+  // Restoring that guarded atom makes the active graph cyclic. Report an
+  // ordering error and leave every output and tentative RNG uncommitted.
+  captures[2] = 3;
+  captures[3] = 2;
+  ASSERT_EQ(talos_rt_v1_random_function_stage(
+                context, bytes.data(), bytes.size(), &start, &mask, 1, 0, 1, 17,
+                3, captures, 4, widths, 4, &assignment, &success, &next,
+                &remaining, &complete),
+            TALOS_RT_OK);
+  EXPECT_EQ(success, 0u);
+  EXPECT_EQ(assignment, 0u);
+  EXPECT_EQ(remaining, 0u);
+  EXPECT_EQ(complete, 0u);
+  EXPECT_EQ(next, 17u);
+  EXPECT_EQ(context->schedulerFinishStatus, TALOS_RT_FATAL);
+}
+
+TEST_F(RandSolveWideTest, FunctionStageABIValidatesAndClearsFailureOutputs) {
+  constexpr uint32_t flags = TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM |
+                             TALOS_RT_RANDOM_PROGRAM_HAS_SOLVE_BEFORE |
+                             TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY;
+  auto bytes = program(1, 1,
+                       {{TALOS_RT_RANDOM_PUSH_CAPTURE_V1, 1},
+                        {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, UINT32_MAX}},
+                       flags, {}, {}, {}, {{1, {1}, {1}}});
+  uint64_t start = 0, mask = 1, capture = 0;
+  uint32_t width = 1, success = 99, complete = 99;
+  uint64_t assignment = 99, remaining = 99, next = 99;
+  auto invoke = [&](uint64_t attempts) {
+    return talos_rt_v1_random_function_stage(
+        context, bytes.data(), bytes.size(), &start, &mask, 1, 0, attempts, 17,
+        3, &capture, 1, &width, 1, &assignment, &success, &next, &remaining,
+        &complete);
+  };
+  ASSERT_EQ(invoke(0), TALOS_RT_OK);
+  EXPECT_EQ(success, 0u);
+  EXPECT_EQ(assignment, 0u);
+  EXPECT_EQ(remaining, 0u);
+  EXPECT_EQ(complete, 0u);
+  EXPECT_EQ(next, 17u);
+
+  ASSERT_EQ(invoke(1), TALOS_RT_OK);
+  ASSERT_EQ(success, 1u);
+  EXPECT_EQ(remaining, 0u);
+  EXPECT_EQ(complete, 0u); // No remaining bits, but f(y) still needs checking.
+  start = assignment;
+  mask = remaining;
+  ASSERT_EQ(invoke(1), TALOS_RT_OK);
+  EXPECT_EQ(success, 0u);
+  EXPECT_EQ(assignment, 0u);
+  EXPECT_EQ(remaining, 0u);
+  EXPECT_EQ(complete, 0u);
+  EXPECT_EQ(next, 17u);
+  capture = 1;
+  ASSERT_EQ(invoke(1), TALOS_RT_OK);
+  EXPECT_EQ(success, 1u);
+  EXPECT_EQ(assignment, start);
+  EXPECT_EQ(complete, 1u);
+
+  auto valid = bytes;
+  // Flags and compiled plan are mandatory, and invalid metadata never claims
+  // completion. The regular whole-call API still accepts non-priority plans.
+  bytes[20] &= ~TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY;
+  EXPECT_EQ(invoke(1), TALOS_RT_INVALID_ARGUMENT);
+  EXPECT_EQ(complete, 0u);
+  bytes = valid;
+  bytes.resize(bytes.size() - 1);
+  EXPECT_EQ(invoke(1), TALOS_RT_INVALID_ARGUMENT);
+  bytes = valid;
+  EXPECT_EQ(talos_rt_v1_random_function_stage(
+                context, bytes.data(), bytes.size(), &start, &mask, 1, 0, 1, 17,
+                3, &capture, 1, &width, 1, &assignment, &success, &next,
+                nullptr, &complete),
+            TALOS_RT_INVALID_ARGUMENT);
+}
+
+TEST_F(RandSolveWideTest, FunctionStageABIResumesPartialSemanticDomains) {
+  // An enum e has encodings 00 and 11; x == f(e[0]). Choosing the argument bit
+  // first must retain the enum domain when only its upper bit remains mutable.
+  auto bytes = program(3, 1,
+                       {{TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 1, 0, 2},
+                        {TALOS_RT_RANDOM_PUSH_CAPTURE_V1, 1},
+                        {TALOS_RT_RANDOM_EQ_V1, 1},
+                        {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, UINT32_MAX}},
+                       TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM |
+                           TALOS_RT_RANDOM_PROGRAM_HAS_SOLVE_BEFORE |
+                           TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY |
+                           TALOS_RT_RANDOM_PROGRAM_HAS_DOMAINS,
+                       {{0, 0, 2, 3, 0}, {0, 0, 2, 3, 3}},
+                       {{{1}, {4}, UINT32_MAX, true}}, {}, {{3, {5}, {1}}});
+  bool sawZero = false, sawOne = false;
+  for (unsigned seed = 0; seed != 16; ++seed) {
+    talos_rt_random_state_v1 rng;
+    talos_rt_v1_random_state_seed(&rng, seed, 17);
+    uint64_t start = 0, mask = 7, capture = 0;
+    uint32_t width = 1, success = 0, complete = 0;
+    uint64_t assignment = 0, remaining = 0, next = 0;
+    auto invoke = [&] {
+      return talos_rt_v1_random_function_stage(
+          context, bytes.data(), bytes.size(), &start, &mask, 1, 0, 1,
+          rng.state, rng.increment, &capture, 1, &width, 1, &assignment,
+          &success, &next, &remaining, &complete);
+    };
+    ASSERT_EQ(invoke(), TALOS_RT_OK);
+    ASSERT_EQ(success, 1u);
+    ASSERT_EQ(complete, 0u);
+    ASSERT_EQ(remaining, 6u);
+    capture = assignment & 1;
+    start = assignment;
+    mask = remaining;
+    rng.state = next;
+    ASSERT_EQ(invoke(), TALOS_RT_OK);
+    ASSERT_EQ(success, 1u);
+    EXPECT_EQ(complete, 1u);
+    EXPECT_EQ(remaining, 0u);
+    EXPECT_EQ(assignment, capture ? 7u : 0u);
+    sawZero |= !capture;
+    sawOne |= capture;
+    EXPECT_EQ(next, rng.state); // The remaining bits are forced by the domain.
+  }
+  EXPECT_TRUE(sawZero);
+  EXPECT_TRUE(sawOne);
+}
+
 talos::runtime::SamplerResult sampleFunctionStage(
     const std::vector<uint8_t> &bytes, const std::vector<uint64_t> &start,
     const std::vector<uint64_t> &mask, const std::vector<uint64_t> &captures,

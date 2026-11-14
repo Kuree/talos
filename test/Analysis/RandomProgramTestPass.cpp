@@ -327,6 +327,8 @@ public:
         program = solve.getProgramAttr();
       else if (auto solve = dyn_cast<talos::sim::SimRandomSolveWideOp>(op))
         program = solve.getProgramAttr();
+      else if (auto stage = dyn_cast<talos::sim::SimRandomFunctionStageOp>(op))
+        program = stage.getProgramAttr();
       else if (auto sample = dyn_cast<talos::sim::SimRandomCycleSampleOp>(op))
         program = sample.getProgramAttr();
       if (!program)

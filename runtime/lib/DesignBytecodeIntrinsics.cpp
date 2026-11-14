@@ -60,7 +60,6 @@ std::optional<ByteSpan> readByteSpan(const Image &image, const Frame &frame,
   return ByteSpan{image.data + image.constants + offset, size};
 }
 
-
 bool writeScalar(const Image &image, Frame &frame, uint32_t reg,
                  uint64_t value) {
   if (!validRegister(frame.function, reg))
@@ -1310,7 +1309,9 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       return status == TALOS_RT_OK ? TALOS_RT_INVALID_BYTECODE : status;
     return TALOS_RT_OK;
   }
-  case TALOS_RT_INTRINSIC_V1_RANDOM_SOLVE_WIDE_STATE: {
+  case TALOS_RT_INTRINSIC_V1_RANDOM_SOLVE_WIDE_STATE:
+  case TALOS_RT_INTRINSIC_V1_RANDOM_FUNCTION_STAGE: {
+    bool stage = signature.id == TALOS_RT_INTRINSIC_V1_RANDOM_FUNCTION_STAGE;
     std::optional<ByteSpan> program = bytes(0);
     auto constraintMask = scalar(3), maxAttempts = scalar(4),
          rngState = scalar(5), rngIncrement = scalar(6);
@@ -1327,6 +1328,13 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
         assignmentLayout.kind != TALOS_RT_DBREG_BITS ||
         assignmentLayout.width != startLayout.width)
       return TALOS_RT_INVALID_BYTECODE;
+    Layout remainingLayout{};
+    if (stage) {
+      remainingLayout = layoutAt(image, frame.function, outputRegister(3));
+      if (remainingLayout.kind != TALOS_RT_DBREG_BITS ||
+          remainingLayout.width != startLayout.width)
+        return TALOS_RT_INVALID_BYTECODE;
+    }
     Logic start = readLogic(frame.data, startLayout);
     Logic mutableMask = readLogic(frame.data, mutableLayout);
     std::vector<uint64_t> captures;
@@ -1348,20 +1356,39 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     }
     Logic assignment{start.width, false, LimbVector(limbCount(start.width)),
                      LimbVector(limbCount(start.width))};
+    Logic remaining;
+    if (stage)
+      remaining = Logic{start.width, false, LimbVector(limbCount(start.width)),
+                        LimbVector(limbCount(start.width))};
     uint64_t nextRngState = 0;
-    uint32_t success = 0;
-    talos_rt_status status = talos_rt_v1_random_solve_wide_modes_state(
-        context, program->data, program->size, start.value.data(),
-        mutableMask.value.data(), start.value.size(), *constraintMask,
-        *maxAttempts, *rngState, *rngIncrement, captures.data(),
-        captures.size(), captureWidths.data(), captureWidths.size(),
-        assignment.value.data(), &success, &nextRngState);
+    uint32_t success = 0, complete = 0;
+    talos_rt_status status;
+    if (stage)
+      status = talos_rt_v1_random_function_stage(
+          context, program->data, program->size, start.value.data(),
+          mutableMask.value.data(), start.value.size(), *constraintMask,
+          *maxAttempts, *rngState, *rngIncrement, captures.data(),
+          captures.size(), captureWidths.data(), captureWidths.size(),
+          assignment.value.data(), &success, &nextRngState,
+          remaining.value.data(), &complete);
+    else
+      status = talos_rt_v1_random_solve_wide_modes_state(
+          context, program->data, program->size, start.value.data(),
+          mutableMask.value.data(), start.value.size(), *constraintMask,
+          *maxAttempts, *rngState, *rngIncrement, captures.data(),
+          captures.size(), captureWidths.data(), captureWidths.size(),
+          assignment.value.data(), &success, &nextRngState);
     if (status != TALOS_RT_OK)
       return status;
     writeLogic(frame.data, assignmentLayout, assignment);
     if (!writeScalar(image, frame, outputRegister(1), success) ||
         !writeScalar(image, frame, outputRegister(2), nextRngState))
       return TALOS_RT_INVALID_BYTECODE;
+    if (stage) {
+      writeLogic(frame.data, remainingLayout, remaining);
+      if (!writeScalar(image, frame, outputRegister(4), complete))
+        return TALOS_RT_INVALID_BYTECODE;
+    }
     return TALOS_RT_OK;
   }
   case TALOS_RT_INTRINSIC_V1_RANDOM_CYCLE_SAMPLE: {

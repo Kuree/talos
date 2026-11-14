@@ -66,6 +66,7 @@ struct EncodedPriorityInput {
   uint32_t instruction;
   uint64_t references;
   uint64_t arguments = 0;
+  uint32_t maskCapture = 0;
 };
 
 std::vector<uint8_t>
@@ -98,6 +99,9 @@ program(uint32_t width, uint32_t captures,
     flags |= TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY |
              TALOS_RT_RANDOM_PROGRAM_HAS_SOLVE_BEFORE |
              TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM;
+  for (const auto &input : priorityInputs)
+    if (input.maskCapture)
+      flags |= TALOS_RT_RANDOM_PROGRAM_HAS_GUARD_INPUT_MASKS;
   for (const auto &range : distRanges)
     if (range.flags & TALOS_RT_RANDOM_DIST_RAW_WEIGHT)
       flags |= TALOS_RT_RANDOM_PROGRAM_EXACT_WEIGHTED;
@@ -125,7 +129,7 @@ program(uint32_t width, uint32_t captures,
     append32(bytes, static_cast<uint32_t>(priorityInputs.size()));
     for (const auto &input : priorityInputs) {
       append32(bytes, input.instruction);
-      append32(bytes, 0);
+      append32(bytes, input.maskCapture);
       append64(bytes, input.references);
       append64(bytes, input.arguments);
     }
@@ -1440,6 +1444,34 @@ TEST_F(RandSolveTest, PartialAndUnorderedFieldsJoinTheLatestLegalLayer) {
 }
 
 #ifdef TALOS_TEST_COMPILED_SAMPLER
+TEST_F(RandSolveTest, FunctionPriorityChecksCyclesAfterGuardElimination) {
+  auto bytes = program(2, 4,
+                       {{TALOS_RT_RANDOM_PUSH_LITERAL_V1, 1, 0, 0, 1},
+                        {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 0},
+                        {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 1, 0, 0, 1},
+                        {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 1}},
+                       false, {{1, 2, 0, true}, {2, 1, 1, true}}, {}, {},
+                       {{1, 3, 1, 1}, {3, 3, 2, 3}});
+  uint64_t captures[] = {3, 1, 0, 0};
+  uint64_t assignment = 0, next = 0;
+  uint32_t success = 0;
+  auto invoke = [&] {
+    return talos_rt_v1_random_solve_modes_state(
+        context, bytes.data(), bytes.size(), 0, 3, 0, 1, 17, 3, captures, 4,
+        &assignment, &success, &next);
+  };
+  ASSERT_EQ(invoke(), TALOS_RT_OK);
+  EXPECT_EQ(success, 1u);
+  EXPECT_EQ(context->schedulerFinishStatus, TALOS_RT_OK);
+  captures[2] = 3;
+  captures[3] = 2;
+  ASSERT_EQ(invoke(), TALOS_RT_OK);
+  EXPECT_EQ(success, 0u);
+  EXPECT_EQ(assignment, 0u);
+  EXPECT_EQ(next, 17u);
+  EXPECT_EQ(context->schedulerFinishStatus, TALOS_RT_FATAL);
+}
+
 TEST_F(RandSolveTest, FunctionPriorityPreservesSimplifiedSourceReferences) {
   auto bytes = program(2, 0,
                        {{TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 1, 0, 0},

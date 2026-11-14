@@ -1272,7 +1272,7 @@ extern "C" talos_rt_status talos_rt_v1_random_cycle_sample(
   TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_ARGUMENT; }
 }
 
-extern "C" talos_rt_status talos_rt_v1_random_solve_wide_modes_state(
+static talos_rt_status randomSolveWideModesImpl(
     talos_rt_context *context, const uint8_t *programBytes,
     uint64_t programSize, const uint64_t *startWords,
     const uint64_t *mutableMaskWords, uint64_t assignmentWordCount,
@@ -1280,7 +1280,8 @@ extern "C" talos_rt_status talos_rt_v1_random_solve_wide_modes_state(
     uint64_t rngIncrement, const uint64_t *captureWords,
     uint64_t captureWordCount, const uint32_t *captureWidths,
     uint64_t captureCount, uint64_t *outAssignmentWords, uint32_t *outSuccess,
-    uint64_t *outRngState) {
+    uint64_t *outRngState,
+    talos::runtime::FunctionStageSampleRequest *functionStage = nullptr) {
   constexpr uint64_t maxAddressableWords =
       std::numeric_limits<size_t>::max() / sizeof(uint64_t);
   if (!context || !programBytes || !startWords || !mutableMaskWords ||
@@ -1300,6 +1301,12 @@ extern "C" talos_rt_status talos_rt_v1_random_solve_wide_modes_state(
                           captureWordCount) ||
         assignmentWordCount !=
             (static_cast<uint64_t>(program.aggregateWidth) + 63) / 64)
+      return TALOS_RT_INVALID_ARGUMENT;
+    uint32_t flags = read32(programBytes + 20);
+    if (functionStage &&
+        (!(flags & TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM) ||
+         !(flags & TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY) ||
+         !program.samplerPlan.nodes))
       return TALOS_RT_INVALID_ARGUMENT;
     uint64_t aggregateHighMask = highMask(program.aggregateWidth);
     if ((startWords[assignmentWordCount - 1] & ~aggregateHighMask) != 0 ||
@@ -1325,21 +1332,28 @@ extern "C" talos_rt_status talos_rt_v1_random_solve_wide_modes_state(
     talos_rt_random_state_v1 randomState{rngState, rngIncrement};
     if (read32(programBytes + 20) & (TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM |
                                      TALOS_RT_RANDOM_PROGRAM_EXACT_WEIGHTED)) {
-      for (const DomainGroup &group : program.domainGroups) {
-        WideValue overlap =
-            extract(mutableMask.words.data(), mutableMask.words.size(),
-                    group.targetOffset, group.width);
-        if (truth(overlap))
-          for (size_t word = 0; word != overlap.words.size(); ++word)
-            if (overlap.words[word] != (word + 1 == overlap.words.size()
-                                            ? highMask(group.width)
-                                            : UINT64_MAX))
-              return TALOS_RT_INVALID_ARGUMENT;
-      }
+      // A continuation can fix only the selected argument bits of an enum
+      // or other semantic domain. Its remaining bits still obey that full
+      // domain, specialized to the already accepted argument values.
+      if (!functionStage)
+        for (const DomainGroup &group : program.domainGroups) {
+          WideValue overlap =
+              extract(mutableMask.words.data(), mutableMask.words.size(),
+                      group.targetOffset, group.width);
+          if (truth(overlap))
+            for (size_t word = 0; word != overlap.words.size(); ++word)
+              if (overlap.words[word] != (word + 1 == overlap.words.size()
+                                              ? highMask(group.width)
+                                              : UINT64_MAX))
+                return TALOS_RT_INVALID_ARGUMENT;
+        }
       if (maxAttempts == 0)
         return TALOS_RT_OK;
       std::vector<WideValue> solveLayers;
-      if (!buildSolveBeforeLayers(program.solveEdges, mutableMask,
+      // The sampler filters implicit edges using the live guarded atom's
+      // input inventory. A raw precheck could invent an inactive cycle.
+      if (!(flags & TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY) &&
+          !buildSolveBeforeLayers(program.solveEdges, mutableMask,
                                   constraintMask, solveLayers)) {
         talos::runtime::reportActiveSolveOrderCycle(context);
         return TALOS_RT_OK;
@@ -1353,9 +1367,18 @@ extern "C" talos_rt_status talos_rt_v1_random_solve_wide_modes_state(
           mutableMaskWords, assignmentWordCount, constraintMask, captureWords,
           captureWidths, captureCount, outAssignmentWords, &randomState,
           orderedMasks.data(), solveLayers.size(), nullptr,
-          program.samplerPlan.nodes ? &program.samplerPlan : nullptr);
+          program.samplerPlan.nodes ? &program.samplerPlan : nullptr,
+          functionStage);
       if (result == talos::runtime::SamplerResult::Exhausted)
         return TALOS_RT_OUT_OF_RESOURCES;
+      if (result == talos::runtime::SamplerResult::OrderCycle) {
+        talos::runtime::reportActiveSolveOrderCycle(context);
+        return TALOS_RT_OK;
+      }
+      if (functionStage &&
+          (result == talos::runtime::SamplerResult::Unavailable ||
+           result == talos::runtime::SamplerResult::Invalid))
+        return TALOS_RT_INVALID_ARGUMENT;
       if (result == talos::runtime::SamplerResult::Satisfiable)
         *outSuccess = 1;
       else
@@ -1497,4 +1520,52 @@ extern "C" talos_rt_status talos_rt_v1_random_solve_wide_modes_state(
   }
   TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
   TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_ARGUMENT; }
+}
+
+extern "C" talos_rt_status talos_rt_v1_random_solve_wide_modes_state(
+    talos_rt_context *context, const uint8_t *programBytes,
+    uint64_t programSize, const uint64_t *startWords,
+    const uint64_t *mutableMaskWords, uint64_t assignmentWordCount,
+    uint64_t constraintMask, uint64_t maxAttempts, uint64_t rngState,
+    uint64_t rngIncrement, const uint64_t *captureWords,
+    uint64_t captureWordCount, const uint32_t *captureWidths,
+    uint64_t captureCount, uint64_t *outAssignmentWords, uint32_t *outSuccess,
+    uint64_t *outRngState) {
+  return randomSolveWideModesImpl(
+      context, programBytes, programSize, startWords, mutableMaskWords,
+      assignmentWordCount, constraintMask, maxAttempts, rngState, rngIncrement,
+      captureWords, captureWordCount, captureWidths, captureCount,
+      outAssignmentWords, outSuccess, outRngState);
+}
+
+extern "C" talos_rt_status talos_rt_v1_random_function_stage(
+    talos_rt_context *context, const uint8_t *programBytes,
+    uint64_t programSize, const uint64_t *startWords,
+    const uint64_t *mutableMaskWords, uint64_t assignmentWordCount,
+    uint64_t constraintMask, uint64_t maxAttempts, uint64_t rngState,
+    uint64_t rngIncrement, const uint64_t *captureWords,
+    uint64_t captureWordCount, const uint32_t *captureWidths,
+    uint64_t captureCount, uint64_t *outAssignmentWords, uint32_t *outSuccess,
+    uint64_t *outRngState, uint64_t *outRemainingMaskWords,
+    uint32_t *outComplete) {
+  if (!outRemainingMaskWords || !outComplete)
+    return TALOS_RT_INVALID_ARGUMENT;
+  *outComplete = 0;
+  talos::runtime::FunctionStageSampleRequest stage;
+  talos_rt_status status = randomSolveWideModesImpl(
+      context, programBytes, programSize, startWords, mutableMaskWords,
+      assignmentWordCount, constraintMask, maxAttempts, rngState, rngIncrement,
+      captureWords, captureWordCount, captureWidths, captureCount,
+      outAssignmentWords, outSuccess, outRngState, &stage);
+  if (status != TALOS_RT_OK)
+    return status;
+  if (*outSuccess) {
+    std::copy(stage.remainingMask.begin(), stage.remainingMask.end(),
+              outRemainingMaskWords);
+    *outComplete = stage.complete;
+  } else {
+    std::fill_n(outRemainingMaskWords, static_cast<size_t>(assignmentWordCount),
+                0);
+  }
+  return TALOS_RT_OK;
 }

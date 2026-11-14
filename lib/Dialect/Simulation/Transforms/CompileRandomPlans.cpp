@@ -78,6 +78,8 @@ public:
         compiled = compile(narrow, cache);
       else if (auto wide = dyn_cast<sim::SimRandomSolveWideOp>(op))
         compiled = compile(wide, cache);
+      else if (auto stage = dyn_cast<sim::SimRandomFunctionStageOp>(op))
+        compiled = compile(stage, cache);
       else if (auto cyclic = dyn_cast<sim::SimRandomCycleSampleOp>(op))
         compiled = compile(cyclic, cache);
       return failed(compiled) ? WalkResult::interrupt() : WalkResult::advance();

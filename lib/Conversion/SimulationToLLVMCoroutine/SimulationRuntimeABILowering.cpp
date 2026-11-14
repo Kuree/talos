@@ -691,6 +691,13 @@ void declareNativeRuntimeABI(ModuleOp module) {
        managedI64, managedPointer, managedI64, managedPointer, managedI64,
        managedPointer, managedPointer, managedPointer});
   getOrDeclareLLVMFunction(
+      module, "talos_rt_v1_random_function_stage", managedI32,
+      {managedPointer, managedPointer, managedI64, managedPointer,
+       managedPointer, managedI64, managedI64, managedI64, managedI64,
+       managedI64, managedPointer, managedI64, managedPointer, managedI64,
+       managedPointer, managedPointer, managedPointer, managedPointer,
+       managedPointer});
+  getOrDeclareLLVMFunction(
       module, "talos_rt_v1_random_cycle_sample", managedI32,
       {managedPointer, managedPointer, managedI64,     managedPointer,
        managedPointer, managedI64,     managedI64,     managedI64,

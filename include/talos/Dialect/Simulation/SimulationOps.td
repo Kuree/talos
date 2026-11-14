@@ -2610,6 +2610,32 @@ def SimRandomSolveWideOp : SimOp<"random.solve_wide", [
   let hasVerifier = 1;
 }
 
+def SimRandomFunctionStageOp : SimOp<"random.function_stage", [
+    MemoryEffects<[MemRead<SimRNGResource>]>,
+    AllTypesMatch<["start", "mutable_mask", "assignment", "remaining_mask"]>
+  ]> {
+  let summary = "sample one tentative constraint-function argument stage";
+  let description = [{
+    Executes one priority stage of a version-2 exact compiled plan. The caller
+    evaluates newly ready pure functions in ordinary Simulation IR, replaces
+    their return-value captures, and resumes with the returned assignment,
+    remaining mask and RNG. Fields and RNG are published only after success
+    and complete are both true. A zero remaining mask can still precede a
+    final function-result check. Values use the same flat-word runtime ABI as
+    random.solve_wide, including arbitrary-width selected argument paths.
+  }];
+  let arguments = (ins SimContextType:$context, AnySignlessInteger:$start,
+                       AnySignlessInteger:$mutable_mask,
+                       I64:$constraint_mask, I64:$max_attempts,
+                       I64:$rng_state, I64:$rng_increment,
+                       Variadic<AnySignlessInteger>:$captures,
+                       StrAttr:$program);
+  let results = (outs AnySignlessInteger:$assignment, I1:$success,
+                       I64:$next_rng_state,
+                       AnySignlessInteger:$remaining_mask, I1:$complete);
+  let hasVerifier = 1;
+}
+
 def SimRandomCycleSampleOp : SimOp<"random.cycle_sample", [
     SimAllocatesManagedStorage,
     MemoryEffects<[MemRead<SimRNGResource>, MemRead<SimHeapResource>,

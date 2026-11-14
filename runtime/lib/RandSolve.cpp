@@ -931,7 +931,10 @@ randomSolveModesImpl(talos_rt_context *context, const uint8_t *program,
     mutableMask &= mask;
     std::vector<uint64_t> solveLayers;
     bool activeSolveBefore = false;
-    if (encodedSolveBefore) {
+    // Function-priority edges are filtered with the guarded source inventory
+    // inside sampleRandomPlan before checking its effective ordering graph.
+    if (encodedSolveBefore &&
+        !(programFlags & TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY)) {
       if (!buildSolveBeforeLayers(solveEdges, mutableMask, constraintMask,
                                   solveLayers)) {
         talos::runtime::reportActiveSolveOrderCycle(context);
@@ -979,6 +982,10 @@ randomSolveModesImpl(talos_rt_context *context, const uint8_t *program,
           plan.nodes ? &plan : nullptr);
       if (result == talos::runtime::SamplerResult::Exhausted)
         return TALOS_RT_OUT_OF_RESOURCES;
+      if (result == talos::runtime::SamplerResult::OrderCycle) {
+        talos::runtime::reportActiveSolveOrderCycle(context);
+        return TALOS_RT_OK;
+      }
       if (result == talos::runtime::SamplerResult::Satisfiable)
         *outSuccess = 1;
       return TALOS_RT_OK;

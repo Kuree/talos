@@ -1861,7 +1861,7 @@ public:
         adaptor.getRngState().size() != 1 ||
         adaptor.getRngIncrement().size() != 1)
       return failure();
-    if constexpr (std::is_same_v<Op, sim::SimRandomSolveWideOp>) {
+    if constexpr (!std::is_same_v<Op, sim::SimRandomCycleSampleOp>) {
       if (adaptor.getMaxAttempts().size() != 1)
         return failure();
     } else {
@@ -1965,7 +1965,7 @@ public:
                                  mutableAddress,
                                  c64(assignmentWords),
                                  adaptor.getConstraintMask().front()};
-    if constexpr (std::is_same_v<Op, sim::SimRandomSolveWideOp>)
+    if constexpr (!std::is_same_v<Op, sim::SimRandomCycleSampleOp>)
       arguments.push_back(adaptor.getMaxAttempts().front());
     arguments.append(
         {adaptor.getRngState().front(), adaptor.getRngIncrement().front()});
@@ -1984,6 +1984,14 @@ public:
     arguments.append({captureAddress, c64(captureWordCount),
                       captureWidthsAddress, c64(captures.size()),
                       assignmentAddress, successStorage, nextRngState});
+    Value remainingAddress, completeStorage;
+    if constexpr (std::is_same_v<Op, sim::SimRandomFunctionStageOp>) {
+      functionName = "talos_rt_v1_random_function_stage";
+      remainingAddress =
+          entryAlloca(rewriter, op.getLoc(), i64, assignmentWords, 8);
+      completeStorage = entryAlloca(rewriter, op.getLoc(), i32, 1, 4);
+      arguments.append({remainingAddress, completeStorage});
+    }
     if constexpr (std::is_same_v<Op, sim::SimRandomCycleSampleOp>)
       arguments.append({nextKey, nextPosition, nextDomain});
     Value status =
@@ -1993,33 +2001,42 @@ public:
             .getResult();
     reportManagedStatus(rewriter, op.getLoc(), context, status);
 
-    Value result =
-        arith::ConstantOp::create(rewriter, op.getLoc(), assignmentType,
-                                  rewriter.getIntegerAttr(assignmentType, 0));
-    for (uint64_t index = 0; index != assignmentWords; ++index) {
-      Value word =
-          LLVM::LoadOp::create(rewriter, op.getLoc(), i64,
-                               byteGEP(rewriter, op.getLoc(), assignmentAddress,
-                                       index * sizeof(uint64_t)),
-                               8);
-      if (assignmentType.getWidth() > 64)
-        word =
-            LLVM::ZExtOp::create(rewriter, op.getLoc(), assignmentType, word);
-      else if (assignmentType.getWidth() < 64)
-        word =
-            LLVM::TruncOp::create(rewriter, op.getLoc(), assignmentType, word);
-      if (index != 0)
-        word = arith::ShLIOp::create(
-            rewriter, op.getLoc(), word,
-            llvmConstant(rewriter, op.getLoc(), assignmentType, index * 64));
-      result = arith::OrIOp::create(rewriter, op.getLoc(), result, word);
-    }
+    auto loadWords = [&](Value address) -> Value {
+      Value result =
+          arith::ConstantOp::create(rewriter, op.getLoc(), assignmentType,
+                                    rewriter.getIntegerAttr(assignmentType, 0));
+      for (uint64_t index = 0; index != assignmentWords; ++index) {
+        Value word = LLVM::LoadOp::create(
+            rewriter, op.getLoc(), i64,
+            byteGEP(rewriter, op.getLoc(), address, index * sizeof(uint64_t)),
+            8);
+        if (assignmentType.getWidth() > 64)
+          word =
+              LLVM::ZExtOp::create(rewriter, op.getLoc(), assignmentType, word);
+        else if (assignmentType.getWidth() < 64)
+          word = LLVM::TruncOp::create(rewriter, op.getLoc(), assignmentType,
+                                       word);
+        if (index != 0)
+          word = arith::ShLIOp::create(
+              rewriter, op.getLoc(), word,
+              llvmConstant(rewriter, op.getLoc(), assignmentType, index * 64));
+        result = arith::OrIOp::create(rewriter, op.getLoc(), result, word);
+      }
+      return result;
+    };
+    Value result = loadWords(assignmentAddress);
     Value successValue = LLVM::TruncOp::create(
         rewriter, op.getLoc(), rewriter.getI1Type(),
         LLVM::LoadOp::create(rewriter, op.getLoc(), i32, successStorage, 4));
     Value nextState =
         LLVM::LoadOp::create(rewriter, op.getLoc(), i64, nextRngState, 8);
     SmallVector<Value> results{result, successValue, nextState};
+    if constexpr (std::is_same_v<Op, sim::SimRandomFunctionStageOp>) {
+      Value completeValue = LLVM::TruncOp::create(
+          rewriter, op.getLoc(), rewriter.getI1Type(),
+          LLVM::LoadOp::create(rewriter, op.getLoc(), i32, completeStorage, 4));
+      results.append({loadWords(remainingAddress), completeValue});
+    }
     if constexpr (std::is_same_v<Op, sim::SimRandomCycleSampleOp>)
       for (Value address : {nextKey, nextPosition, nextDomain})
         results.push_back(
@@ -2031,6 +2048,8 @@ public:
 
 using RandomSolveWideConversion =
     RandomPlanWideConversion<sim::SimRandomSolveWideOp>;
+using RandomFunctionStageConversion =
+    RandomPlanWideConversion<sim::SimRandomFunctionStageOp>;
 using RandomCycleSampleConversion =
     RandomPlanWideConversion<sim::SimRandomCycleSampleOp>;
 
@@ -2238,11 +2257,11 @@ void populateManagedContainerToLLVMConversionPatterns(
       ContainerExportBitstreamConversion, RecursiveExportBitstreamConversion,
       AggregateExportBitstreamConversion, AggregateImportBitstreamConversion>(
       converter, context, dataLayout);
-  patterns.add<RandomSolveWideConversion, RandomCycleSampleConversion,
-               RandomRealToRankConversion, RandomRealFromRankConversion,
-               SampledReadConversion, SampledHistoryConversion,
-               ClockedSampleUpdateConversion, ClockedSampleReadConversion>(
-      converter, context);
+  patterns.add<RandomSolveWideConversion, RandomFunctionStageConversion,
+               RandomCycleSampleConversion, RandomRealToRankConversion,
+               RandomRealFromRankConversion, SampledReadConversion,
+               SampledHistoryConversion, ClockedSampleUpdateConversion,
+               ClockedSampleReadConversion>(converter, context);
   populateManagedAssociativeToLLVMConversionPatterns(patterns, converter);
 }
 

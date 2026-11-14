@@ -1649,7 +1649,7 @@ public:
     if (!buildSolveOrderLayers(edges,
                                OrderMask(mutableMask, mutableMask + wordCount),
                                disabledBlocks, true, stages, false, &arguments))
-      return SamplerResult::Unavailable;
+      return SamplerResult::OrderCycle;
     std::vector<size_t> inputStages(bits.size(), 0);
     for (size_t bit = 0; bit != bits.size(); ++bit)
       for (size_t stage = 0; stage != stages.size(); ++stage)
@@ -1722,7 +1722,7 @@ public:
       std::vector<OrderMask> layers;
       if (!buildSolveOrderLayers(edges, stages[stage], disabledBlocks, false,
                                  layers, true))
-        return SamplerResult::Unavailable;
+        return SamplerResult::OrderCycle;
       if (layers.empty())
         layers.push_back(stages[stage]);
       for (const OrderMask &layer : layers)

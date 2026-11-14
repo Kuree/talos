@@ -19,6 +19,7 @@ enum class SamplerResult {
   Unavailable,
   Satisfiable,
   Unsatisfiable,
+  OrderCycle,
   Invalid,
   Exhausted
 };

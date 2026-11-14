@@ -31,6 +31,7 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/ADT/bit.h"
+#include "llvm/Support/Endian.h"
 #include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
@@ -1426,6 +1427,31 @@ LogicalResult SimRandomSolveWideOp::verify() {
   for (Value capture : getCaptures())
     if (!isa<IntegerType>(capture.getType()))
       return emitOpError("captures must be signless integers");
+  return success();
+}
+
+LogicalResult SimRandomFunctionStageOp::verify() {
+  StringRef program = getProgram();
+  const auto *bytes = reinterpret_cast<const uint8_t *>(program.data());
+  if (program.size() < TALOS_RT_RANDOM_PROGRAM_HEADER_SIZE_V2)
+    return emitOpError("requires a complete version-2 program header");
+  if (llvm::support::endian::read32le(bytes) != TALOS_RT_RANDOM_PROGRAM_MAGIC ||
+      llvm::support::endian::read16le(bytes + 4) !=
+          TALOS_RT_RANDOM_PROGRAM_VERSION_V2)
+    return emitOpError("requires a version-2 random program");
+  uint32_t flags = llvm::support::endian::read32le(bytes + 20);
+  uint32_t required = TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM |
+                      TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY;
+  if ((flags & required) != required)
+    return emitOpError("requires exact uniform function-priority sampling");
+  uint64_t width = llvm::support::endian::read32le(bytes + 8);
+  unsigned valueWidth = cast<IntegerType>(getStart().getType()).getWidth();
+  if (!width || width > valueWidth ||
+      (width + 63) / 64 != (uint64_t{valueWidth} + 63) / 64)
+    return emitOpError(
+        "program width must fit the assignment's word inventory");
+  if (llvm::support::endian::read32le(bytes + 16) != getCaptures().size())
+    return emitOpError("program capture count must match the capture operands");
   return success();
 }
 

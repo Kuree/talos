@@ -828,6 +828,8 @@ LogicalResult lowerPackedSimulationOperations(
       program = solve.getProgram();
     else if (auto solve = dyn_cast<sim::SimRandomSolveWideOp>(operation))
       program = solve.getProgram();
+    else if (auto stage = dyn_cast<sim::SimRandomFunctionStageOp>(operation))
+      program = stage.getProgram();
     else if (auto cyclic = dyn_cast<sim::SimRandomCycleSampleOp>(operation))
       program = cyclic.getProgram();
     if (!program.empty()) {
@@ -1203,21 +1205,21 @@ LogicalResult lowerPackedSimulationOperations(
         sim::SimRandomSeedOp, sim::SimRandomBoundedOp,
         sim::SimRandomDistributionOp, sim::SimStochasticQueueOp,
         sim::SimRandomCycleNextOp, sim::SimRandomSolveOp,
-        sim::SimRandomSolveWideOp, sim::SimRandomCycleSampleOp,
-        sim::SimRandomRealToRankOp, sim::SimRandomRealFromRankOp,
-        sim::SimStringLiteralOp, sim::SimStringFromPackedOp,
-        sim::SimStringToPackedOp, sim::SimStringToPackedExactOp,
-        sim::SimStringConcatOp, sim::SimStringRepeatOp, sim::SimStringLengthOp,
-        sim::SimStringGetcOp, sim::SimStringPutcOp, sim::SimStringSubstrOp,
-        sim::SimStringCompareOp, sim::SimStringCaseConvertOp,
-        sim::SimStringParseIntegerOp, sim::SimStringParseLogicOp,
-        sim::SimStringParseRealOp, sim::SimStringParseRealConstantOp,
-        sim::SimPlusargParseLogicOp, sim::SimPlusargParseRealOp,
-        sim::SimStringScanFieldOp, sim::SimScanDynamicValidateOp,
-        sim::SimStringScanDynamicOp, sim::SimStringScanRawOp,
-        sim::SimStringSkipRawOp, sim::SimStringFormatIntegerOp,
-        sim::SimStringFormatRealOp, sim::SimFileScanDynamicOp,
-        sim::SimFileScanRawOp, sim::SimFileSkipRawOp,
+        sim::SimRandomSolveWideOp, sim::SimRandomFunctionStageOp,
+        sim::SimRandomCycleSampleOp, sim::SimRandomRealToRankOp,
+        sim::SimRandomRealFromRankOp, sim::SimStringLiteralOp,
+        sim::SimStringFromPackedOp, sim::SimStringToPackedOp,
+        sim::SimStringToPackedExactOp, sim::SimStringConcatOp,
+        sim::SimStringRepeatOp, sim::SimStringLengthOp, sim::SimStringGetcOp,
+        sim::SimStringPutcOp, sim::SimStringSubstrOp, sim::SimStringCompareOp,
+        sim::SimStringCaseConvertOp, sim::SimStringParseIntegerOp,
+        sim::SimStringParseLogicOp, sim::SimStringParseRealOp,
+        sim::SimStringParseRealConstantOp, sim::SimPlusargParseLogicOp,
+        sim::SimPlusargParseRealOp, sim::SimStringScanFieldOp,
+        sim::SimScanDynamicValidateOp, sim::SimStringScanDynamicOp,
+        sim::SimStringScanRawOp, sim::SimStringSkipRawOp,
+        sim::SimStringFormatIntegerOp, sim::SimStringFormatRealOp,
+        sim::SimFileScanDynamicOp, sim::SimFileScanRawOp, sim::SimFileSkipRawOp,
         sim::SimFileOpenStringMCDOp, sim::SimFileOpenStringOp,
         sim::SimFileGetlineStringOp, sim::SimFileErrorStringOp,
         sim::SimTimeFormatOp, sim::SimTimeScanScaleOp, sim::SimPlusargTestOp,

@@ -1498,6 +1498,7 @@ enum {
   TALOS_RT_INTRINSIC_V1_RANDOM_CYCLE_SAMPLE = UINT32_C(0x00010486),
   TALOS_RT_INTRINSIC_V1_STRING_PARSE_REAL_CONSTANT = UINT32_C(0x00010487),
   TALOS_RT_INTRINSIC_V1_MANAGED_NBA_MASKED = UINT32_C(0x00010488),
+  TALOS_RT_INTRINSIC_V1_RANDOM_FUNCTION_STAGE = UINT32_C(0x00010489),
   TALOS_RT_INTRINSIC_V1_VPI_ROOT = UINT32_C(0x00011000),
   TALOS_RT_INTRINSIC_V1_VPI_CHILD = UINT32_C(0x00011001),
   TALOS_RT_INTRINSIC_V1_VPI_SIBLING = UINT32_C(0x00011002),
@@ -5947,6 +5948,25 @@ talos_rt_status talos_rt_v1_random_solve_wide_modes_state(
     const uint32_t *capture_widths, uint64_t capture_count,
     uint64_t *out_assignment_words, uint32_t *out_success,
     uint64_t *out_rng_state);
+// Yield one function-priority stage of an exact version-2 compiled plan.
+// Returned assignments and RNG are tentative: the caller evaluates newly
+// ready pure functions, refreshes their captures, and resumes with the returned
+// remaining mask. Publish fields and RNG only after success AND complete.
+// A zero remaining mask can still require a final function-result check.
+// Partial mutable semantic domains are supported for selected argument bits.
+// On a valid unsuccessful request assignment/remaining/complete are zero and
+// RNG is unchanged. Invalid metadata does not publish an assignment; as with
+// other pointer/count APIs, outputs must not alias inputs or each other.
+talos_rt_status talos_rt_v1_random_function_stage(
+    talos_rt_context *context, const uint8_t *program, uint64_t program_size,
+    const uint64_t *start_words, const uint64_t *mutable_mask_words,
+    uint64_t assignment_word_count, uint64_t constraint_mask,
+    uint64_t max_attempts, uint64_t rng_state, uint64_t rng_increment,
+    const uint64_t *capture_words, uint64_t capture_word_count,
+    const uint32_t *capture_widths, uint64_t capture_count,
+    uint64_t *out_assignment_words, uint32_t *out_success,
+    uint64_t *out_rng_state, uint64_t *out_remaining_mask_words,
+    uint32_t *out_complete);
 // Project one cyclic field from a version-2 compiler sampling plan. Histories
 // are immutable managed strings that callers keep rooted like other strings.
 // No field, history or supplied RNG is changed on an unsuccessful stage.
