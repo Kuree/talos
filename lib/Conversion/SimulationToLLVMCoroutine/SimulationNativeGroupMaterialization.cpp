@@ -851,7 +851,6 @@ promoteGroupState(LLVM::LLVMFuncOp function,
     return success();
   OpBuilder builder(function.getContext());
   builder.setInsertionPointToStart(&function.getBody().front());
-  OpBuilder::InsertPoint entry = builder.saveInsertionPoint();
   Location location = function.getLoc();
   struct Slot {
     uint64_t offset;
@@ -879,8 +878,12 @@ promoteGroupState(LLVM::LLVMFuncOp function,
     // block, acquire at its first access and publish after its last access.
     // This preserves source order and avoids touching state on a skipped
     // branch. Intervening observers still flush/reacquire below (38.15/38.34).
+    // Otherwise acquire at the function entry, right after the window's
+    // slot: no position among the accesses this loop erases.
     if (window->scope)
       builder.setInsertionPoint(window->first);
+    else
+      builder.setInsertionPointAfter(local.getDefiningOp());
     Slot slot{window->offset, local, type, window};
     LLVM::StoreOp::create(builder, location, acquire(location, slot), local, 1);
     slots.push_back(slot);
@@ -933,7 +936,6 @@ promoteGroupState(LLVM::LLVMFuncOp function,
                                        local, 1));
         operation->erase();
       }
-    builder.restoreInsertionPoint(entry);
   }
   for (Operation *boundary : boundaries) {
     builder.setInsertionPoint(boundary);
