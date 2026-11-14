@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <list>
 #include <map>
 #include <memory>
 #include <numeric>
@@ -403,6 +404,60 @@ struct LocalRelation {
   }
 };
 
+/// Fully specialized local relations recur across randomize calls, even when
+/// a field moves to another physical offset or a capture cycles through a
+/// small domain. Match the complete canonical shape, including input count
+/// and complemented root, rather than program addresses or a hash alone.
+/// Entries own only immutable rank tables; no source circuit or RNG state
+/// survives a call. Worker-local storage needs no lock and is bounded.
+class LocalSamplerCache {
+public:
+  const ModelSampler *find(const LocalRelation &local, uint64_t hash) {
+    for (auto entry = entries.begin(); entry != entries.end(); ++entry)
+      if (entry->hash == hash && entry->shape == local.shape) {
+        entries.splice(entries.begin(), entries, entry);
+        return &entries.front().sampler;
+      }
+    return nullptr;
+  }
+
+  void remember(const LocalRelation &local, uint64_t hash,
+                const ModelCounter &counter) {
+    size_t shapeBytes = local.shape.size() * sizeof(uint32_t);
+    constexpr size_t overhead = sizeof(Entry) + 2 * sizeof(void *);
+    if (shapeBytes > maxBytes - overhead)
+      return;
+    auto sampler = counter.sampler(maxBytes - overhead - shapeBytes);
+    if (!sampler)
+      return;
+    Entry entry{hash, local.shape, std::move(*sampler), 0};
+    entry.bytes = sizeof(Entry) + 2 * sizeof(void *) +
+                  entry.shape.capacity() * sizeof(uint32_t) +
+                  entry.sampler.storageBytes();
+    if (entry.bytes > maxBytes)
+      return;
+    while (!entries.empty() &&
+           (entries.size() >= maxEntries || bytes > maxBytes - entry.bytes)) {
+      bytes -= entries.back().bytes;
+      entries.pop_back();
+    }
+    entries.push_front(std::move(entry));
+    bytes += entries.front().bytes;
+  }
+
+private:
+  static constexpr size_t maxEntries = 64;
+  static constexpr size_t maxBytes = size_t{4} << 20;
+  struct Entry {
+    uint64_t hash;
+    std::vector<uint32_t> shape;
+    ModelSampler sampler;
+    size_t bytes;
+  };
+  size_t bytes = 0;
+  std::list<Entry> entries;
+};
+
 /// The runtime handles Boolean cofactors and exact ranks only. Arithmetic
 /// expressions and their validity predicates were lowered by compiler Z3.
 class Formula {
@@ -667,27 +722,33 @@ public:
     // shape; each distinct relation is built and counted once.
     std::vector<std::pair<const LocalRelation *, ModelCounter>> counters;
     std::unordered_map<uint64_t, std::vector<size_t>> shapes;
+    thread_local LocalSamplerCache cachedSamplers;
     for (LocalRelation &local : locals) {
-      std::vector<size_t> &candidates = shapes[local.hash()];
-      auto same =
-          std::find_if(candidates.begin(), candidates.end(), [&](size_t index) {
-            return counters[index].first->shape == local.shape;
-          });
-      if (same == candidates.end()) {
-        local.build();
-        candidates.push_back(counters.size());
-        counters.emplace_back(&local,
-                              ModelCounter(local.circuit, local.inputs));
-        if (!counters.back().second.build(local.root))
-          return SamplerResult::Invalid;
-        same = candidates.end() - 1;
+      uint64_t hash = local.hash();
+      const ModelSampler *sampler = cachedSamplers.find(local, hash);
+      if (!sampler) {
+        std::vector<size_t> &candidates = shapes[hash];
+        auto same = std::find_if(
+            candidates.begin(), candidates.end(), [&](size_t index) {
+              return counters[index].first->shape == local.shape;
+            });
+        if (same == candidates.end()) {
+          local.build();
+          candidates.push_back(counters.size());
+          counters.emplace_back(&local,
+                                ModelCounter(local.circuit, local.inputs));
+          if (!counters.back().second.build(local.root))
+            return SamplerResult::Invalid;
+          cachedSamplers.remember(local, hash, counters.back().second);
+          same = candidates.end() - 1;
+        }
+        sampler = &counters[*same].second;
       }
-      const ModelCounter &counter = counters[*same].second;
-      ModelCount count = counter.count();
+      ModelCount count = sampler->count();
       if (count.zero())
         return SamplerResult::Unsatisfiable;
       std::vector<bool> value =
-          counter.assignment(ModelCount::randomBelow(count, state));
+          sampler->assignment(ModelCount::randomBelow(count, state));
       for (size_t input = 0; input != local.originals.size(); ++input) {
         fixed[local.originals[input]] = true;
         fixedValues[local.originals[input]] = value[input];

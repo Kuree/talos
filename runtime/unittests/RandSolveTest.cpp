@@ -1881,6 +1881,67 @@ TEST_F(RandSolveTest, UniformResidualUsesWholeJointSetInsteadOfCyclicGaps) {
             TALOS_RT_INVALID_ARGUMENT);
 }
 
+#ifdef TALOS_TEST_COMPILED_SAMPLER
+TEST_F(RandSolveTest, RepeatedSamplesFollowLiveCapturesModesAndFrozenValues) {
+  auto bytes = program(16, 1,
+                       {{TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 8, 0, 0},
+                        {TALOS_RT_RANDOM_PUSH_CAPTURE_V1, 8, 0, 0},
+                        {TALOS_RT_RANDOM_LT_V1, 1},
+                        {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 0},
+                        {TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 8, 0, 0},
+                        {TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 8, 0, 8},
+                        {TALOS_RT_RANDOM_EQ_V1, 1},
+                        {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, 1}});
+  bytes[20] |= TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM;
+  appendTestSamplerPlan(bytes);
+  struct Result {
+    uint64_t value, state;
+  };
+  std::vector<Result> first;
+  // More specialized relations than the cache holds, followed by an exact
+  // replay. Eviction and warm tables must preserve assignments and draws.
+  for (unsigned pass = 0; pass != 2; ++pass)
+    for (uint64_t capture = 0; capture != 97; ++capture)
+      for (uint64_t disabled = 0; disabled != 4; ++disabled)
+        for (bool frozen : {false, true}) {
+          SCOPED_TRACE(::testing::Message()
+                       << "pass=" << pass << " capture=" << capture
+                       << " disabled=" << disabled << " frozen=" << frozen);
+          uint64_t start = (capture ^ 1) << 8;
+          uint64_t state = 12345, assignment = UINT64_MAX;
+          uint32_t success = 0;
+          ASSERT_EQ(talos_rt_v1_random_solve_modes_state(
+                        context, bytes.data(), bytes.size(), start,
+                        frozen ? 255 : 65535, disabled, 1, state, 15, &capture,
+                        1, &assignment, &success, &state),
+                    TALOS_RT_OK);
+          bool possible = (disabled & 1) ||
+                          (frozen && !(disabled & 2) ? (capture ^ 1) < capture
+                                                     : capture != 0);
+          ASSERT_EQ(success, possible);
+          if (possible) {
+            uint64_t x = assignment & 255, y = assignment >> 8;
+            EXPECT_TRUE((disabled & 1) || x < capture);
+            EXPECT_TRUE((disabled & 2) || x == y);
+            if (frozen)
+              EXPECT_EQ(y, capture ^ 1);
+          } else {
+            EXPECT_EQ(state, 12345u);
+            // The ABI clears its tentative result; generated callers commit
+            // it to the source variables only on success (LRM 18.6.3).
+            EXPECT_EQ(assignment, 0u);
+          }
+          size_t index = (capture * 4 + disabled) * 2 + frozen;
+          if (pass == 0)
+            first.push_back({assignment, state});
+          else {
+            EXPECT_EQ(assignment, first[index].value);
+            EXPECT_EQ(state, first[index].state);
+          }
+        }
+}
+#endif
+
 TEST_F(RandSolveTest, WeightedRangesRetainOriginalMassAfterFiltering) {
   // LRM 18.5.3: x>101; x dist {[100:102]:=1, 103:=1} gives 102
   // three times 103's mass. With :/ the two items have equal mass.

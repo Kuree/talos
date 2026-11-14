@@ -2,12 +2,14 @@
 
 #include "gtest/gtest.h"
 
+#include <optional>
 #include <set>
 
 using talos::random::BooleanCircuit;
 using talos::random::PlanOpcode;
 using talos::runtime::ModelCount;
 using talos::runtime::ModelCounter;
+using talos::runtime::ModelSampler;
 using ID = BooleanCircuit::ID;
 
 namespace {
@@ -99,6 +101,69 @@ TEST_F(RandModelCountTest, CountsWideImplicationIncludingItsSingleton) {
   auto last = counter.assignment(ModelCount::powerOfTwo(130));
   EXPECT_FALSE(last.back());
   EXPECT_EQ(std::count(last.begin(), last.end() - 1, true), 130);
+}
+
+TEST(RandModelSamplerTest,
+     OwnsProjectedRanksAfterCounterAndCircuitDestruction) {
+  std::optional<ModelSampler> sampler;
+  {
+    BooleanCircuit circuit;
+    std::vector<ID> bits;
+    for (unsigned bit = 0; bit != 7; ++bit)
+      bits.push_back(circuit.input(PlanOpcode::RandomBit, bit, bit));
+    // Project away bit 2 from b0 -> (b1 && !b2), and bit 4 from
+    // b3 != b4. The remaining legal choices are (!b0 || b1) and free b3.
+    ID predicate = circuit.conjunction(
+        circuit.disjunction(bits[0] ^ 1,
+                            circuit.conjunction(bits[1], bits[2] ^ 1)),
+        circuit.exclusiveOr(bits[3], bits[4]));
+    ModelCounter counter(circuit, bits);
+    ASSERT_TRUE(counter.build(predicate));
+    std::vector<bool> values(7), fixed(7);
+    values[5] = fixed[5] = true;
+    counter.restrict(values, fixed);
+    counter.project({true, true, false, true, false, false, false});
+    sampler = counter.sampler();
+    ASSERT_TRUE(sampler);
+    ASSERT_TRUE(counter.constrain(0));
+    EXPECT_TRUE(counter.count().zero());
+    auto empty = counter.sampler();
+    ASSERT_TRUE(empty);
+    EXPECT_LT(empty->storageBytes(), counter.storageBytes());
+    EXPECT_FALSE(counter.sampler(0));
+    EXPECT_TRUE(counter.sampler(empty->storageBytes()));
+  }
+  ASSERT_EQ(sampler->count().compare(ModelCount(6)), 0);
+  std::set<unsigned> actual;
+  for (unsigned rank = 0; rank != 6; ++rank) {
+    auto bits = sampler->assignment(ModelCount(rank));
+    unsigned value = 0;
+    for (unsigned bit = 0; bit != bits.size(); ++bit)
+      value |= unsigned(bits[bit]) << bit;
+    EXPECT_TRUE(sampler->contains(bits));
+    EXPECT_TRUE(actual.insert(value).second);
+  }
+  EXPECT_EQ(actual, (std::set<unsigned>{32, 34, 35, 40, 42, 43}));
+}
+
+TEST(RandModelSamplerTest, OwnsArbitraryPrecisionFullCube) {
+  std::optional<ModelSampler> sampler;
+  {
+    BooleanCircuit circuit;
+    std::vector<ID> bits;
+    for (unsigned bit = 0; bit != 130; ++bit)
+      bits.push_back(circuit.input(PlanOpcode::RandomBit, bit, bit));
+    ModelCounter counter(circuit, bits);
+    ASSERT_TRUE(counter.build(1));
+    sampler = counter.sampler();
+  }
+  EXPECT_EQ(sampler->count().compare(ModelCount::powerOfTwo(130)), 0);
+  ModelCount last = sampler->count();
+  last.subtract(ModelCount(1));
+  auto bits = sampler->assignment(last);
+  EXPECT_EQ(std::count(bits.begin(), bits.end(), true), 130);
+  bits = sampler->assignment(ModelCount());
+  EXPECT_EQ(std::count(bits.begin(), bits.end(), true), 0);
 }
 
 TEST_F(RandModelCountTest, FullWideCubeAndRejectionSamplingPreservePrecision) {

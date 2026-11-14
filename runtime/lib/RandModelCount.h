@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace talos::runtime {
@@ -18,6 +19,7 @@ namespace talos::runtime {
 class CountWords {
 public:
   size_t size() const { return count; }
+  size_t allocatedBytes() const { return heap.capacity() * sizeof(uint64_t); }
   bool empty() const { return count == 0; }
   uint64_t *begin() { return data(); }
   uint64_t *end() { return data() + count; }
@@ -226,6 +228,8 @@ public:
                                           __builtin_clzll(words.back()));
   }
 
+  size_t allocatedBytes() const { return words.allocatedBytes(); }
+
 private:
   void normalize() {
     while (!words.empty() && words.back() == 0)
@@ -235,17 +239,146 @@ private:
   CountWords words;
 };
 
-/// Exact counts, projections and ranks for a compiler-produced Boolean plan.
-/// Shared with bounded compiler preparation; target counting has no budget.
-/// Iterative graph walks also avoid a bit-width-dependent WASM call stack.
-class ModelCounter {
+/// Immutable exact ranks, independent of the circuit used to construct them.
+/// A compact copy can outlive both the counter and its specialized circuit.
+class ModelSampler {
 public:
   using ID = size_t;
 
+  ModelCount count() const {
+    return counts[viewRoot].shifted(levels[nodes[viewRoot].variable]);
+  }
+
+  /// Whether the projected relation contains a complete assignment.
+  bool contains(const std::vector<bool> &value) const {
+    ID current = viewRoot;
+    while (current > 1)
+      current = value[nodes[current].variable] ? nodes[current].high
+                                               : nodes[current].low;
+    return current == 1;
+  }
+
+  /// Each rank names one legal assignment exactly once. Skipped variables
+  /// denote a full cube, whose cardinality is included rather than enumerated.
+  std::vector<bool> assignment(ModelCount rank) const {
+    std::vector<bool> value = fixedValues;
+    ID current = viewRoot;
+    for (size_t variable = 0; variable != variableCount; ++variable) {
+      if (!sampled[variable])
+        continue;
+      const Node &node = nodes[current];
+      bool skipped = variable < node.variable;
+      ID low = skipped ? current : node.low;
+      ModelCount lowCount = counts[low].shifted(levels[nodes[low].variable] -
+                                                levels[variable] - 1);
+      bool high = rank.compare(lowCount) >= 0;
+      if (high) {
+        rank.subtract(lowCount);
+        value[variable] = true;
+      }
+      if (!skipped)
+        current = high ? node.high : node.low;
+    }
+    return value;
+  }
+
+  size_t storageBytes() const {
+    size_t bytes = sizeof(*this) + nodes.capacity() * sizeof(Node) +
+                   counts.capacity() * sizeof(ModelCount) +
+                   levels.capacity() * sizeof(size_t) +
+                   fixedValues.capacity() / 8 + sampled.capacity() / 8;
+    for (const ModelCount &count : counts)
+      bytes += count.allocatedBytes();
+    return bytes;
+  }
+
+  /// Retain only the completed sampling view. Construction caches, dead
+  /// nodes, and the source circuit are unnecessary for drawing another rank.
+  std::optional<ModelSampler> sampler(size_t maxBytes = SIZE_MAX) const {
+    auto reached = reachable(viewRoot);
+    size_t retained = 2 + std::count(reached.begin() + 2, reached.end(), true);
+    size_t bytes = sizeof(ModelSampler) + levels.size() * sizeof(size_t) +
+                   fixedValues.capacity() / 8 + sampled.capacity() / 8;
+    if (bytes > maxBytes ||
+        retained > (maxBytes - bytes) / (sizeof(Node) + sizeof(ModelCount)))
+      return std::nullopt;
+    bytes += retained * (sizeof(Node) + sizeof(ModelCount));
+    for (ID id = 0; id != nodes.size(); ++id) {
+      if (id > 1 && !reached[id])
+        continue;
+      size_t allocated = counts[id].allocatedBytes();
+      if (allocated > maxBytes - bytes)
+        return std::nullopt;
+      bytes += allocated;
+    }
+    ModelSampler result(variableCount);
+    result.fixedValues = fixedValues;
+    result.sampled = sampled;
+    result.levels = levels;
+    result.nodes.reserve(retained);
+    result.counts.reserve(retained);
+    result.nodes.assign(nodes.begin(), nodes.begin() + 2);
+    result.counts.assign(counts.begin(), counts.begin() + 2);
+    std::vector<ID> renamed(nodes.size());
+    renamed[1] = 1;
+    for (ID id = 2; id != nodes.size(); ++id) {
+      if (!reached[id])
+        continue;
+      const Node &node = nodes[id];
+      renamed[id] = result.nodes.size();
+      result.nodes.push_back(
+          {node.variable, renamed[node.low], renamed[node.high]});
+      result.counts.push_back(counts[id]);
+    }
+    result.viewRoot = renamed[viewRoot];
+    if (result.storageBytes() > maxBytes)
+      return std::nullopt;
+    return result;
+  }
+
+protected:
+  explicit ModelSampler(size_t variables)
+      : variableCount(variables), fixedValues(variables, false) {}
+
+  struct Node {
+    size_t variable;
+    ID low, high;
+  };
+
+  std::vector<bool> reachable(ID start) const {
+    std::vector<bool> reached(nodes.size(), false);
+    std::vector<ID> pending{start};
+    while (!pending.empty()) {
+      ID id = pending.back();
+      pending.pop_back();
+      if (reached[id])
+        continue;
+      reached[id] = true;
+      if (id > 1) {
+        pending.push_back(nodes[id].low);
+        pending.push_back(nodes[id].high);
+      }
+    }
+    return reached;
+  }
+
+  size_t variableCount;
+  ID viewRoot = 0;
+  std::vector<bool> fixedValues, sampled;
+  std::vector<size_t> levels;
+  std::vector<Node> nodes;
+  std::vector<ModelCount> counts;
+};
+
+/// Exact counts, projections and ranks for a compiler-produced Boolean plan.
+/// Shared with bounded compiler preparation; target counting has no budget.
+/// Iterative graph walks also avoid a bit-width-dependent WASM call stack.
+class ModelCounter : public ModelSampler {
+public:
   ModelCounter(random::BooleanCircuit &circuit,
                const std::vector<random::BooleanCircuit::ID> &variables)
-      : circuit(&circuit), variableCount(variables.size()),
-        fixed(variableCount, false), fixedValues(variableCount, false) {
+      : ModelSampler(variables.size()), circuit(&circuit),
+        fixed(variableCount, false) {
     nodes.push_back({variableCount, 0, 0});
     nodes.push_back({variableCount, 1, 1});
     circuits.insert(0, 0);
@@ -396,19 +529,6 @@ public:
     return true;
   }
 
-  ModelCount count() const {
-    return counts[viewRoot].shifted(levels[nodes[viewRoot].variable]);
-  }
-
-  /// Whether the projected relation contains a complete assignment.
-  bool contains(const std::vector<bool> &value) const {
-    ID current = viewRoot;
-    while (current > 1)
-      current = value[nodes[current].variable] ? nodes[current].high
-                                               : nodes[current].low;
-    return current == 1;
-  }
-
   /// Existentially remove other fields before counting a solve-order layer.
   /// A legal projected value contributes one choice regardless of how many
   /// completions it has. Previous choices remain fixed in the original graph.
@@ -462,53 +582,7 @@ public:
     project(std::vector<bool>(variableCount, true));
   }
 
-  /// Each rank names one legal assignment exactly once. Skipped variables
-  /// denote a full cube, whose cardinality is included rather than enumerated.
-  std::vector<bool> assignment(ModelCount rank) const {
-    std::vector<bool> value = fixedValues;
-    ID current = viewRoot;
-    for (size_t variable = 0; variable != variableCount; ++variable) {
-      if (!sampled[variable])
-        continue;
-      const Node &node = nodes[current];
-      bool skipped = variable < node.variable;
-      ID low = skipped ? current : node.low;
-      ModelCount lowCount = counts[low].shifted(levels[nodes[low].variable] -
-                                                levels[variable] - 1);
-      bool high = rank.compare(lowCount) >= 0;
-      if (high) {
-        rank.subtract(lowCount);
-        value[variable] = true;
-      }
-      if (!skipped)
-        current = high ? node.high : node.low;
-    }
-    return value;
-  }
-
 private:
-  struct Node {
-    size_t variable;
-    ID low, high;
-  };
-
-  std::vector<bool> reachable(ID start) const {
-    std::vector<bool> reached(nodes.size(), false);
-    std::vector<ID> pending{start};
-    while (!pending.empty()) {
-      ID id = pending.back();
-      pending.pop_back();
-      if (reached[id])
-        continue;
-      reached[id] = true;
-      if (id > 1) {
-        pending.push_back(nodes[id].low);
-        pending.push_back(nodes[id].high);
-      }
-    }
-    return reached;
-  }
-
   void recount() {
     auto reached = reachable(viewRoot);
     counts.resize(nodes.size());
@@ -796,15 +870,10 @@ private:
   }
 
   random::BooleanCircuit *circuit;
-  size_t variableCount;
   ID root = 0;
-  ID viewRoot = 0;
   size_t constructionBudget = 0;
   bool constructionExhausted = false;
-  std::vector<bool> fixed, fixedValues, sampled;
-  std::vector<size_t> levels;
-  std::vector<Node> nodes;
-  std::vector<ModelCount> counts;
+  std::vector<bool> fixed;
   random::FlatMap<Key, ID, Hash> unique, cache;
   random::FlatMap<random::BooleanCircuit::ID, ID> circuits;
 };
