@@ -5,9 +5,9 @@
 // RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph{vpi=read},talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=read},convert-talos-sim-processes-to-llvm-coroutines)' -o %t.read.llvm.mlir
 // RUN: FileCheck %s --check-prefix=READ < %t.read.llvm.mlir
 
-// Empty dynamic slots must bypass stale address/value/unknown loads in all
-// three commit variants, and each variant clears the slot summary only once
-// the last slot is consumed or skipped.
+// Empty dynamic slots must bypass stale address/value/unknown loads in both
+// commit variants, and each variant clears the slot summary only once the
+// last slot is consumed or skipped.
 // GUARD-LABEL: llvm.func {{(internal )?}}@__talos_aot_static_nba_commit_v1(
 // GUARD: %[[ADDR0:.*]] = llvm.mlir.addressof @__talos_eval_nba_valid_
 // GUARD-NEXT: %[[VALID0:.*]] = llvm.load %[[ADDR0]] {{.*}} : !llvm.ptr -> i32
@@ -26,24 +26,10 @@
 // GUARD-NEXT: %[[CLEAR0:.*]] = llvm.mlir.constant(0 : i32) : i32
 // GUARD-NEXT: %[[SUMMARY0:.*]] = llvm.mlir.addressof @__talos_eval_nba_dynamic_pending_v1
 // GUARD-NEXT: llvm.store %[[CLEAR0]], %[[SUMMARY0]]
-// GUARD-LABEL: llvm.func {{(internal )?}}@__talos_aot_static_nba_commit_two_state_v1(
-// GUARD: %[[ADDR1:.*]] = llvm.mlir.addressof @__talos_eval_nba_valid_
-// GUARD-NEXT: %[[VALID1:.*]] = llvm.load %[[ADDR1]] {{.*}} : !llvm.ptr -> i32
-// GUARD-NEXT: %[[ZERO1:.*]] = llvm.mlir.constant(0 : i32)
-// GUARD-NEXT: %[[ACTIVE1:.*]] = llvm.icmp "ne" %[[VALID1]], %[[ZERO1]] : i32
-// GUARD-NEXT: llvm.cond_br %[[ACTIVE1]], ^[[WORK1:bb[0-9]+]], ^[[NEXT1:bb[0-9]+]]
-// GUARD: ^[[WORK1]]:
-// GUARD: llvm.mlir.addressof @__talos_eval_nba_offset_
-// GUARD: ^[[NEXT1]]:
-// GUARD-NEXT: %[[ADDR1B:.*]] = llvm.mlir.addressof @__talos_eval_nba_valid_
-// GUARD-NEXT: %[[VALID1B:.*]] = llvm.load %[[ADDR1B]] {{.*}} : !llvm.ptr -> i32
-// GUARD-NEXT: %[[ZERO1B:.*]] = llvm.mlir.constant(0 : i32)
-// GUARD-NEXT: %[[ACTIVE1B:.*]] = llvm.icmp "ne" %[[VALID1B]], %[[ZERO1B]] : i32
-// GUARD-NEXT: llvm.cond_br %[[ACTIVE1B]], ^{{bb[0-9]+}}, ^[[LAST1:bb[0-9]+]]
-// GUARD: ^[[LAST1]]:
-// GUARD-NEXT: %[[CLEAR1:.*]] = llvm.mlir.constant(0 : i32) : i32
-// GUARD-NEXT: %[[SUMMARY1:.*]] = llvm.mlir.addressof @__talos_eval_nba_dynamic_pending_v1
-// GUARD-NEXT: llvm.store %[[CLEAR1]], %[[SUMMARY1]]
+// This commit stages no accumulator unknown data for a canonical two-state
+// variant to zero, so that variant would copy the commit unchanged; there is
+// none, and its callers keep the four-state commit.
+// GUARD-NOT: @__talos_aot_static_nba_commit_two_state_v1
 // GUARD-LABEL: llvm.func {{(internal )?}}@__talos_aot_static_nba_commit_two_state_fast_v1(
 // GUARD: %[[ADDR2:.*]] = llvm.mlir.addressof @__talos_eval_nba_valid_
 // GUARD-NEXT: %[[VALID2:.*]] = llvm.load %[[ADDR2]] {{.*}} : !llvm.ptr -> i32

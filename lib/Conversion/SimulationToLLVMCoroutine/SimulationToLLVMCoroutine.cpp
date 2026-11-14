@@ -3860,36 +3860,73 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
   return success();
 }
 
-LogicalResult materializeEvalNBACommitVariants(ModuleOp module,
-                                               StringRef fourStateName,
-                                               StringRef twoStateName,
-                                               StringRef fastTwoStateName,
-                                               bool keepOutOfLine) {
+/// Clone the two-state variants of an NBA commit. Returns whether a separate
+/// canonical two-state variant exists; without one, canonical callers call
+/// the source. Two-state variants, and the source in place of the canonical
+/// one, get `twoStateAlignment` when it is nonzero.
+FailureOr<bool> materializeEvalNBACommitVariants(ModuleOp module,
+                                                 StringRef fourStateName,
+                                                 StringRef twoStateName,
+                                                 StringRef fastTwoStateName,
+                                                 bool keepOutOfLine,
+                                                 uint64_t twoStateAlignment) {
   LLVM::LLVMFuncOp source =
       module.lookupSymbol<LLVM::LLVMFuncOp>(fourStateName);
   if (!source)
-    return success();
+    return false;
 
   OpBuilder builder(source);
   builder.setInsertionPointAfter(source);
-  auto clone = cast<LLVM::LLVMFuncOp>(builder.clone(*source.getOperation()));
-  clone.setSymName(twoStateName);
-  clone.setLinkage(LLVM::Linkage::Internal);
+  // The canonical two-state variant differs from its source only in the
+  // staged unknown loads it zeroes. A two-state build zeroes every load of
+  // staged unknown data module-wide (eliminateTwoStateUnknownPlane), and a
+  // source without such loads has nothing to zero: either way the variant
+  // would equal its source, so its canonical callers keep calling the source.
+  bool twoStateBuild = native::has<native::TwoState>(module);
+  bool stagesUnknown = false;
+  source.walk([&](LLVM::LoadOp load) {
+    if (!::talos::schedule::has<
+            ::talos::schedule::Field::EvalTwoStateZeroUnknown>(load))
+      return;
+    stagesUnknown = true;
+    // The elimination finds staged unknown data by its NBA field address.
+    assert((!twoStateBuild ||
+            [&] {
+              auto field = load.getAddr().getDefiningOp<LLVM::GEPOp>();
+              auto offset =
+                  field ? native::get<native::NBAField>(field) : IntegerAttr{};
+              return offset &&
+                     offset.getValue().getZExtValue() ==
+                         offsetof(talos_rt_generated_nba_accumulator_256,
+                                  unknown);
+            }()) &&
+           "staged unknown load is not an NBA unknown field");
+  });
+  stagesUnknown &= !twoStateBuild;
+  LLVM::LLVMFuncOp clone;
+  if (stagesUnknown) {
+    clone = cast<LLVM::LLVMFuncOp>(builder.clone(*source.getOperation()));
+    clone.setSymName(twoStateName);
+    clone.setLinkage(LLVM::Linkage::Internal);
+    builder.setInsertionPointAfter(clone);
+  }
 
   auto fastClone = module.lookupSymbol<LLVM::LLVMFuncOp>(fastTwoStateName);
   if (!fastClone) {
-    builder.setInsertionPointAfter(clone);
-    fastClone = cast<LLVM::LLVMFuncOp>(builder.clone(*clone.getOperation()));
+    fastClone = cast<LLVM::LLVMFuncOp>(builder.clone(*source.getOperation()));
     fastClone.setSymName(fastTwoStateName);
+    fastClone.setLinkage(LLVM::Linkage::Internal);
   }
   SmallVector<LLVM::LoadOp> stagedUnknownLoads;
   for (auto variant : {clone, fastClone})
-    variant.walk([&](Operation *operation) {
-      if (auto load = dyn_cast<LLVM::LoadOp>(operation);
-          load && ::talos::schedule::has<
-                      ::talos::schedule::Field::EvalTwoStateZeroUnknown>(load))
-        stagedUnknownLoads.push_back(load);
-    });
+    if (variant)
+      variant.walk([&](Operation *operation) {
+        if (auto load = dyn_cast<LLVM::LoadOp>(operation);
+            load &&
+            ::talos::schedule::has<
+                ::talos::schedule::Field::EvalTwoStateZeroUnknown>(load))
+          stagedUnknownLoads.push_back(load);
+      });
   for (LLVM::LoadOp load : stagedUnknownLoads) {
     builder.setInsertionPoint(load);
     load.replaceAllUsesWith(
@@ -3945,7 +3982,16 @@ LogicalResult materializeEvalNBACommitVariants(ModuleOp module,
   }
   for (LLVM::StoreOp store : canonicalUnknownStores)
     store.erase();
+  // Keep the generated eval loop's hottest call boundaries on an I-cache line
+  // regardless of unrelated runtime/string table growth: their placement at
+  // the target's minimum function alignment would make steady-state
+  // throughput depend on incidental section size.
+  if (twoStateAlignment)
+    for (LLVM::LLVMFuncOp function : {clone ? clone : source, fastClone})
+      function.setAlignmentAttr(builder.getI64IntegerAttr(twoStateAlignment));
   for (LLVM::LLVMFuncOp function : {source, clone, fastClone}) {
+    if (!function)
+      continue;
     // Keep the generic table-dispatch barrier shared. The certified action
     // lists have no dispatch loop; let LLVM decide whether to inline them.
     if (keepOutOfLine)
@@ -3977,7 +4023,7 @@ LogicalResult materializeEvalNBACommitVariants(ModuleOp module,
     ::talos::schedule::remove<
         ::talos::schedule::Field::EvalTwoStateZeroUnknown>(load);
   });
-  return success();
+  return static_cast<bool>(clone);
 }
 
 LogicalResult materializeEvalTwoStateNBACommit(ModuleOp module) {
@@ -3986,13 +4032,17 @@ LogicalResult materializeEvalTwoStateNBACommit(ModuleOp module) {
       "__talos_aot_static_nba_commit_two_state_v1";
   constexpr StringLiteral fastTwoStateName =
       "__talos_aot_static_nba_commit_two_state_fast_v1";
-  if (failed(materializeEvalNBACommitVariants(
-          module, fourStateName, twoStateName, fastTwoStateName,
-          /*keepOutOfLine=*/true)) ||
-      failed(materializeEvalNBACommitVariants(
-          module, detail::staticNBAPublicationName,
-          detail::staticNBAPublicationTwoStateName,
-          detail::staticNBAPublicationFastName, /*keepOutOfLine=*/false)))
+  FailureOr<bool> commitHasCanonical = materializeEvalNBACommitVariants(
+      module, fourStateName, twoStateName, fastTwoStateName,
+      /*keepOutOfLine=*/true, /*twoStateAlignment=*/128);
+  if (failed(commitHasCanonical))
+    return failure();
+  FailureOr<bool> publicationHasCanonical = materializeEvalNBACommitVariants(
+      module, detail::staticNBAPublicationName,
+      detail::staticNBAPublicationTwoStateName,
+      detail::staticNBAPublicationFastName, /*keepOutOfLine=*/false,
+      /*twoStateAlignment=*/0);
+  if (failed(publicationHasCanonical))
     return failure();
   // Specialization is carried entirely by call-site intent.  Validate and
   // consume the phase-local markers so a renamed or newly outlined
@@ -4029,6 +4079,11 @@ LogicalResult materializeEvalTwoStateNBACommit(ModuleOp module) {
         publication ? detail::staticNBAPublicationName : fourStateName;
     StringRef canonicalName =
         publication ? detail::staticNBAPublicationTwoStateName : twoStateName;
+    // Without staged unknown loads, the source is the canonical variant.
+    StringRef canonicalCallee =
+        (publication ? *publicationHasCanonical : *commitHasCanonical)
+            ? canonicalName
+            : sourceName;
     StringRef fastName =
         publication ? detail::staticNBAPublicationFastName : fastTwoStateName;
     bool expectedSource = *callee == sourceName;
@@ -4056,7 +4111,7 @@ LogicalResult materializeEvalTwoStateNBACommit(ModuleOp module) {
         return call.emitError("canonical two-state NBA intent is attached to "
                               "an unrelated callee"),
                WalkResult::interrupt();
-      call.setCallee(canonicalName);
+      call.setCallee(canonicalCallee);
       ::talos::schedule::remove<
           ::talos::schedule::Field::EvalUseCanonicalTwoStateNba>(call);
       return WalkResult::advance();

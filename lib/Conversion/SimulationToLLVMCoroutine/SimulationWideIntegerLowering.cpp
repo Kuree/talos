@@ -523,15 +523,14 @@ struct NativeFunctionFinalizationPass
     // line regardless of unrelated runtime/string table growth. These bodies
     // are deliberately retained as calls by the large-function policy below;
     // leaving their placement at the target's minimum function alignment
-    // makes steady-state throughput depend on incidental section size.
+    // makes steady-state throughput depend on incidental section size. The
+    // two-state NBA commits get theirs where they are created.
     Builder alignmentBuilder(function.getContext());
     {
       StringRef name = function.getSymName();
       uint64_t alignment = 0;
-      if (name.starts_with("__talos_aot_static_nba_commit_two_state"))
-        alignment = 128;
-      else if (name.starts_with("__talos_fused_") &&
-               name.contains("__talos_eval_body_"))
+      if (name.starts_with("__talos_fused_") &&
+          name.contains("__talos_eval_body_"))
         alignment = 64;
       else if (::talos::schedule::has<
                    ::talos::schedule::Field::EvalCallClosureRoot>(function))
