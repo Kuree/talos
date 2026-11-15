@@ -1,6 +1,6 @@
 // RUN: talos-opt %S/../Conversion/simulation-native-group-external-clock.mlir --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-suspension),talos-sim-build-compute-graph{vpi=full},talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=full},convert-talos-sim-processes-to-llvm-coroutines,materialize-runtime-byte-globals)' -o %t.mlir
-// RUN: talos-opt %t.mlir '--test-talos-export-llvm-symbols=globals=__talos_eval_write_guard_states_0_v1,__talos_eval_write_guard_states_1_v1,__talos_eval_write_guard_states_2_v1 main=model_main' | talos-translate --mlir-to-llvmir | opt -S -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>,verify' -o %t.ll
-// RUN: %target_cxx -std=c++17 -O2 -I%S/../../runtime/include %t.ll %S/Inputs/check-vpi-write-guard-roots.cpp -Wl,--wrap=talos_rt_v1_static_specialization_guard_roots %runtime_link_flags -o %t.exe
+// RUN: talos-opt %t.mlir '--test-talos-export-llvm-symbols=wrap-calls=talos_rt_v1_static_specialization_guard_roots i32-predicates=__talos_eval_write_guard_roots_v1 globals=__talos_eval_write_guard_states_0_v1,__talos_eval_write_guard_states_1_v1,__talos_eval_write_guard_states_2_v1 main=model_main' | talos-translate --mlir-to-llvmir | opt -S -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>,verify' -o %t.ll
+// RUN: %target_cxx -std=c++17 -O2 -I%S/../../runtime/include %t.ll %S/Inputs/check-vpi-write-guard-roots.cpp %runtime_link_flags -o %t.exe
 // RUN: %t.exe | FileCheck %s
 
 // Execute the emitted shared guard after O3 with each owner's actual immutable

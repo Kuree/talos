@@ -1,5 +1,5 @@
-// RUN: talos-opt %s --encode-talos-sim-to-bytecode=vpi=off --convert-talos-sim-processes-to-llvm-coroutines --materialize-runtime-byte-globals | talos-translate --mlir-to-llvmir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>' | %llc -filetype=obj -relocation-model=pic -o %t.o
-// RUN: %target_cxx -I%S/../../runtime/include %t.o %S/Inputs/check-task-reference-release.cpp -Wl,--wrap=talos_rt_v1_native_state_alloc -Wl,--wrap=talos_rt_v1_context_destroy %runtime_link_flags -o %t.exe
+// RUN: talos-opt %s --encode-talos-sim-to-bytecode=vpi=off --convert-talos-sim-processes-to-llvm-coroutines --materialize-runtime-byte-globals --test-talos-export-llvm-symbols=wrap-calls=talos_rt_v1_native_state_alloc,talos_rt_v1_context_destroy | talos-translate --mlir-to-llvmir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>' | %llc -filetype=obj -relocation-model=pic -o %t.o
+// RUN: %target_cxx -I%S/../../runtime/include %t.o %S/Inputs/check-task-reference-release.cpp %runtime_link_flags -o %t.exe
 // RUN: env TALOS_RT_GC_THRESHOLD=1 %t.exe | FileCheck %s
 
 // Duplicate automatic ref formals each transfer one reference to the helper;

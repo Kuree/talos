@@ -91,6 +91,9 @@ public:
   ListOption<std::string> predicates{
       *this, "i32-predicates",
       llvm::cl::desc("i1-returning LLVM functions to wrap as <name>_i32")};
+  ListOption<std::string> wrapCalls{
+      *this, "wrap-calls",
+      llvm::cl::desc("LLVM declarations to rename as __wrap_<name>")};
   Option<std::string> main{
       *this, "main",
       llvm::cl::desc("new name for the generated main function")};
@@ -185,6 +188,18 @@ public:
       Value result = LLVM::ZExtOp::create(builder, loc, builder.getI32Type(),
                                           call.getResult());
       LLVM::ReturnOp::create(builder, loc, result);
+    }
+    // Intercept calls in the generated model without ELF-only --wrap flags.
+    // The C++ oracle can call the original runtime symbol directly.
+    for (const std::string &name : wrapCalls) {
+      auto function = table.lookup<LLVM::LLVMFuncOp>(name);
+      std::string wrapperName = "__wrap_" + name;
+      if (!function || !function.isExternal() || table.lookup(wrapperName) ||
+          failed(table.rename(
+              function, StringAttr::get(&getContext(), wrapperName)))) {
+        module.emitError() << "cannot wrap LLVM declaration @" << name;
+        return signalPassFailure();
+      }
     }
     if (main.empty())
       return;

@@ -6807,6 +6807,12 @@ long double logicToReal(const std::vector<uint64_t> &value,
       isSigned && logicBit(value, width - 1) && !logicBit(unknown, width - 1);
   if (negative)
     negateWidth(magnitude, width);
+  // Convert a single word directly so platforms where long double is double
+  // do not round after each bit before rounding the final integer (6.12.1).
+  if (width <= 64) {
+    long double result = static_cast<long double>(magnitude[0]);
+    return negative ? -result : result;
+  }
   long double result = 0;
   for (uint64_t bit = width; bit-- != 0;)
     result = std::ldexp(result, 1) + (logicBit(magnitude, bit) ? 1 : 0);

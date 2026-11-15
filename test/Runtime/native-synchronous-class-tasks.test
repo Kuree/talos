@@ -1,7 +1,7 @@
 // Execute the real compiled task wrappers from bytecode-owned activations.
 // RUN: talos --std=1800-2023 -emit-slang %S/Inputs/native-synchronous-class-tasks.sv -o %t.slang.mlir
-// RUN: talos-opt %t.slang.mlir --pass-pipeline='builtin.module(test-talos-native-backend{scheduler=generic sim-opt-level=3 stop-after=lowering},talos-sim-insert-gc-polls,simulation.design(simulation.func(talos-sim-thread-process-cfg)),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines,materialize-runtime-byte-globals,test-talos-bytecode-bootstrap{record-tasks=true})' | talos-translate --mlir-to-llvmir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>' | %llc -filetype=obj -relocation-model=pic -o %t.o
-// RUN: %target_cxx -I%S/../../runtime/include %t.o %S/Inputs/check-native-task-entries.cpp -Wl,--wrap=talos_rt_v1_context_destroy %runtime_link_flags -o %t.exe
+// RUN: talos-opt %t.slang.mlir --pass-pipeline='builtin.module(test-talos-native-backend{scheduler=generic sim-opt-level=3 stop-after=lowering},talos-sim-insert-gc-polls,simulation.design(simulation.func(talos-sim-thread-process-cfg)),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines,materialize-runtime-byte-globals,test-talos-bytecode-bootstrap{record-tasks=true},test-talos-export-llvm-symbols{wrap-calls=talos_rt_v1_context_destroy})' | talos-translate --mlir-to-llvmir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>' | %llc -filetype=obj -relocation-model=pic -o %t.o
+// RUN: %target_cxx -I%S/../../runtime/include %t.o %S/Inputs/check-native-task-entries.cpp %runtime_link_flags -o %t.exe
 // RUN: %t.exe | FileCheck %s
 
 // CHECK: value=1xz010100 copy=1xz010100 calls=27 tag=B

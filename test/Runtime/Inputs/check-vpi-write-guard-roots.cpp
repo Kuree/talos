@@ -5,9 +5,9 @@
 #define TALOS_TEST_STRINGIFY_(text) #text
 #define TALOS_TEST_STRINGIFY(text) TALOS_TEST_STRINGIFY_(text)
 #define TALOS_TEST_SYMBOL(name) TALOS_TEST_STRINGIFY(__USER_LABEL_PREFIX__) name
-extern "C" bool
+extern "C" uint32_t
 guard(talos_rt_context *, const uint32_t *,
-      uint64_t) asm(TALOS_TEST_SYMBOL("__talos_eval_write_guard_roots_v1"));
+      uint64_t) asm(TALOS_TEST_SYMBOL("__talos_eval_write_guard_roots_v1_i32"));
 extern "C" const uint32_t
     roots0[] asm(TALOS_TEST_SYMBOL("__talos_eval_write_guard_states_0_v1"));
 extern "C" const uint32_t

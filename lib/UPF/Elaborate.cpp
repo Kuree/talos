@@ -327,7 +327,7 @@ struct Lowering {
   std::unique_ptr<ClockSnapshots> clocks;
   SmallVector<sim::SimFuncOp> originalFunctions;
   llvm::DenseSet<uint64_t> originalStorage;
-  SmallVector<WriteDomain> writeDomains;
+  SmallVector<WriteDomain, 0> writeDomains;
   SmallVector<RetentionWrite> retainedWrites;
   RetentionPlans retentionPlans;
   Lowering(sim::SimDesignOp design, bool preserveStorage,

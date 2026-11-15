@@ -7,8 +7,6 @@ static unsigned entries;
 
 extern "C" void talos_test_native_task_entry() { ++entries; }
 
-extern "C" void __real_talos_rt_v1_context_destroy(talos_rt_context *);
-
 extern "C" void __wrap_talos_rt_v1_context_destroy(talos_rt_context *context) {
   // Virtual run, recursive method, exact super call and duplicate ref aliases
   // each cross the bytecode/native boundary. Static output may use fallback
@@ -18,5 +16,5 @@ extern "C" void __wrap_talos_rt_v1_context_destroy(talos_rt_context *context) {
     std::abort();
   }
   std::puts("native task entries observed");
-  __real_talos_rt_v1_context_destroy(context);
+  talos_rt_v1_context_destroy(context);
 }
