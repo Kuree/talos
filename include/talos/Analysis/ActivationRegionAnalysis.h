@@ -2,16 +2,17 @@
 #ifndef TALOS_ANALYSIS_ACTIVATIONREGIONANALYSIS_H
 #define TALOS_ANALYSIS_ACTIVATIONREGIONANALYSIS_H
 
-#include "mlir/IR/OwningOpRef.h"
-#include "talos/Analysis/ActivationMemoryAnalysis.h"
+#include "talos/Analysis/ActivationPreparation.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
+#include <memory>
 
 namespace talos::analysis {
 
-/// Read-only CFG view of one change-sensitive activation. Initial and resumed
-/// activations must have equivalent CFGs, and remaining cycles need bounded-loop
-/// termination certificates. Loops remain in the CFG rather than being unrolled.
+/// Read-only facts for a prepared change-sensitive activation. Preparation
+/// establishes initial/resume equivalence and bounded-loop termination before
+/// construction. The analysis never rewrites its input view. Loops remain in
+/// the CFG rather than being unrolled.
 ///
 /// Chain blocks dominate the suspension and belong to no CFG cycle. Each of
 /// their operations is a scheduling unit. The branch and intervening blocks
@@ -23,18 +24,7 @@ namespace talos::analysis {
 /// legality before transforming the view.
 class ActivationRegionAnalysis {
 public:
-  enum class FailureReason {
-    None,
-    ActivationShape,
-    InitialResumeEquivalence,
-    Termination,
-    MemoryEffects,
-    UnmappedMemoryAccess,
-  };
-  enum class TracePhase { Initial, Resume };
-  /// Clients materializing the CFG view may prepare dispatch edges.
-  /// Summary-only clients can retain the existing canonical CFG policy.
-  enum class ControlFlowPreparation { Canonical, ThreadDispatch };
+  using FailureReason = ActivationFailureReason;
   using Ranges = ActivationMemoryAnalysis::Ranges;
   struct Node {
     /// An operation unit, or the branch that enters a region unit.
@@ -48,17 +38,10 @@ public:
     /// Visit every operation of the unit, including a region's entry branch.
     void walk(llvm::function_ref<void(mlir::Operation *)> callback) const;
   };
-  /// Optional diagnostic views; the callback must not retain their IR.
-  using Trace = llvm::function_ref<void(TracePhase, mlir::Operation *)>;
-  /// `symbols` supplies the original symbol table for a detached modeled
-  /// function; otherwise callees resolve in the function's parent.
   ActivationRegionAnalysis(
-      sim::SimFuncOp function, const HandleDataflowAnalysis &handles,
-      Trace trace = {},
+      PreparedActivation prepared, const HandleDataflowAnalysis &handles,
       ActivationMemoryAnalysis::DependencyMode mode =
-          ActivationMemoryAnalysis::DependencyMode::Accesses,
-      ControlFlowPreparation control = ControlFlowPreparation::Canonical,
-      mlir::Operation *symbols = nullptr);
+          ActivationMemoryAnalysis::DependencyMode::Accesses);
   bool isValid() const { return reason == FailureReason::None; }
   FailureReason getFailureReason() const { return reason; }
   llvm::ArrayRef<Node> getNodes() const { return nodes; }
@@ -72,6 +55,19 @@ public:
   sim::SimFuncOp getActivationFunction() const { return view.get(); }
   const ActivationMemoryAnalysis &getMemory() const { return memory; }
   mlir::Operation *getSuspension() const { return suspension; }
+  sim::SimFuncOp getSourceFunction() const { return sourceFunction; }
+  /// Symbol table resolving the activation's callees.
+  mlir::Operation *getSymbolTable() const { return symbols; }
+  ActivationMemoryAnalysis::DependencyMode getDependencyMode() const {
+    return dependencyMode;
+  }
+  /// Exact source event ranges, or nullopt for unresolved/dynamic watches.
+  const std::optional<Ranges> &getWatchedRanges() const {
+    return watchedRanges;
+  }
+  const ActivationRegionAnalysis *getSourceActivation() const {
+    return sourceActivation ? sourceActivation : this;
+  }
 
 private:
   ActivationMemoryAnalysis memory;
@@ -80,6 +76,12 @@ private:
   llvm::DenseMap<mlir::Operation *, unsigned> nodeIndices;
   llvm::DenseMap<mlir::Block *, unsigned> argumentNodes;
   mlir::Operation *suspension = nullptr;
+  std::optional<Ranges> watchedRanges;
+  sim::SimFuncOp sourceFunction;
+  mlir::Operation *symbols = nullptr;
+  const ActivationRegionAnalysis *sourceActivation = nullptr;
+  ActivationMemoryAnalysis::DependencyMode dependencyMode =
+      ActivationMemoryAnalysis::DependencyMode::Accesses;
   FailureReason reason = FailureReason::ActivationShape;
 };
 
@@ -166,6 +168,137 @@ struct ActivationSchedule {
     return llvm::none_of(cyclic, [](bool value) { return value; });
   }
 };
+
+/// Explicit, cached preparation of the views needed by interleaving analysis.
+/// Call prepare for each cohort before querying its order. Only potentially
+/// pulsing, cyclic cohorts need publication-frontier copies. Each copy is
+/// frozen before constructing its memory/region analysis; source views remain
+/// unchanged. The source views and handle facts must outlive this cache.
+class ActivationInterleavingPreparation {
+public:
+  explicit ActivationInterleavingPreparation(
+      const HandleDataflowAnalysis &handles)
+      : handles(handles) {}
+  void prepare(llvm::ArrayRef<const ActivationRegionAnalysis *> activations);
+  const ActivationRegionAnalysis *
+  getFrontierView(const ActivationRegionAnalysis *activation) const {
+    auto found = frontierViews.find(activation);
+    return found == frontierViews.end() ? nullptr : found->second.get();
+  }
+  unsigned getFrontierActivationCount() const {
+    return llvm::count_if(frontierViews,
+                          [](const auto &entry) { return bool(entry.second); });
+  }
+
+private:
+  friend class ActivationInterleavingAnalysis;
+  const HandleDataflowAnalysis &handles;
+  llvm::DenseMap<const ActivationRegionAnalysis *,
+                 std::unique_ptr<ActivationRegionAnalysis>>
+      frontierViews;
+  bool prepared = false;
+  llvm::SmallVector<const ActivationRegionAnalysis *> preparedActivations;
+  std::optional<ActivationSchedule> schedule;
+};
+
+/// Revision-local analysis of a source-ordered interleaving of combinational
+/// activations. Only a strongly connected cycle of unequal publications with
+/// jointly satisfiable, stable guards can select a new order. A guard may read
+/// another owner's output only through a nonrecursive final-value proof.
+/// Otherwise getOrder returns the existing region order unchanged. A cyclic
+/// physical-access graph can
+/// then be refined with demanded load lanes, including every intermediate
+/// publication and control decision. Source order, SSA and local snapshots
+/// remain constraints; this never drops events or certifies extra activations.
+///
+/// Range intersections use an indexed sweep with bounded work. Bit demand is
+/// solved only for activations in a cyclic component and cached across cohort
+/// queries. Conditional publication frontiers are supplied by explicit
+/// preparation; queries never clone or rewrite IR. Returned steps may refer
+/// to those prepared views. Preparation and the input activation views must
+/// outlive this analysis and remain unchanged during a query. Clients
+/// separately prove activation and observer eligibility.
+/// Pulse proofs admit up to eight owners and 64 stable external input bits
+/// per guard; pulse witnesses and exact handoff searches each visit at most
+/// 4096 states. Budget
+/// exhaustion or unsupported guards never authorize a new schedule.
+class ActivationInterleavingAnalysis {
+public:
+  explicit ActivationInterleavingAnalysis(
+      const ActivationInterleavingPreparation &preparation)
+      : preparation(preparation) {}
+  std::optional<llvm::SmallVector<ActivationRegionStep>>
+  getOrder(llvm::ArrayRef<const ActivationRegionAnalysis *> activations,
+           llvm::SmallVectorImpl<ActivationRegionStep> *cycle = nullptr);
+  unsigned getRefinedActivationCount() const { return demandedReads.size(); }
+  unsigned getFrontierActivationCount() const {
+    return preparation.getFrontierActivationCount();
+  }
+  bool hasProvenLivelock() const { return provenLivelock; }
+  /// Minimum handoffs among source-ordered, single-activation schedules that
+  /// satisfy the dependence graph and re-arm only after the last publication
+  /// of each watched input. Nullopt if the bounded exact search did not finish.
+  std::optional<unsigned> getMinimumHandoffs() const { return minimumHandoffs; }
+  /// Boundaries of the exact order, immediately before the next unit of an
+  /// interrupted actor. A null operation delays only its original re-arm.
+  /// These are choices of Active execution, not new source timing controls.
+  llvm::ArrayRef<ActivationRegionStep> getPreemptions() const {
+    return preemptions;
+  }
+  /// Every maximal run of the exact solution, including virtual re-arms.
+  llvm::ArrayRef<const ActivationRegionAnalysis *> getRuns() const {
+    return runs;
+  }
+
+private:
+  const ActivationInterleavingPreparation &preparation;
+  std::optional<llvm::SmallVector<ActivationRegionStep>>
+  computeOrder(llvm::ArrayRef<const ActivationRegionAnalysis *> activations,
+               llvm::SmallVectorImpl<ActivationRegionStep> *cycle);
+  using Reads =
+      llvm::DenseMap<mlir::Operation *, ActivationMemoryAnalysis::Ranges>;
+  llvm::DenseMap<const ActivationRegionAnalysis *, Reads> demandedReads;
+  bool provenLivelock = false;
+  std::optional<unsigned> minimumHandoffs;
+  llvm::SmallVector<ActivationRegionStep> preemptions;
+  llvm::SmallVector<const ActivationRegionAnalysis *> runs;
+  bool cached = false;
+  bool cachedCycleAvailable = false;
+  llvm::SmallVector<const ActivationRegionAnalysis *> cachedActivations;
+  std::optional<llvm::SmallVector<ActivationRegionStep>> cachedOrder;
+  llvm::SmallVector<ActivationRegionStep> cachedCycle;
+};
+
+/// A legal Active-region execution of the original processes, independent of
+/// settled-value fusion. Each body stays intact, including reads that capture
+/// an earlier publication. Selected processes remain active after their body
+/// until other pending Active work has run, then encounter their original
+/// event control. No watch, publication or logical process is removed.
+struct ActivationRearmPlan {
+  using Trace = llvm::function_ref<void(const ActivationRegionAnalysis *,
+                                        mlir::Value, llvm::StringRef)>;
+  llvm::SmallVector<const ActivationRegionAnalysis *> preemptions;
+  /// Whole-body run order selected by the exact search, before virtual re-arms.
+  llvm::SmallVector<const ActivationRegionAnalysis *> bodyOrder;
+  /// Complete maximal-run order, including the virtual re-arms.
+  llvm::SmallVector<const ActivationRegionAnalysis *> runs;
+  /// Exact minimum for whole-body executions followed by their original
+  /// re-arms, counting only handoffs within this cohort. This is not an
+  /// optimum over arbitrary source-statement interleavings or outside work.
+  unsigned minimumHandoffs = 0;
+};
+/// Fast potential pulse SCCs, indexed by source watched ranges. Only original
+/// always_comb owners with repeated publications participate. A component is
+/// a candidate, not a proof of livelock or permission to change its schedule.
+llvm::SmallVector<llvm::SmallVector<const ActivationRegionAnalysis *>>
+getActivationPulseComponents(
+    llvm::ArrayRef<const ActivationRegionAnalysis *> activations);
+/// Empty preemptions preserve the schedule when no pulse-cycle witness was
+/// proved. Unsupported or exhausted exact searches return nullopt. At most
+/// eight owners and 4096 search states; neither query mutates source IR.
+std::optional<ActivationRearmPlan> getActivationRearmPlan(
+    llvm::ArrayRef<const ActivationRegionAnalysis *> activations,
+    ActivationRearmPlan::Trace trace = {});
 
 std::optional<ActivationSchedule> getActivationRegionSchedule(
     llvm::ArrayRef<const ActivationRegionAnalysis *> activations);

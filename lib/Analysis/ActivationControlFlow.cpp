@@ -7,13 +7,93 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/Dominance.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/OwningOpRef.h"
+#include "mlir/IR/RegionGraphTraits.h"
+#include "mlir/IR/SymbolTable.h"
+#include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "talos/Analysis/GraphAlgorithms.h"
 #include "talos/Analysis/OrderedDenseAnalysis.h"
+#include "talos/Dialect/Simulation/SimulationOps.h"
+#include "llvm/ADT/SCCIterator.h"
 
 using namespace mlir;
 namespace talos::analysis {
+
+LogicalResult canonicalizeActivationControlFlow(Operation *operation) {
+  RewritePatternSet patterns(operation->getContext());
+  operation->getContext()
+      ->getLoadedDialect<sim::TalosSimulationDialect>()
+      ->getCanonicalizationPatterns(patterns);
+  for (RegisteredOperationName name :
+       operation->getContext()->getRegisteredOperations())
+    if (name.getDialectNamespace() == "arith" ||
+        name.getDialectNamespace() == "cf")
+      name.getCanonicalizationPatterns(patterns, operation->getContext());
+  return applyPatternsGreedily(operation, std::move(patterns));
+}
+
+ControlActivationAnalysis::ControlActivationAnalysis(sim::SimDesignOp design) {
+  DenseSet<uint64_t> targets;
+  design.walk([&](Operation *op) {
+    if (auto disable = dyn_cast<sim::SimControlDisableOp>(op))
+      targets.insert(disable.getTargetId());
+    else if (auto exit = dyn_cast<sim::SimControlNonlocalExitOp>(op))
+      targets.insert(exit.getTargetId());
+  });
+  // Reports enqueued by a zero-time callee still belong to this process's
+  // innermost active block. Propagate that effect through the reverse call
+  // graph; unresolved/foreign calls can reenter SV and remain conservative.
+  SymbolTable symbols(design);
+  DenseMap<Operation *, SmallVector<Operation *>> callers;
+  DenseSet<Operation *> reports;
+  SmallVector<Operation *> pending;
+  auto mayReport = [&](Operation *function) {
+    if (reports.insert(function).second)
+      pending.push_back(function);
+  };
+  for (auto function : design.getBody().front().getOps<sim::SimFuncOp>()) {
+    if (function.isExternal())
+      mayReport(function);
+    function.walk([&](Operation *op) {
+      if (auto call = dyn_cast<sim::SimCallOp>(op)) {
+        if (auto callee = symbols.lookup<sim::SimFuncOp>(call.getCallee()))
+          callers[callee].push_back(function);
+        else
+          mayReport(function);
+      } else if (isa<sim::SimDeferredEnqueueOp, sim::SimDPICallOp,
+                     sim::SimTaskCallOp, sim::SimClassDirectCallOp,
+                     sim::SimClassVirtualCallOp, sim::SimClassVirtualTaskCallOp,
+                     sim::SimVPICallPrepareOp, CallOpInterface>(op))
+        mayReport(function);
+    });
+  }
+  for (unsigned index = 0; index < pending.size(); ++index)
+    for (Operation *caller : callers[pending[index]])
+      mayReport(caller);
+  for (auto function : design.getBody().front().getOps<sim::SimFuncOp>()) {
+    if (reports.contains(function))
+      continue;
+    function.walk([&](sim::SimControlEnterOp enter) {
+      if (!targets.contains(enter.getTargetId()) &&
+          llvm::all_of(enter.getControl().getUsers(), [](Operation *user) {
+            return isa<sim::SimControlLeaveOp>(user);
+          }))
+        enters[function].push_back(enter);
+    });
+  }
+}
+
+ArrayRef<Operation *> ControlActivationAnalysis::getUnobservableEnters(
+    sim::SimFuncOp function) const {
+  auto found = enters.find(function);
+  return found == enters.end() ? ArrayRef<Operation *>{}
+                               : ArrayRef<Operation *>(found->second);
+}
+
 namespace {
 using Predicates = DenseMap<Value, bool>;
 void forgetDefinitions(Predicates &facts, ValueRange definitions) {
@@ -174,6 +254,88 @@ struct ThreadedEdge {
   SmallVector<Value> arguments;
 };
 } // namespace
+
+// CFG canonicalization shares identical case tails, passing the selected
+// references as block arguments. Recover edge-specific tails in a disposable
+// view before exposing their publications. Every dynamic path still executes
+// exactly one copy; no operation moves across a branch or a memory access.
+bool specializeStaticHandleTails(Region &region,
+                                 llvm::function_ref<bool(Block *)> eligible) {
+  SmallVector<Block *> tails;
+  for (Block &block : region) {
+    auto branch = dyn_cast<cf::BranchOp>(block.getTerminator());
+    if ((!eligible || eligible(&block)) &&
+        llvm::any_of(block.getArguments(),
+                     [](BlockArgument argument) {
+                       return isa<sim::RefType, sim::NetType, sim::DriverType>(
+                           argument.getType());
+                     }) &&
+        !block.hasOneUse() && branch && branch.getDestOperands().empty() &&
+        block.getOperations().size() <= 128 &&
+        llvm::all_of(block.getArguments(),
+                     [&](BlockArgument argument) {
+                       return llvm::all_of(argument.getUsers(),
+                                           [&](Operation *user) {
+                                             return user->getBlock() == &block;
+                                           });
+                     }) &&
+        llvm::all_of(block, [&](Operation &op) {
+          return !op.getNumRegions() &&
+                 llvm::all_of(op.getUsers(), [&](Operation *user) {
+                   return user->getBlock() == &block;
+                 });
+        }))
+      tails.push_back(&block);
+  }
+  if (tails.empty())
+    return false;
+  // A process's wait/resume edge begins a new activation; it must not make
+  // every otherwise acyclic case tail look like an induction-loop block.
+  SmallVector<Block *> vertices;
+  DenseMap<Block *, SmallVector<Block *>> edges;
+  for (Block &block : region) {
+    vertices.push_back(&block);
+    if (!sim::isSuspensionOp(block.getTerminator()))
+      llvm::append_range(edges[&block], block.getSuccessors());
+  }
+  DenseSet<Block *> cyclic;
+  for (const auto &component :
+       computeStronglyConnectedComponents<Block *>(vertices, edges))
+    if (component.size() > 1 ||
+        llvm::is_contained(edges.lookup(component.front()), component.front()))
+      cyclic.insert(component.begin(), component.end());
+  bool changed = false;
+  unsigned growth = 0;
+  for (Block *block : tails) {
+    if (cyclic.contains(block))
+      continue;
+    SmallVector<std::pair<Operation *, unsigned>> edges;
+    for (auto it = block->pred_begin(); it != block->pred_end(); ++it)
+      edges.emplace_back((*it)->getTerminator(), it.getSuccessorIndex());
+    if (edges.size() < 2 || edges.size() > 8 ||
+        growth + edges.size() * block->getOperations().size() > 4096 ||
+        llvm::any_of(edges, [](auto edge) {
+          return !isa<cf::BranchOp, cf::CondBranchOp>(edge.first);
+        }))
+      continue;
+    growth += edges.size() * block->getOperations().size();
+    for (auto [term, index] : edges) {
+      auto operands = cast<BranchOpInterface>(term).getSuccessorOperands(index);
+      IRMapping mapping;
+      mapping.map(block->getArguments(), operands.getForwardedOperands());
+      auto *copy = new Block;
+      region.getBlocks().insert(block->getIterator(), copy);
+      OpBuilder builder = OpBuilder::atBlockEnd(copy);
+      for (Operation &op : *block)
+        builder.clone(op, mapping);
+      operands.erase(0, operands.size());
+      term->setSuccessor(copy, index);
+    }
+    block->erase();
+    changed = true;
+  }
+  return changed;
+}
 
 bool threadActivationControlFlow(Region &region) {
   DataFlowSolver solver(DataFlowConfig().setInterprocedural(false));

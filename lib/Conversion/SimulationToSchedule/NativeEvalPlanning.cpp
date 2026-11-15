@@ -1080,7 +1080,7 @@ NativeActivationInputs collectNativeActivationInputs(sim::SimDesignOp design,
     // feedback. This does not certify redundant evaluation: uncertified
     // owners retain all their source watches and intermediate publications.
     analysis::ActivationRegionAnalysis activation(
-        function, handles, {},
+        analysis::prepareActivation(function), handles,
         analysis::ActivationMemoryAnalysis::DependencyMode::ReachingValues);
     const auto &memory = activation.getMemory();
     Facts &fact = facts[index];

@@ -224,11 +224,23 @@ public:
     return "print activation units and their memory effects";
   }
   Option<bool> dump{*this, "dump", llvm::cl::init(false)};
+  Option<bool> verifyPreparedViews{*this, "verify-prepared-views",
+                                   llvm::cl::init(false)};
   Option<bool> threadControl{*this, "thread-control", llvm::cl::init(false)};
+  Option<bool> canonicalControls{*this, "canonical-controls",
+                                 llvm::cl::init(false)};
+  Option<bool> publicationFrontiers{*this, "publication-frontiers",
+                                    llvm::cl::init(false)};
   Option<bool> publications{*this, "publications", llvm::cl::init(false)};
   Option<bool> regionOrder{*this, "order", llvm::cl::init(false)};
+  Option<bool> interleaving{*this, "interleaving", llvm::cl::init(false)};
+  Option<bool> rearmInterleaving{*this, "rearm-interleaving",
+                                 llvm::cl::init(false)};
   Option<bool> sliceOrder{*this, "slice-order", llvm::cl::init(false)};
   Option<bool> components{*this, "components", llvm::cl::init(false)};
+  Option<std::string> sliceCycleFunction{*this, "slice-cycle-function",
+                                         llvm::cl::init("")};
+  Option<bool> cycleRegions{*this, "cycle-regions", llvm::cl::init(false)};
   Option<bool> reachingValues{*this, "reaching-values", llvm::cl::init(false)};
   Option<bool> inputDependencies{*this, "input-dependencies",
                                  llvm::cl::init(false)};
@@ -247,8 +259,13 @@ public:
   void runOnOperation() final {
     getOperation().walk([&](talos::sim::SimDesignOp design) {
       talos::analysis::HandleDataflowAnalysis handles(design);
+      std::optional<talos::analysis::ControlActivationAnalysis> controls;
+      if (canonicalControls)
+        controls.emplace(design);
       SmallVector<std::unique_ptr<talos::analysis::ActivationRegionAnalysis>>
           owned;
+      SmallVector<std::unique_ptr<talos::analysis::ActivationRegionAnalysis>>
+          sourceViews;
       for (auto function : design.getBody().getOps<talos::sim::SimFuncOp>()) {
         if (!functions.empty() &&
             !llvm::is_contained(functions, function.getSymName().str()))
@@ -258,13 +275,13 @@ public:
           continue;
         }
         auto trace =
-            [&](talos::analysis::ActivationRegionAnalysis::TracePhase phase,
+            [&](talos::analysis::ActivationPreparationOptions::TracePhase phase,
                 Operation *view) {
               if (!dump)
                 return;
               llvm::errs()
                   << "activation "
-                  << (phase == talos::analysis::ActivationRegionAnalysis::
+                  << (phase == talos::analysis::ActivationPreparationOptions::
                                    TracePhase::Initial
                           ? "initial"
                           : "resume")
@@ -272,19 +289,54 @@ public:
               view->print(llvm::errs());
               llvm::errs() << '\n';
             };
+        talos::analysis::ActivationPreparationOptions preparation;
+        preparation.trace = trace;
+        if (threadControl)
+          preparation.controlFlow = talos::analysis::
+              ActivationPreparationOptions::ControlFlow::ThreadDispatch;
+        preparation.controls = controls ? &*controls : nullptr;
+        auto prepared =
+            talos::analysis::prepareActivation(function, preparation);
+        std::string preparedText = snapshot(prepared.getFunction());
         auto proof =
             std::make_unique<talos::analysis::ActivationRegionAnalysis>(
-                function, handles, trace,
+                std::move(prepared), handles,
                 inputDependencies ? talos::analysis::ActivationMemoryAnalysis::
                                         DependencyMode::Inputs
                 : reachingValues  ? talos::analysis::ActivationMemoryAnalysis::
                                         DependencyMode::ReachingValues
                                   : talos::analysis::ActivationMemoryAnalysis::
-                                        DependencyMode::Accesses,
-                threadControl ? talos::analysis::ActivationRegionAnalysis::
-                                    ControlFlowPreparation::ThreadDispatch
-                              : talos::analysis::ActivationRegionAnalysis::
-                                    ControlFlowPreparation::Canonical);
+                                        DependencyMode::Accesses);
+        verifySnapshot(proof->getActivationFunction(), preparedText);
+        if (publicationFrontiers) {
+          auto frontierTrace = [&](StringRef reason, Value value) {
+            if (dump) {
+              llvm::errs() << "frontier @" << function.getSymName()
+                           << " retained: " << reason << ' ';
+              if (value)
+                value.print(llvm::errs());
+              llvm::errs() << '\n';
+            }
+          };
+          auto view = talos::analysis::prepareActivationFrontiers(
+              *proof, handles, frontierTrace);
+          std::unique_ptr<talos::analysis::ActivationRegionAnalysis> refined;
+          if (view) {
+            std::string frontierText = snapshot(view->getFunction());
+            refined =
+                std::make_unique<talos::analysis::ActivationRegionAnalysis>(
+                    std::move(*view), handles, proof->getDependencyMode());
+            verifySnapshot(refined->getActivationFunction(), frontierText);
+            if (!refined->isValid())
+              refined.reset();
+          }
+          if (refined) {
+            // Keep source views alive: the refined analysis retains their
+            // identity, just as the production interleaving cache does.
+            sourceViews.push_back(std::move(proof));
+            proof = std::move(refined);
+          }
+        }
         auto &analysis = *proof;
         if (auto maximum = function->getAttrOfType<IntegerAttr>(
                 "test.activation_max_value_nodes")) {
@@ -324,6 +376,9 @@ public:
           print("live-in", memory.getLiveIns());
           llvm::errs() << "  values valid=" << memory.hasValueDependencies()
                        << '\n';
+          if (reachingValues && !memory.hasValueDependencies())
+            llvm::errs() << "  value reason=" << memory.getDependencyFailure()
+                         << '\n';
           if (inputDependencies)
             llvm::errs() << "  inputs valid=" << memory.hasInputDependencies()
                          << '\n';
@@ -385,14 +440,114 @@ public:
               llvm::errs() << '\n';
             }
         }
-        if (publications || regionOrder || sliceOrder || components)
+        if (publications || regionOrder || interleaving || rearmInterleaving ||
+            sliceOrder || components)
           owned.push_back(std::move(proof));
       }
-      if (publications || regionOrder || sliceOrder || components) {
+      if (publications || regionOrder || interleaving || rearmInterleaving ||
+          sliceOrder || components) {
         SmallVector<const talos::analysis::ActivationRegionAnalysis *> views;
         for (const auto &view : owned)
           views.push_back(view.get());
         SmallVector<talos::analysis::ActivationRegionStep> cycle;
+        if (rearmInterleaving) {
+          auto cohorts = talos::analysis::getActivationPulseComponents(views);
+          llvm::errs() << "rearm interleaving: components=" << cohorts.size()
+                       << '\n';
+          for (const auto &cohort : cohorts) {
+            auto trace = [&](const auto *activation, Value value,
+                             StringRef reason) {
+              if (!dump)
+                return;
+              llvm::errs() << "pulse @"
+                           << activation->getActivationFunction().getSymName()
+                           << ": " << reason << ' ';
+              value.print(llvm::errs());
+              llvm::errs() << '\n';
+            };
+            auto plan = talos::analysis::getActivationRearmPlan(cohort, trace);
+            llvm::errs() << "  rearm plan: ";
+            if (!plan)
+              llvm::errs() << "unavailable";
+            else if (plan->preemptions.empty())
+              llvm::errs() << "unchanged";
+            else {
+              llvm::errs() << "handoffs=" << plan->minimumHandoffs
+                           << " preemptions=";
+              for (auto *activation : plan->preemptions)
+                llvm::errs()
+                    << " @" << activation->getActivationFunction().getSymName();
+            }
+            llvm::errs() << '\n';
+          }
+        }
+        if (interleaving) {
+          talos::analysis::ActivationInterleavingPreparation preparation(
+              handles);
+          SmallVector<std::pair<Operation *, std::string>> snapshots;
+          auto remember = [&](const auto *view) {
+            if (view && view->getActivationFunction()) {
+              Operation *operation = view->getActivationFunction();
+              snapshots.emplace_back(operation, snapshot(operation));
+            }
+          };
+          for (const auto *view : views)
+            remember(view);
+          preparation.prepare(views);
+          for (const auto *view : views)
+            remember(preparation.getFrontierView(view));
+          talos::analysis::ActivationInterleavingAnalysis analysis(preparation);
+          for (unsigned query = 0; query != 2; ++query) {
+            auto order = analysis.getOrder(views, &cycle);
+            for (const auto &[operation, before] : snapshots)
+              verifySnapshot(operation, before);
+            bool preserved = true;
+            if (!analysis.hasProvenLivelock()) {
+              auto original = talos::analysis::getActivationRegionOrder(views);
+              preserved = bool(order) == bool(original);
+              if (order && original)
+                preserved &= llvm::equal(
+                    *order, *original, [](const auto &a, const auto &b) {
+                      return a.activation == b.activation &&
+                             a.operation == b.operation;
+                    });
+              if (!preserved) {
+                design.emitError("non-livelocking interleaving changed");
+                signalPassFailure();
+              }
+            }
+            llvm::errs() << "interleaving order: "
+                         << (order           ? "acyclic"
+                             : cycle.empty() ? "unavailable"
+                                             : "cyclic")
+                         << " refined=" << analysis.getRefinedActivationCount()
+                         << " livelock-witness=" << analysis.hasProvenLivelock()
+                         << " preserved=";
+            if (analysis.hasProvenLivelock())
+              llvm::errs() << "n/a";
+            else
+              llvm::errs() << preserved;
+            llvm::errs() << " handoffs=";
+            if (auto handoffs = analysis.getMinimumHandoffs())
+              llvm::errs() << *handoffs;
+            else
+              llvm::errs() << "unavailable";
+            llvm::errs() << " frontiers="
+                         << analysis.getFrontierActivationCount() << '\n';
+            if (dump && order) {
+              llvm::errs() << "interleaving runs:";
+              const talos::analysis::ActivationRegionAnalysis *last = nullptr;
+              for (const auto &step : *order) {
+                const auto *owner = step.activation->getSourceActivation();
+                if (owner != last)
+                  llvm::errs()
+                      << " @" << owner->getActivationFunction().getSymName();
+                last = owner;
+              }
+              llvm::errs() << '\n';
+            }
+          }
+        }
         if (components) {
           auto print = [&](StringRef kind, const auto &schedule) {
             llvm::errs() << kind << " components: ";
@@ -416,8 +571,75 @@ public:
                                              })
                            << '\n';
           };
-          print("region", talos::analysis::getActivationRegionSchedule(views));
-          print("slice", talos::analysis::getActivationSliceSchedule(views));
+          auto regions = talos::analysis::getActivationRegionSchedule(views);
+          print("region", regions);
+          auto slices = talos::analysis::getActivationSliceSchedule(views);
+          print("slice", slices);
+          if (cycleRegions)
+            slices = std::move(regions);
+          if (slices && !sliceCycleFunction.empty()) {
+            SmallVector<SmallVector<unsigned>> next(slices->nodes.size());
+            for (auto edge : slices->dependencies)
+              next[edge.source].push_back(edge.target);
+            for (auto [root, step] : llvm::enumerate(slices->nodes)) {
+              if (!slices->cyclic[slices->componentOf[root]] ||
+                  step.activation->getActivationFunction().getSymName() !=
+                      sliceCycleFunction)
+                continue;
+              SmallVector<unsigned> parent(slices->nodes.size(), UINT_MAX);
+              SmallVector<unsigned> pending{unsigned(root)};
+              parent[root] = root;
+              unsigned last = UINT_MAX;
+              for (unsigned cursor = 0;
+                   cursor < pending.size() && last == UINT_MAX; ++cursor) {
+                unsigned from = pending[cursor];
+                for (unsigned target : next[from]) {
+                  if (target == root) {
+                    last = from;
+                    break;
+                  }
+                  if (parent[target] == UINT_MAX) {
+                    parent[target] = from;
+                    pending.push_back(target);
+                  }
+                }
+              }
+              if (last == UINT_MAX)
+                continue;
+              SmallVector<unsigned> path;
+              for (unsigned node = last; node != root; node = parent[node])
+                path.push_back(node);
+              path.push_back(root);
+              llvm::errs() << (cycleRegions ? "region" : "slice")
+                           << " cycle through @" << sliceCycleFunction << ':'
+                           << root << '\n';
+              for (unsigned node : llvm::reverse(path)) {
+                const auto &piece = slices->nodes[node];
+                llvm::errs()
+                    << "  @"
+                    << piece.activation->getActivationFunction().getSymName()
+                    << ':' << node << " writes";
+                talos::analysis::Ranges ranges;
+                if (cycleRegions)
+                  ranges = piece.activation->getNode(piece.operation)->writes;
+                else if (!slices->slices[node].windows.empty())
+                  for (const auto &[operation, range] :
+                       slices->slices[node].windows)
+                    ranges.push_back(range);
+                else
+                  for (Operation *store : slices->slices[node].stores)
+                    llvm::append_range(
+                        ranges,
+                        piece.activation->getMemory().getWrites().lookup(
+                            store));
+                talos::analysis::normalize(ranges);
+                for (auto range : ranges)
+                  llvm::errs() << " s" << range.root << '[' << range.low << ','
+                               << range.low + range.width << ')';
+                llvm::errs() << '\n';
+              }
+            }
+          }
         }
         if (sliceOrder) {
           auto order = talos::analysis::getActivationSliceOrder(views, &cycle);
@@ -465,6 +687,20 @@ public:
   }
 
 private:
+  std::string snapshot(Operation *operation) {
+    std::string text;
+    if (verifyPreparedViews && operation) {
+      llvm::raw_string_ostream os(text);
+      operation->print(os);
+    }
+    return text;
+  }
+  void verifySnapshot(Operation *operation, const std::string &before) {
+    if (snapshot(operation) != before) {
+      getOperation().emitError("analysis rewrote a prepared activation view");
+      signalPassFailure();
+    }
+  }
   /// Whenever full publication analysis has value dependencies, the cheaper
   /// input-only proof must succeed with the same publication inputs.
   void compare(talos::sim::SimFuncOp function,
@@ -472,12 +708,12 @@ private:
     using talos::analysis::ActivationMemoryAnalysis;
     using talos::analysis::ActivationRegionAnalysis;
     ActivationRegionAnalysis full(
-        function, handles, {},
+        talos::analysis::prepareActivation(function), handles,
         ActivationMemoryAnalysis::DependencyMode::ReachingValues);
     if (!full.getMemory().hasValueDependencies())
       return;
     ActivationRegionAnalysis inputs(
-        function, handles, {},
+        talos::analysis::prepareActivation(function), handles,
         ActivationMemoryAnalysis::DependencyMode::Inputs);
     if (!inputs.getMemory().hasInputDependencies() ||
         full.getMemory().getValueInputs() !=

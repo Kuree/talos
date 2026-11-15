@@ -187,11 +187,10 @@ bool isSAIFReference(sim::SimFuncOp function,
     }
     reference = *delayErased;
   }
+  analysis::ActivationPreparationOptions preparation;
+  preparation.symbols = function->getParentOp();
   analysis::ActivationRegionAnalysis activation(
-      reference, handles, {},
-      analysis::ActivationMemoryAnalysis::DependencyMode::Accesses,
-      analysis::ActivationRegionAnalysis::ControlFlowPreparation::Canonical,
-      function->getParentOp());
+      analysis::prepareActivation(reference, preparation), handles);
   if (activation.isValid()) {
     const auto &memory = activation.getMemory();
     return memory.hasCompleteWrites() &&

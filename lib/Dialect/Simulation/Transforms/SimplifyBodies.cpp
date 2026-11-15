@@ -11,6 +11,7 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/RegionUtils.h"
+#include "talos/Analysis/ActivationControlFlow.h"
 #include "talos/Analysis/ActivationRegionAnalysis.h"
 #include "talos/Analysis/DemandedBitAnalysis.h"
 #include "talos/Analysis/HandleDataflowAnalysis.h"
@@ -445,36 +446,15 @@ void promotePrivateReductions(sim::SimDesignOp design) {
 /// reports belong to the innermost activation (16.4.1), which the runtime
 /// tracks through these entries.
 void removeUnusedControlActivations(sim::SimDesignOp design) {
-  DenseSet<uint64_t> targets;
-  design.walk([&](Operation *operation) {
-    if (auto disable = dyn_cast<sim::SimControlDisableOp>(operation))
-      targets.insert(disable.getTargetId());
-    else if (auto exit = dyn_cast<sim::SimControlNonlocalExitOp>(operation))
-      targets.insert(exit.getTargetId());
-  });
-  SmallVector<sim::SimControlEnterOp> unused;
-  for (auto function : design.getBody().front().getOps<sim::SimFuncOp>()) {
-    bool deferred = function
-                        .walk([](sim::SimDeferredEnqueueOp) {
-                          return WalkResult::interrupt();
-                        })
-                        .wasInterrupted();
-    if (deferred)
-      continue;
-    function.walk([&](sim::SimControlEnterOp enter) {
-      if (!targets.contains(enter.getTargetId()) &&
-          llvm::all_of(enter.getControl().getUsers(), [](Operation *user) {
-            return isa<sim::SimControlLeaveOp>(user);
-          }))
-        unused.push_back(enter);
-    });
-  }
-  for (sim::SimControlEnterOp enter : unused) {
-    for (Operation *leave :
-         llvm::make_early_inc_range(enter.getControl().getUsers()))
-      leave->erase();
-    enter.erase();
-  }
+  analysis::ControlActivationAnalysis controls(design);
+  for (auto function : design.getBody().front().getOps<sim::SimFuncOp>())
+    for (Operation *op : controls.getUnobservableEnters(function)) {
+      auto enter = cast<sim::SimControlEnterOp>(op);
+      for (Operation *leave :
+           llvm::make_early_inc_range(enter.getControl().getUsers()))
+        leave->erase();
+      enter.erase();
+    }
 }
 void promotePrivateAggregates(sim::SimDesignOp design) {
   analysis::PrivateStorageAnalysis storage(design);
@@ -575,7 +555,7 @@ void promotePrivateAggregates(sim::SimDesignOp design) {
       auto [found, fresh] = activations.try_emplace(function);
       if (fresh)
         found->second = std::make_unique<analysis::ActivationRegionAnalysis>(
-            function, handles);
+            analysis::prepareActivation(function), handles);
       if (found->second->isValid()) {
         const auto &memory = found->second->getMemory();
         for (const auto &range : memory.getMayWrites())

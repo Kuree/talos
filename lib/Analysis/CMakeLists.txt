@@ -3,6 +3,7 @@ add_mlir_library(TalosSimulationAnalysis
   ActivationIdempotenceAnalysis.cpp
   ActivationMemoryAnalysis.cpp
   ActivationPhaseAnalysis.cpp
+  ActivationPreparation.cpp
   ActivationRegionAnalysis.cpp
   AccessFootprintAnalysis.cpp
   BoundedLoopAnalysis.cpp

@@ -1,27 +1,27 @@
 //===- ActivationRegionAnalysis.cpp - CFG activation regions -------------===//
 #include "talos/Analysis/ActivationRegionAnalysis.h"
 #include "mlir/Analysis/CFGLoopInfo.h"
-#include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
-#include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
-#include "mlir/Analysis/DataFlow/LivenessAnalysis.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/RegionGraphTraits.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "talos/Analysis/ActivationControlFlow.h"
 #include "talos/Analysis/BoundedLoopAnalysis.h"
+#include "talos/Analysis/DemandedBitAnalysis.h"
 #include "talos/Analysis/GraphAlgorithms.h"
 #include "talos/Analysis/LocalStorageAnalysis.h"
-#include "talos/Analysis/SSAValueAnalysis.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
 #include "talos/Runtime/ActivationOrder.h"
 #include "llvm/ADT/SCCIterator.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SetVector.h"
+#include <array>
+#include <functional>
+#include <map>
 #include <numeric>
 #include <queue>
 #include <set>
@@ -30,295 +30,6 @@ using namespace mlir;
 namespace talos::analysis {
 namespace {
 using Ranges = ActivationMemoryAnalysis::Ranges;
-
-// Normalize disposable initial/resume views with ordinary dialect patterns.
-// Memory summaries are computed only after this revision is stable.
-LogicalResult canonicalizeControl(Operation *operation) {
-  RewritePatternSet patterns(operation->getContext());
-  operation->getContext()
-      ->getLoadedDialect<sim::TalosSimulationDialect>()
-      ->getCanonicalizationPatterns(patterns);
-  for (RegisteredOperationName name :
-       operation->getContext()->getRegisteredOperations())
-    if (name.getDialectNamespace() == "arith" ||
-        name.getDialectNamespace() == "cf")
-      name.getCanonicalizationPatterns(patterns, operation->getContext());
-  return applyPatternsGreedily(operation, std::move(patterns));
-}
-
-/// An activation creates each flushed private slot from its root and may then
-/// execute the slot's resumption refresh, a store of the same root load into
-/// the fresh slot. Without an intervening access of the root or the slot that
-/// store rewrites the initial contents; drop it so the initial and resumed
-/// views match.
-void dropRedundantSlotRefreshes(sim::SimFuncOp function) {
-  Block &entry = function.getBody().front();
-  SmallVector<Operation *> redundant;
-  for (Operation &op : entry) {
-    auto alloc = dyn_cast<sim::SimRefAllocOp>(op);
-    if (!alloc || !sim::has<sim::metadata::FlushedPrivateSlot>(alloc))
-      continue;
-    auto initial = alloc.getInitialValue().getDefiningOp<sim::SimRefLoadOp>();
-    Value root = initial ? initial.getReference() : Value{};
-    for (Operation *next = alloc->getNextNode(); next;
-         next = next->getNextNode()) {
-      auto store = dyn_cast<sim::SimRefStoreOp>(next);
-      auto load = store ? store.getValue().getDefiningOp<sim::SimRefLoadOp>()
-                        : sim::SimRefLoadOp{};
-      if (store && store.getReference() == alloc.getResult() &&
-          (store.getValue() == alloc.getInitialValue() ||
-           (root && load && load.getReference() == root))) {
-        redundant.push_back(store);
-        break;
-      }
-      // Pure computations, loads, fresh slots and stores into other fresh
-      // slots touch neither this slot nor its root.
-      auto otherSlot = [&](Value reference) {
-        auto slot = reference.getDefiningOp<sim::SimRefAllocOp>();
-        return slot && slot != alloc;
-      };
-      if (!isMemoryEffectFree(next) &&
-          !isa<sim::SimRefLoadOp, sim::SimRefAllocOp>(next) &&
-          !(store && otherSlot(store.getReference())))
-        break;
-    }
-  }
-  for (Operation *store : redundant) {
-    auto load = cast<sim::SimRefStoreOp>(store).getValue().getDefiningOp();
-    store->erase();
-    if (load && load->use_empty())
-      load->erase();
-  }
-  // Place every slot, with its root load, immediately before its first use in
-  // the entry block, so slot creation order does not distinguish the views.
-  // Nothing in between writes the exclusive root or the fresh slot.
-  SmallVector<sim::SimRefAllocOp> slots;
-  for (Operation &op : entry)
-    if (auto alloc = dyn_cast<sim::SimRefAllocOp>(op);
-        alloc && sim::has<sim::metadata::FlushedPrivateSlot>(alloc))
-      slots.push_back(alloc);
-  for (auto alloc : slots) {
-    auto initial = alloc.getInitialValue().getDefiningOp<sim::SimRefLoadOp>();
-    Operation *first = entry.getTerminator();
-    for (Operation *user : alloc->getUsers())
-      if (Operation *ancestor = entry.findAncestorOpInBlock(*user);
-          ancestor && ancestor->isBeforeInBlock(first))
-        first = ancestor;
-    if (sim::has<sim::metadata::ActivationDefaultSlot>(alloc)) {
-      // Fresh default scratch does not read canonical state. Sinking its
-      // allocation past unrelated pure initializers gives both views the
-      // same placement even when several slots share an aggregate default.
-      alloc->moveBefore(first);
-      continue;
-    }
-    if (!initial || initial->getBlock() != &entry || !initial->hasOneUse())
-      continue;
-    bool clear = true;
-    for (Operation *op = alloc->getNextNode(); op && op != first && clear;
-         op = op->getNextNode())
-      if (auto store = dyn_cast<sim::SimRefStoreOp>(op))
-        clear = store.getReference() != initial.getReference();
-      else
-        clear = isMemoryEffectFree(op) ||
-                isa<sim::SimRefLoadOp, sim::SimRefAllocOp>(op);
-    if (!clear)
-      continue;
-    initial->moveBefore(first);
-    alloc->moveBefore(first);
-  }
-}
-
-OwningOpRef<sim::SimFuncOp>
-cloneActivation(sim::SimFuncOp source, Operation *suspend, bool resume,
-                IRMapping &mapping, ActivationRegionAnalysis::Trace trace,
-                ActivationRegionAnalysis::ControlFlowPreparation control) {
-  auto copy = cast<sim::SimFuncOp>(source->clone(mapping));
-  OwningOpRef<sim::SimFuncOp> owner(copy);
-  DenseSet<Operation *> initialEffects;
-  if (resume)
-    for (Operation &op : source.getBody().front().without_terminator())
-      if (!isMemoryEffectFree(&op))
-        initialEffects.insert(mapping.lookup(&op));
-  auto *wait = mapping.lookup(suspend);
-  OpBuilder builder(wait);
-  sim::SimReturnOp::create(builder, wait->getLoc(), ValueRange{});
-  wait->erase();
-  // The threading marker expresses where a constant was materialized, not
-  // its value. It must not distinguish initial and resume computations.
-  copy.walk(
-      [](Operation *op) { sim::remove<sim::metadata::Rematerialized>(op); });
-  if (resume) {
-    auto *entryTerminator = copy.getBody().front().getTerminator();
-    if (!isa<cf::BranchOp>(entryTerminator))
-      return {};
-    builder.setInsertionPoint(entryTerminator);
-    SemanticValueRootAnalysis roots(source);
-    DenseMap<Value, Value> rematerialized;
-    DenseSet<Value> visiting;
-    auto materialize = [&](Value value, auto &materialize) -> Value {
-      value = roots.lookup(value);
-      if (auto argument = dyn_cast<BlockArgument>(value))
-        return argument.getOwner() == &source.getBody().front()
-                   ? mapping.lookup(argument)
-                   : Value{};
-      if (Value found = rematerialized.lookup(value))
-        return found;
-      auto *definition = value.getDefiningOp();
-      // A flushed private slot equals a fresh copy of its exclusive root at
-      // every resumption: recreate it together with the root load.
-      auto flushed = [](Operation *op) {
-        return op && sim::has<sim::metadata::FlushedPrivateSlot>(op);
-      };
-      bool slotInitializer = isa_and_nonnull<sim::SimRefLoadOp>(definition) &&
-                             definition->hasOneUse() &&
-                             flushed(*definition->getUsers().begin());
-      if (!definition || !visiting.insert(value).second ||
-          definition->getNumRegions() ||
-          (!flushed(definition) && !slotInitializer &&
-           (!isMemoryEffectFree(definition) || !isSpeculatable(definition))))
-        return {};
-      IRMapping operands;
-      for (Value operand : definition->getOperands()) {
-        Value mapped = materialize(operand, materialize);
-        if (!mapped)
-          return {};
-        operands.map(operand, mapped);
-      }
-      // Immutable entry definitions already dominate the new resume edge.
-      // Reuse them when their operands are unchanged, retaining canonical
-      // definition order (including aggregate defaults shared by slots).
-      // A snapshot load is never reused by this rule.
-      bool reuse = definition->getBlock() == &source.getBody().front() &&
-                   isMemoryEffectFree(definition) &&
-                   isSpeculatable(definition) &&
-                   llvm::all_of(definition->getOperands(), [&](Value operand) {
-                     return operands.lookup(operand) == mapping.lookup(operand);
-                   });
-      auto *cloned = reuse ? mapping.lookup(definition)
-                           : builder.clone(*definition, operands);
-      sim::remove<sim::metadata::Rematerialized>(cloned);
-      for (auto [from, to] :
-           llvm::zip_equal(definition->getResults(), cloned->getResults()))
-        rematerialized[from] = to;
-      visiting.erase(value);
-      return rematerialized.lookup(value);
-    };
-    // Recreate flushed private slots in entry order so both activations
-    // allocate them identically.
-    for (Operation &op : source.getBody().front().without_terminator())
-      if (sim::has<sim::metadata::FlushedPrivateSlot>(&op) &&
-          !materialize(op.getResult(0), materialize))
-        return {};
-    auto branch = cast<BranchOpInterface>(suspend);
-    SmallVector<Value> arguments;
-    for (Value argument :
-         branch.getSuccessorOperands(0).getForwardedOperands()) {
-      Value mapped = materialize(argument, materialize);
-      if (!mapped)
-        return {};
-      arguments.push_back(mapped);
-    }
-    // Unthreaded CFGs may use an entry slot directly instead of passing its
-    // reference on the suspension edge. Rebind those uses to the recreated
-    // slot too; otherwise the clone keeps an artificial bootstrap live-in.
-    for (auto [original, recreated] : rematerialized)
-      if (auto alloc = original.getDefiningOp<sim::SimRefAllocOp>();
-          alloc && sim::has<sim::metadata::FlushedPrivateSlot>(alloc))
-        mapping.lookup(original).replaceAllUsesWith(recreated);
-    cf::BranchOp::create(builder, source.getLoc(),
-                         mapping.lookup(suspend->getSuccessor(0)), arguments);
-    entryTerminator->erase();
-  }
-  IRRewriter rewriter(copy.getContext());
-  (void)eraseUnreachableBlocks(rewriter, copy.getBody());
-  // Suspension threading can introduce forwarding cycles through loop
-  // headers. Collapse their proven SSA identities before structuring, so a
-  // stable reference does not become a loop-carried region result.
-  propagateActivationValueRoots(copy);
-  if (!initialEffects.empty()) {
-    // A live one-time snapshot is captured state, not a fresh resume read.
-    // Sparse backward liveness follows CFG forwarding lanes, including dead
-    // phi cycles, before any rewrite can merge loads or recycle op addresses.
-    SymbolTableCollection symbols;
-    DataFlowSolver solver(DataFlowConfig().setInterprocedural(false));
-    solver.load<dataflow::DeadCodeAnalysis>();
-    solver.load<dataflow::SparseConstantPropagation>();
-    solver.load<dataflow::LivenessAnalysis>(symbols);
-    if (failed(solver.initializeAndRun(copy)))
-      return {};
-    for (Operation *effect : initialEffects) {
-      if (!wouldOpBeTriviallyDead(effect))
-        return {};
-      for (Value result : effect->getResults()) {
-        auto *state = solver.lookupState<dataflow::Liveness>(result);
-        if (!state || state->isLive)
-          return {};
-      }
-    }
-  }
-  if (failed(canonicalizeControl(copy)))
-    return {};
-  dropRedundantSlotRefreshes(copy);
-  // Normalize lowered break/continue dispatch only when it obstructs the
-  // ordinary induction proof. Already admitted activations keep their CFG.
-  if (control ==
-          ActivationRegionAnalysis::ControlFlowPreparation::ThreadDispatch &&
-      !hasFiniteControlFlow(copy.getBody()))
-    while (threadActivationControlFlow(copy.getBody())) {
-      if (failed(canonicalizeControl(copy)))
-        return {};
-    }
-  if (trace)
-    trace(resume ? ActivationRegionAnalysis::TracePhase::Resume
-                 : ActivationRegionAnalysis::TracePhase::Initial,
-          copy);
-  return owner;
-}
-
-/// Give every top-level loop a dedicated entry block and one landing block
-/// per exit edge, so the blocks around a loop bound it as a unit. Canonical
-/// pass-through forwarding otherwise lets a loop exit straight into the next
-/// loop's header, fusing both loops into one scheduling unit. Entry operands
-/// pass through unchanged, keeping a constant induction start visible.
-void separateTopLevelLoops(sim::SimFuncOp function) {
-  Region &body = function.getBody();
-  SmallVector<SmallVector<Block *>> loops;
-  for (auto scc = llvm::scc_begin(&body); !scc.isAtEnd(); ++scc)
-    if (scc.hasCycle())
-      loops.emplace_back(scc->begin(), scc->end());
-  OpBuilder builder(function.getContext());
-  auto splitEdge = [&](Block *from, unsigned successor) {
-    auto branch = cast<BranchOpInterface>(from->getTerminator());
-    Block *to = from->getTerminator()->getSuccessor(successor);
-    SmallVector<Value> operands(
-        branch.getSuccessorOperands(successor).getForwardedOperands());
-    auto *landing = new Block;
-    body.getBlocks().insert(to->getIterator(), landing);
-    builder.setInsertionPointToEnd(landing);
-    cf::BranchOp::create(builder, from->getTerminator()->getLoc(), to,
-                         operands);
-    branch.getSuccessorOperands(successor).erase(0, operands.size());
-    from->getTerminator()->setSuccessor(landing, successor);
-  };
-  for (const auto &loop : loops) {
-    DenseSet<Block *> members(loop.begin(), loop.end());
-    SmallVector<std::pair<Block *, unsigned>> entries, exits;
-    for (Block *block : loop) {
-      for (auto it = block->pred_begin(); it != block->pred_end(); ++it)
-        if (!members.contains(*it))
-          entries.push_back({*it, it.getSuccessorIndex()});
-      for (auto [index, next] : llvm::enumerate(block->getSuccessors()))
-        if (!members.contains(next))
-          exits.push_back({block, unsigned(index)});
-    }
-    // A loop already entered by the sole edge of a straight-line block has
-    // its boundary; several entries would need a merged entry block.
-    if (entries.size() == 1 && entries.front().first->getNumSuccessors() > 1)
-      splitEdge(entries.front().first, entries.front().second);
-    for (auto [block, index] : exits)
-      splitEdge(block, index);
-  }
-}
 
 void unionRanges(Ranges &into, ArrayRef<ActivationMemoryAnalysis::Range> from) {
   llvm::append_range(into, from);
@@ -356,32 +67,6 @@ Ranges intersectRanges(ArrayRef<ActivationMemoryAnalysis::Range> a,
   return normalized;
 }
 
-bool equivalentActivations(sim::SimFuncOp lhs, sim::SimFuncOp rhs) {
-  // CFG block order is not dominance order. Register corresponding SSA
-  // definitions before comparing operands, including definitions in a loop
-  // header printed after one of its dominated exit blocks.
-  auto definitions = [](sim::SimFuncOp function) {
-    SmallVector<Value> values;
-    function.walk([&](Operation *op) {
-      llvm::append_range(values, op->getResults());
-      for (Region &region : op->getRegions())
-        for (Block &block : region)
-          llvm::append_range(values, block.getArguments());
-    });
-    return values;
-  };
-  auto left = definitions(lhs), right = definitions(rhs);
-  if (left.size() != right.size())
-    return false;
-  IRMapping mapping;
-  mapping.map(left, right);
-  return OperationEquivalence::isEquivalentTo(
-      lhs, rhs,
-      [&](Value a, Value b) {
-        return success(mapping.lookupOrDefault(a) == b);
-      },
-      nullptr, OperationEquivalence::IgnoreLocations);
-}
 } // namespace
 
 StringRef
@@ -405,55 +90,24 @@ stringifyActivationFailure(ActivationRegionAnalysis::FailureReason reason) {
 }
 
 ActivationRegionAnalysis::ActivationRegionAnalysis(
-    sim::SimFuncOp function, const HandleDataflowAnalysis &handles, Trace trace,
-    ActivationMemoryAnalysis::DependencyMode mode,
-    ControlFlowPreparation control, Operation *symbols) {
-  if (function.isExternal() || !function.getFunctionType().getResults().empty())
+    PreparedActivation prepared, const HandleDataflowAnalysis &handles,
+    ActivationMemoryAnalysis::DependencyMode mode)
+    : view(std::move(prepared.view)), suspension(prepared.suspension),
+      sourceFunction(prepared.source), symbols(prepared.getSymbolTable()),
+      sourceActivation(prepared.sourceActivation), dependencyMode(mode),
+      reason(prepared.reason) {
+  if (!prepared.isValid())
     return;
-  unsigned waits = 0;
-  bool returns = false;
-  function.walk([&](Operation *op) {
-    returns |= isa<sim::SimReturnOp>(op);
-    if (sim::isSuspensionOp(op)) {
-      ++waits;
-      suspension = op;
-    }
-  });
-  if (returns || waits != 1 ||
-      !isa<sim::SimSuspendChangeOp, sim::SimSuspendAnyOp>(suspension))
-    return;
-  if (auto any = dyn_cast<sim::SimSuspendAnyOp>(suspension))
-    if (llvm::any_of(any.getEdges(), [](int32_t edge) {
-          return edge != static_cast<int32_t>(sim::EdgeKind::Change);
-        }))
-      return;
-  IRMapping initialMap, resumeMap;
-  auto initial =
-      cloneActivation(function, suspension, false, initialMap, trace, control);
-  auto resumed =
-      cloneActivation(function, suspension, true, resumeMap, trace, control);
-  if (!initial || !resumed ||
-      !equivalentActivations(initial.get(), resumed.get())) {
-    reason = FailureReason::InitialResumeEquivalence;
-    return;
-  }
-  if (!hasFiniteControlFlow(initial->getBody())) {
-    reason = FailureReason::Termination;
-    return;
-  }
-  separateTopLevelLoops(*initial);
-  // Canonicalization can merge CFG blocks and change a reference phi's range.
-  // Recompute memory facts on this revision; original access-site facts must
-  // never be projected through a rewrite that may have merged accesses.
+  sim::SimFuncOp initial = view.get();
+  // Preparation has finished every CFG rewrite. Facts and scheduling units
+  // refer to this frozen revision for the entire analysis lifetime.
   memory =
-      ActivationMemoryAnalysis(initial.get(), handles, 65536, mode,
-                               symbols ? symbols : function->getParentOp());
+      ActivationMemoryAnalysis(initial, handles, 65536, mode, symbols);
   if (!memory.isValid()) {
-    // Failure diagnostics retain the unsupported operation as well.
-    view = std::move(initial);
     reason = FailureReason::MemoryEffects;
     return;
   }
+  reason = FailureReason::ActivationShape;
   const auto &reads = memory.getReads();
   const auto &writes = memory.getWrites();
   // The dense solver visits every feasible activation path. Frontend slice
@@ -468,7 +122,7 @@ ActivationRegionAnalysis::ActivationRegionAnalysis(
          !writes.contains(op)))
       unreachableAccesses.insert(op);
   });
-  Region &body = initial->getBody();
+  Region &body = initial.getBody();
   Block *exit = nullptr;
   for (Block &block : body)
     if (isa<sim::SimReturnOp>(block.getTerminator())) {
@@ -489,7 +143,7 @@ ActivationRegionAnalysis::ActivationRegionAnalysis(
   if (body.hasOneBlock()) {
     chain.push_back(exit);
   } else {
-    DominanceInfo dominance(*initial);
+    DominanceInfo dominance(initial);
     for (auto *node = dominance.getNode(exit); node; node = node->getIDom())
       if (Block *block = node->getBlock(); block && !cyclic.contains(block))
         chain.push_back(block);
@@ -565,7 +219,32 @@ ActivationRegionAnalysis::ActivationRegionAnalysis(
       return;
     }
   }
-  view = std::move(initial);
+  SmallVector<Value> watched;
+  if (auto change = dyn_cast<sim::SimSuspendChangeOp>(suspension))
+    watched.push_back(change.getWatched());
+  else
+    llvm::append_range(watched,
+                       cast<sim::SimSuspendAnyOp>(suspension).getWatched());
+  auto facts = handles.derive(sourceFunction);
+  watchedRanges.emplace();
+  for (Value watch : watched) {
+    auto fact = facts.find(watch);
+    auto span = sim::getProvenanceSpan(watch.getType());
+    if (fact == facts.end() || !fact->second.descriptor ||
+        fact->second.dynamic || !span || fact->second.width != *span) {
+      watchedRanges.reset();
+      break;
+    }
+    auto root = ActivationMemoryAnalysis::getRoot(fact->second.resource,
+                                                  *fact->second.descriptor);
+    if (!root) {
+      watchedRanges.reset();
+      break;
+    }
+    watchedRanges->push_back({*root, fact->second.low, fact->second.width});
+  }
+  if (watchedRanges)
+    normalize(*watchedRanges);
   reason = FailureReason::None;
 }
 
@@ -1086,8 +765,818 @@ std::optional<SmallVector<ActivationRegionStep>> getActivationPublicationOrder(
   return orderSteps(steps, std::move(edges), cycle);
 }
 
-std::optional<ActivationSchedule> getActivationRegionSchedule(
-    ArrayRef<const ActivationRegionAnalysis *> activations) {
+namespace {
+using InterleavingReads =
+    DenseMap<Operation *, ActivationMemoryAnalysis::Ranges>;
+using InterleavingReadCache =
+    DenseMap<const ActivationRegionAnalysis *, InterleavingReads>;
+
+using GuardBit = std::pair<uint64_t, uint64_t>;
+using GuardCube = std::map<GuardBit, bool>;
+using PulseGuards = SmallVector<GuardCube>;
+
+std::optional<PulseGuards> combineGuards(ArrayRef<GuardCube> a,
+                                         ArrayRef<GuardCube> b) {
+  PulseGuards result;
+  for (const auto &left : a)
+    for (const auto &right : b) {
+      GuardCube joined = left;
+      bool compatible = true;
+      for (const auto &[bit, value] : right) {
+        auto [found, inserted] = joined.emplace(bit, value);
+        compatible &= inserted || found->second == value;
+      }
+      if (joined.size() > 64)
+        continue;
+      if (compatible && !llvm::is_contained(result, joined)) {
+        if (result.size() == 32)
+          return result;
+        result.push_back(std::move(joined));
+      }
+    }
+  return result;
+}
+
+// Guard cubes are sufficient known-bit witnesses, not a two-state rewrite of
+// four-state expressions. Unproved paths contribute no cube. A cohort input
+// is stable only when its exclusive producer's final value can be resolved
+// without a recursive value dependency or a read of its own publications.
+class PulseGuardAnalysis {
+public:
+  using Resolve = std::function<std::optional<PulseGuards>(GuardBit, bool)>;
+  PulseGuardAnalysis(const ActivationRegionAnalysis &activation,
+                     const RangeSet &writes, Resolve resolve = {})
+      : activation(activation), writes(writes), resolve(std::move(resolve)),
+        dominance(activation.getActivationFunction()),
+        postDominance(activation.getActivationFunction()) {
+    ownWrites.unite(activation.getMemory().getMayWrites());
+    for (auto scc =
+             llvm::scc_begin(&activation.getActivationFunction().getBody());
+         !scc.isAtEnd(); ++scc) {
+      if (!scc.hasCycle())
+        continue;
+      acyclic = false;
+      unsigned id = loops.size();
+      for (Block *block : *scc)
+        cyclicBlocks[block] = id;
+      loops.emplace_back();
+      auto &loop = loops.back();
+      bool supported = true;
+      for (Block *block : *scc) {
+        for (Block *predecessor : block->getPredecessors())
+          if (!cyclicBlocks.contains(predecessor) ||
+              cyclicBlocks.lookup(predecessor) != id) {
+            if (loop.entry && loop.entry != block)
+              supported = false;
+            loop.entry = block;
+          }
+        for (Block *next : block->getSuccessors())
+          if (!cyclicBlocks.contains(next) || cyclicBlocks.lookup(next) != id) {
+            if (loop.exit && loop.exit != next)
+              supported = false;
+            loop.exit = next;
+          }
+      }
+      if (!supported)
+        loop.entry = loop.exit = nullptr;
+    }
+  }
+  bool hasAcyclicControl() const { return acyclic; }
+  Value getUnprovedPredicate() const { return unprovedPredicate; }
+  std::optional<PulseGuards> predicate(Value value, bool truth) {
+    if (sim::getPackedWidth(value.getType()) != 1)
+      return std::nullopt;
+    return bitPredicate(value, 0, truth);
+  }
+  std::optional<PulseGuards> bitPredicate(Value value, unsigned bit,
+                                          bool truth) {
+    auto key = std::make_tuple(value, bit, unsigned(truth));
+    auto found = cache.find(key);
+    if (found != cache.end()) {
+      if (!found->second && !unprovedPredicate)
+        unprovedPredicate = value;
+      return found->second;
+    }
+    if (depth == 128 || ++work > 4096)
+      return std::nullopt;
+    cache[key] = std::nullopt;
+    ++depth;
+    auto result = solve(value, bit, truth);
+    --depth;
+    if (!result && !unprovedPredicate)
+      unprovedPredicate = value;
+    cache[key] = result;
+    return result;
+  }
+  PulseGuards edgeGuards(Operation *term, unsigned index) {
+    if (pathDepth == 128 || ++work > 4096)
+      return {};
+    ++pathDepth;
+    llvm::scope_exit restoreDepth([&] { --pathDepth; });
+    if (auto found = cyclicBlocks.find(term->getBlock());
+        found != cyclicBlocks.end()) {
+      const auto &loop = loops[found->second];
+      if (!loop.entry || term->getSuccessor(index) != loop.exit)
+        return {};
+      // Valid activations already have a finite-control-flow proof. A
+      // single-entry, single-exit loop therefore reaches its common exit
+      // whenever its entry executes. This contracts only reachability;
+      // values and publications inside the loop remain unproved.
+      PulseGuards result;
+      for (auto it = loop.entry->pred_begin(); it != loop.entry->pred_end();
+           ++it)
+        if (auto predecessor = cyclicBlocks.find(*it);
+            predecessor == cyclicBlocks.end() ||
+            predecessor->second != found->second)
+          if (!append(result, edgeGuards((*it)->getTerminator(),
+                                         it.getSuccessorIndex())))
+            return {};
+      return result;
+    }
+    PulseGuards guards = pathGuards(term->getBlock());
+    auto condition = edgeCondition(term, index);
+    auto combined =
+        condition ? combineGuards(guards, *condition) : std::nullopt;
+    return combined.value_or(PulseGuards{});
+  }
+  std::optional<PulseGuards> edgeCondition(Operation *term, unsigned index) {
+    if (isa<cf::BranchOp>(term))
+      return PulseGuards{GuardCube{}};
+    if (auto branch = dyn_cast<cf::CondBranchOp>(term))
+      return predicate(branch.getCondition(), index == 0);
+    auto choice = dyn_cast<cf::SwitchOp>(term);
+    if (!choice)
+      return std::nullopt;
+    PulseGuards result{GuardCube{}};
+    if (auto cases = choice.getCaseValues())
+      for (auto [lane, fixed] : llvm::enumerate(cases->getValues<APInt>())) {
+        if (index && lane + 1 != index)
+          continue;
+        auto condition = bitEquality(choice.getFlag(), fixed, index != 0);
+        auto joined =
+            condition ? combineGuards(result, *condition) : std::nullopt;
+        if (!joined)
+          return std::nullopt;
+        result = std::move(*joined);
+      }
+    return result;
+  }
+  PulseGuards pathGuards(Block *block) {
+    if (cyclicBlocks.contains(block) || pathDepth == 128 || ++work > 4096)
+      return {};
+    if (auto found = blockGuards.find(block); found != blockGuards.end())
+      return found->second;
+    ++pathDepth;
+    llvm::scope_exit restoreDepth([&] { --pathDepth; });
+    blockGuards[block] = {};
+    if (block == &activation.getActivationFunction().getBody().front())
+      return blockGuards[block] = {GuardCube{}};
+    if (auto *node = dominance.getNode(block); node && node->getIDom())
+      if (Block *before = node->getIDom()->getBlock();
+          before && !cyclicBlocks.contains(before) &&
+          postDominance.postDominates(block, before))
+        // A completed finite diamond does not restrict reachability of its
+        // common join. Normalize that control fact before expanding branch
+        // predicates, without speculating or rereading any of their values.
+        return blockGuards[block] = pathGuards(before);
+    PulseGuards result;
+    for (auto it = block->pred_begin(); it != block->pred_end(); ++it) {
+      auto guards = edgeGuards((*it)->getTerminator(), it.getSuccessorIndex());
+      if (!append(result, guards))
+        return {};
+    }
+    return blockGuards[block] = result;
+  }
+  static bool append(PulseGuards &into, ArrayRef<GuardCube> from) {
+    for (const auto &cube : from)
+      if (!llvm::any_of(into, [&](const GuardCube &existing) {
+            return llvm::all_of(existing, [&](const auto &bit) {
+              auto found = cube.find(bit.first);
+              return found != cube.end() && found->second == bit.second;
+            });
+          })) {
+        llvm::erase_if(into, [&](const GuardCube &existing) {
+          return llvm::all_of(cube, [&](const auto &bit) {
+            auto found = existing.find(bit.first);
+            return found != existing.end() && found->second == bit.second;
+          });
+        });
+        if (into.size() == 32)
+          continue;
+        into.push_back(cube);
+      }
+    // These are sufficient witnesses, not a may-execute summary. Retaining a
+    // bounded subset remains sound; losing a witness can only miss a possible
+    // livelock. Never use this bounded DNF to remove a dependence or event.
+    return true;
+  }
+
+  /// A may-write envelope does not prove that a publication occurs. In
+  /// particular an invalid dynamic index writes nothing (11.5.1), even when
+  /// its envelope has exactly the width of the stored scalar.
+  bool hasExactStoreTarget(sim::SimRefStoreOp store, const Range &range) {
+    if (!store)
+      return false;
+    if (!handleFacts)
+      handleFacts = HandleDataflowAnalysis(activation.getActivationFunction())
+                        .derive(activation.getActivationFunction());
+    Value reference = store.getReference();
+    auto found = handleFacts->find(reference);
+    auto span = sim::getProvenanceSpan(reference.getType());
+    if (found == handleFacts->end() || !span)
+      return false;
+    const auto &fact = found->second;
+    if (!fact.descriptor || fact.dynamic || fact.width != *span ||
+        fact.low > fact.rootWidth || fact.width > fact.rootWidth - fact.low)
+      return false;
+    auto root =
+        ActivationMemoryAnalysis::getRoot(fact.resource, *fact.descriptor);
+    return root && range == Range{*root, fact.low, fact.width};
+  }
+
+private:
+  std::optional<PulseGuards> inputBit(Range range, bool truth) {
+    if (!ownWrites.intersectWith({range}).empty())
+      return std::nullopt;
+    if (!writes.intersectWith({range}).empty())
+      return resolve ? resolve({range.root, range.low}, truth) : std::nullopt;
+    return PulseGuards{GuardCube{{{range.root, range.low}, truth}}};
+  }
+  std::optional<PulseGuards> referencePredicate(Value reference, uint64_t bit,
+                                                bool truth) {
+    if (depth == 128 || ++work > 4096)
+      return std::nullopt;
+    ++depth;
+    llvm::scope_exit restoreDepth([&] { --depth; });
+    if (!handleFacts)
+      handleFacts = HandleDataflowAnalysis(activation.getActivationFunction())
+                        .derive(activation.getActivationFunction());
+    auto found = handleFacts->find(reference);
+    if (found != handleFacts->end() && found->second.descriptor &&
+        !found->second.dynamic && bit < found->second.width) {
+      const auto &fact = found->second;
+      auto root =
+          ActivationMemoryAnalysis::getRoot(fact.resource, *fact.descriptor);
+      return root ? inputBit({*root, fact.low + bit, 1}, truth) : std::nullopt;
+    }
+    if (auto extract = reference.getDefiningOp<sim::SimRefExtractOp>())
+      return referencePredicate(extract.getInput(), bit + extract.getLowBit(),
+                                truth);
+    if (auto field = reference.getDefiningOp<sim::SimRefSubelementOp>()) {
+      Type type = field.getInput().getType().getElementType();
+      uint64_t offset = 0;
+      for (int64_t index : field.getIndices()) {
+        auto child = index >= 0 && uint64_t(index) <= UINT_MAX
+                         ? sim::getAggregateProvenanceSubelement(type, index)
+                         : std::nullopt;
+        if (!child || child->first > UINT64_MAX - offset)
+          return std::nullopt;
+        offset += child->first;
+        type = sim::getAggregateElementType(type, index);
+      }
+      return referencePredicate(field.getInput(), bit + offset, truth);
+    }
+    if (auto element = reference.getDefiningOp<sim::SimRefArrayElementOp>()) {
+      Type type = element.getInput().getType().getElementType();
+      auto bounds =
+          TypeSwitch<Type, std::optional<std::pair<int64_t, int64_t>>>(type)
+              .Case<sim::PackedArrayType, sim::UnpackedArrayType>(
+                  [](auto array) {
+                    return std::pair{array.getLeft(), array.getRight()};
+                  })
+              .Default(std::nullopt);
+      auto width = sim::getPackedWidth(element.getIndex().getType());
+      unsigned count = sim::getAggregateNumElements(type);
+      if (!bounds || !width || *width > 128 || count > 16)
+        return std::nullopt;
+      PulseGuards result;
+      for (unsigned ordinal = 0; ordinal < count; ++ordinal) {
+        int64_t logical = bounds->first <= bounds->second
+                              ? bounds->first + ordinal
+                              : bounds->first - ordinal;
+        auto child = sim::getAggregateProvenanceSubelement(type, ordinal);
+        if (!child || bit >= child->second)
+          continue;
+        auto index = bitEquality(element.getIndex(),
+                                 APInt(*width, uint64_t(logical), true), true);
+        auto value =
+            referencePredicate(element.getInput(), child->first + bit, truth);
+        auto joined =
+            index && value ? combineGuards(*index, *value) : std::nullopt;
+        if (joined && !append(result, *joined))
+          return std::nullopt;
+      }
+      return result;
+    }
+    return std::nullopt;
+  }
+  std::optional<PulseGuards> bitEquality(Value input, const APInt &fixed,
+                                         bool match) {
+    if (fixed.getBitWidth() > 128)
+      return std::nullopt;
+    PulseGuards result = match ? PulseGuards{GuardCube{}} : PulseGuards{};
+    for (unsigned lane = 0; lane < fixed.getBitWidth(); ++lane) {
+      auto part = bitPredicate(input, lane, bool(fixed[lane]) == match);
+      if (!part && match)
+        return std::nullopt;
+      if (match) {
+        auto joined = combineGuards(result, *part);
+        if (!joined)
+          return std::nullopt;
+        result = std::move(*joined);
+      } else if (part && !append(result, *part))
+        return std::nullopt;
+    }
+    return result;
+  }
+  std::optional<PulseGuards> truthPredicate(Value value, bool truth) {
+    auto width = sim::getPackedWidth(value.getType());
+    if (!width || *width > 64)
+      return std::nullopt;
+    PulseGuards result = truth ? PulseGuards{} : PulseGuards{GuardCube{}};
+    for (unsigned bit = 0; bit < *width; ++bit) {
+      auto part = bitPredicate(value, bit, truth);
+      if (!part && !truth)
+        return std::nullopt;
+      if (truth) {
+        if (part && !append(result, *part))
+          return std::nullopt;
+      } else {
+        auto joined = combineGuards(result, *part);
+        if (!joined)
+          return std::nullopt;
+        result = std::move(*joined);
+      }
+    }
+    return result;
+  }
+  std::optional<PulseGuards> solve(Value value, unsigned bit, bool truth) {
+    auto width = sim::getPackedWidth(value.getType());
+    if (!width || bit >= *width)
+      return std::nullopt;
+    Operation *op = value.getDefiningOp();
+    if (!op) {
+      auto argument = dyn_cast<BlockArgument>(value);
+      if (!argument || cyclicBlocks.contains(argument.getOwner()) ||
+          argument.getOwner() ==
+              &activation.getActivationFunction().getBody().front())
+        return std::nullopt;
+      PulseGuards result;
+      for (auto it = argument.getOwner()->pred_begin();
+           it != argument.getOwner()->pred_end(); ++it) {
+        auto term = dyn_cast<BranchOpInterface>((*it)->getTerminator());
+        if (!term)
+          continue;
+        auto incoming = term.getSuccessorOperands(it.getSuccessorIndex());
+        if (incoming.isOperandProduced(argument.getArgNumber()))
+          continue;
+        auto part = bitPredicate(incoming[argument.getArgNumber()], bit, truth);
+        auto guards = edgeGuards(term, it.getSuccessorIndex());
+        auto joined = part ? combineGuards(guards, *part) : std::nullopt;
+        if (joined && !append(result, *joined))
+          return std::nullopt;
+      }
+      return result;
+    }
+    if (isa<arith::ConstantOp, sim::SimLogicConstantOp>(op)) {
+      auto constant = op->getAttrOfType<IntegerAttr>("value");
+      auto unknown = op->getAttrOfType<IntegerAttr>("unknown");
+      if (!constant || (unknown && unknown.getValue()[bit]))
+        return std::nullopt;
+      return bool(constant.getValue()[bit]) == truth ? PulseGuards{GuardCube{}}
+                                                     : PulseGuards{};
+    }
+    if (auto load = dyn_cast<sim::SimRefLoadOp>(op))
+      return referencePredicate(load.getReference(), bit, truth);
+    if (isa<sim::SimLogicIsTrueOp>(op))
+      return truthPredicate(op->getOperand(0), truth);
+    if (isa<sim::SimLogicFromBitsOp, sim::SimLogicToBitsOp,
+            sim::SimPackedFlattenOp, sim::SimPackedUnflattenOp>(op))
+      return bitPredicate(op->getOperand(0), bit, truth);
+    if (auto extract = dyn_cast<sim::SimLogicExtractOp>(op))
+      return bitPredicate(extract.getInput(), bit + extract.getLowBit(), truth);
+    if (auto extract = dyn_cast<sim::SimAggregateExtractOp>(op)) {
+      auto field = sim::getAggregateProvenanceSubelement(
+          extract.getInput().getType(), extract.getIndex());
+      return field ? bitPredicate(extract.getInput(), bit + field->first, truth)
+                   : std::nullopt;
+    }
+    if (auto resize = dyn_cast<sim::SimLogicResizeOp>(op)) {
+      unsigned input = resize.getInput().getType().getWidth();
+      if (bit < input)
+        return bitPredicate(resize.getInput(), bit, truth);
+      if (resize.getIsSigned())
+        return bitPredicate(resize.getInput(), input - 1, truth);
+      return truth ? PulseGuards{} : PulseGuards{GuardCube{}};
+    }
+    if (isa<arith::ExtUIOp, arith::ExtSIOp, arith::TruncIOp>(op)) {
+      Value input = op->getOperand(0);
+      unsigned inputWidth = cast<IntegerType>(input.getType()).getWidth();
+      if (bit < inputWidth)
+        return bitPredicate(input, bit, truth);
+      if (isa<arith::ExtSIOp>(op))
+        return bitPredicate(input, inputWidth - 1, truth);
+      return truth ? PulseGuards{} : PulseGuards{GuardCube{}};
+    }
+    if (auto unary = dyn_cast<sim::SimLogicUnaryOp>(op)) {
+      if (unary.isBitwiseNegation())
+        return bitPredicate(unary.getInput(), bit, !truth);
+      if (unary.getKind() == sim::UnaryKind::LogicalNot)
+        return truthPredicate(unary.getInput(), !truth);
+    }
+    if (auto reduction = dyn_cast<sim::SimLogicReductionOp>(op))
+      if (reduction.getKind() == sim::ReductionKind::Or)
+        return truthPredicate(reduction.getInput(), truth);
+    if (auto select = dyn_cast<arith::SelectOp>(op)) {
+      PulseGuards result;
+      for (bool take : {false, true}) {
+        auto condition = predicate(select.getCondition(), take);
+        auto part = bitPredicate(
+            take ? select.getTrueValue() : select.getFalseValue(), bit, truth);
+        auto joined =
+            condition && part ? combineGuards(*condition, *part) : std::nullopt;
+        if (joined && !append(result, *joined))
+          return std::nullopt;
+      }
+      return result;
+    }
+    if (auto compare = dyn_cast<sim::SimLogicCompareOp>(op)) {
+      bool equal = compare.getKind() == sim::CompareKind::Eq ||
+                   compare.getKind() == sim::CompareKind::CaseEq;
+      bool unequal = compare.getKind() == sim::CompareKind::Ne ||
+                     compare.getKind() == sim::CompareKind::CaseNe;
+      if (!equal && !unequal)
+        return std::nullopt;
+      Value input = compare.getLhs(), fixed = compare.getRhs();
+      if (!fixed.getDefiningOp<sim::SimLogicConstantOp>())
+        std::swap(input, fixed);
+      auto constant = fixed.getDefiningOp<sim::SimLogicConstantOp>();
+      if (!constant || !constant.getUnknown().isZero() ||
+          constant.getValue().getBitWidth() > 64)
+        return std::nullopt;
+      return bitEquality(input, constant.getValue(), truth == equal);
+    }
+    if (auto compare = dyn_cast<arith::CmpIOp>(op)) {
+      bool equal = compare.getPredicate() == arith::CmpIPredicate::eq;
+      if (!equal && compare.getPredicate() != arith::CmpIPredicate::ne)
+        return std::nullopt;
+      Value input = compare.getLhs(), fixed = compare.getRhs();
+      if (!fixed.getDefiningOp<arith::ConstantOp>())
+        std::swap(input, fixed);
+      auto constant = fixed.getDefiningOp<arith::ConstantOp>();
+      auto integer =
+          constant ? dyn_cast<IntegerAttr>(constant.getValue()) : IntegerAttr{};
+      return integer ? bitEquality(input, integer.getValue(), truth == equal)
+                     : std::nullopt;
+    }
+    if (auto binary = dyn_cast<arith::XOrIOp>(op)) {
+      PulseGuards result;
+      for (bool leftBit : {false, true}) {
+        auto left = bitPredicate(binary.getLhs(), bit, leftBit);
+        auto right = bitPredicate(binary.getRhs(), bit, leftBit != truth);
+        auto joined =
+            left && right ? combineGuards(*left, *right) : std::nullopt;
+        if (joined)
+          append(result, *joined);
+      }
+      return result;
+    }
+    bool conjunction = isa<arith::AndIOp>(op);
+    bool disjunction = isa<arith::OrIOp>(op);
+    if (auto binary = dyn_cast<sim::SimLogicBinaryOp>(op)) {
+      conjunction = binary.getKind() == sim::BinaryKind::And;
+      disjunction = binary.getKind() == sim::BinaryKind::Or;
+    }
+    bool logical = isa<sim::SimLogicLogicalOp>(op);
+    if (auto logicalOp = dyn_cast<sim::SimLogicLogicalOp>(op)) {
+      conjunction = logicalOp.getKind() == sim::LogicalKind::And;
+      disjunction = logicalOp.getKind() == sim::LogicalKind::Or;
+    }
+    if (!conjunction && !disjunction)
+      return std::nullopt;
+    auto left = logical ? truthPredicate(op->getOperand(0), truth)
+                        : bitPredicate(op->getOperand(0), bit, truth);
+    auto right = logical ? truthPredicate(op->getOperand(1), truth)
+                         : bitPredicate(op->getOperand(1), bit, truth);
+    if (truth == conjunction)
+      return left && right ? combineGuards(*left, *right) : std::nullopt;
+    PulseGuards result = left.value_or(PulseGuards{});
+    return !right || append(result, *right)
+               ? std::optional<PulseGuards>(std::move(result))
+               : std::nullopt;
+  }
+  const ActivationRegionAnalysis &activation;
+  const RangeSet &writes;
+  RangeSet ownWrites;
+  Resolve resolve;
+  DominanceInfo dominance;
+  PostDominanceInfo postDominance;
+  unsigned work = 0, depth = 0;
+  unsigned pathDepth = 0;
+  bool acyclic = true;
+  struct Loop {
+    Block *entry = nullptr, *exit = nullptr;
+  };
+  SmallVector<Loop> loops;
+  DenseMap<Block *, unsigned> cyclicBlocks;
+  std::optional<HandleFacts> handleFacts;
+  Value unprovedPredicate;
+  DenseMap<std::tuple<Value, unsigned, unsigned>, std::optional<PulseGuards>>
+      cache;
+  DenseMap<Block *, PulseGuards> blockGuards;
+};
+
+// Final values are evaluated only on demand for bits used by another owner's
+// pulse guard. Backward CFG summaries distinguish paths with no further write
+// from paths whose final value is already determined. This retains last-write
+// semantics without expanding the CFG into exponentially many paths.
+class PulseFinalValues {
+public:
+  PulseFinalValues(ArrayRef<const ActivationRegionAnalysis *> activations,
+                   const RangeSet &writes)
+      : activations(activations) {
+    for (const auto *activation : activations)
+      guards.push_back(std::make_unique<PulseGuardAnalysis>(
+          *activation, writes,
+          [&](GuardBit bit, bool truth) { return get(bit, truth); }));
+  }
+  std::optional<PulseGuards> get(GuardBit bit, bool truth) {
+    auto key = std::make_pair(bit, truth);
+    if (auto found = values.find(key); found != values.end())
+      return found->second;
+    values[key] = std::nullopt; // Reject recursive final-value equations.
+    unsigned owner = UINT_MAX;
+    Range target{bit.first, bit.second, 1};
+    for (auto [index, activation] : llvm::enumerate(activations)) {
+      RangeSet writes;
+      writes.unite(activation->getMemory().getMayWrites());
+      if (!writes.intersectWith({target}).empty()) {
+        if (owner != UINT_MAX)
+          return std::nullopt;
+        owner = index;
+      }
+    }
+    if (owner == UINT_MAX || values.size() > 128 ||
+        !guards[owner]->hasAcyclicControl())
+      return std::nullopt;
+    struct Summary {
+      PulseGuards holds, value;
+    };
+    DenseMap<Block *, Summary> summaries;
+    unsigned work = 0, depth = 0;
+    auto visit = [&](Block *block, auto &visit) -> Summary {
+      if (auto found = summaries.find(block); found != summaries.end())
+        return found->second;
+      summaries[block] = {};
+      if (depth == 128 || ++work > 4096)
+        return {};
+      ++depth;
+      llvm::scope_exit restoreDepth([&] { --depth; });
+      Summary result;
+      Operation *term = block->getTerminator();
+      if (isa<sim::SimReturnOp>(term))
+        result.holds = {GuardCube{}};
+      for (auto [index, next] : llvm::enumerate(term->getSuccessors())) {
+        // Use the branch predicate, not its complete incoming path: the
+        // backward summary will supply that path at its predecessor.
+        auto condition = guards[owner]->edgeCondition(term, index);
+        if (!condition)
+          continue;
+        auto suffix = visit(next, visit);
+        auto holds = combineGuards(*condition, suffix.holds);
+        auto value = combineGuards(*condition, suffix.value);
+        if (!holds || !value ||
+            !PulseGuardAnalysis::append(result.holds, *holds) ||
+            !PulseGuardAnalysis::append(result.value, *value))
+          return {};
+      }
+      const auto &memory = activations[owner]->getMemory();
+      for (Operation &op : llvm::reverse(block->without_terminator())) {
+        auto found = memory.getWrites().find(&op);
+        if (found == memory.getWrites().end())
+          continue;
+        RangeSet writes;
+        writes.unite(found->second);
+        if (writes.intersectWith({target}).empty())
+          continue;
+        if (found->second.size() != 1 || result.holds.empty()) {
+          if (found->second.size() != 1)
+            return Summary{};
+          continue;
+        }
+        auto range = found->second.front();
+        if (!guards[owner]->hasExactStoreTarget(
+                dyn_cast<sim::SimRefStoreOp>(op), range))
+          // An overlapping ambiguous write can supersede an earlier exact
+          // value. It must not be skipped to invent a final-value witness.
+          return Summary{};
+        auto stored = guards[owner]->bitPredicate(
+            ActivationMemoryAnalysis::getStoredValue(&op),
+            bit.second - range.low, truth);
+        auto value =
+            stored ? combineGuards(result.holds, *stored) : std::nullopt;
+        if (value && !PulseGuardAnalysis::append(result.value, *value))
+          return Summary{};
+        result.holds.clear();
+      }
+      return summaries[block] = result;
+    };
+    auto result = visit(
+        &activations[owner]->getActivationFunction().getBody().front(), visit);
+    return values[key] = result.value;
+  }
+  PulseGuardAnalysis &getGuards(unsigned owner) { return *guards[owner]; }
+
+private:
+  ArrayRef<const ActivationRegionAnalysis *> activations;
+  SmallVector<std::unique_ptr<PulseGuardAnalysis>> guards;
+  std::map<std::pair<GuardBit, bool>, std::optional<PulseGuards>> values;
+};
+
+bool mayHavePulseCycle(ArrayRef<const ActivationRegionAnalysis *> activations) {
+  if (activations.size() < 2 || activations.size() > 8)
+    return false;
+  unsigned pulsing = 0;
+  for (const auto *activation : activations) {
+    if (!activation->isValid() || !activation->getWatchedRanges())
+      return false;
+    pulsing += !activation->getMemory().getRepeatedWrites().empty() &&
+               activation->getActivationFunction().getEntryKind() ==
+                   sim::EntryKind::AlwaysComb;
+  }
+  return pulsing >= 2;
+}
+
+bool hasPossiblePulseCycle(
+    ArrayRef<const ActivationRegionAnalysis *> activations,
+    ActivationRearmPlan::Trace trace = {}) {
+  if (!mayHavePulseCycle(activations))
+    return false;
+  using Range = ActivationMemoryAnalysis::Range;
+  struct Pulse {
+    Range range;
+    GuardCube guard;
+  };
+  SmallVector<SmallVector<Pulse>> pulses(activations.size());
+  RangeSet cohortWrites;
+  for (const auto *activation : activations)
+    cohortWrites.unite(activation->getMemory().getMayWrites());
+  RangeSet watched;
+  for (const auto *activation : activations)
+    watched.unite(*activation->getWatchedRanges());
+  PulseFinalValues finalValues(activations, cohortWrites);
+  for (auto [owner, activation] : llvm::enumerate(activations)) {
+    if (activation->getActivationFunction().getEntryKind() !=
+            sim::EntryKind::AlwaysComb ||
+        activation->getMemory().getRepeatedWrites().empty())
+      continue;
+    struct Store {
+      Range range;
+      Value value;
+      std::optional<APInt> bits, unknown;
+      PulseGuards guards;
+    };
+    auto &guardAnalysis = finalValues.getGuards(owner);
+    SmallVector<Store> stores;
+    activation->getActivationFunction().walk([&, activation = activation](
+                                                 sim::SimRefStoreOp store) {
+      const auto &writes = activation->getMemory().getWrites();
+      auto found = writes.find(store);
+      if (found == writes.end() || found->second.size() != 1 ||
+          watched.intersectWith(found->second).empty())
+        return;
+      Range range = found->second.front();
+      if (!guardAnalysis.hasExactStoreTarget(store, range))
+        return;
+      const auto *node = activation->getNode(store);
+      PulseGuards guards = node && !node->isRegion()
+                               ? PulseGuards{GuardCube{}}
+                               : guardAnalysis.pathGuards(store->getBlock());
+      if (trace) {
+        trace(activation, store.getValue(),
+              guards.empty() ? "unproved store guard" : "proved store guard");
+        if (guards.empty() && guardAnalysis.getUnprovedPredicate())
+          trace(activation, guardAnalysis.getUnprovedPredicate(),
+                "unproved predicate");
+      }
+      if (guards.empty())
+        return;
+      Store fact{range, store.getValue(), std::nullopt, std::nullopt,
+                 std::move(guards)};
+      Operation *definition = store.getValue().getDefiningOp();
+      if (definition &&
+          isa<arith::ConstantOp, sim::SimLogicConstantOp>(definition)) {
+        auto value = definition->getAttrOfType<IntegerAttr>("value");
+        auto unknown = definition->getAttrOfType<IntegerAttr>("unknown");
+        if (value && value.getValue().getBitWidth() == range.width) {
+          fact.bits = value.getValue();
+          fact.unknown = unknown ? unknown.getValue() : APInt(range.width, 0);
+        }
+      }
+      if (fact.bits || range.width == 1)
+        stores.push_back(std::move(fact));
+    });
+    llvm::sort(stores, [](const auto &a, const auto &b) {
+      return std::tie(a.range.root, a.range.low, a.range.width) <
+             std::tie(b.range.root, b.range.low, b.range.width);
+    });
+    size_t comparisons = 0;
+    for (unsigned i = 0; i < stores.size(); ++i)
+      for (unsigned j = i + 1;
+           j < stores.size() && stores[j].range == stores[i].range; ++j) {
+        if (++comparisons > std::max(size_t{65536}, stores.size() * 64))
+          return false;
+        auto guards = combineGuards(stores[i].guards, stores[j].guards);
+        if (!guards)
+          return false;
+        APInt different(stores[i].range.width, 0);
+        if (stores[i].bits && stores[j].bits)
+          different = (*stores[j].bits ^ *stores[i].bits) |
+                      (*stores[j].unknown ^ *stores[i].unknown);
+        else {
+          PulseGuards unequal;
+          for (bool first : {false, true}) {
+            auto left = guardAnalysis.predicate(stores[i].value, first);
+            auto right = guardAnalysis.predicate(stores[j].value, !first);
+            auto condition =
+                left && right ? combineGuards(*left, *right) : std::nullopt;
+            auto witness =
+                condition ? combineGuards(*guards, *condition) : std::nullopt;
+            if (witness && !PulseGuardAnalysis::append(unequal, *witness))
+              return false;
+          }
+          guards = std::move(unequal);
+          different.setBit(0);
+        }
+        for (unsigned bit = 0; bit < different.getBitWidth();) {
+          if (!different[bit]) {
+            ++bit;
+            continue;
+          }
+          unsigned begin = bit++;
+          while (bit < different.getBitWidth() && different[bit])
+            ++bit;
+          for (const auto &guard : *guards) {
+            if (pulses[owner].size() == 4096)
+              return false;
+            pulses[owner].push_back({{stores[i].range.root,
+                                      stores[i].range.low + begin, bit - begin},
+                                     guard});
+          }
+        }
+      }
+  }
+
+  SmallVector<SmallVector<PulseGuards>> edges(
+      activations.size(), SmallVector<PulseGuards>(activations.size()));
+  for (unsigned from = 0; from < activations.size(); ++from)
+    for (unsigned to = 0; to < activations.size(); ++to)
+      if (from != to) {
+        RangeSet watches;
+        watches.unite(*activations[to]->getWatchedRanges());
+        for (const auto &pulse : pulses[from])
+          if (!watches.intersectWith({pulse.range}).empty())
+            if (!PulseGuardAnalysis::append(edges[from][to], {pulse.guard}))
+              return false;
+      }
+  // One satisfiable directed cycle is enough. Requiring every member of
+  // an observer-closed cohort to pulse would miss a loop accompanied by a
+  // passive observer, or mutually exclusive LOAD and STORE pulse cycles.
+  struct Witness {
+    GuardCube guard;
+    unsigned last;
+    uint8_t visited;
+  };
+  unsigned work = 0;
+  for (unsigned root = 0; root < activations.size(); ++root) {
+    SmallVector<Witness> pending{{{}, root, uint8_t(1u << root)}};
+    while (!pending.empty()) {
+      Witness witness = pending.pop_back_val();
+      for (unsigned to = root; to < activations.size(); ++to) {
+        if (to != root && (witness.visited & (1u << to)))
+          continue;
+        for (const auto &cube : edges[witness.last][to]) {
+          if (++work > 4096)
+            return false;
+          auto joined = combineGuards({witness.guard}, {cube});
+          if (!joined || joined->empty())
+            continue;
+          if (to == root)
+            return true;
+          pending.push_back({std::move(joined->front()), to,
+                             uint8_t(witness.visited | (1u << to))});
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+std::optional<ActivationSchedule> buildActivationRegionSchedule(
+    ArrayRef<const ActivationRegionAnalysis *> activations,
+    const InterleavingReadCache *demandedReads = nullptr,
+    bool bounded = false) {
   using Range = ActivationMemoryAnalysis::Range;
   struct Access {
     unsigned step;
@@ -1100,12 +1589,22 @@ std::optional<ActivationSchedule> getActivationRegionSchedule(
                   ActivationSchedule::DependencyKind kind) {
     result.dependencies.push_back({source, target, kind});
   };
-  DenseMap<uint64_t, SmallVector<Access>> readers, writers;
+  struct Interval {
+    Access access;
+    bool write;
+  };
+  SmallVector<Interval> intervals;
   for (const auto *activation : activations) {
     if (!activation->isValid())
       return std::nullopt;
     result.sensitivityEvents.push_back(activation->getSuspension());
     const auto &memory = activation->getMemory();
+    const auto *selectedReads = &memory.getReads();
+    if (demandedReads) {
+      auto refined = demandedReads->find(activation);
+      if (refined != demandedReads->end())
+        selectedReads = &refined->second;
+    }
     bool hasOwners = true;
     activation->getActivationFunction().walk([&](Operation *op) {
       if ((memory.getReads().contains(op) || memory.getWrites().contains(op)) &&
@@ -1126,14 +1625,15 @@ std::optional<ActivationSchedule> getActivationRegionSchedule(
                          : schedule::SourceOwnerAttr{};
         if (owner)
           owners.insert(owner);
-        auto record = [&](const auto &accesses, auto &inventory) {
+        auto record = [&](const auto &accesses, bool write) {
           auto found = accesses.find(op);
           if (found != accesses.end())
             for (Range range : found->second)
-              inventory[range.root].push_back({id, range, owner});
+              if (range.width)
+                intervals.push_back({{id, range, owner}, write});
         };
-        record(memory.getReads(), readers);
-        record(memory.getWrites(), writers);
+        record(*selectedReads, false);
+        record(memory.getWrites(), true);
       });
       // Fusion does not create source-order relations between the original
       // processes. Preserve each owner's order, including owners sharing a
@@ -1163,35 +1663,433 @@ std::optional<ActivationSchedule> getActivationRegionSchedule(
       });
     }
   }
-  auto overlaps = [](Range a, Range b) {
-    return a.low < b.low + b.width && b.low < a.low + a.width;
+  // Half-open intervals: end events precede starts at the same bit. Compare
+  // only simultaneously live intervals on the same root, rather than every
+  // read/write pair of a large aggregate. Sorting the resulting dependencies
+  // below retains deterministic node order independently of set iteration.
+  struct Endpoint {
+    uint64_t root, bit;
+    unsigned interval;
+    bool start;
   };
-  for (const auto &[root, writes] : writers)
-    for (const auto &write : writes) {
-      for (const auto &read : readers[root])
-        if (write.step != read.step &&
-            (steps[write.step].activation != steps[read.step].activation ||
-             write.owner != read.owner) &&
-            overlaps(write.range, read.range))
-          edge(write.step, read.step,
-               ActivationSchedule::DependencyKind::Value);
-        else if (write.step != read.step &&
-                 steps[write.step].activation == steps[read.step].activation &&
-                 write.owner == read.owner && overlaps(write.range, read.range))
-          edge(std::min(write.step, read.step), std::max(write.step, read.step),
-               ActivationSchedule::DependencyKind::Snapshot);
-      // If distinct original owners publish overlapping ranges, provenance
-      // alone cannot justify changing their order within an existing kernel.
-      for (const auto &later : writes)
-        if (write.step < later.step && write.owner != later.owner &&
-            steps[write.step].activation == steps[later.step].activation &&
-            overlaps(write.range, later.range))
-          edge(write.step, later.step,
-               ActivationSchedule::DependencyKind::Publication);
+  SmallVector<Endpoint> endpoints;
+  endpoints.reserve(intervals.size() * 2);
+  for (auto [id, interval] : llvm::enumerate(intervals)) {
+    const Range &range = interval.access.range;
+    if (range.low > UINT64_MAX - range.width)
+      return std::nullopt;
+    endpoints.push_back({range.root, range.low, unsigned(id), true});
+    endpoints.push_back(
+        {range.root, range.low + range.width, unsigned(id), false});
+  }
+  llvm::sort(endpoints, [](const Endpoint &a, const Endpoint &b) {
+    return std::tie(a.root, a.bit, a.start, a.interval) <
+           std::tie(b.root, b.bit, b.start, b.interval);
+  });
+  std::set<unsigned> readers, writers;
+  // Dense overlapping accesses have quadratic output even with an index.
+  // Bound both comparisons and stored edges by the input size. Exhaustion
+  // means an unavailable proof, never permission to cut a dependency.
+  size_t comparisons = 0;
+  size_t budget = std::max(size_t{65536}, intervals.size() * 64);
+  auto connectRead = [&](const Access &write, const Access &read) {
+    if (write.step == read.step)
+      return;
+    if (steps[write.step].activation != steps[read.step].activation ||
+        write.owner != read.owner)
+      edge(write.step, read.step, ActivationSchedule::DependencyKind::Value);
+    else
+      edge(std::min(write.step, read.step), std::max(write.step, read.step),
+           ActivationSchedule::DependencyKind::Snapshot);
+  };
+  for (const Endpoint &point : endpoints) {
+    const Interval &current = intervals[point.interval];
+    auto &active = current.write ? writers : readers;
+    if (!point.start) {
+      active.erase(point.interval);
+      continue;
     }
+    for (unsigned id : writers) {
+      if (++comparisons > budget && bounded)
+        return std::nullopt;
+      const Access &write = intervals[id].access;
+      if (!current.write)
+        connectRead(write, current.access);
+      else if (write.step != current.access.step &&
+               write.owner != current.access.owner &&
+               steps[write.step].activation ==
+                   steps[current.access.step].activation)
+        edge(std::min(write.step, current.access.step),
+             std::max(write.step, current.access.step),
+             ActivationSchedule::DependencyKind::Publication);
+    }
+    if (current.write)
+      for (unsigned id : readers) {
+        if (++comparisons > budget && bounded)
+          return std::nullopt;
+        connectRead(current.access, intervals[id].access);
+      }
+    active.insert(point.interval);
+  }
   if (!buildComponents(result))
     return std::nullopt;
   return result;
+}
+
+std::optional<SmallVector<ActivationRegionStep>> minimumHandoffOrder(
+    const ActivationSchedule &schedule,
+    ArrayRef<const ActivationRegionAnalysis *> activations,
+    std::optional<unsigned> &handoffs,
+    SmallVectorImpl<const ActivationRegionAnalysis *> *held = nullptr,
+    bool wholeBodies = false,
+    SmallVectorImpl<ActivationRegionStep> *preemptions = nullptr,
+    SmallVectorImpl<const ActivationRegionAnalysis *> *runs = nullptr) {
+  unsigned count = activations.size(), nodes = schedule.nodes.size();
+  if (count > 8)
+    return std::nullopt;
+  DenseMap<const ActivationRegionAnalysis *, unsigned> owners;
+  SmallVector<SmallVector<unsigned>> sequences(count);
+  SmallVector<unsigned> ownerOf(nodes), position(nodes);
+  for (auto [id, activation] : llvm::enumerate(activations))
+    owners[activation] = id;
+  for (auto [id, step] : llvm::enumerate(schedule.nodes)) {
+    unsigned owner = owners.at(step.activation);
+    ownerOf[id] = owner;
+    position[id] = sequences[owner].size();
+    sequences[owner].push_back(id);
+  }
+  // A virtual final step encounters the original event control again. Its
+  // watched inputs must receive their last publication before that re-arm.
+  // These steps are part of the scheduling proof, not executable operations
+  // to clone: the fused body ends at the common suspension.
+  std::vector<std::array<unsigned, 8>> required(nodes + count);
+  for (auto dependency : schedule.dependencies)
+    required[dependency.target][ownerOf[dependency.source]] =
+        std::max(required[dependency.target][ownerOf[dependency.source]],
+                 position[dependency.source] + 1);
+  SmallVector<RangeSet> watches(count);
+  for (unsigned owner = 0; owner < count; ++owner) {
+    watches[owner].unite(*activations[owner]->getWatchedRanges());
+    sequences[owner].push_back(nodes + owner);
+  }
+  for (auto [id, step] : llvm::enumerate(schedule.nodes)) {
+    const auto &writes = step.activation->getMemory().getWrites();
+    auto requirePublications =
+        [&, id = id](ArrayRef<ActivationMemoryAnalysis::Range> ranges) {
+          for (unsigned owner = 0; owner < count; ++owner)
+            if (owner != ownerOf[id] &&
+                !watches[owner].intersectWith(ranges).empty())
+              required[nodes + owner][ownerOf[id]] = std::max(
+                  required[nodes + owner][ownerOf[id]], position[id] + 1);
+        };
+    if (wholeBodies)
+      requirePublications(step.activation->getMemory().getMayWrites());
+    else
+      step.activation->getNode(step.operation)->walk([&](Operation *op) {
+        auto found = writes.find(op);
+        if (found != writes.end())
+          requirePublications(found->second);
+      });
+  }
+  struct State {
+    std::vector<unsigned> progress;
+    unsigned parent, actor, segments;
+  };
+  std::vector<State> states{
+      {std::vector<unsigned>(count, 0), UINT_MAX, UINT_MAX, 0}};
+  std::map<std::vector<unsigned>, unsigned> visited{{states[0].progress, 0}};
+  size_t work = 0;
+  size_t budget =
+      std::max(size_t{65536},
+               (schedule.nodes.size() + schedule.dependencies.size()) * 128);
+  unsigned complete = UINT_MAX;
+  for (unsigned cursor = 0; cursor < states.size() && complete == UINT_MAX;
+       ++cursor) {
+    auto progress = states[cursor].progress;
+    unsigned segments = states[cursor].segments;
+    for (unsigned actor = 0; actor < count; ++actor) {
+      auto next = progress;
+      while (next[actor] < sequences[actor].size()) {
+        unsigned node = sequences[actor][next[actor]];
+        bool ready = true;
+        for (unsigned owner = 0; owner < count; ++owner) {
+          if (++work > budget)
+            return std::nullopt;
+          ready &= next[owner] >= required[node][owner];
+        }
+        if (!ready)
+          break;
+        ++next[actor];
+      }
+      if (next == progress || visited.find(next) != visited.end())
+        continue;
+      if (states.size() == 4096)
+        return std::nullopt;
+      unsigned id = states.size();
+      visited.emplace(next, id);
+      states.push_back({std::move(next), cursor, actor, segments + 1});
+      bool done = true;
+      for (unsigned owner = 0; owner < count; ++owner)
+        done &= states.back().progress[owner] == sequences[owner].size();
+      if (done) {
+        complete = id;
+        break;
+      }
+    }
+  }
+  if (complete == UINT_MAX)
+    return std::nullopt;
+  // Advancing a ready source prefix cannot disable another step. Therefore
+  // an optimal order can always run each chosen actor until blocked. BFS of
+  // precisely those maximal runs minimizes handoffs; an exhausted search is
+  // unavailable, never an approximate optimum.
+  handoffs = states[complete].segments - 1;
+  SmallVector<unsigned> path;
+  for (unsigned id = complete; id; id = states[id].parent)
+    path.push_back(id);
+  SmallVector<ActivationRegionStep> order;
+  order.reserve(nodes);
+  for (unsigned id : llvm::reverse(path)) {
+    const State &state = states[id], &previous = states[state.parent];
+    if (runs)
+      runs->push_back(activations[state.actor]);
+    if (held && previous.progress[state.actor])
+      held->push_back(activations[state.actor]);
+    if (preemptions &&
+        state.progress[state.actor] < sequences[state.actor].size()) {
+      unsigned next = sequences[state.actor][state.progress[state.actor]];
+      preemptions->push_back(
+          next < nodes
+              ? schedule.nodes[next]
+              : ActivationRegionStep{activations[state.actor], nullptr});
+    }
+    for (unsigned i = previous.progress[state.actor];
+         i < state.progress[state.actor]; ++i) {
+      unsigned node = sequences[state.actor][i];
+      if (node < nodes)
+        order.push_back(schedule.nodes[node]);
+    }
+  }
+  return order;
+}
+} // namespace
+
+SmallVector<SmallVector<const ActivationRegionAnalysis *>>
+getActivationPulseComponents(
+    ArrayRef<const ActivationRegionAnalysis *> activations) {
+  using Range = ActivationMemoryAnalysis::Range;
+  SmallVector<unsigned> owners;
+  DenseMap<uint64_t, SmallVector<std::pair<unsigned, Range>>> watchers;
+  for (auto [owner, activation] : llvm::enumerate(activations))
+    if (activation->isValid() && activation->getWatchedRanges() &&
+        activation->getActivationFunction().getEntryKind() ==
+            sim::EntryKind::AlwaysComb &&
+        !activation->getMemory().getRepeatedWrites().empty()) {
+      owners.push_back(owner);
+      for (Range range : *activation->getWatchedRanges())
+        watchers[range.root].emplace_back(owner, range);
+    }
+  DenseMap<unsigned, SmallVector<unsigned>> edges;
+  size_t work = 0, budget = std::max(size_t{65536}, owners.size() * 256);
+  for (unsigned owner : owners) {
+    for (Range write : activations[owner]->getMemory().getRepeatedWrites()) {
+      auto found = watchers.find(write.root);
+      if (found == watchers.end())
+        continue;
+      for (auto [reader, read] : found->second) {
+        if (++work > budget)
+          return {};
+        if (reader != owner && write.low < read.low + read.width &&
+            read.low < write.low + write.width)
+          edges[owner].push_back(reader);
+      }
+    }
+    auto &targets = edges[owner];
+    llvm::sort(targets);
+    targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+  }
+  SmallVector<SmallVector<const ActivationRegionAnalysis *>> result;
+  for (auto component :
+       computeStronglyConnectedComponents<unsigned>(owners, edges)) {
+    if (component.size() < 2)
+      continue;
+    llvm::sort(component);
+    auto &cohort = result.emplace_back();
+    for (unsigned owner : component)
+      cohort.push_back(activations[owner]);
+  }
+  return result;
+}
+
+std::optional<ActivationRearmPlan>
+getActivationRearmPlan(ArrayRef<const ActivationRegionAnalysis *> activations,
+                       ActivationRearmPlan::Trace trace) {
+  if (activations.size() > 8)
+    return std::nullopt;
+  ActivationRearmPlan result;
+  if (!hasPossiblePulseCycle(activations, trace))
+    return result;
+  // Source execution does not require a read to see a later publication.
+  // Such value edges belong to the separate settled-value fusion proof.
+  // The only cross-process requirements here precede the original re-arms.
+  ActivationSchedule bodies;
+  for (const auto *activation : activations)
+    bodies.nodes.push_back(
+        {activation, activation->getActivationFunction().getOperation()});
+  std::optional<unsigned> handoffs;
+  auto order =
+      minimumHandoffOrder(bodies, activations, handoffs, &result.preemptions,
+                          /*wholeBodies=*/true, nullptr, &result.runs);
+  if (!order)
+    return std::nullopt;
+  for (const auto &step : *order)
+    result.bodyOrder.push_back(step.activation);
+  result.minimumHandoffs = *handoffs;
+  return result;
+}
+
+std::optional<ActivationSchedule> getActivationRegionSchedule(
+    ArrayRef<const ActivationRegionAnalysis *> activations) {
+  return buildActivationRegionSchedule(activations);
+}
+
+void ActivationInterleavingPreparation::prepare(
+    ArrayRef<const ActivationRegionAnalysis *> activations) {
+  if (prepared && llvm::equal(preparedActivations, activations))
+    return;
+  prepared = true;
+  preparedActivations.assign(activations.begin(), activations.end());
+  schedule.reset();
+  if (!mayHavePulseCycle(activations))
+    return;
+  schedule = buildActivationRegionSchedule(activations, nullptr, true);
+  if (!schedule || schedule->isAcyclic())
+    return;
+  for (const auto *activation : activations) {
+    if (frontierViews.contains(activation) ||
+        !llvm::any_of(activation->getNodes(), [](const auto &node) {
+          return node.isRegion() && !node.reads.empty() && !node.writes.empty();
+        }))
+      continue;
+    auto &refined = frontierViews[activation];
+    if (auto view = prepareActivationFrontiers(*activation, handles)) {
+      refined = std::make_unique<ActivationRegionAnalysis>(
+          std::move(*view), handles, activation->getDependencyMode());
+      if (!refined->isValid())
+        refined.reset();
+    }
+  }
+}
+
+std::optional<SmallVector<ActivationRegionStep>>
+ActivationInterleavingAnalysis::getOrder(
+    ArrayRef<const ActivationRegionAnalysis *> activations,
+    SmallVectorImpl<ActivationRegionStep> *cycle) {
+  assert(preparation.prepared &&
+         llvm::equal(preparation.preparedActivations, activations) &&
+         "prepare activation views before querying interleavings");
+  if (!cached || !llvm::equal(cachedActivations, activations) ||
+      (cycle && !cachedCycleAvailable)) {
+    cachedCycle.clear();
+    cachedOrder = computeOrder(activations, cycle ? &cachedCycle : nullptr);
+    cachedActivations.assign(activations.begin(), activations.end());
+    cached = true;
+    cachedCycleAvailable = cycle != nullptr;
+  }
+  if (cycle)
+    cycle->assign(cachedCycle.begin(), cachedCycle.end());
+  return cachedOrder;
+}
+
+std::optional<SmallVector<ActivationRegionStep>>
+ActivationInterleavingAnalysis::computeOrder(
+    ArrayRef<const ActivationRegionAnalysis *> activations,
+    SmallVectorImpl<ActivationRegionStep> *cycle) {
+  if (cycle)
+    cycle->clear();
+  minimumHandoffs.reset();
+  preemptions.clear();
+  runs.clear();
+  provenLivelock = hasPossiblePulseCycle(activations);
+  SmallVector<const ActivationRegionAnalysis *> selected(activations);
+  bool pulseCandidates = mayHavePulseCycle(activations);
+  if (!provenLivelock && !pulseCandidates)
+    return getActivationRegionOrder(activations, cycle);
+  auto schedule = preparation.schedule;
+  if (pulseCandidates && schedule && !schedule->isAcyclic()) {
+    bool changed = false;
+    for (auto &activation : selected) {
+      if (!llvm::any_of(activation->getNodes(), [](const auto &node) {
+            return node.isRegion() && !node.reads.empty() &&
+                   !node.writes.empty();
+          }))
+        continue;
+      if (const auto *refined = preparation.getFrontierView(activation)) {
+        activation = refined;
+        changed = true;
+      }
+    }
+    if (changed) {
+      if (!provenLivelock)
+        provenLivelock = hasPossiblePulseCycle(selected);
+      if (provenLivelock)
+        schedule = buildActivationRegionSchedule(selected, nullptr, true);
+    }
+  }
+  if (!provenLivelock)
+    return getActivationRegionOrder(activations, cycle);
+  if (!schedule)
+    return getActivationRegionOrder(activations, cycle);
+  if (!schedule->isAcyclic()) {
+    DenseSet<const ActivationRegionAnalysis *> cyclic;
+    for (auto [node, step] : llvm::enumerate(schedule->nodes))
+      if (schedule->cyclic[schedule->componentOf[node]])
+        cyclic.insert(step.activation);
+    for (const auto *activation : selected) {
+      if (!cyclic.contains(activation) || demandedReads.contains(activation))
+        continue;
+      DemandedBitAnalysis demands(activation->getActivationFunction());
+      auto &refined = demandedReads[activation];
+      for (const auto &[operation, ranges] :
+           activation->getMemory().getReads()) {
+        auto load = dyn_cast<sim::SimRefLoadOp>(operation);
+        const APInt *mask = load ? demands.get(load.getResult()) : nullptr;
+        auto &reads = refined[operation];
+        for (Range range : ranges) {
+          if (!mask || mask->getBitWidth() != range.width ||
+              mask->isAllOnes()) {
+            reads.push_back(range);
+            continue;
+          }
+          for (unsigned bit = 0; bit < mask->getBitWidth();) {
+            if (!(*mask)[bit]) {
+              ++bit;
+              continue;
+            }
+            unsigned begin = bit++;
+            while (bit < mask->getBitWidth() && (*mask)[bit])
+              ++bit;
+            reads.push_back({range.root, range.low + begin, bit - begin});
+          }
+        }
+      }
+    }
+    schedule = buildActivationRegionSchedule(selected, &demandedReads, true);
+    if (!schedule)
+      return getActivationRegionOrder(activations, cycle);
+  }
+  if (!schedule->isAcyclic()) {
+    if (cycle) {
+      SmallVector<std::pair<unsigned, unsigned>> edges;
+      for (auto dependency : schedule->dependencies)
+        edges.emplace_back(dependency.source, dependency.target);
+      orderSteps(schedule->nodes, std::move(edges), cycle);
+    }
+    return std::nullopt;
+  }
+  auto order = minimumHandoffOrder(*schedule, selected, minimumHandoffs,
+                                   nullptr, false, &preemptions, &runs);
+  return order ? order : getActivationRegionOrder(activations, cycle);
 }
 
 std::optional<SmallVector<ActivationRegionStep>>
@@ -1774,7 +2672,7 @@ cloneSliceWithTemporaries(const ActivationSlice &slice,
     return !deadStores.empty();
   };
   removeDeadStores();
-  if (failed(canonicalizeControl(*copy)))
+  if (failed(canonicalizeActivationControlFlow(*copy)))
     return {};
   while (true) {
     // Removing a branch can make a private load dead; its reaching stores
@@ -1794,7 +2692,7 @@ cloneSliceWithTemporaries(const ActivationSlice &slice,
     bool removedLoop = removeEmptyFiniteLoop(*copy);
     if (deadCalls.empty() && !removedLoop && !removedStores)
       break;
-    if (failed(canonicalizeControl(*copy)))
+    if (failed(canonicalizeActivationControlFlow(*copy)))
       return {};
   }
   return copy;

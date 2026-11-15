@@ -744,8 +744,8 @@ void CombinationalFusionAnalysis::prepareActivations() const {
       design.getContext(), functions.size(), [&](size_t index) {
         if (isComputeBodyFusionEligible(functions[index], *provenance))
           built[index] = std::make_unique<analysis::ActivationRegionAnalysis>(
-              functions[index], *provenance,
-              analysis::ActivationRegionAnalysis::Trace{}, dependencyMode);
+              analysis::prepareActivation(functions[index]), *provenance,
+              dependencyMode);
       });
   for (auto [function, activation] : llvm::zip_equal(functions, built))
     if (activation)
@@ -777,8 +777,7 @@ std::optional<CombinationalFusionBody> CombinationalFusionAnalysis::analyze(
     auto &activation = activations[function];
     if (!activation)
       activation = std::make_unique<analysis::ActivationRegionAnalysis>(
-          function, analysis, analysis::ActivationRegionAnalysis::Trace{},
-          dependencyMode);
+          analysis::prepareActivation(function), analysis, dependencyMode);
     if (!activation->isValid()) {
       CombinationalFusionFailure failure{Reason::Activation,
                                          activation->getFailureReason()};

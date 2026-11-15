@@ -284,7 +284,7 @@ TEST_F(ActivationOracle, IdempotenceProofsAreSound) {
   for (auto [c, function] : llvm::zip_equal(cases, functions)) {
     SCOPED_TRACE(describe(c));
     ActivationRegionAnalysis analysis(
-        function, handles, {},
+        talos::analysis::prepareActivation(function), handles,
         ActivationMemoryAnalysis::DependencyMode::ReachingValues);
     ASSERT_TRUE(analysis.isValid());
     bool admitted = talos::analysis::hasIdempotentStateTransition(
@@ -324,13 +324,13 @@ TEST_F(ActivationOracle, InputDependenciesCoverEveryObservedBit) {
   for (auto [c, function] : llvm::zip_equal(cases, functions)) {
     SCOPED_TRACE(describe(c));
     ActivationRegionAnalysis full(
-        function, handles, {},
+        talos::analysis::prepareActivation(function), handles,
         ActivationMemoryAnalysis::DependencyMode::ReachingValues);
     ASSERT_TRUE(full.isValid());
     ASSERT_TRUE(full.getMemory().hasValueDependencies());
     // The cheaper input-only proof must agree with full publication analysis.
     ActivationRegionAnalysis inputs(
-        function, handles, {},
+        talos::analysis::prepareActivation(function), handles,
         ActivationMemoryAnalysis::DependencyMode::Inputs);
     ASSERT_TRUE(inputs.isValid());
     ASSERT_TRUE(inputs.getMemory().hasValueDependencies() ||
