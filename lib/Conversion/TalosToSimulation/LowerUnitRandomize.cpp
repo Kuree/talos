@@ -6557,7 +6557,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         !dependsOnCandidate(source))
       return false;
     auto type = getNormalizedSemanticType(source);
-    if (failed(type) || !isa<FloatType>(*type))
+    if (failed(type) || !getRandomRealElementType(*type))
       return false;
     for (Operation *path = source;;) {
       if (sim::has<sim::metadata::RandomVariable>(path) ||
@@ -6605,12 +6605,26 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
                sim::has<sim::metadata::RandomVariableBitOffset>(source)) {
       mask = constantAssignment(sourceReferences(source));
     } else if (selectedRealStorage(source)) {
-      // Shared IEEE path graphs expose exactly the selected leaf's bits.
+      // Shared IEEE path graphs expose every selected leaf's exact bits.
       // Do not invoke arbitrary actual expressions merely to find a mask.
-      auto value = safeConstraintValue(source);
-      if (failed(value))
+      auto type = getNormalizedSemanticType(source);
+      auto real =
+          succeeded(type) ? getRandomRealElementType(*type) : FloatType{};
+      auto width =
+          succeeded(type) ? getRandomPropertyWidth(*type) : std::nullopt;
+      auto leafWidth = real ? getRandomPropertyWidth(real) : std::nullopt;
+      if (!width || !leafWidth || !*leafWidth || !*width ||
+          *width % *leafWidth != 0)
         return failure();
-      mask = value->inputs;
+      for (unsigned ordinal = 0; ordinal != *width / *leafWidth; ++ordinal) {
+        auto element = arithmetic.realElement(source, ordinal);
+        auto value = succeeded(element)
+                         ? safeConstraintValue(*element)
+                         : FailureOr<SafeConstraintValue>(failure());
+        if (failed(value))
+          return failure();
+        mask = unionGuardInputs(mask, value->inputs);
+      }
     } else {
       if (auto call = dyn_cast<semantic::SVCallExpressionOp>(source);
           call && !call.getIsSystemCall()) {

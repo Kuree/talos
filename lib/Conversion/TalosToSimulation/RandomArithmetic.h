@@ -57,6 +57,10 @@ public:
   /// the source needs no expansion. Shared operands keep their source identity.
   mlir::FailureOr<mlir::Operation *>
   realExpression(mlir::Operation *expression);
+  /// Shared scalar IEEE element in declared ordinal order. These shallow
+  /// graphs also expose a selected aggregate's exact per-element input masks.
+  mlir::FailureOr<mlir::Operation *> realElement(mlir::Operation *expression,
+                                                 unsigned ordinal);
   mlir::FailureOr<mlir::Operation *> known(mlir::Operation *expression);
 
 private:

@@ -1925,4 +1925,9 @@ FailureOr<Operation *> RandomArithmetic::known(Operation *expression) {
   return impl->known(expression);
 }
 
+FailureOr<Operation *> RandomArithmetic::realElement(Operation *expression,
+                                                     unsigned ordinal) {
+  return impl->realLeaf(expression, ordinal);
+}
+
 } // namespace talos::simlowering

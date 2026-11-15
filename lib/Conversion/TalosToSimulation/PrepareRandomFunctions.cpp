@@ -749,7 +749,8 @@ LogicalResult freezeRandomConstraintPriorityInputs(
                                     ? getNormalizedSemanticType(nested)
                                     : FailureOr<Type>(failure());
             if (hasFunctionCalls && !valuePath.precise &&
-                succeeded(selectedType) && isa<FloatType>(*selectedType) &&
+                succeeded(selectedType) &&
+                getRandomRealElementType(*selectedType) &&
                 !sim::has<sim::metadata::RandomEvaluationError>(nested)) {
               Operation *selection = nested;
               unsigned depth = 0;
