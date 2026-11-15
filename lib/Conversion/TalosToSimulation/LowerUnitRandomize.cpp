@@ -3369,6 +3369,10 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
   Block *nativeDispatch = nullptr;
   Block *nativeSample = nullptr;
   Value nativeCandidate, nativeRemaining, nativeState, nativeInitialState;
+  struct NativeResultCache {
+    Value value, ready;
+  };
+  llvm::DenseMap<Operation *, NativeResultCache> nativeResultCaches;
 
   auto materializeCandidates = [&](Value assignment,
                                    bool preserveSymbols =
@@ -7109,7 +7113,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
             expressionCaptures.erase(input);
         }
       });
-      auto lowerEvaluatedExpression = [&]() -> FailureOr<Value> {
+      auto lowerUncachedExpression = [&]() -> FailureOr<Value> {
         SmallVector<std::pair<Operation *, Value>> references;
         auto restore = llvm::scope_exit([&] {
           for (auto [actual, reference] : llvm::reverse(references)) {
@@ -7152,6 +7156,60 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
           }
         }
         return lowerExpression(expression);
+      };
+      auto lowerEvaluatedExpression = [&]() -> FailureOr<Value> {
+        if (!hasNativeFunctionStages ||
+            !sim::has<sim::metadata::RandomNativeFunction>(expression))
+          return lowerUncachedExpression();
+        auto found = nativeResultCaches.find(expression);
+        if (found == nativeResultCaches.end()) {
+          NativeResultCache cache;
+          {
+            OpBuilder::InsertionGuard insertion(builder);
+            Block *savedCurrent = current;
+            setCurrent(nativeDispatch);
+            // Reset per source occurrence and randomize request, including
+            // after a failed solve. These private automatic cells promote to
+            // loop-carried SSA; no object or RNG state is published here.
+            cache.value = sim::SimRefAllocOp::create(
+                builder, location,
+                sim::RefType::get(function.getContext(), *resultType),
+                createDefaultValue(builder, location, *resultType));
+            cache.ready = sim::SimRefAllocOp::create(
+                builder, location,
+                sim::RefType::get(function.getContext(), builder.getI1Type()),
+                guardConstant(false));
+            current = savedCurrent;
+          }
+          found = nativeResultCaches.try_emplace(expression, cache).first;
+        }
+        NativeResultCache cache = found->second;
+        Value cached =
+            sim::SimRefLoadOp::create(builder, location, cache.ready);
+        Block *reuse = addBlock();
+        Block *invoke = addBlock();
+        Block *done = addBlock();
+        Value result = done->addArgument(*resultType, location);
+        cf::CondBranchOp::create(builder, location, cached, reuse, ValueRange{},
+                                 invoke, ValueRange{});
+        setCurrent(reuse);
+        Value previous =
+            sim::SimRefLoadOp::create(builder, location, cache.value);
+        cf::BranchOp::create(builder, location, done, ValueRange{previous});
+        setCurrent(invoke);
+        auto value = lowerUncachedExpression();
+        if (failed(value))
+          return failure();
+        // Only an actual invocation fills the cache. An unready argument or
+        // inactive/invalid guard must not freeze a deferred dummy value.
+        // Accepted arguments and body-only state stay fixed for later stages
+        // (18.5.11), so a pure return, including its X/Z symbols, is reusable.
+        sim::SimRefStoreOp::create(builder, location, *value, cache.value);
+        sim::SimRefStoreOp::create(builder, location, guardConstant(true),
+                                   cache.ready);
+        cf::BranchOp::create(builder, location, done, ValueRange{*value});
+        setCurrent(done);
+        return result;
       };
       Value evaluate = errors;
       if (sim::has<sim::metadata::RandomNativeFunction>(expression))
