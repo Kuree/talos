@@ -1677,18 +1677,14 @@ void ComputeGraphBuilder::buildDataEdges() {
         continue;
       watchedEffects.forEachAlias(produced.target, [&](IndexedEffect consumed) {
         Fragment &consumer = fragments[consumed.owner];
-        // A nested procedural control might not have been reached when an
-        // earlier statement writes its operand, and an implicit wildcard
-        // excludes its controlled write from activating the inferred wait.
-        // An outer explicit always control repeats continuously, so an event
-        // enabled by one iteration can enqueue the next iteration.
+        // A procedural event control is not waiting while its body executes
+        // (9.4.2), including the leading control of a repeating always.
+        // Deferred NBA updates are separate producers after the re-arm.
         if (producer.function == consumer.function &&
             (::talos::schedule::has<schedule::metadata::topLevelWildcardWait>(
                  consumer.block->getTerminator()) ||
              ::talos::schedule::has<schedule::metadata::proceduralEventWait>(
-                 consumer.block->getTerminator())) &&
-            !::talos::schedule::has<schedule::metadata::repeatingAlwaysWait>(
-                consumer.block->getTerminator()))
+                 consumer.block->getTerminator())))
           return;
         if (provenancesAlias(produced.target, consumed.effect->target))
           addEdge(producer.id, consumer.id,

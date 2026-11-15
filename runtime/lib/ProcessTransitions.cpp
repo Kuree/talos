@@ -1289,6 +1289,8 @@ publishSignalOccurrenceUnlocked(talos_rt_context *context, uint64_t stableID,
       SignalSubscription *subscription = entry.subscription;
       if (!subscription || subscription->lastExaminedSequence == sequence)
         continue;
+      if (subscription->latch && !subscription->latch->armed)
+        continue;
       subscription->lastExaminedSequence = sequence;
       if (context->signalDiagnosticsEnabled)
         ++context->signalDiagnostics.subscribersExamined;

@@ -17,15 +17,12 @@ using namespace mlir;
 namespace talos::detail {
 
 uint32_t signalWaitFlags(Operation *operation) {
-  // A procedural or top-level wildcard event control that is not the
-  // repeating wait of an always procedure must not be satisfied by the
-  // waiting process's own earlier update (see serializeRuntimeWait).
+  // An event control has completed before its controlled body runs (9.4.2).
+  // Repeating the enclosing always procedure does not keep that wait armed.
   if ((::talos::schedule::has<schedule::metadata::topLevelWildcardWait>(
            operation) ||
        ::talos::schedule::has<schedule::metadata::proceduralEventWait>(
            operation)) &&
-      !::talos::schedule::has<schedule::metadata::repeatingAlwaysWait>(
-          operation) &&
       isa<schedule::NativeSuspendChangeOp, schedule::NativeSuspendEdgeOp,
           schedule::NativeSuspendEdgeIffOp, schedule::NativeSuspendAnyOp>(
           operation))

@@ -7250,13 +7250,12 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
       bool resuming = task.started && task.suspendKind != TALOS_RT_SUSPEND_NONE;
       if (!task.started)
         talos_rt_unregister_unstarted_actor(context, task.phase, task.id);
-      // Keep a direct wait indexed while its task executes. The task may
-      // change its own watched signal and then suspend on the same wait; the
-      // transition is the next occurrence, not part of the one being
-      // consumed now.
+      // The event control has completed (9.4.2). Retain its index for reuse,
+      // but do not deliver changes while the process executes its body.
       if (task.signalLatch) {
         task.signalLatch->triggered = false;
         task.signalLatch->affected = false;
+        task.signalLatch->armed = !task.signalLatch->disarmWhileRunning;
       }
       task.signalTriggered = false;
       context->designPollCandidates.erase(task.id);
@@ -7649,6 +7648,8 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
                 context, wait, task.signalSubscriptions, task.signalLatch,
                 task.id, true))
           finalizeStatus = context->schedulerStatus;
+        if (signalWait && task.signalLatch)
+          task.signalLatch->armed = true;
         break;
       }
       case TALOS_RT_FRAGMENT_PROCESS_SUSPEND:

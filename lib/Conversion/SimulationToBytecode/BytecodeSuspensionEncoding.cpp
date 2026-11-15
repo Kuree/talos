@@ -11,11 +11,9 @@ namespace talos::bytecode {
 
 static uint32_t directSignalWaitFlags(Operation *operation) {
   bool suppressActiveSelf =
-      (::talos::schedule::has<schedule::metadata::topLevelWildcardWait>(
-           operation) ||
-       ::talos::schedule::has<schedule::metadata::proceduralEventWait>(
-           operation)) &&
-      !::talos::schedule::has<schedule::metadata::repeatingAlwaysWait>(
+      ::talos::schedule::has<schedule::metadata::topLevelWildcardWait>(
+          operation) ||
+      ::talos::schedule::has<schedule::metadata::proceduralEventWait>(
           operation);
   return suppressActiveSelf ? TALOS_RT_WAIT_SUPPRESS_ACTIVE_SELF
                             : TALOS_RT_WAIT_FLAGS_NONE;

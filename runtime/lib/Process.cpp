@@ -4419,6 +4419,8 @@ adoptScheduledSuspendUnlocked(talos_rt_context *context,
           context, wait, scheduled.signalSubscriptions, scheduled.signalLatch,
           scheduled.token, false))
     return context->schedulerStatus;
+  if (directSignalSuspend && scheduled.signalLatch)
+    scheduled.signalLatch->armed = true;
   return TALOS_RT_OK;
 }
 
@@ -5814,14 +5816,13 @@ talos_rt_status runScheduler(talos_rt_context *context,
           if (node != UINT32_MAX)
             clearNativeAOTNodeReadyUnlocked(context, node);
         }
-        // Keep the wait indexed while its process executes. A process may
-        // update a signal in its own event expression and then suspend on the
-        // same wait again; retaining the subscription lets that transition
-        // latch the next activation instead of being lost between resume and
-        // re-arm. Consume only the occurrence that selected this activation.
+        // The previous event control is no longer waiting while its body
+        // executes (9.4.2). Keep the index, but disarm delivery until the
+        // process encounters its next event control.
         if (candidate.signalLatch) {
           candidate.signalLatch->triggered = false;
           candidate.signalLatch->affected = false;
+          candidate.signalLatch->armed = !candidate.signalLatch->disarmWhileRunning;
         }
         candidate.signalTriggered = false;
         context->nativePollCandidates.erase(candidate.token);

@@ -676,9 +676,8 @@ FailureOr<PreparedSuspendableProcess> prepareSuspendableProcess(
       if (wait.actionFlags == UINT32_MAX)
         valid = false;
       wait.flags = 0;
-      if ((schedule::has<schedule::metadata::topLevelWildcardWait>(op) ||
-           schedule::has<schedule::metadata::proceduralEventWait>(op)) &&
-          !schedule::has<schedule::metadata::repeatingAlwaysWait>(op))
+      if (schedule::has<schedule::metadata::topLevelWildcardWait>(op) ||
+          schedule::has<schedule::metadata::proceduralEventWait>(op))
         wait.flags = TALOS_RT_WAIT_SUPPRESS_ACTIVE_SELF;
     });
     if (!valid || !llvm::all_of(seen, [](bool value) { return value; }))

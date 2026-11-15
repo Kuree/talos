@@ -103,9 +103,8 @@ analyzeTableProcess(sim::SimFuncOp function,
     } else {
       return std::nullopt;
     }
-    if ((schedule::has<schedule::metadata::topLevelWildcardWait>(op) ||
-         schedule::has<schedule::metadata::proceduralEventWait>(op)) &&
-        !schedule::has<schedule::metadata::repeatingAlwaysWait>(op))
+    if (schedule::has<schedule::metadata::topLevelWildcardWait>(op) ||
+        schedule::has<schedule::metadata::proceduralEventWait>(op))
       wait.flags = TALOS_RT_WAIT_SUPPRESS_ACTIVE_SELF;
     for (auto [value, edge] : llvm::zip_equal(watched, edges)) {
       auto argument = dyn_cast<BlockArgument>(value);

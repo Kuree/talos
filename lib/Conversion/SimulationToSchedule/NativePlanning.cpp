@@ -1123,11 +1123,9 @@ FailureOr<NativeStaticFanoutPlan> buildNativeStaticFanoutPlan(
         continue;
       }
       bool suppressActiveSelf =
-          (::talos::schedule::has<schedule::metadata::proceduralEventWait>(
-               terminator) ||
-           ::talos::schedule::has<schedule::metadata::topLevelWildcardWait>(
-               terminator)) &&
-          !::talos::schedule::has<schedule::metadata::repeatingAlwaysWait>(
+          ::talos::schedule::has<schedule::metadata::proceduralEventWait>(
+              terminator) ||
+          ::talos::schedule::has<schedule::metadata::topLevelWildcardWait>(
               terminator);
       uint32_t flags =
           suppressActiveSelf ? TALOS_RT_FANOUT_SUPPRESS_ACTIVE_SELF : 0;

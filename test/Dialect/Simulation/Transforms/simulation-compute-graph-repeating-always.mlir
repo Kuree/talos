@@ -1,15 +1,16 @@
 // RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph))' | FileCheck %s
 
-// IEEE 1800-2017 9.2.2 requires an always procedure to repeat continuously,
-// and 4.9.3 requires a blocking update to enable dependent events. Preserve
-// the self-sensitivity edge for the outer wait so an update in one iteration
-// can enqueue the next iteration.
+// IEEE 1800-2023 9.4.2: the outer event control of an always procedure has
+// completed while its body runs, so the body's own blocking update does not
+// enable that wait again; only an update made while waiting can. No
+// self-sensitivity edge connects the body to its own outer wait.
 // CHECK-LABEL: simulation.design @repeating_always attributes {compute_graph = #schedule.graph<
 // CHECK-SAME: #schedule.fragment<id = [[WAIT:[0-9]+]], function = @process, block = 1
 // CHECK-SAME: effect = watch
 // CHECK-SAME: #schedule.fragment<id = [[BODY:[0-9]+]], function = @process, block = 2
 // CHECK-SAME: effect = write
-// CHECK-SAME: #schedule.edge<source = [[BODY]], target = [[WAIT]], kind = sensitivity
+// CHECK-SAME: edges = [
+// CHECK-NOT: kind = sensitivity
 // CHECK-SAME: regions =
 module {
   simulation.design @repeating_always {

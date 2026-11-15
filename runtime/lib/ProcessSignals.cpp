@@ -1576,6 +1576,9 @@ bool talos_rt_register_signal_wait_unlocked(
   if (latch) {
     latch->triggered = false;
     latch->affected = false;
+    latch->armed = true;
+    latch->disarmWhileRunning =
+        (wait->flags & TALOS_RT_WAIT_SUPPRESS_ACTIVE_SELF) != 0;
   }
   if (wait->kind != TALOS_RT_SUSPEND_CHANGE &&
       wait->kind != TALOS_RT_SUSPEND_EDGE)
@@ -1698,6 +1701,7 @@ bool talos_rt_register_signal_wait_unlocked(
     context->schedulerStatus = TALOS_RT_OUT_OF_MEMORY;
     return false;
   }
+  latch->disarmWhileRunning = suppressActiveSelf;
   const talos_rt_wait_entry_v1 *entries = waitEntries(wait);
   TALOS_RT_TRY {
     subscriptions.reserve(wait->count);
@@ -1846,7 +1850,8 @@ bool talos_rt_notify_managed_waiters_unlocked(talos_rt_context *context,
   if (found == context->managedWatchWaiters.end())
     return true;
   for (SignalSubscription *subscription : found->second) {
-    if (!subscription || !subscription->latch || subscription->latch->triggered)
+    if (!subscription || !subscription->latch ||
+        !subscription->latch->armed || subscription->latch->triggered)
       continue;
     if (subscription->suppressActiveSelf && subscription->waiterToken != 0) {
       uint64_t logicalToken =
@@ -1959,6 +1964,9 @@ bool talos_rt_register_computed_signal_wait_unlocked(
       latch = std::make_unique<SignalWaitLatch>();
     latch->triggered = false;
     latch->affected = false;
+    latch->armed = true;
+    latch->disarmWhileRunning =
+        (wait->flags & TALOS_RT_WAIT_SUPPRESS_ACTIVE_SELF) != 0;
     const auto *dependencies =
         reinterpret_cast<const talos_rt_computed_dependency_v1 *>(
             reinterpret_cast<const uint8_t *>(wait) +

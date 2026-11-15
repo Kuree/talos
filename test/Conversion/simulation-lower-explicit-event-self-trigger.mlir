@@ -1,12 +1,27 @@
 // RUN: talos-opt %s --pass-pipeline='builtin.module(talos-sim-prepare-unit-lowering,simulation.design(simulation.func(talos-sim-lower-unit)))' | FileCheck %s
+// RUN: talos-opt %s --pass-pipeline='builtin.module(talos-sim-prepare-unit-lowering,simulation.design(simulation.func(talos-sim-lower-unit),talos-sim-build-compute-graph,talos-sim-verify-compute-graph))' -o %t.mlir
+// RUN: FileCheck %s --check-prefix=GRAPH < %t.mlir
+// RUN: talos-opt %t.mlir '--encode-talos-sim-to-bytecode=vpi=off' --test-talos-print-bytecode -o /dev/null 2>&1 | FileCheck %s --check-prefix=BYTECODE
+// RUN: talos-opt %t.mlir --convert-talos-sim-processes-to-llvm-coroutines | FileCheck %s --check-prefix=NATIVE
 
-// IEEE 1800-2017 9.2.2: an always procedure repeats continuously. Distinguish
-// its outer event control from nested procedural controls so an event enabled
-// by one iteration can enqueue the next iteration.
+// IEEE 1800-2023 9.2.2/9.4.2: the leading event control is encountered again
+// after the controlled body completes. It is not armed while that body runs.
+// Keep the leading-wait identity, but do not add a self-wakeup edge from the
+// body's blocking assignment to the next iteration's wait.
+// GRAPH: edges = [#schedule.edge<source = 0, target = 1, kind = process_order>, #schedule.edge<source = 1, target = 2, kind = resume>, #schedule.edge<source = 2, target = 1, kind = process_order>]
+// The serialized wait header has version 1, kind 3, flags 4
+// (SUPPRESS_ACTIVE_SELF), and two watched expressions.
+// BYTECODE: constants: 01000000030000000400000002000000
+// NATIVE-LABEL: llvm.mlir.global internal constant @event_loop.__talos_table.waits()
+// NATIVE: %[[FLAGS:[0-9]+]] = llvm.mlir.constant(4 : i32)
+// NATIVE-NEXT: %{{[0-9]+}} = llvm.insertvalue %[[FLAGS]], %{{[0-9]+}}[2]
 
 !logic1 = !talos.integral<1, false, true, 0 : 0, logic>
 
-module {
+module attributes {
+  llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128",
+  llvm.target_triple = "x86_64-unknown-linux-gnu"
+} {
   simulation.design @explicit_event_self_trigger {
     simulation.code_unit.decl 9903001 in 0 always hierarchy "top.event_loop"
     simulation.scope.decl 0

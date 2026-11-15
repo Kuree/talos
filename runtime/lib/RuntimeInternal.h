@@ -167,6 +167,13 @@ struct SAIFCause;
 struct SignalWaitLatch {
   bool triggered = false;
   bool affected = false;
+  // An event control is armed only while its process is waiting. The index
+  // may be retained for reuse while the resumed body runs (9.4.2).
+  bool armed = true;
+  // Source event controls (TALOS_RT_WAIT_SUPPRESS_ACTIVE_SELF) disarm while
+  // their process runs. Internal waits, such as IEEE 1801-2018 9.7.3
+  // retention handlers querying process.event_pending, keep latching.
+  bool disarmWhileRunning = false;
 };
 
 struct SignalSubscription;

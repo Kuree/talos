@@ -1301,6 +1301,7 @@ talos_rt_status executeAOTNode(talos_rt_context *context, uint32_t actorSlot,
     if (scheduled.signalLatch) {
       scheduled.signalLatch->triggered = false;
       scheduled.signalLatch->affected = false;
+      scheduled.signalLatch->armed = !scheduled.signalLatch->disarmWhileRunning;
     }
     scheduled.signalTriggered = false;
     scheduled.started = true;
@@ -1717,6 +1718,10 @@ talos_rt_status executeAOTNode(talos_rt_context *context, uint32_t actorSlot,
                 scheduled.signalLatch, scheduled.token, false)) {
           return context->schedulerStatus;
         }
+        // Registration storage may be reused, but encountering the event
+        // control arms a new wait. The latch was disarmed while this body ran.
+        if (scheduled.signalLatch)
+          scheduled.signalLatch->armed = true;
       }
       break;
     }
