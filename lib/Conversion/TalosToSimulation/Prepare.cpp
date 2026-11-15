@@ -5998,10 +5998,15 @@ void TalosSimPreparePass::runOnOperation() {
       return getRandomConstraintPath(expression, propertyWidths,
                                      propertyForExpression);
     };
+    bool hasPriorityCalls = false;
+    for (Operation *root : constraintRoots)
+      root->walk([&](semantic::SVCallExpressionOp call) {
+        hasPriorityCalls |= !call.getIsSystemCall();
+      });
     for (Operation *root : constraintRoots)
       if (failed(freezeRandomConstraintPriorityInputs(
               root, propertyOffsets, totalWidth, builder, getPath,
-              getRandomStructureField))) {
+              getRandomStructureField, hasPriorityCalls))) {
         invalid = true;
         return true;
       }
@@ -8611,11 +8616,16 @@ void TalosSimPreparePass::runOnOperation() {
       randomPropertyOffsets.push_back(randomPropertyOffset);
       randomPropertyOffset += property.width;
     }
+    bool hasPriorityCalls = false;
+    for (Operation *root : constraintRoots)
+      root->walk([&](semantic::SVCallExpressionOp call) {
+        hasPriorityCalls |= !call.getIsSystemCall();
+      });
     for (Operation *root : constraintRoots) {
       randomValueOwner = getNestedConstraintOwner(root);
       if (failed(freezeRandomConstraintPriorityInputs(
               root, randomPropertyOffsets, randomPropertyOffset, builder,
-              getRandomValuePath, getRandomStructureField))) {
+              getRandomValuePath, getRandomStructureField, hasPriorityCalls))) {
         invalid = true;
         return true;
       }

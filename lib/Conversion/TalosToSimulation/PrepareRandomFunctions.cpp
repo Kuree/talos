@@ -338,7 +338,8 @@ LogicalResult freezeRandomConstraintPriorityInputs(
     llvm::function_ref<
         FailureOr<std::optional<RandomConstraintPath>>(Operation *)>
         getRandomConstraintPath,
-    llvm::function_ref<Operation *(Type, unsigned)> getStructureField) {
+    llvm::function_ref<Operation *(Type, unsigned)> getStructureField,
+    bool hasFunctionCalls) {
   unsigned orderingWidth =
       static_cast<unsigned>(std::max<uint64_t>(64, randomPropertyOffset));
   uint64_t nextCondition = 0;
@@ -354,11 +355,19 @@ LogicalResult freezeRandomConstraintPriorityInputs(
       track |=
           binary.getOperatorKind() == semantic::SVBinaryOperator::LogicalAnd ||
           binary.getOperatorKind() == semantic::SVBinaryOperator::LogicalOr;
+    if (hasFunctionCalls &&
+        isa<semantic::SVElementSelectExpressionOp>(expression)) {
+      auto parts = getChildren(expression);
+      auto base = parts.size() == 2 ? getNormalizedSemanticType(parts.front())
+                                    : FailureOr<Type>(failure());
+      track |= succeeded(base) && isa<sim::UnpackedArrayType>(*base) &&
+               !getConstantSpelling(parts[1]);
+    }
     if (sim::has<sim::metadata::RandomPriorityCondition>(expression) &&
         !track) {
       emitError(getSemanticLocation(expression))
-          << "constraint priority condition metadata requires a conditional or "
-             "logical expression";
+          << "constraint priority condition metadata requires a conditional, "
+             "logical or fixed-array selection expression";
       invalid = true;
     }
     if (track)
@@ -575,17 +584,19 @@ LogicalResult freezeRandomConstraintPriorityInputs(
     uint64_t condition;
     bool positive;
     unsigned kind;
+    int64_t index;
   };
   SmallVector<Context> contexts;
-  llvm::DenseMap<std::tuple<unsigned, uint64_t, uint8_t, unsigned>, unsigned>
+  llvm::DenseMap<std::tuple<unsigned, uint64_t, uint8_t, unsigned, int64_t>,
+                 unsigned>
       contextIds;
   auto branchContext = [&](unsigned parent, uint64_t condition, bool positive,
-                           unsigned kind = 0) {
+                           unsigned kind = 0, int64_t index = 0) {
     auto [found, inserted] = contextIds.try_emplace(
-        {parent, condition, static_cast<uint8_t>(positive), kind},
+        {parent, condition, static_cast<uint8_t>(positive), kind, index},
         contexts.size() + 1);
     if (inserted)
-      contexts.push_back({parent, condition, positive, kind});
+      contexts.push_back({parent, condition, positive, kind, index});
     return found->second;
   };
   // Function expansion can replace a call by a constant or eliminate an
@@ -639,7 +650,12 @@ LogicalResult freezeRandomConstraintPriorityInputs(
   SmallVector<Edge> functionOrder;
   uint64_t nextSource = 0;
   bool functionArgumentsPresent = false;
+  // Only inventory clones are expanded. The original selection and call
+  // occurrences remain intact for ordinary evaluation and ERROR sifting.
+  uint64_t remainingPathOperations = uint64_t{1} << 20;
   root->walk([&](Operation *expression) {
+    if (invalid)
+      return;
     if (!isa<semantic::SVExpressionConstraintOp,
              semantic::SVUniquenessConstraintOp,
              semantic::SVDisableSoftConstraintOp>(expression))
@@ -684,7 +700,8 @@ LogicalResult freezeRandomConstraintPriorityInputs(
             return;
           }
           if (auto index =
-                  sim::get<sim::metadata::RandomPriorityCondition>(nested)) {
+                  sim::get<sim::metadata::RandomPriorityCondition>(nested);
+              index && !isa<semantic::SVElementSelectExpressionOp>(nested)) {
             auto children = getChildren(nested);
             uint64_t id = index.getValue().getZExtValue();
             if (isa<semantic::SVConditionalExpressionOp>(nested)) {
@@ -728,6 +745,100 @@ LogicalResult freezeRandomConstraintPriorityInputs(
           }
           if (*path) {
             const RandomConstraintPath &valuePath = **path;
+            auto selectedType = hasFunctionCalls && !valuePath.precise
+                                    ? getNormalizedSemanticType(nested)
+                                    : FailureOr<Type>(failure());
+            if (hasFunctionCalls && !valuePath.precise &&
+                succeeded(selectedType) && isa<FloatType>(*selectedType) &&
+                !sim::has<sim::metadata::RandomEvaluationError>(nested)) {
+              Operation *selection = nested;
+              unsigned depth = 0;
+              for (;;) {
+                auto parts = getChildren(selection);
+                if (isa<semantic::SVElementSelectExpressionOp>(selection) &&
+                    parts.size() == 2 &&
+                    sim::has<sim::metadata::RandomPriorityCondition>(
+                        selection) &&
+                    !getConstantSpelling(parts[1]))
+                  break;
+                if (!isa<semantic::SVElementSelectExpressionOp,
+                         semantic::SVMemberAccessExpressionOp>(selection) ||
+                    parts.empty()) {
+                  selection = nullptr;
+                  break;
+                }
+                selection = parts.front();
+                ++depth;
+              }
+              if (selection) {
+                auto parts = getChildren(selection);
+                auto base = getNormalizedSemanticType(parts.front());
+                auto array = succeeded(base)
+                                 ? dyn_cast<sim::UnpackedArrayType>(*base)
+                                 : sim::UnpackedArrayType{};
+                if (!array) {
+                  invalid = true;
+                  return;
+                }
+                uint64_t condition =
+                    sim::get<sim::metadata::RandomPriorityCondition>(selection)
+                        .getValue()
+                        .getZExtValue();
+                uint64_t operations = 0;
+                nested->walk([&](Operation *) { ++operations; });
+                int64_t first = std::min(array.getLeft(), array.getRight());
+                int64_t last = std::max(array.getLeft(), array.getRight());
+                for (int64_t address = first;; ++address) {
+                  if (operations > remainingPathOperations) {
+                    emitError(getSemanticLocation(nested))
+                        << "constraint function selected-path inventory "
+                           "exceeds its expansion budget";
+                    invalid = true;
+                    return;
+                  }
+                  remainingPathOperations -= operations;
+                  Operation *copy = nested->clone();
+                  auto cleanup = llvm::scope_exit([&] { copy->destroy(); });
+                  Operation *selected = copy;
+                  for (unsigned index = 0; index != depth; ++index)
+                    selected = getChildren(selected).front();
+                  Operation *old = getChildren(selected)[1];
+                  OperationState literal(
+                      old->getLoc(),
+                      semantic::SVIntegerLiteralOp::getOperationName());
+                  literal.addAttribute("node_id", old->getAttr("node_id"));
+                  literal.addAttribute(
+                      "semantic_type",
+                      TypeAttr::get(semantic::IntegralType::get(
+                          builder.getContext(), 65, true, false, 64, 0,
+                          semantic::SVIntegralFlavor::Bit)));
+                  literal.addAttribute("is_signed", builder.getBoolAttr(true));
+                  SmallString<32> digits;
+                  APInt(65, static_cast<uint64_t>(address), true)
+                      .toString(digits, 16, false);
+                  literal.addAttribute(
+                      "constant_value",
+                      builder.getStringAttr("65'h" + digits.str().str()));
+                  literal.addRegion()->push_back(new Block());
+                  old->getBlock()->getOperations().insert(
+                      old->getIterator(), Operation::create(literal));
+                  old->erase();
+                  collectReferences(
+                      copy, inFunctionArgument,
+                      branchContext(context, condition, true, 2, address),
+                      sifting);
+                  if (invalid)
+                    return;
+                  if (address == last)
+                    break;
+                }
+                // Indices are independent actual expressions. Keep them in
+                // the source context, including references erased in clones.
+                collectReferences(parts[1], inFunctionArgument, context,
+                                  sifting);
+                return;
+              }
+            }
             // Preserve source references even if expression simplification
             // later removes their Boolean dependence. Function priority
             // classifies constraints by the variables they include.
@@ -846,16 +957,21 @@ LogicalResult freezeRandomConstraintPriorityInputs(
   }
   if (!contexts.empty()) {
     SmallVector<Attribute> encoded;
-    for (const Context &context : contexts)
-      encoded.push_back(builder.getDictionaryAttr(
-          {builder.getNamedAttr("parent",
-                                builder.getI64IntegerAttr(context.parent)),
-           builder.getNamedAttr("condition",
-                                builder.getI64IntegerAttr(context.condition)),
-           builder.getNamedAttr("positive",
-                                builder.getBoolAttr(context.positive)),
-           builder.getNamedAttr("kind",
-                                builder.getI64IntegerAttr(context.kind))}));
+    for (const Context &context : contexts) {
+      SmallVector<NamedAttribute> fields{
+          builder.getNamedAttr("parent",
+                               builder.getI64IntegerAttr(context.parent)),
+          builder.getNamedAttr("condition",
+                               builder.getI64IntegerAttr(context.condition)),
+          builder.getNamedAttr("positive",
+                               builder.getBoolAttr(context.positive)),
+          builder.getNamedAttr("kind",
+                               builder.getI64IntegerAttr(context.kind))};
+      if (context.kind == 2)
+        fields.push_back(builder.getNamedAttr(
+            "index", builder.getI64IntegerAttr(context.index)));
+      encoded.push_back(builder.getDictionaryAttr(fields));
+    }
     sim::set<sim::metadata::RandomPriorityContexts>(
         root, builder.getArrayAttr(encoded));
   }

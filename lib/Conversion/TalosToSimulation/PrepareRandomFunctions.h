@@ -75,7 +75,8 @@ mlir::LogicalResult freezeRandomConstraintPriorityInputs(
         mlir::FailureOr<std::optional<RandomConstraintPath>>(mlir::Operation *)>
         getPath,
     llvm::function_ref<mlir::Operation *(mlir::Type, unsigned)>
-        getStructureField);
+        getStructureField,
+    bool hasFunctionCalls);
 
 /// Expand validated pure expression calls. Actual arguments remain constraint
 /// variables; non-argument random reads introduced by a body become state.

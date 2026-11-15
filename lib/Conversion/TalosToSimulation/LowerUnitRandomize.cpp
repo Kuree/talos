@@ -2926,6 +2926,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     unsigned parent;
     Operation *condition;
     bool positive;
+    std::optional<int64_t> index = std::nullopt;
   };
   SmallVector<PriorityContext> priorityContexts{{0, nullptr, true}};
   llvm::DenseMap<Operation *, SmallVector<PriorityPath>> priorityPaths;
@@ -2960,6 +2961,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     SmallVector<unsigned> contextMap{0};
     if (auto contexts = sim::get<sim::metadata::RandomPriorityContexts>(root)) {
       llvm::DenseMap<uint64_t, std::pair<Operation *, unsigned>> conditions;
+      llvm::DenseMap<uint64_t, std::pair<int64_t, int64_t>> selectionBounds;
       root->walk([&](Operation *expression) {
         auto id = sim::get<sim::metadata::RandomPriorityCondition>(expression);
         if (!id || id.getValue().isNegative() ||
@@ -2979,6 +2981,20 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
                   binary.getOperatorKind() ==
                       semantic::SVBinaryOperator::LogicalOr))
           conditions.try_emplace(id.getValue().getZExtValue(), expression, 1);
+        else if (isa<semantic::SVElementSelectExpressionOp>(expression) &&
+                 parts.size() == 2) {
+          auto base = getNormalizedSemanticType(parts.front());
+          auto indexType = getNormalizedSemanticType(parts[1]);
+          if (succeeded(base) && isa<sim::UnpackedArrayType>(*base) &&
+              succeeded(indexType) && sim::getPackedWidth(*indexType)) {
+            conditions.try_emplace(id.getValue().getZExtValue(), parts[1], 2);
+            auto array = cast<sim::UnpackedArrayType>(*base);
+            selectionBounds.try_emplace(
+                id.getValue().getZExtValue(),
+                std::min(array.getLeft(), array.getRight()),
+                std::max(array.getLeft(), array.getRight()));
+          }
+        }
       });
       for (Attribute attribute : contexts) {
         auto record = dyn_cast<DictionaryAttr>(attribute);
@@ -2989,10 +3005,18 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         auto positive =
             record ? record.getAs<BoolAttr>("positive") : BoolAttr{};
         auto kind = record ? record.getAs<IntegerAttr>("kind") : IntegerAttr{};
+        auto selectedIndex =
+            record ? record.getAs<IntegerAttr>("index") : IntegerAttr{};
         if (!parent || !condition || !positive ||
-            (record.size() != 3 && record.size() != 4) ||
-            (record.size() == 4 && (!kind || kind.getValue().isNegative() ||
-                                    kind.getValue().getActiveBits() > 1)) ||
+            (record.size() != 3 && record.size() != 4 && record.size() != 5) ||
+            (record.size() >= 4 &&
+             (!kind || kind.getValue().isNegative() ||
+              kind.getValue().getActiveBits() > 2 || kind.getInt() > 2)) ||
+            ((kind && kind.getInt() == 2)
+                 ? (record.size() != 5 || !selectedIndex ||
+                    !selectedIndex.getValue().isSignedIntN(64) ||
+                    !positive.getValue())
+                 : record.size() == 5) ||
             parent.getValue().isNegative() ||
             parent.getValue().getActiveBits() > 64 ||
             parent.getValue().getZExtValue() >= contextMap.size() ||
@@ -3009,10 +3033,22 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
               << "constraint function branch context kind is inconsistent";
           return failure();
         }
+        if (selectedIndex) {
+          auto bounds =
+              selectionBounds.lookup(condition.getValue().getZExtValue());
+          if (selectedIndex.getInt() < bounds.first ||
+              selectedIndex.getInt() > bounds.second) {
+            emitError(getSemanticLocation(root))
+                << "constraint function selected index context is out of range";
+            return failure();
+          }
+        }
         contextMap.push_back(priorityContexts.size());
         priorityContexts.push_back(
             {contextMap[parent.getValue().getZExtValue()], selected.first,
-             positive.getValue()});
+             positive.getValue(),
+             selectedIndex ? std::optional(selectedIndex.getInt())
+                           : std::nullopt});
       }
     }
     for (Operation *source : sources)
@@ -6516,6 +6552,25 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     object = cast ? cast.getObject() : Value{};
   }
   llvm::DenseMap<Operation *, Value> argumentInputMasks;
+  auto selectedRealStorage = [&](Operation *source) {
+    if (!isa<semantic::SVElementSelectExpressionOp>(source) ||
+        !dependsOnCandidate(source))
+      return false;
+    auto type = getNormalizedSemanticType(source);
+    if (failed(type) || !isa<FloatType>(*type))
+      return false;
+    for (Operation *path = source;;) {
+      if (sim::has<sim::metadata::RandomVariable>(path) ||
+          sim::has<sim::metadata::RandomVariableBitOffset>(path))
+        return true;
+      auto parts = getChildren(path);
+      if (!isa<semantic::SVElementSelectExpressionOp,
+               semantic::SVMemberAccessExpressionOp>(path) ||
+          parts.empty())
+        return false;
+      path = parts.front();
+    }
+  };
   std::function<FailureOr<Value>(Operation *)> liveArgumentInputs;
   liveArgumentInputs = [&](Operation *source) -> FailureOr<Value> {
     if (auto found = argumentInputMasks.find(source);
@@ -6549,6 +6604,13 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     } else if (sim::has<sim::metadata::RandomVariable>(source) ||
                sim::has<sim::metadata::RandomVariableBitOffset>(source)) {
       mask = constantAssignment(sourceReferences(source));
+    } else if (selectedRealStorage(source)) {
+      // Shared IEEE path graphs expose exactly the selected leaf's bits.
+      // Do not invoke arbitrary actual expressions merely to find a mask.
+      auto value = safeConstraintValue(source);
+      if (failed(value))
+        return failure();
+      mask = value->inputs;
     } else {
       if (auto call = dyn_cast<semantic::SVCallExpressionOp>(source);
           call && !call.getIsSystemCall()) {
@@ -7692,6 +7754,32 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
           return failure();
         found = priorityConditionValues.try_emplace(entry.condition, *condition)
                     .first;
+      }
+      if (entry.index) {
+        auto address = toArrayIndex(found->second.value,
+                                    isSignedNode(entry.condition), location);
+        if (failed(address))
+          return failure();
+        if (auto logic = dyn_cast<sim::LogicType>((*address).getType()))
+          address = sim::SimLogicToBitsOp::create(
+                        builder, location,
+                        builder.getIntegerType(logic.getWidth()), *address)
+                        .getResult();
+        auto type = cast<IntegerType>((*address).getType());
+        Value expected = arith::ConstantOp::create(
+            builder, location, type,
+            builder.getIntegerAttr(
+                type, APInt(type.getWidth(),
+                            static_cast<uint64_t>(*entry.index), true)));
+        Value equal = arith::CmpIOp::create(
+            builder, location, arith::CmpIPredicate::eq, *address, expected);
+        Value selected =
+            guardAnd(found->second.errors,
+                     guardOr(found->second.random,
+                             guardAnd(found->second.valid, equal)));
+        priorityContextValues[index] =
+            guardAnd(priorityContextValues[entry.parent], selected);
+        continue;
       }
       auto eliminated = stateGuard(found->second, !entry.positive);
       if (failed(eliminated))
