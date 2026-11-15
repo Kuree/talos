@@ -1,6 +1,7 @@
 // RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-replicate,simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o %t.mlir
 // RUN: FileCheck %s < %t.mlir
 // RUN: FileCheck %s --check-prefix=CLEAR < %t.mlir
+// RUN: FileCheck %s --check-prefix=STORES < %t.mlir
 
 // A store marked as an NBA update performed early (as a clocked kernel's
 // direct store is) publishes the wakes of its 66 readers into the held
@@ -36,10 +37,10 @@
 // CHECK:      ^bb2(%[[REST:[0-9]+]]: i64):
 // CHECK:      ^bb3:
 // CHECK:      %[[LEAF:[0-9]+]] = "llvm.intr.cttz"(%[[REST]])
-// CHECK:      %[[HL:[0-9]+]] = llvm.getelementptr %[[HELD]][%[[LEAF]]]
-// CHECK-NEXT: %[[IL:[0-9]+]] = llvm.getelementptr %[[IN]][%[[LEAF]]]
-// CHECK-NEXT: %[[HV:[0-9]+]] = llvm.load %[[HL]]
-// CHECK-NEXT: %[[IV:[0-9]+]] = llvm.load %[[IL]]
+// CHECK-DAG: %[[HL:[0-9]+]] = llvm.getelementptr %[[HELD]][%[[LEAF]]]
+// CHECK-DAG: %[[IL:[0-9]+]] = llvm.getelementptr %[[IN]][%[[LEAF]]]
+// CHECK-DAG: %[[HV:[0-9]+]] = llvm.load %[[HL]]
+// CHECK-DAG: %[[IV:[0-9]+]] = llvm.load %[[IL]]
 // CHECK-NEXT: %[[MV:[0-9]+]] = llvm.or %[[IV]], %[[HV]]
 // CHECK-NEXT: llvm.store %[[MV]], %[[IL]]
 // CHECK-NOT: llvm.store
@@ -67,6 +68,18 @@
 // CLEAR-DAG: llvm.store %[[ZERO:[0-9]+]], %[[HL]]
 // CLEAR-DAG: %[[ZERO]] = llvm.mlir.constant(0 : i64)
 // CLEAR: ^bb4:
+
+// Reordering the independent addresses and loads must not hide an early or
+// extra store. CHECK pins the two destinations and their relative order.
+// STORES-LABEL: llvm.func internal @__talos_eval_nba_held_merge_v1()
+// STORES: ^bb3:
+// STORES-NOT: llvm.call
+// STORES: llvm.store
+// STORES-NOT: llvm.call
+// STORES: llvm.store
+// STORES-NOT: llvm.call
+// STORES-NOT: llvm.store
+// STORES: ^bb4:
 
 !clk = !simulation.ref<i1>
 !int = !simulation.ref<i32>

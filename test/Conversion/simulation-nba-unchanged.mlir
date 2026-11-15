@@ -13,9 +13,11 @@
 // LOWER: %[[DELTA:.*]] = llvm.and
 // LOWER: llvm.load {{.*}}schedule.eval.pending_dirty_root
 // LOWER: %[[PENDING:.*]] = llvm.and
-// LOWER-NEXT: %[[NEEDED:.*]] = llvm.or %[[DELTA]], %[[PENDING]]
-// LOWER-NEXT: llvm.icmp "ne" %[[NEEDED]],
-// LOWER-NEXT: llvm.cond_br {{.*}}, ^[[STAGE:bb[0-9]+]], ^[[DONE:bb[0-9]+]]
+// LOWER-NOT: llvm.store
+// LOWER-NOT: llvm.call
+// LOWER: %[[NEEDED:.*]] = llvm.or %[[DELTA]], %[[PENDING]]
+// LOWER-NEXT: %[[NEEDS_STAGE:.*]] = llvm.icmp "ne" %[[NEEDED]],
+// LOWER-NEXT: llvm.cond_br %[[NEEDS_STAGE]], ^[[STAGE:bb[0-9]+]], ^[[DONE:bb[0-9]+]]
 // LOWER-NEXT: ^[[STAGE]]:
 // LOWER: llvm.mlir.addressof @__talos_aot_nba_accumulator_0
 // LOWER: llvm.br ^[[DONE]]
