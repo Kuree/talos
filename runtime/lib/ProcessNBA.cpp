@@ -320,9 +320,6 @@ static talos_rt_status schedulerNBA(
   if (!value || (unknownPlane && !unknown) ||
       byteCount > std::numeric_limits<size_t>::max())
     return fail(TALOS_RT_INVALID_ARGUMENT);
-  auto sourceBit = [&](const uint8_t *plane, uint64_t bit) {
-    return byteBit(plane, sourceBitOffset + bit);
-  };
   talos_rt_string_v1 queuedString = 0;
   if (stringValue) {
     std::memcpy(&queuedString, value, sizeof(queuedString));
@@ -610,28 +607,36 @@ static talos_rt_status schedulerNBA(
           }
       }
     }
-    update.inlinePacked =
-        !automatic && boundedStatic && !stringValue && delay == 0 &&
-        bitWidth <= 64 && offset >= 0 && staticState &&
-        static_cast<uint64_t>(offset) <= staticState->bitWidth &&
-        bitWidth <= staticState->bitWidth - static_cast<uint64_t>(offset) &&
-        context->nativeSchedulePlan && !context->nativeScheduleDeoptimized &&
-        (context->nativeSchedulePlan->flags &
-         TALOS_RT_NATIVE_SCHEDULE_FULLY_STATIC) != 0;
+    // Payload representation is independent of the scheduling tier and the
+    // destination's address class. Capture a scalar in the record itself;
+    // delayed and clipped updates retain the same RHS snapshot and ordering.
+    update.inlinePacked = !stringValue && bitWidth <= 64;
     if (update.inlinePacked) {
       update.inlineValue = loadPackedBytes(value, sourceBitOffset, bitWidth);
       if (unknownPlane)
         update.inlineUnknown =
             loadPackedBytes(unknown, sourceBitOffset, bitWidth);
-      ++context->signalDiagnostics.aotNBAStages;
+      if (!automatic && boundedStatic && !stringValue && delay == 0 &&
+          bitWidth <= 64 && offset >= 0 && staticState &&
+          static_cast<uint64_t>(offset) <= staticState->bitWidth &&
+          bitWidth <= staticState->bitWidth - static_cast<uint64_t>(offset) &&
+          context->nativeSchedulePlan && !context->nativeScheduleDeoptimized &&
+          (context->nativeSchedulePlan->flags &
+           TALOS_RT_NATIVE_SCHEDULE_FULLY_STATIC) != 0)
+        ++context->signalDiagnostics.aotNBAStages;
     } else {
       update.value.assign(static_cast<size_t>(byteCount), 0);
       if (unknownPlane)
         update.unknown.assign(static_cast<size_t>(byteCount), 0);
-      for (uint64_t bit = 0; bit != bitWidth; ++bit) {
-        setByteBit(update.value.data(), bit, sourceBit(value, bit));
+      for (uint64_t bit = 0; bit < bitWidth;) {
+        uint64_t width = std::min<uint64_t>(64, bitWidth - bit);
+        storePackedBytes(update.value.data(), bit, width,
+                         loadPackedBytes(value, sourceBitOffset + bit, width));
         if (unknownPlane)
-          setByteBit(update.unknown.data(), bit, sourceBit(unknown, bit));
+          storePackedBytes(
+              update.unknown.data(), bit, width,
+              loadPackedBytes(unknown, sourceBitOffset + bit, width));
+        bit += width;
       }
     }
     update.sequence = context->nextSchedulerSequence++;
@@ -640,7 +645,7 @@ static talos_rt_status schedulerNBA(
                          : context->schedulerTime + delay;
     if (context->saif)
       talos_rt_saif_event_issued_unlocked(context, update);
-    context->scheduledNBAs.push_back(std::move(update));
+    context->enqueueNBA(std::move(update));
     if (automatic)
       ++context->nativeAutomaticStates.find(automaticID)->second.referenceCount;
     return TALOS_RT_OK;
@@ -1045,7 +1050,7 @@ enqueuePowerNBA(talos_rt_context *context, uint8_t *valuePlane,
     static_assert(std::is_nothrow_move_constructible_v<ScheduledNBA>);
     for (size_t index = 0; index != count; ++index) {
       updates[index].sequence = first + index;
-      queue.push_back(std::move(updates[index]));
+      context->enqueueNBA(std::move(updates[index]));
     }
     context->nextSchedulerSequence = first + count;
     return TALOS_RT_OK;
@@ -1363,7 +1368,7 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_inertial_driver(
       }
       if (context->saif)
         talos_rt_saif_event_issued_unlocked(context, update);
-      context->scheduledNBAs.push_back(std::move(update));
+      context->enqueueNBA(std::move(update));
       return true;
     };
 
@@ -2213,7 +2218,7 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_inertial_driver_strength_pair(
       update.inlineUnknown = unknown;
       if (context->saif)
         talos_rt_saif_event_issued_unlocked(context, update);
-      context->scheduledNBAs.push_back(std::move(update));
+      context->enqueueNBA(std::move(update));
     };
     for (uint64_t bit = 0; bit != low->width; ++bit) {
       bool lowChanged =

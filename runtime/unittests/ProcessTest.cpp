@@ -10923,7 +10923,7 @@ TEST(Scheduler, QueuedNBABarrierPreservesActiveAndReactiveEligibility) {
     update.dueTime = due;
     update.execRegion = region;
     update.cancelled = cancelled;
-    context->scheduledNBAs.push_back(std::move(update));
+    context->enqueueNBA(std::move(update));
   };
   enqueue(51, TALOS_RT_REGION_ACTIVE);
   enqueue(40, TALOS_RT_REGION_ACTIVE, true);
@@ -16137,7 +16137,7 @@ TEST(Scheduler, CoordinatorCommitsAtOnceWithoutRuntimeWork) {
   ScheduledNBA update;
   update.dueTime = context->schedulerTime;
   update.execRegion = TALOS_RT_REGION_NBA;
-  context->scheduledNBAs.push_back(update);
+  context->enqueueNBA(ScheduledNBA(update));
   EXPECT_EQ(pending(TALOS_RT_REGION_INACTIVE), 0u);
   EXPECT_EQ(pending(TALOS_RT_REGION_OBSERVED), 1u);
   context->scheduledNBAs.back().dueTime = context->schedulerTime + 1;

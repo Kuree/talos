@@ -4011,7 +4011,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
                            : context->schedulerTime + delay;
       if (context->saif)
         talos_rt_saif_event_issued_unlocked(context, update);
-      context->scheduledNBAs.push_back(std::move(update));
+      context->enqueueNBA(std::move(update));
       if (automatic)
         ++context->nativeAutomaticStates.find(objectID)->second.referenceCount;
       return TALOS_RT_OK;

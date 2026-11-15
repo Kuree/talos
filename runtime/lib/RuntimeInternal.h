@@ -2824,6 +2824,18 @@ struct talos_rt_context {
     uint64_t virtualMaterializations = 0;
   } startedOwnerDiagnostics;
   std::vector<ScheduledNBA> scheduledNBAs;
+  // Lower bound on the regions of all entries added since the queue was last
+  // empty. Cancellation, clipping and compaction may leave it conservative;
+  // a due entry at this bound still proves the scan has found the minimum.
+  uint32_t scheduledNBARegionLowerBound = UINT32_MAX;
+  void enqueueNBA(ScheduledNBA &&update) {
+    uint32_t lower =
+        scheduledNBAs.empty()
+            ? update.execRegion
+            : std::min(scheduledNBARegionLowerBound, update.execRegion);
+    scheduledNBAs.push_back(std::move(update));
+    scheduledNBARegionLowerBound = lower;
+  }
   // Path-delay events have one live entry per destination bit. Keeping them
   // in an ordered keyed calendar lets pulse rejection remove a superseded
   // long-delay event directly instead of leaving a tombstone in the generic

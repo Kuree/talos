@@ -807,7 +807,7 @@ bool scheduleNetBit(talos_rt_context *context, uint64_t root,
   update.inertialNetChargeDecay = chargeDecay;
   if (context->saif)
     talos_rt_saif_event_issued_unlocked(context, update);
-  context->scheduledNBAs.push_back(std::move(update));
+  context->enqueueNBA(std::move(update));
   context->inertialNetPending.emplace(
       destination, InertialNetPending{value, unknown, chargeDecay});
   return true;

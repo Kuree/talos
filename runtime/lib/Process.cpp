@@ -1076,6 +1076,10 @@ talos_rt_status promoteInactiveResumptionsUnlocked(talos_rt_context *context,
       if (entry.dueTime <= context->schedulerTime &&
           entry.execRegion == region) {
         entry.execRegion = target;
+        if constexpr (std::is_same_v<std::decay_t<decltype(entry)>,
+                                     ScheduledNBA>)
+          context->scheduledNBARegionLowerBound =
+              std::min(context->scheduledNBARegionLowerBound, target);
         promoted = true;
       }
   };
@@ -4057,15 +4061,25 @@ uint32_t nextDueNBABarrierRegionUnlocked(const talos_rt_context *context,
   };
   // Region eligibility is invariant during this query. Keep its reactive
   // predicate outside the ordinary queue scan (IEEE 1800-2023 4.5).
+  // Reaching the queue's conservative region bound proves the minimum even
+  // with future or cancelled entries. Otherwise inspect the complete queue.
   if (context->schedulerDrainingReactive) {
-    for (const ScheduledNBA &entry : context->scheduledNBAs)
+    for (const ScheduledNBA &entry : context->scheduledNBAs) {
       if (!entry.cancelled && entry.dueTime <= context->schedulerTime &&
           schedulerRegionEligible(context, entry.execRegion))
         barrierRegion = std::min(barrierRegion, entry.execRegion);
+      if (barrierRegion != UINT32_MAX &&
+          barrierRegion == context->scheduledNBARegionLowerBound)
+        break;
+    }
   } else {
-    for (const ScheduledNBA &entry : context->scheduledNBAs)
+    for (const ScheduledNBA &entry : context->scheduledNBAs) {
       if (!entry.cancelled && entry.dueTime <= context->schedulerTime)
         barrierRegion = std::min(barrierRegion, entry.execRegion);
+      if (barrierRegion != UINT32_MAX &&
+          barrierRegion == context->scheduledNBARegionLowerBound)
+        break;
+    }
   }
   if (!context->schedulerDrainingReactive &&
       !context->scheduledInertialPathNBAs.empty() &&
@@ -6163,122 +6177,111 @@ talos_rt_status runScheduler(talos_rt_context *context,
           }
           PackedSignalTransitionBuffer transitions(update.bitWidth);
           uint64_t packedPlaneBit = 0;
-          bool smallCanonicalPacked =
+          bool canonicalPacked =
               canonical && !automatic && !update.stringValue &&
-              baseOffset >= 0 && update.bitWidth <= 64 &&
+              baseOffset >= 0 &&
               (update.inlinePacked ||
                update.value.size() == (update.bitWidth + 7) / 8);
-          if (smallCanonicalPacked) {
+          if (canonicalPacked) {
             if (staticState)
-              smallCanonicalPacked =
+              canonicalPacked =
                   static_cast<uint64_t>(baseOffset) <= staticState->bitWidth &&
                   update.bitWidth <=
                       staticState->bitWidth - static_cast<uint64_t>(baseOffset);
             packedPlaneBit = staticState ? staticState->bitOffset +
                                                static_cast<uint64_t>(baseOffset)
                                          : static_cast<uint64_t>(baseOffset);
-            smallCanonicalPacked &=
+            canonicalPacked &=
                 packedPlaneBit <= update.planeBitCount &&
                 update.bitWidth <= update.planeBitCount - packedPlaneBit;
           }
-          auto rangeMasked = [&](const std::vector<uint64_t> &masks) {
-            if (masks.empty())
-              return false;
-            uint64_t first = packedPlaneBit / 64;
-            uint64_t last = (packedPlaneBit + update.bitWidth - 1) / 64;
-            for (uint64_t limb = first; limb <= last && limb < masks.size();
-                 ++limb) {
-              uint64_t begin =
-                  limb == first ? packedPlaneBit % 64 : uint64_t{0};
-              uint64_t end =
-                  limb == last ? (packedPlaneBit + update.bitWidth - 1) % 64 + 1
-                               : uint64_t{64};
-              uint64_t mask =
-                  begin == 0 && end == 64
-                      ? UINT64_MAX
-                      : (end == 64 ? UINT64_MAX : (uint64_t{1} << end) - 1) &
-                            (begin == 0 ? UINT64_MAX
-                                        : ~((uint64_t{1} << begin) - 1));
-              if ((masks[limb] & mask) != 0)
-                return true;
-            }
-            return false;
-          };
-          smallCanonicalPacked &= !rangeMasked(context->forceMask) &&
-                                  !rangeMasked(context->assignMask);
-          if (smallCanonicalPacked) {
+          canonicalPacked &=
+              !nativeMaskIntersectsRange(context->forceMask, packedPlaneBit,
+                                         update.bitWidth) &&
+              !nativeMaskIntersectsRange(context->assignMask, packedPlaneBit,
+                                         update.bitWidth);
+          if (canonicalPacked) {
             auto *canonicalValue =
                 reinterpret_cast<uint8_t *>(context->stateValue.data());
             auto *canonicalUnknown =
                 reinterpret_cast<uint8_t *>(context->stateUnknown.data());
-            uint64_t oldValue = loadPackedBytes(canonicalValue, packedPlaneBit,
-                                                update.bitWidth);
-            uint64_t oldUnknown = loadPackedBytes(
-                canonicalUnknown, packedPlaneBit, update.bitWidth);
-            uint64_t newValue =
-                update.inlinePacked
-                    ? update.inlineValue
-                    : loadPackedBytes(update.value.data(), 0, update.bitWidth);
-            uint64_t newUnknown = update.inlinePacked ? update.inlineUnknown
-                                  : update.unknown.empty()
-                                      ? 0
-                                      : loadPackedBytes(update.unknown.data(),
-                                                        0, update.bitWidth);
-            uint64_t widthMask = update.bitWidth == 64
-                                     ? UINT64_MAX
-                                     : (uint64_t{1} << update.bitWidth) - 1;
-            uint64_t changedBits =
-                ((oldValue ^ newValue) | (oldUnknown ^ newUnknown)) & widthMask;
-            oldRealBits = oldValue;
-            newRealBits = newValue;
-            uint64_t oldZero = ~oldUnknown & ~oldValue & widthMask;
-            uint64_t oldOne = ~oldUnknown & oldValue & widthMask;
-            uint64_t newZero = ~newUnknown & ~newValue & widthMask;
-            uint64_t newOne = ~newUnknown & newValue & widthMask;
-            uint64_t posedge = (oldZero & ~newZero) | (oldUnknown & newOne);
-            uint64_t negedge = (oldOne & ~newOne) | (oldUnknown & newZero);
-            uint64_t packedBytes = (update.bitWidth + 7) / 8;
-            std::memcpy(transitions.changed(), &changedBits, packedBytes);
-            std::memcpy(transitions.posedge(), &posedge, packedBytes);
-            std::memcpy(transitions.negedge(), &negedge, packedBytes);
-            if (update.valuePlane)
-              storePackedBytes(update.valuePlane, packedPlaneBit,
-                               update.bitWidth, newValue);
-            if (update.unknownPlane)
-              storePackedBytes(update.unknownPlane, packedPlaneBit,
-                               update.bitWidth, newUnknown);
-            storePackedBytes(canonicalValue, packedPlaneBit, update.bitWidth,
-                             newValue);
-            storePackedBytes(canonicalUnknown, packedPlaneBit, update.bitWidth,
-                             newUnknown);
-            // Shared canonical storage already contains the new value.
-            // Preserve its pre-write X/Z bits so unchanged knownness does
-            // not invalidate/recheck every dependent proof (LRM 6.11.2).
-            std::optional<uint64_t> nativeOldUnknown;
-            if (context->nativeSchedulePlan &&
-                canonicalUnknown == context->nativeSchedulePlan->state_unknown)
-              nativeOldUnknown = oldUnknown;
-            if (!storeNativeScheduleStateUnlocked(
-                    context, packedPlaneBit, update.bitWidth, newValue,
-                    newUnknown, nativeOldUnknown)) {
-              context->schedulerStatus = TALOS_RT_LAYOUT_MISMATCH;
-              return;
+            bool valueChanged = false;
+            // One NBA remains one ordered publication. Move its packed planes
+            // in words, retaining old X/Z bits until knownness bookkeeping has
+            // consumed them. No observer runs between the chunks (4.6, 10.4.2).
+            for (uint64_t source = 0; source < update.bitWidth;) {
+              uint64_t width = std::min<uint64_t>(64, update.bitWidth - source);
+              uint64_t destination = packedPlaneBit + source;
+              uint64_t oldValue =
+                  loadPackedBytes(canonicalValue, destination, width);
+              uint64_t oldUnknown =
+                  loadPackedBytes(canonicalUnknown, destination, width);
+              uint64_t newValue =
+                  update.inlinePacked
+                      ? update.inlineValue
+                      : loadPackedBytes(update.value.data(), source, width);
+              uint64_t newUnknown =
+                  update.inlinePacked ? update.inlineUnknown
+                  : update.unknown.empty()
+                      ? 0
+                      : loadPackedBytes(update.unknown.data(), source, width);
+              uint64_t widthMask = packedWidthMask(width);
+              uint64_t changedBits =
+                  ((oldValue ^ newValue) | (oldUnknown ^ newUnknown)) &
+                  widthMask;
+              if (source == 0) {
+                oldRealBits = oldValue;
+                newRealBits = newValue;
+              }
+              uint64_t oldZero = ~oldUnknown & ~oldValue & widthMask;
+              uint64_t oldOne = ~oldUnknown & oldValue & widthMask;
+              uint64_t newZero = ~newUnknown & ~newValue & widthMask;
+              uint64_t newOne = ~newUnknown & newValue & widthMask;
+              uint64_t posedge = (oldZero & ~newZero) | (oldUnknown & newOne);
+              uint64_t negedge = (oldOne & ~newOne) | (oldUnknown & newZero);
+              storePackedBytes(transitions.changed(), source, width,
+                               changedBits);
+              storePackedBytes(transitions.posedge(), source, width, posedge);
+              storePackedBytes(transitions.negedge(), source, width, negedge);
+              if (update.valuePlane && update.valuePlane != canonicalValue)
+                storePackedBytes(update.valuePlane, destination, width,
+                                 newValue);
+              if (update.unknownPlane &&
+                  update.unknownPlane != canonicalUnknown)
+                storePackedBytes(update.unknownPlane, destination, width,
+                                 newUnknown);
+              storePackedBytes(canonicalValue, destination, width, newValue);
+              storePackedBytes(canonicalUnknown, destination, width,
+                               newUnknown);
+              std::optional<uint64_t> nativeOldUnknown;
+              if (context->nativeSchedulePlan &&
+                  canonicalUnknown ==
+                      context->nativeSchedulePlan->state_unknown)
+                nativeOldUnknown = oldUnknown;
+              if (!storeNativeScheduleStateUnlocked(context, destination, width,
+                                                    newValue, newUnknown,
+                                                    nativeOldUnknown)) {
+                context->schedulerStatus = TALOS_RT_LAYOUT_MISMATCH;
+                return;
+              }
+              valueChanged |= changedBits != 0;
+              if (update.inertialNetBit != UINT64_MAX || powerSnapshot)
+                while (changedBits) {
+                  unsigned bit = __builtin_ctzll(changedBits);
+                  uint64_t mask = uint64_t{1} << bit;
+                  delayedNetPublications.push_back(
+                      {destination + bit, (oldValue & mask) != 0,
+                       (oldUnknown & mask) != 0, (newValue & mask) != 0,
+                       (newUnknown & mask) != 0});
+                  changedBits &= changedBits - 1;
+                }
+              source += width;
             }
             publicationChanged = update.realWidth != 0
                                      ? realBitsChanged(oldRealBits, newRealBits)
-                                     : changedBits != 0;
+                                     : valueChanged;
             if (!update.driver)
               changed |= publicationChanged;
-            if (update.inertialNetBit != UINT64_MAX || powerSnapshot)
-              for (uint64_t bit = 0; bit != update.bitWidth; ++bit) {
-                uint64_t mask = uint64_t{1} << bit;
-                if ((changedBits & mask) == 0)
-                  continue;
-                delayedNetPublications.push_back(
-                    {packedPlaneBit + bit, (oldValue & mask) != 0,
-                     (oldUnknown & mask) != 0, (newValue & mask) != 0,
-                     (newUnknown & mask) != 0});
-              }
           } else
             for (uint64_t bit = 0; bit < update.bitWidth; ++bit) {
               uint64_t sourceByte = bit / 8;
@@ -6957,7 +6960,7 @@ talos_rt_status runScheduler(talos_rt_context *context,
               ScheduledNBA update = std::move(pathUpdate->second);
               context->scheduledInertialPathNBAs.erase(pathUpdate);
               if (update.execRegion != TALOS_RT_REGION_ACTIVE) {
-                context->scheduledNBAs.push_back(std::move(update));
+                context->enqueueNBA(std::move(update));
                 continue;
               }
               bool pathCurrent =

@@ -15423,11 +15423,11 @@ TEST(VPI, IteratesCanonicalSchedulerTimeQueuesOnDemand) {
 
   ScheduledNBA nba;
   nba.dueTime = 20;
-  context->scheduledNBAs.push_back(nba);
+  context->enqueueNBA(ScheduledNBA(nba));
   ScheduledNBA cancelledNBA;
   cancelledNBA.dueTime = 21;
   cancelledNBA.cancelled = true;
-  context->scheduledNBAs.push_back(cancelledNBA);
+  context->enqueueNBA(ScheduledNBA(cancelledNBA));
   ScheduledNBA inertial;
   inertial.dueTime = 70;
   context->scheduledInertialPathNBAs.emplace(std::pair{70u, 1u}, inertial);
@@ -15519,7 +15519,7 @@ TEST(VPI, IteratesCanonicalSchedulerTimeQueuesOnDemand) {
   ScheduledNBA postponedNBA;
   postponedNBA.dueTime = context->schedulerTime;
   postponedNBA.execRegion = TALOS_RT_REGION_POSTPONED;
-  context->scheduledNBAs.push_back(std::move(postponedNBA));
+  context->enqueueNBA(std::move(postponedNBA));
   EXPECT_EQ(vpi_iterate(vpiTimeQueue, nullptr), nullptr);
   context->scheduledProcesses.front().queuedRegion = TALOS_RT_REGION_ACTIVE;
   iterator = vpi_iterate(vpiTimeQueue, nullptr);
@@ -17082,7 +17082,7 @@ TEST(DesignBytecode, CachedDirectSignalCohortRespectsReactiveIteration) {
     nba.bitWidth = 1;
     nba.inlinePacked = true;
     nba.inlineValue = 1;
-    context->scheduledNBAs.push_back(std::move(nba));
+    context->enqueueNBA(std::move(nba));
     context->nativeScheduleSingleStep = true;
     ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
     // IEEE 1800-2023 4.5: NBA precedes entry into Reactive, but once that
