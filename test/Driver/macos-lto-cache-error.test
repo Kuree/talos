@@ -1,0 +1,7 @@
+// REQUIRES: native-macho
+// An unsplit model must honor its requested cache, including reporting an
+// unusable path. It must not silently compile the runtime without caching.
+// RUN: touch %t.file
+// RUN: not %talos -flto --thinlto-cache-dir=%t.file/cache %S/macos-native.sv -o %t.exe 2>&1 | FileCheck %s
+
+// CHECK: talos: error: could not create ThinLTO cache:

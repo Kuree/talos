@@ -139,7 +139,10 @@ LogicalResult linkMachOExecutable(ArrayRef<std::string> modulePaths,
       owned.push_back(std::move(name));
     }
   }
-  if (thinLTO) {
+  // Mach-O handles unified runtime bitcode through ThinLTO even for an
+  // unsplit model. Honor an explicit cache for that path too, so linking
+  // another model can reuse unchanged runtime backends.
+  if (thinLTO || (fullLTO && !options.thinLTOCacheDir.empty())) {
     std::string cache = options.thinLTOCacheDir.empty()
                             ? (outputPath + ".thinlto-cache").str()
                             : options.thinLTOCacheDir;
@@ -150,9 +153,10 @@ LogicalResult linkMachOExecutable(ArrayRef<std::string> modulePaths,
     }
     owned.push_back("-cache_path_lto");
     owned.push_back(std::move(cache));
-    owned.push_back(
-        (Twine("--thinlto-jobs=") + Twine(std::max(options.compileThreads, 1u)))
-            .str());
+    if (thinLTO)
+      owned.push_back((Twine("--thinlto-jobs=") +
+                       Twine(std::max(options.compileThreads, 1u)))
+                          .str());
   }
   llvm::append_range(owned, modulePaths);
   StringSet<> runpaths;

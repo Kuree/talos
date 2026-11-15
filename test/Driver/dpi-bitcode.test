@@ -1,5 +1,5 @@
 // RUN: %target_clang %target_pic -flto=full -funified-lto -c %S/Inputs/dpi_impl.c -I%resource_dir/include -o %t.bc
-// RUN: talos -O1 -flto --mlir-timing %S/dpi.sv %t.bc -o %t.bitcode 2> %t.lto.timing
+// RUN: talos -O1 -flto --thinlto-cache-dir=%obj_root/lto.cache/talos-runtime --mlir-timing %S/dpi.sv %t.bc -o %t.bitcode 2> %t.lto.timing
 // RUN: %t.bitcode | FileCheck %s --check-prefix=OUTPUT
 
 // OUTPUT: vector-ok

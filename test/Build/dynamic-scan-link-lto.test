@@ -1,6 +1,6 @@
 # Bytecode takes the same LTO link as native code: the executable prints what
 # the object-runtime link prints, and links no unused runtime features.
-# RUN: talos -O1 --vpi=off -flto --mlir-timing --execution-tier=bytecode %S/../Driver/scan-dynamic-pay-for-play.sv -o %t.exe 2> %t.lto.timing
+# RUN: talos -O1 --vpi=off -flto --thinlto-cache-dir=%obj_root/lto.cache/talos-runtime --mlir-timing --execution-tier=bytecode %S/../Driver/scan-dynamic-pay-for-play.sv -o %t.exe 2> %t.lto.timing
 # RUN: %llvm_dist/bin/llvm-nm --defined-only %t.exe > %t.symbols
 # RUN: FileCheck %s --check-prefix=SYMBOLS --allow-empty < %t.symbols
 # Mach-O dispatchers define weak fallbacks under the HOOKS names; the feature

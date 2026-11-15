@@ -3,7 +3,8 @@
 // RUN: llvm-readobj --file-headers --macho-version-min %t.exe | FileCheck %s --check-prefix=MACHO
 // RUN: codesign --verify %t.exe && %t.exe | FileCheck %s --check-prefix=OUTPUT
 // RUN: %talos -O0 %s -o %t.o0 && %t.o0 | FileCheck %s --check-prefix=OUTPUT
-// RUN: %talos -flto --mlir-timing %s -o %t.lto 2> %t.lto.timing && codesign --verify %t.lto && %t.lto | FileCheck %s --check-prefix=OUTPUT
+// RUN: %talos -flto --thinlto-cache-dir=%obj_root/lto.cache/talos-runtime --mlir-timing %s -o %t.lto 2> %t.lto.timing && codesign --verify %t.lto && %t.lto | FileCheck %s --check-prefix=OUTPUT
+// RUN: ls %obj_root/lto.cache/talos-runtime/llvmcache-* > /dev/null && cp %t.lto %t.saved && %talos -flto --thinlto-cache-dir=%obj_root/lto.cache/talos-runtime --mlir-timing %s -o %t.lto 2> %t.warm.lto.timing && cmp %t.saved %t.lto
 // RUN: %talos -c %s -o %t.o && llvm-readobj --file-headers %t.o | FileCheck %s --check-prefix=OBJECT
 // RUN: %talos -emit-llvm %s -o - | FileCheck %s --check-prefix=LLVM
 

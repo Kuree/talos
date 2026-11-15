@@ -4,6 +4,6 @@
 // RUN: %target_clang -dynamiclib -Wl,-undefined,dynamic_lookup -Wl,-install_name,@rpath/second.dylib %S/Inputs/vpi_startup_second.c -I%resource_dir/include -o %t.dir/lib/second.dylib
 // RUN: not %talos --vpi=off %S/vpi.sv %t.dir/lib/first.dylib -o %t.dir/off 2>&1 | FileCheck %S/vpi.sv --check-prefix=OFF
 // RUN: cd %t.dir && %talos --vpi=full %S/vpi.sv lib/first.dylib lib/first.dylib lib/second.dylib -o bin/simulator && ./bin/simulator | FileCheck %S/vpi.sv --check-prefix=OUTPUT
-// RUN: cd %t.dir && %talos -flto --mlir-timing --vpi=full %S/vpi.sv lib/first.dylib lib/second.dylib -o bin/simulator-lto 2> %t.lto.timing && ./bin/simulator-lto | FileCheck %S/vpi.sv --check-prefix=OUTPUT
+// RUN: cd %t.dir && %talos -flto --thinlto-cache-dir=%obj_root/lto.cache/talos-runtime --mlir-timing --vpi=full %S/vpi.sv lib/first.dylib lib/second.dylib -o bin/simulator-lto 2> %t.lto.timing && ./bin/simulator-lto | FileCheck %S/vpi.sv --check-prefix=OUTPUT
 // RUN: cd %t.dir && %talos --execution-tier=bytecode --vpi=full %S/vpi.sv lib/first.dylib lib/second.dylib -o bin/simulator-bc && ./bin/simulator-bc | FileCheck %S/vpi.sv --check-prefix=OUTPUT
 // RUN: rm -rf %t.moved && cp -R %t.dir %t.moved && %t.moved/bin/simulator | FileCheck %S/vpi.sv --check-prefix=OUTPUT
