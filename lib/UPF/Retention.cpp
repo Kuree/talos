@@ -39,7 +39,7 @@ struct Lowering {
   RetentionLoweringResult &result;
   OpBuilder b;
   ReferenceWindows references;
-  SmallVector<Register> registers;
+  SmallVector<Register, 1> registers;
   SmallVector<Strategy, 0> strategies;
   llvm::DenseMap<uint64_t, sim::SimScopeDeclOp> scopes;
   llvm::DenseMap<uint64_t, uint64_t> unitScopes;
