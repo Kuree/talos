@@ -7141,16 +7141,24 @@ LogicalResult UnitLowering::lowerRoots(ArrayRef<Operation *> roots) {
     sensitivity.insert(read);
   for (Value written : virtualInterfaceWrittenSensitivity)
     implicitProcessWrites[written].push_back({0, UINT64_MAX});
-  for (auto &[written, writes] : implicitProcessWrites) {
-    if (!sensitivity.remove(written))
-      continue;
-    auto reference = dyn_cast<sim::RefType>(written.getType());
+  // Longest-static-prefix sensitivity also applies when this procedure does
+  // not write the declaration. Watching the whole input in that case wakes
+  // on unrelated packed fields and can create false combinational feedback
+  // through other processes (9.2.2.2.1, 11.5.3).
+  SmallVector<Value> originalSensitivity(sensitivity.getArrayRef());
+  for (Value watched : originalSensitivity) {
+    auto writes = implicitProcessWrites.find(watched);
+    bool written = writes != implicitProcessWrites.end();
+    auto reference = dyn_cast<sim::RefType>(watched.getType());
     std::optional<unsigned> packedWidth =
         reference ? sim::getPackedWidth(reference.getElementType())
                   : std::nullopt;
-    auto reads = sensitivityReadWindows.find(written);
-    if (!packedWidth || reads == sensitivityReadWindows.end())
+    auto reads = sensitivityReadWindows.find(watched);
+    if (!packedWidth || reads == sensitivityReadWindows.end()) {
+      if (written)
+        sensitivity.remove(watched);
       continue;
+    }
     // Merge the read and written windows within the declaration, then keep
     // the read bits no write covers.
     auto merged = [&](const ReferenceWindows &windows) {
@@ -7170,21 +7178,27 @@ LogicalResult UnitLowering::lowerRoots(ArrayRef<Operation *> roots) {
           result.push_back(span);
       return result;
     };
-    auto covered = merged(writes);
+    auto readSpans = merged(reads->second);
+    if (!written && readSpans.size() == 1 && readSpans.front().first == 0 &&
+        readSpans.front().second == *packedWidth)
+      continue;
+    sensitivity.remove(watched);
+    auto covered = written ? merged(writes->second)
+                           : SmallVector<std::pair<uint64_t, uint64_t>>{};
     Type scalar = sim::getPackedScalarType(reference.getElementType());
-    for (auto [begin, end] : merged(reads->second)) {
+    for (auto [begin, end] : readSpans) {
       for (auto [writeBegin, writeEnd] : covered) {
         if (writeEnd <= begin || writeBegin >= end)
           continue;
         if (writeBegin > begin) {
           sensitivity.insert(
-              createReadWindowView(written, scalar, begin, writeBegin - begin));
+              createReadWindowView(watched, scalar, begin, writeBegin - begin));
         }
         begin = std::max(begin, writeEnd);
       }
       if (begin < end)
         sensitivity.insert(
-            createReadWindowView(written, scalar, begin, end - begin));
+            createReadWindowView(watched, scalar, begin, end - begin));
     }
   }
 

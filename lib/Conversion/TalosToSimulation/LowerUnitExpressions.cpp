@@ -3940,9 +3940,91 @@ FailureOr<Value> UnitLowering::lowerVirtualInterfaceMember(
       .getResult();
 }
 
+std::optional<UnitLowering::StaticReadWindow>
+UnitLowering::getStaticReadWindow(Operation *op) {
+  if (getConstantSpelling(op))
+    return std::nullopt;
+  if (isa<semantic::SVNamedValueExpressionOp,
+          semantic::SVHierarchicalValueExpressionOp>(op)) {
+    auto path = op->getAttrOfType<StringAttr>("referenced_path");
+    if (!path || coverageInputs.lookup(path.getValue()).formal)
+      return std::nullopt;
+    Value reference = values.lookup(path.getValue());
+    auto argument = dyn_cast_or_null<BlockArgument>(reference);
+    auto type = reference ? dyn_cast<sim::RefType>(reference.getType())
+                          : sim::RefType{};
+    if (!argument || argument.getOwner() != &function.getBody().front() ||
+        !type)
+      return std::nullopt;
+    auto width = sim::getPackedWidth(type.getElementType());
+    if (width)
+      return StaticReadWindow{reference, 0, *width};
+    return std::nullopt;
+  }
+  bool member = isa<semantic::SVMemberAccessExpressionOp>(op);
+  bool element = isa<semantic::SVElementSelectExpressionOp>(op);
+  if (!member && !element && !isa<semantic::SVRangeSelectExpressionOp>(op))
+    return std::nullopt;
+  auto children = getChildren(op);
+  if (children.size() != (member ? 1u : element ? 2u : 3u))
+    return std::nullopt;
+  auto base = getStaticReadWindow(children.front());
+  if (!base)
+    return std::nullopt;
+  auto sourceType = getNormalizedSemanticType(children.front());
+  auto resultType = getNormalizedSemanticType(op);
+  if (failed(sourceType) || failed(resultType))
+    return std::nullopt;
+  auto width = sim::getPackedWidth(*resultType);
+  if (!width)
+    return std::nullopt;
+  uint64_t offset;
+  if (member) {
+    auto ordinal = op->getAttrOfType<IntegerAttr>("field_ordinal");
+    if (!ordinal || ordinal.getValue().isNegative() ||
+        ordinal.getValue().getActiveBits() > 32)
+      return std::nullopt;
+    auto field = sim::getAggregateProvenanceSubelement(
+        *sourceType, ordinal.getValue().getZExtValue());
+    if (!field)
+      return std::nullopt;
+    offset = field->first;
+  } else {
+    // A dynamic suffix leaves its base as the longest static prefix. The
+    // ordinary recursive lowering records that base and the index reads.
+    if (!llvm::all_of(ArrayRef(children).drop_front(), isIntegerConstant))
+      return std::nullopt;
+    auto address = lowerPackedSelectionAddress(op, *sourceType, *resultType,
+                                               /*constantOnly=*/true);
+    if (failed(address) || !address->constant || address->padding)
+      return std::nullopt;
+    offset = address->lowBit;
+  }
+  if (offset > base->width || *width > base->width - offset)
+    return std::nullopt;
+  return StaticReadWindow{base->reference, base->offset + offset, *width};
+}
+
+bool UnitLowering::recordStaticReadWindow(Operation *op) {
+  if (selectionRecordsReadWindow || sensitivityExcluded ||
+      sampleAssertionValues || sampleAssertionDefaults)
+    return false;
+  auto window = getStaticReadWindow(op);
+  if (!window)
+    return false;
+  llvm::SaveAndRestore recordsWindow(selectionRecordsReadWindow, true);
+  recordSensitivity(window->reference);
+  sensitivityReadWindows[window->reference].push_back(
+      {window->offset, window->width});
+  return true;
+}
+
 FailureOr<Value>
 UnitLowering::lowerMember(semantic::SVMemberAccessExpressionOp op,
                           bool lvalue) {
+  bool recordsWindow = !lvalue && recordStaticReadWindow(op);
+  llvm::SaveAndRestore recordsReadWindow(
+      selectionRecordsReadWindow, selectionRecordsReadWindow || recordsWindow);
   Location location = getSemanticLocation(op);
   if (!lvalue) {
     FailureOr<std::optional<Value>> option = lowerCovergroupOptionRead(op);
@@ -5010,7 +5092,7 @@ FailureOr<Value> UnitLowering::lowerNewArray(Operation *op) {
 
 FailureOr<UnitLowering::PackedSelectionAddress>
 UnitLowering::lowerPackedSelectionAddress(Operation *op, Type sourceValueType,
-                                          Type resultType) {
+                                          Type resultType, bool constantOnly) {
   Location location = getSemanticLocation(op);
   SmallVector<Operation *> children = getChildren(op);
   bool element = isa<semantic::SVElementSelectExpressionOp>(op);
@@ -5194,12 +5276,16 @@ UnitLowering::lowerPackedSelectionAddress(Operation *op, Type sourceValueType,
       address.constant = true;
       address.lowBit = knownLow->getZExtValue();
     } else if (knownLow) {
+      if (constantOnly)
+        return address;
       FailureOr<Type> arithmeticType = getIndexArithmeticType(*firstIndexType);
       if (failed(arithmeticType))
         return failure();
       address.dynamicLow = createKnownIndex(*arithmeticType, *knownLow);
     }
   }
+  if (constantOnly && !address.constant)
+    return address;
   if (!address.constant && !address.dynamicLow) {
     if (!element && selectionKind == semantic::SVRangeSelectionKind::Simple) {
       unsupported(op) << " (dynamic simple range selection)";
@@ -5483,6 +5569,9 @@ FailureOr<Value> UnitLowering::lowerSequentialContainerIndex(
 }
 
 FailureOr<Value> UnitLowering::lowerSelection(Operation *op, bool lvalue) {
+  bool recordsWindow = !lvalue && recordStaticReadWindow(op);
+  llvm::SaveAndRestore recordsReadWindow(
+      selectionRecordsReadWindow, selectionRecordsReadWindow || recordsWindow);
   Location location = getSemanticLocation(op);
   if (auto leafPath = sim::get<sim::metadata::InterconnectLeafPath>(op))
     return lowerReferencedValue(op, leafPath.getValue(), lvalue);
@@ -5504,9 +5593,9 @@ FailureOr<Value> UnitLowering::lowerSelection(Operation *op, bool lvalue) {
   }
   // A constant rvalue select of a built-in net reads, and in a combinational
   // process watches, only its selected window instead of the whole net. A
-  // constant element select of a variable still reads the whole value, but
-  // records the element's window for implicit sensitivity (9.2.2.2.1).
-  Value selectedNet, selectedVariable;
+  // variable still reads the whole value; recordStaticReadWindow separately
+  // records its longest static prefix for implicit sensitivity (9.2.2.2.1).
+  Value selectedNet;
   if (!lvalue && !sampleAssertionValues && !sampleAssertionDefaults &&
       !fixedArrayElement &&
       isa<semantic::SVNamedValueExpressionOp>(children.front()) &&
@@ -5517,14 +5606,9 @@ FailureOr<Value> UnitLowering::lowerSelection(Operation *op, bool lvalue) {
         if (Value bound = values.lookup(path.getValue())) {
           if (isa<sim::NetType>(bound.getType()))
             selectedNet = bound;
-          else if (element && isa<sim::RefType>(bound.getType()))
-            selectedVariable = bound;
         }
   FailureOr<Value> input;
   {
-    llvm::SaveAndRestore recordsWindow(selectionRecordsReadWindow,
-                                       selectionRecordsReadWindow ||
-                                           bool(selectedVariable));
     input = selectedNet
                 ? FailureOr<Value>(selectedNet)
                 : lowerExpression(children.front(),
@@ -5574,14 +5658,6 @@ FailureOr<Value> UnitLowering::lowerSelection(Operation *op, bool lvalue) {
       return std::optional<std::pair<uint64_t, uint64_t>>{};
     return sim::getAggregateProvenanceSubelement(sourceValueType, *ordinal);
   };
-  if (selectedVariable) {
-    std::pair<uint64_t, uint64_t> window{0, UINT64_MAX};
-    if (isa<sim::PackedArrayType, sim::UnpackedArrayType>(sourceValueType))
-      if (auto offset = constantElementOffset(); succeeded(offset) && *offset)
-        window = **offset;
-    sensitivityReadWindows[selectedVariable].push_back(window);
-  }
-
   if (selectedNet) {
     std::optional<uint64_t> lowBit;
     if (element &&

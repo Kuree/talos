@@ -136,10 +136,16 @@ private:
 
   ::mlir::FailureOr<::mlir::Value> lowerExpression(::mlir::Operation *op,
                                                    bool lvalue = false);
-  ::mlir::FailureOr<PackedSelectionAddress>
-  lowerPackedSelectionAddress(::mlir::Operation *op,
-                              ::mlir::Type sourceValueType,
-                              ::mlir::Type resultType);
+  struct StaticReadWindow {
+    ::mlir::Value reference;
+    uint64_t offset;
+    uint64_t width;
+  };
+  std::optional<StaticReadWindow> getStaticReadWindow(::mlir::Operation *op);
+  bool recordStaticReadWindow(::mlir::Operation *op);
+  ::mlir::FailureOr<PackedSelectionAddress> lowerPackedSelectionAddress(
+      ::mlir::Operation *op, ::mlir::Type sourceValueType,
+      ::mlir::Type resultType, bool constantOnly = false);
   /// Surround `scalar` with `padding` out-of-range bits on either side. Reads
   /// of the padding see x, matching what IEEE 1800-2017 11.5.1 requires of a
   /// select position outside the value.

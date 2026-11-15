@@ -3203,10 +3203,15 @@ FailureOr<sim::SimFuncOp> materializeStraightLineKernel(
             !mapWatchHandle(operand, *mapping, mapWatchHandle))
           return bail();
 
+  // An unused view, such as a narrowed sensitivity window superseded by an
+  // equivalent element view, carries an instance offset but no behavior. It
+  // must neither distinguish members nor be cloned into the shared helper.
   SmallVector<SmallVector<Operation *>> memberOperations(candidates.size());
   for (auto [index, candidate] : llvm::enumerate(candidates))
     for (Operation &operation : candidate.body->without_terminator())
-      if (!hoistedWatchOps.contains(&operation))
+      if (!hoistedWatchOps.contains(&operation) &&
+          !(isa<ViewLikeOpInterface>(operation) &&
+            isOpTriviallyDead(&operation)))
         memberOperations[index].push_back(&operation);
   ArrayRef<Operation *> templateOperations = memberOperations.front();
   auto areEquivalentMemberOperations = [](Operation *lhs, Operation *rhs) {
