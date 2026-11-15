@@ -212,3 +212,5 @@ module {
 // CHECK: [[DATA]] = simulation.managed.load %[[DATA_REF]]
 // CHECK: simulation.container.size [[DATA]]
 // CHECK-NOT: simulation.managed.store {{.*}} to %[[MIDDLE_REF]]
+// Constructor property initialization is outside the randomize helper.
+// CHECK-LABEL: simulation.func private @__talos_class_

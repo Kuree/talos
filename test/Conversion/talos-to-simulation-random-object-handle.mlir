@@ -166,3 +166,5 @@ module {
 // CHECK-NEXT: %[[POST_STOP:.*]] = simulation.termination.requested
 // CHECK-NEXT: cf.cond_br %[[POST_STOP]], ^{{bb[0-9]+}}, ^[[AFTER_POST]]
 // CHECK-NOT: simulation.managed.store {{.*}} to %[[LEAF_REF]]
+// Constructor property initialization is outside the randomize helper.
+// CHECK-LABEL: simulation.func private @__talos_class_

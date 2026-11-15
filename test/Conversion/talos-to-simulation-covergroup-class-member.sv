@@ -11,9 +11,9 @@
 // CHECK: simulation.class.decl @[[DERIVED:[^ ]+]] id 2 extends @[[BASE]]
 // CHECK: simulation.class.field {{.*}}of @[[DERIVED]]{{.*}}debug_name = "bias"
 // CHECK: simulation.func private @{{unit_[0-9]+}}({{.*}}%arg1: !simulation.class_handle
-// CHECK: simulation.covergroup.create
-// CHECK: simulation.class.field_ref %arg1[{{.*}}field_1]
-// CHECK: simulation.managed.store
+// CHECK-DAG: %[[CREATED:.*]] = simulation.covergroup.create
+// CHECK-DAG: %[[CG_FIELD:.*]] = simulation.class.field_ref %arg1[{{.*}}field_1]
+// CHECK: simulation.managed.store %[[CREATED]] to %[[CG_FIELD]]
 
 // IEEE 19.4 and 19.8: the coverpoint expression `value + extra` is evaluated
 // in the covergroup's class scope, so `value` is read from the receiver.

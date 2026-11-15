@@ -86,3 +86,5 @@ module {
 // CHECK-NOT: simulation.managed.store {{.*}} to %[[CHILD_REF]]
 // CHECK: simulation.class.direct_call @__talos_randomize_plan_
 // CHECK-NOT: simulation.managed.store {{.*}} to %[[CHILD_REF]]
+// Constructor property initialization is outside the randomize helper.
+// CHECK-LABEL: simulation.func private @__talos_class_

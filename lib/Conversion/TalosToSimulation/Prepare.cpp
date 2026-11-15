@@ -11636,23 +11636,29 @@ void TalosSimPreparePass::runOnOperation() {
       auto subroutine = dyn_cast<semantic::SVSubroutineSymbolOp>(unit.source);
       auto owner =
           subroutine ? getOwningClass(subroutine) : semantic::SVClassTypeOp{};
-      auto clonePropertyInitializers = [&](OpBuilder &initializerBuilder,
-                                           bool nestedAfterSuper = false) {
+      auto clonePropertyInitializers = [&](OpBuilder &initializerBuilder) {
         if (!owner)
           return;
         Value receiver = unit.function.getBody().front().getArgument(1);
         for (Operation *member : getChildren(owner)) {
           auto property = dyn_cast<semantic::SVClassPropertySymbolOp>(member);
           if (!property ||
-              property.getLifetime() == semantic::SVVariableLifetime::Static)
+              property.getLifetime() == semantic::SVVariableLifetime::Static ||
+              classes->covergroupFieldStorageTypes.count(property))
             continue;
           SmallVector<Operation *> initializer = getChildren(property);
           if (initializer.empty()) {
             FailureOr<Type> type = getNormalizedSemanticType(property);
             FlatSymbolRefAttr field = classFieldSymbols.lookup(property);
-            if (succeeded(type) && isa<sim::EventType>(*type) && field) {
-              auto event = sim::SimEventCreateOp::create(
+            if (succeeded(type) && field) {
+              Value value = createDefaultValue(
                   initializerBuilder, getSemanticLocation(property), *type);
+              if (!value) {
+                emitError(getSemanticLocation(property))
+                    << "class property has no default initialization value";
+                invalid = true;
+                continue;
+              }
               auto receiverType =
                   cast<sim::ClassHandleType>(receiver.getType());
               Type referenceType = sim::ManagedRefType::get(
@@ -11661,14 +11667,13 @@ void TalosSimPreparePass::runOnOperation() {
                   initializerBuilder, getSemanticLocation(property),
                   referenceType, receiver, field);
               auto store = sim::SimManagedStoreOp::create(
-                  initializerBuilder, getSemanticLocation(property), event,
+                  initializerBuilder, getSemanticLocation(property), value,
                   reference);
-              if (nestedAfterSuper) {
-                UnitAttr marker = builder.getUnitAttr();
-                sim::set<sim::metadata::PreparedInitializer>(event, marker);
-                sim::set<sim::metadata::PreparedInitializer>(reference, marker);
-                sim::set<sim::metadata::PreparedInitializer>(store, marker);
-              }
+              UnitAttr marker = builder.getUnitAttr();
+              sim::set<sim::metadata::PreparedInitializer>(
+                  value.getDefiningOp(), marker);
+              sim::set<sim::metadata::PreparedInitializer>(reference, marker);
+              sim::set<sim::metadata::PreparedInitializer>(store, marker);
             }
             continue;
           }
@@ -11861,8 +11866,7 @@ void TalosSimPreparePass::runOnOperation() {
           if (superStatement) {
             OpBuilder initializerBuilder(superStatement);
             initializerBuilder.setInsertionPointAfter(superStatement);
-            clonePropertyInitializers(initializerBuilder,
-                                      /*nestedAfterSuper=*/true);
+            clonePropertyInitializers(initializerBuilder);
             initialized = true;
           }
         }
@@ -12960,23 +12964,36 @@ void TalosSimPreparePass::runOnOperation() {
     for (Operation *member : getChildren(classType)) {
       auto property = dyn_cast<semantic::SVClassPropertySymbolOp>(member);
       if (!property ||
-          property.getLifetime() == semantic::SVVariableLifetime::Static)
+          property.getLifetime() == semantic::SVVariableLifetime::Static ||
+          classes->covergroupFieldStorageTypes.count(property))
         continue;
       SmallVector<Operation *> initializer = getChildren(property);
       if (initializer.empty()) {
         FailureOr<Type> type = getNormalizedSemanticType(property);
         FlatSymbolRefAttr field = classFieldSymbols.lookup(property);
-        if (succeeded(type) && isa<sim::EventType>(*type) && field) {
-          Value event = sim::SimEventCreateOp::create(
+        if (succeeded(type) && field) {
+          Value value = createDefaultValue(
               bodyBuilder, getSemanticLocation(property), *type);
+          if (!value) {
+            emitError(getSemanticLocation(property))
+                << "class property has no default initialization value";
+            invalid = true;
+            continue;
+          }
           auto receiverType = cast<sim::ClassHandleType>(receiver.getType());
           Type referenceType = sim::ManagedRefType::get(
               context, *type, receiverType.getClassName());
           Value reference = sim::SimClassFieldRefOp::create(
               bodyBuilder, getSemanticLocation(property), referenceType,
               receiver, field);
-          sim::SimManagedStoreOp::create(
-              bodyBuilder, getSemanticLocation(property), event, reference);
+          auto store = sim::SimManagedStoreOp::create(
+              bodyBuilder, getSemanticLocation(property), value, reference);
+          UnitAttr marker = builder.getUnitAttr();
+          sim::set<sim::metadata::PreparedInitializer>(
+              value.getDefiningOp(), marker);
+          sim::set<sim::metadata::PreparedInitializer>(
+              reference.getDefiningOp(), marker);
+          sim::set<sim::metadata::PreparedInitializer>(store, marker);
         }
         continue;
       }
@@ -12984,8 +13001,36 @@ void TalosSimPreparePass::runOnOperation() {
       if (FlatSymbolRefAttr field = classFieldSymbols.lookup(property))
         sim::set<sim::metadata::InitializeField>(cloned, field);
     }
-    function.walk(
-        [&](semantic::SVCallExpressionOp call) { freezeCallContract(call); });
+    function.walk([&](Operation *expression) {
+      if (auto call = dyn_cast<semantic::SVCallExpressionOp>(expression))
+        freezeCallContract(call);
+      // Implicit constructor initializers are cloned after the ordinary unit
+      // walk. Freeze their field and constant references as for method bodies.
+      if (!isa<semantic::SVNamedValueExpressionOp,
+               semantic::SVMemberAccessExpressionOp>(expression))
+        return;
+      auto reference = expression->getAttrOfType<SymbolRefAttr>(
+          "referenced_symbol");
+      auto symbol = reference
+                        ? semanticSymbols.find(reference.getLeafReference())
+                        : semanticSymbols.end();
+      if (symbol == semanticSymbols.end())
+        return;
+      if (isa<semantic::SVParameterSymbolOp, semantic::SVEnumValueSymbolOp,
+              semantic::SVSpecparamSymbolOp>(symbol->second))
+        copyConstantSymbolValue(expression, symbol->second);
+      auto property =
+          dyn_cast<semantic::SVClassPropertySymbolOp>(symbol->second);
+      if (!property ||
+          property.getLifetime() == semantic::SVVariableLifetime::Static)
+        return;
+      if (FlatSymbolRefAttr field = classFieldSymbols.lookup(property)) {
+        sim::set<sim::metadata::ClassField>(expression, field);
+        if (Type storageType =
+                classes->covergroupFieldStorageTypes.lookup(property))
+          cov::set<cov::FieldStorageType>(expression, TypeAttr::get(storageType));
+      }
+    });
     sim::SimReturnOp::create(bodyBuilder, getSemanticLocation(classType),
                              ValueRange{});
   }

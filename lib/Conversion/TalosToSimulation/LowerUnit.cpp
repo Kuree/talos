@@ -4696,13 +4696,17 @@ LogicalResult UnitLowering::lowerStatement(Operation *op) {
 
   // IEEE 1800-2017 8.7 places derived property initialization after an
   // explicit super.new and before the remaining constructor statements.
-  // Prepare therefore leaves default named-event initialization at that exact
+  // Prepare therefore leaves default property initialization at that exact
   // point in the semantic statement sequence. Clone this deliberately mixed
-  // Simulation fragment into the CFG while remapping its event and field-ref
+  // Simulation fragment into the CFG while remapping its value and field-ref
   // SSA values, then let erasure of the semantic root discard the originals.
   if (sim::has<sim::metadata::PreparedInitializer>(op)) {
-    if (!isa<sim::SimEventCreateOp, sim::SimClassFieldRefOp,
-             sim::SimManagedStoreOp>(op)) {
+    if (!isa<arith::ConstantOp, sim::SimLogicConstantOp,
+             sim::SimAggregateDefaultOp, sim::SimClassNullOp,
+             sim::SimCovergroupNullOp, sim::SimVirtualInterfaceNullOp,
+             sim::SimChandleNullOp, sim::SimManagedNullOp,
+             sim::SimProcessNullOp, sim::SimEventCreateOp,
+             sim::SimClassFieldRefOp, sim::SimManagedStoreOp>(op)) {
       emitError(location) << "unsupported prepared property initializer op: "
                           << op->getName();
       return failure();
@@ -7298,7 +7302,8 @@ public:
     Block &entry = function.getBody().front();
     SmallVector<Operation *> sourceRoots;
     for (Operation &op : entry)
-      if (isSemanticOp(&op))
+      if (isSemanticOp(&op) ||
+          sim::has<sim::metadata::PreparedInitializer>(&op))
         sourceRoots.push_back(&op);
     // Drop the placeholder terminator before its producer so no operation is
     // erased while it still has a live SSA use.
@@ -7311,7 +7316,9 @@ public:
 
     simlowering::UnitLowering lowering(function, inputs->get());
     LogicalResult result = lowering.lower(sourceRoots);
-    for (Operation *source : sourceRoots)
+    // Prepared defaults use SSA values within each ordered fragment. Drop
+    // their stores before their value/ref producers after cloning the roots.
+    for (Operation *source : llvm::reverse(sourceRoots))
       source->erase();
     if (failed(result))
       signalPassFailure();

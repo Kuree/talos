@@ -36,8 +36,8 @@
 
 // super.new(n)
 // CHECK-LABEL: simulation.func private @unit_0(
-// CHECK: %[[CREATED:.+]] = simulation.semaphore.create %arg2
-// CHECK: %[[FIELD:.+]] = simulation.class.field_ref %arg1[@[[S_BASE]]]
+// CHECK-DAG: %[[CREATED:.+]] = simulation.semaphore.create %arg2
+// CHECK-DAG: %[[FIELD:.+]] = simulation.class.field_ref %arg1[@[[S_BASE]]]
 // CHECK: simulation.managed.store %[[CREATED]] to %[[FIELD]]
 
 // put(2) inside a method of S
