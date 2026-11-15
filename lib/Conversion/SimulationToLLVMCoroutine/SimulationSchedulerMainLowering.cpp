@@ -3,6 +3,7 @@
 #include "NativeStateAccess.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 
+#include "talos/Dialect/SAIF/SAIFDialect.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Runtime/Runtime.h"
@@ -83,6 +84,7 @@ LogicalResult makeSchedulerMain(ModuleOp module,
   constexpr StringLiteral executionName = "__talos_execution_descriptor_v1";
   bool hasExecution = module.lookupSymbol(executionName) != nullptr;
   bool hasCoverage = runtime::has<runtime::CoverageSchemaBlob>(module);
+  bool hasSAIF = saif::has<saif::Output>(module);
   // A functional schema is also required for covergroup methods used directly
   // by the language.  Its presence therefore does not imply that the user
   // requested persistent coverage output.  The preparation pipeline adds the
@@ -121,7 +123,8 @@ LogicalResult makeSchedulerMain(ModuleOp module,
   // 35.5.3) and must see that caller's stores, which the shared storage
   // already holds; it needs no separate image.
   bool sharedNativeState = hasExecution && useAOT && directEval &&
-                           stateLayout.bitCount && !hasObserver && !hasCoverage;
+                           stateLayout.bitCount && !hasObserver &&
+                           !hasCoverage && !hasSAIF;
   uint64_t linePointCount = 0;
   uint64_t toggleBitCount = 0;
   if (hasCoverage) {
@@ -131,8 +134,9 @@ LogicalResult makeSchedulerMain(ModuleOp module,
       toggleBitCount = count.getValue().getZExtValue();
   }
   bool requiresNativeStateSync =
-      stateLayout.bitCount && (hasDesignBytecode || toggleBitCount != 0 ||
-                               stateLayout.directContinuous);
+      stateLayout.bitCount &&
+      (hasDesignBytecode || hasSAIF || toggleBitCount != 0 ||
+       stateLayout.directContinuous);
   bool bindStateSpecialization =
       (requiresNativeStateSync || sharedNativeState) &&
       !stateLayout.guardedHandles.empty();
@@ -849,6 +853,10 @@ LogicalResult makeSchedulerMain(ModuleOp module,
         SymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"),
         ValueRange{runtimeContext, sealStatus});
   }
+  if (hasSAIF &&
+      mlir::failed(materializeSAIFRegistration(module, builder, runtimeContext,
+                                               stateLayout, precisionFs)))
+    return failure();
   if (useAOT) {
     Value plan = LLVM::AddressOfOp::create(builder, location, pointer,
                                            "__talos_aot_schedule_plan_v1");
@@ -906,6 +914,20 @@ LogicalResult makeSchedulerMain(ModuleOp module,
         builder, location, TypeRange{},
         SymbolRefAttr::get(context, "talos_rt_v1_scheduler_report_status"),
         ValueRange{runtimeContext, coverageStatus});
+  }
+  if (hasSAIF) {
+    Value status =
+        LLVM::CallOp::create(builder, location, TypeRange{i32},
+                             "talos_rt_v1_saif_finish", runtimeContext)
+            .getResult();
+    Value succeeded = LLVM::ICmpOp::create(
+        builder, location, LLVM::ICmpPredicate::eq, finalStatus,
+        llvmConstant(builder, location, i32, TALOS_RT_OK));
+    finalStatus = LLVM::SelectOp::create(builder, location, succeeded, status,
+                                         finalStatus);
+    LLVM::CallOp::create(builder, location, TypeRange{},
+                         "talos_rt_v1_scheduler_report_status",
+                         ValueRange{runtimeContext, status});
   }
   LLVM::CallOp::create(
       builder, location, TypeRange{},
@@ -1006,6 +1028,15 @@ LogicalResult makeSchedulerMain(ModuleOp module,
   if (shouldDumpCoverage)
     getOrDeclareLLVMFunction(module, "talos_rt_v1_coverage_snapshot", i32,
                              {pointer, i32, i64});
+  if (hasSAIF) {
+    getOrDeclareLLVMFunction(module, "talos_rt_v1_saif_configure", i32,
+                             {pointer, pointer, i64});
+    getOrDeclareLLVMFunction(
+        module, "talos_rt_v1_saif_bind", i32,
+        {pointer, i64, pointer, i64, pointer, i32, pointer, i32});
+    getOrDeclareLLVMFunction(module, "talos_rt_v1_saif_seal", i32, {pointer});
+    getOrDeclareLLVMFunction(module, "talos_rt_v1_saif_finish", i32, {pointer});
+  }
   getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_install_aot", i32,
                            {pointer, pointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_run_aot", i32,

@@ -903,6 +903,7 @@ static void buildTalosToSimulationPipelineImpl(
   // Coverage owns module-level schema metadata, so run it at the module
   // anchor after the nested early DCE has completed. A nested pass must not
   // mutate its parent operation.
+  manager.addPass(createTalosSimPrepareSAIFPass());
   manager.addPass(createTalosSimPrepareCoveragePass());
   // Prepared virtual calls expose all compatible targets as symbol edges.
   // Once DCE removes unused method families, compact their vtable slots before

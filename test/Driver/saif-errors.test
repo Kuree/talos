@@ -1,0 +1,42 @@
+// RUN: %split-file %s %t
+// RUN: not talos --saif-input=%t/unknown.saif -emit-sim %t/design.sv -o /dev/null 2>&1 | FileCheck %s --check-prefix=OUTPUT
+// RUN: not talos --saif=%t.saif --saif-input=%t/missing.saif -emit-sim %t/design.sv -o /dev/null 2>&1 | FileCheck %s --check-prefix=READ
+// RUN: not talos --saif=%t.saif --saif-input=%t/backward.saif -emit-sim %t/design.sv -o /dev/null 2>&1 | FileCheck %s --check-prefix=BACKWARD
+// RUN: not talos --saif=%t.saif --saif-input=%t/unknown.saif -emit-sim %t/design.sv -o /dev/null 2>&1 | FileCheck %s --check-prefix=UNKNOWN
+// RUN: not talos --saif=%t.saif --saif-input=%t/huge-index.saif -emit-sim %t/design.sv -o /dev/null 2>&1 | FileCheck %s --check-prefix=UNKNOWN
+// RUN: not talos --saif=%t.saif --saif-input=%t/virtual.saif -emit-sim %t/design.sv -o /dev/null 2>&1 | FileCheck %s --check-prefix=VIRTUAL
+// RUN: not talos --saif=%t.saif --saif-input=%t/duplicate.saif -emit-sim %t/design.sv -o /dev/null 2>&1 | FileCheck %s --check-prefix=DUPLICATE
+// These compile-time diagnostics are required without --mlir-verify-each.
+// OUTPUT: --saif-input requires --saif=<output.saif>
+// READ: cannot read SAIF
+// BACKWARD: SAIF collection input must be RTL forward SAIF
+// UNKNOWN: SAIF source does not resolve to a supported scalar/vector bit
+// VIRTUAL: SAIF virtual instance may contain only ports
+// DUPLICATE: duplicate SAIF mapped output signal
+
+//--- design.sv
+module top;
+  logic q;
+  logic [3:1] bus;
+  initial #1 $finish;
+endmodule
+//--- unknown.saif
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "forward") (DESIGN) (DATE)
+  (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION) (DIVIDER .)
+  (INSTANCE top (NET (missing mapped))))
+//--- huge-index.saif
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "forward") (DESIGN) (DATE)
+  (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION) (DIVIDER .)
+  (INSTANCE top (NET (bus[9223372036854775808] mapped))))
+//--- backward.saif
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward") (DESIGN) (DATE)
+  (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION) (DIVIDER .)
+  (TIMESCALE 1 ns) (DURATION 1) (INSTANCE top (NET (q (TC 0)))))
+//--- virtual.saif
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "forward") (DESIGN) (DATE)
+  (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION) (DIVIDER .)
+  (INSTANCE top (PORT (q gate.Q "seq")) (NET (q gate.r))))
+//--- duplicate.saif
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "forward") (DESIGN) (DATE)
+  (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION) (DIVIDER .)
+  (INSTANCE top (NET (q same) (bus[1] same))))

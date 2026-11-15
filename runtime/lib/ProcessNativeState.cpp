@@ -921,6 +921,9 @@ bool talos_rt_publish_native_signal_transition_unlocked(
     if (context->coverage)
       talos_rt_coverage_record_transition_unlocked(
           context, stableID, bitWidth, changed, newValue, newUnknown);
+    if (context->saif)
+      talos_rt_saif_record_transition_unlocked(context, stableID, bitWidth,
+                                               changed, newValue, newUnknown);
     talos_rt_invalidate_signal_snapshots_unlocked(context, stableID, bitWidth);
     if (++context->schedulerEpoch == 0)
       context->schedulerEpoch = 1;

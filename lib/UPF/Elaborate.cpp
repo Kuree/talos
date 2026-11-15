@@ -372,6 +372,9 @@ struct Lowering {
   }
   void collectReferencedStorage() {
     SymbolTableCollection retentionSymbols;
+    for (auto storage : design.getOps<sim::SimStorageDeclOp>())
+      if (sim::hasTransitionObservers(storage))
+        referencedStorage.insert(storage.getId());
     design.walk([&](sim::SimContextStorageOp ref) {
       referencedStorage.insert(ref.getId());
     });

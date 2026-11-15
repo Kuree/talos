@@ -464,6 +464,10 @@ mlir::LLVM::GlobalOp makeConstantGlobal(mlir::ModuleOp module,
                                         mlir::Attribute value);
 /// The initializer attribute of a struct whose fields are all integers, one
 /// value per field (truncated to the field's width).
+mlir::LogicalResult materializeSAIFRegistration(
+    mlir::ModuleOp module, mlir::OpBuilder &builder, mlir::Value runtimeContext,
+    const NativeStateLayout &stateLayout, int64_t precisionFs);
+
 mlir::ArrayAttr integerStructAttr(mlir::LLVM::LLVMStructType type,
                                   llvm::ArrayRef<uint64_t> values);
 /// The initializer attribute of an array of `elementType` integers.

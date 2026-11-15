@@ -1,0 +1,36 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --vpi=off --upf %t/design.upf --saif=%t.saif --mlir-verify-each -O0 %t/design.sv -o %t.o0 && %t.o0 && FileCheck %s --input-file=%t.saif
+// RUN: talos --vpi=off --upf %t/design.upf --saif=%t.saif --mlir-verify-each -O3 %t/design.sv -o %t.o3 && %t.o3 && FileCheck %s --input-file=%t.saif
+// RUN: talos --vpi=off --upf %t/design.upf --saif=%t.saif --execution-tier=bytecode --mlir-verify-each -O3 %t/design.sv -o %t.bc && %t.bc && FileCheck %s --input-file=%t.saif
+// IEEE 1801-2018 9.8: observe the parent-side isolation result, including
+// corruption under unknown control, rather than the unchanged source value.
+// CHECK: (DURATION 12000000)
+// CHECK: (y (T0 5000000) (T1 4000000) (TX 3000000) (TZ 0) (TC 2))
+
+//--- design.sv
+module leaf(input logic d, output logic y);
+  timeunit 1ns; timeprecision 1ns;
+  assign y = d;
+endmodule
+module top;
+  timeunit 1ns; timeprecision 1ns;
+  import UPF::*;
+  logic d = 1, iso = 0;
+  wire y;
+  leaf dut(d,y);
+  initial begin
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/CORE.ground", 0.0))
+      $fatal(1, "supplies");
+    #2 iso = 1;
+    #3 iso = 0;
+    #2 iso = 'x;
+    #3 iso = 1;
+    #2 $finish;
+  end
+endmodule
+//--- design.upf
+create_supply_set CORE
+create_power_domain PD -elements dut -supply {primary CORE}
+set_isolation ISO -domain PD -isolation_signal iso -isolation_sense high \
+    -clamp_value 0 -applies_to outputs -location parent

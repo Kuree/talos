@@ -434,7 +434,7 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
       // roots; the runtime's static fast path records it before its fanout-only
       // early return.
       module.walk([&](Operation *operation) {
-        if (!cov::has<cov::ToggleObservable>(operation))
+        if (!sim::hasTransitionObservers(operation))
           return;
         const uint64_t *handle = nullptr;
         if (auto storage = dyn_cast<sim::SimStorageDeclOp>(operation)) {

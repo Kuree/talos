@@ -2351,6 +2351,14 @@ struct FunctionalCoverageConfigurationSchemas;
 struct FunctionalCoverageLoadedData;
 struct FunctionalCoverageDiagnosticIndex;
 
+struct SAIFState;
+
+void talos_rt_saif_record_transition_unlocked(
+    talos_rt_context *context, uint64_t stableID, uint64_t bitWidth,
+    const uint8_t *changed, const uint8_t *newValue, const uint8_t *newUnknown);
+bool talos_rt_saif_tracks_static_state_unlocked(const talos_rt_context *context,
+                                                uint32_t staticID);
+
 struct CoverageState {
   std::unique_ptr<talos::coverage::Database> schema;
   std::shared_ptr<const FunctionalCoverageConstructionSchemas>
@@ -3105,6 +3113,7 @@ struct talos_rt_context {
       managedWatchWaiters;
   uint64_t nextManagedWatchToken = 1;
   std::unique_ptr<CoverageState> coverage;
+  std::shared_ptr<SAIFState> saif;
   std::vector<talos_rt_process_instance_v1 *> managedRootProcesses;
   ManagedHeap *managedHeap = nullptr;
   talos_rt_random_state_v1 random{};

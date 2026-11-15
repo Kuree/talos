@@ -26,6 +26,7 @@
 #include "talos/Dialect/DPI/DPIDialect.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
+#include "talos/Dialect/SAIF/SAIFDialect.h"
 #include "talos/Dialect/Schedule/Export.h"
 #include "talos/Dialect/Schedule/ScheduleDialect.h"
 #include "talos/Dialect/Simulation/SimulationDialect.h"
@@ -36,6 +37,7 @@
 #include "talos/Dialect/Talos/TalosOps.h"
 #include "talos/Dialect/UPF/UPFDialect.h"
 #include "talos/Frontend/Frontend.h"
+#include "talos/Frontend/SAIF.h"
 #include "talos/Frontend/UPF.h"
 #include "talos/Version.h"
 
@@ -1379,6 +1381,8 @@ static int executeCompilation(const InputArgList &args,
               talos::cov::CoverageDialect, talos::dpi::DPIDialect,
               talos::native::NativeDialect, talos::runtime::TalosRuntimeDialect,
               talos::sim::TalosSimulationDialect, mlir::LLVM::LLVMDialect>();
+  if (args.hasArg(OPT_saif_EQ, OPT_saif_input_EQ))
+    registry.insert<talos::saif::SAIFDialect>();
   if (args.hasArg(OPT_upf))
     registry.insert<talos::upf::UPFDialect>();
   // One explicitly sized pool is shared by all MLIR parallel pass adaptors.
@@ -1440,6 +1444,33 @@ static int executeCompilation(const InputArgList &args,
   if (failed(importedModule))
     return 1;
   OwningOpRef<ModuleOp> module = std::move(*importedModule);
+  if (args.hasArg(OPT_saif_input_EQ) && !args.hasArg(OPT_saif_EQ)) {
+    emitDriverError("--saif-input requires --saif=<output.saif>");
+    return 1;
+  }
+  if (const Arg *output = args.getLastArg(OPT_saif_EQ)) {
+    StringRef path = output->getValue();
+    if (path.empty()) {
+      emitDriverError("--saif requires a nonempty output path");
+      return 1;
+    }
+    talos::saif::set<talos::saif::Output>(*module,
+                                          StringAttr::get(&context, path));
+    for (StringRef input : args.getAllArgValues(OPT_saif_input_EQ)) {
+      auto contents = MemoryBuffer::getFile(input);
+      if (!contents) {
+        emitDriverError(Twine("cannot read SAIF '") + input +
+                        "': " + contents.getError().message());
+        return 1;
+      }
+      auto imported =
+          talos::frontend::importSAIF(input, (*contents)->getBuffer(), context);
+      if (failed(imported))
+        return 1;
+      module->getBody()->getOperations().splice(
+          module->getBody()->end(), (*imported)->getBody()->getOperations());
+    }
+  }
   auto upfPaths = args.getAllArgValues(OPT_upf);
   if (!upfPaths.empty()) {
     if (frontendOptions.twoState) {

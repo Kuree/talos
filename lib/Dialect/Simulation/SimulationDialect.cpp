@@ -574,10 +574,11 @@ static const llvm::StringMap<discardable::PayloadCheck> &declarations() {
   return discardable::declarations<
       metadata::IntegerRange, metadata::ResultRanges, metadata::ResultExprs,
       metadata::KnownLogicResult, metadata::GCPolled,
-      metadata::SnapshotPublications, metadata::InlineLegalityCache,
-      metadata::PulseRejectPercent, metadata::PulseErrorPercent,
-      metadata::PulseOnDetect, metadata::PulseShowCancelled,
-      metadata::NoNegativeTimingChecks, metadata::ConstraintMode, metadata::ConstraintModeBlock,
+      metadata::SnapshotPublications, metadata::TransitionObservable,
+      metadata::InlineLegalityCache, metadata::PulseRejectPercent,
+      metadata::PulseErrorPercent, metadata::PulseOnDetect,
+      metadata::PulseShowCancelled, metadata::NoNegativeTimingChecks,
+      metadata::ConstraintMode, metadata::ConstraintModeBlock,
       metadata::ConstraintModeField, metadata::ConstraintModeStaticStorage,
       metadata::ConstraintModeStaticStorages,
       metadata::ObjectRandomDispatchClasses, metadata::RandMode,
@@ -750,14 +751,14 @@ static const llvm::StringMap<discardable::PayloadCheck> &declarations() {
       metadata::SynchronousPropertyAbort, metadata::TemporalPropertyNegation,
       metadata::TemporalPropertyNegationOutsideAbort,
       metadata::VacuousSequenceAlternatives, metadata::SteadyUnknown,
-      metadata::ContributionMirrorsNet,
-      metadata::ContinuousStore, metadata::PowerMonitor,
-      metadata::ComputedPortInput, metadata::DelayQuantum, metadata::DelayScale,
-      metadata::DelayedNet, metadata::InitialDriverX,
-      metadata::InterconnectLeafPath, metadata::InterconnectLeaves,
-      metadata::InterconnectNettype, metadata::InterconnectVpiType,
-      metadata::MosTopologyIds, metadata::NegativeTimingAdjusted,
-      metadata::NegativeTimingDelayCommit, metadata::NegativeTimingDelayMonitor,
+      metadata::ContributionMirrorsNet, metadata::ContinuousStore,
+      metadata::PowerMonitor, metadata::ComputedPortInput,
+      metadata::DelayQuantum, metadata::DelayScale, metadata::DelayedNet,
+      metadata::InitialDriverX, metadata::InterconnectLeafPath,
+      metadata::InterconnectLeaves, metadata::InterconnectNettype,
+      metadata::InterconnectVpiType, metadata::MosTopologyIds,
+      metadata::NegativeTimingAdjusted, metadata::NegativeTimingDelayCommit,
+      metadata::NegativeTimingDelayMonitor,
       metadata::NegativeTimingTransportActivation, metadata::PassSwitchIds,
       metadata::PropagationDelays, metadata::ResolutionFunctionPath,
       metadata::ResolutionFunctionSymbol, metadata::SkewDeadlineHelper,
@@ -819,9 +820,8 @@ static const llvm::StringMap<discardable::PayloadCheck> &declarations() {
       metadata::VpiFrameInstrumentation, metadata::VpiAutomatic,
       metadata::VpiCellInstance, metadata::VpiDefDelayMode,
       metadata::DefaultDecayTime, metadata::DefaultTriregStrength,
-      metadata::VpiDefinitionName,
-      metadata::VpiIdentityDelegated, metadata::VpiBoxType,
-      metadata::VpiSourceTypeIdentity, metadata::VpiTop,
+      metadata::VpiDefinitionName, metadata::VpiIdentityDelegated,
+      metadata::VpiBoxType, metadata::VpiSourceTypeIdentity, metadata::VpiTop,
       metadata::DumpportsScope, metadata::DynamicCastEnumValues,
       metadata::DynamicCastTask, metadata::EnumFormatNames,
       metadata::EnumFormatValues, metadata::EnumFormats,
@@ -947,6 +947,9 @@ static LogicalResult verifyDeclaredAttribute(Operation *operation,
     if (ranges.size() % 2)
       return error() << "must hold (offset, width) pairs";
   }
+  if (name == TransitionObservable::getNameStr() &&
+      !isa<SimStorageDeclOp, SimNetDeclOp>(operation))
+    return error() << "belongs on a storage or net declaration";
   if ((name == GCPolled::getNameStr() ||
        name == SnapshotPublications::getNameStr() ||
        name == PulseRejectPercent::getNameStr() ||

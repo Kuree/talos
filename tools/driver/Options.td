@@ -88,6 +88,12 @@ def two_state : Flag<["--"], "two-state">, Group<Compilation_Group>,
 def upf : JoinedOrSeparate<["--"], "upf">, Group<Compilation_Group>,
   MetaVarName<"<file.upf>">,
   HelpText<"Execute UPF power intent after elaborated Slang IR import">;
+def saif_EQ : Joined<["--"], "saif=">, Group<Compilation_Group>,
+  MetaVarName<"<output.saif>">,
+  HelpText<"Collect committed scalar/vector activity into backward SAIF">;
+def saif_input_EQ : Joined<["--"], "saif-input=">, Group<Compilation_Group>,
+  MetaVarName<"<forward.saif>">,
+  HelpText<"Select and map activity with an RTL forward SAIF file">;
 def upf_allow_hdl_expressions : Flag<["--"], "upf-allow-hdl-expressions">,
   Group<Compilation_Group>,
   HelpText<"Allow direct HDL references in switch expressions (extension to IEEE 1801 6.22)">;

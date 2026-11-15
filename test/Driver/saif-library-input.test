@@ -1,0 +1,10 @@
+// RUN: %split-file %s %t
+// RUN: not talos --saif=%t.saif --saif-input=%t/library.saif -emit-sim %t/design.sv -o /dev/null 2>&1 | FileCheck %s
+// CHECK: library forward SAIF collection (SDPD/glitch directives) is not implemented
+//--- design.sv
+module top;
+  initial #1 $finish;
+endmodule
+//--- library.saif
+(SAIFILE (SAIFVERSION "2.0" "lib") (DIRECTION "forward") (DESIGN) (DATE)
+  (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION) (DIVIDER .) (LIBRARY "L"))

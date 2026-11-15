@@ -52,6 +52,14 @@ def TalosSimMaterializeDPIExportsPass
   ];
 }
 
+def TalosSimPrepareSAIFPass
+    : Pass<"talos-sim-prepare-saif", "mlir::ModuleOp"> {
+  let summary = "Bind RTL forward SAIF and preserve activity observations";
+  let dependentDialects = [
+    "talos::sim::TalosSimulationDialect", "talos::saif::SAIFDialect"
+  ];
+}
+
 def TalosSimPrepareCoveragePass
     : Pass<"talos-sim-prepare-coverage", "mlir::ModuleOp"> {
   let summary = "Inventory coverage obligations and emit the native schema";

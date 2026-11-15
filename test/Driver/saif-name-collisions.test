@@ -1,0 +1,32 @@
+// RUN: %split-file %s %t
+// RUN: talos --vpi=off --saif=%t.saif --saif-input=%t/map.saif -O3 --mlir-verify-each %t/design.sv -o %t.exe && %t.exe && FileCheck %s --input-file=%t.saif
+// RUN: talos-translate --import-saif %t.saif | talos-opt | FileCheck %s --check-prefix=IR
+// CHECK: (INSTANCE top
+// CHECK: (outer (T0 1000000) (T1 1000000) (TX 0) (TZ 0) (TC 1))
+// CHECK: (INSTANCE top
+// CHECK: (inner (T0 1000000) (T1 1000000) (TX 0) (TZ 0) (TC 1))
+// IR: name = "inner"
+
+//--- design.sv
+module leaf;
+  timeunit 1ns; timeprecision 1ns;
+  bit q = 0;
+endmodule
+module root;
+  timeunit 1ns; timeprecision 1ns;
+  bit top = 0;
+  leaf top_instance();
+  initial begin #1 top = 1; top_instance.q = 1; #1 $finish; end
+endmodule
+module top;
+  timeunit 1ns; timeprecision 1ns;
+  root top();
+endmodule
+//--- map.saif
+(SAIFILE
+  (SAIFVERSION "2.0") (DIRECTION "forward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION) (DIVIDER .)
+  (INSTANCE top
+    (INSTANCE top
+      (NET (top top.outer))
+      (INSTANCE top_instance (NET (q top.top.inner))))))

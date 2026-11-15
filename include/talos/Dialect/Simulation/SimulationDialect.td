@@ -63,6 +63,8 @@ def TalosSimulationDialect : Dialect {
     // Module: event-time state snapshots require publication barriers before
     // optimization (IEEE 1801 6.50). Retain after UPF intent is erased.
     "::mlir::UnitAttr":$snapshot_publications,
+    // Storage/net: each committed transition is externally observed (SAIF).
+    "::mlir::UnitAttr":$transition_observable,
     // Function: the inliner's cached callee-invariant `InlineLegality`.
     "::mlir::IntegerAttr":$inline_legality,
     // Module: driver pulse controls for path delays (IEEE 1800 30.7).

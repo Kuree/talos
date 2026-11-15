@@ -5622,6 +5622,23 @@ talos_rt_status talos_rt_v1_coverage_save(talos_rt_context *context,
                                           const char *path, uint64_t path_size,
                                           uint32_t run_status,
                                           uint64_t simulation_time);
+// IEEE 1801-2018 Annex I backward collection, on committed state changes.
+// Instance components are canonical escaped SAIF tokens separated by NUL,
+// including a terminating NUL, with explicit total byte length. Signal is one
+// escaped token. Escape punctuation and leading digits only; indices have no
+// leading zeroes. Initial state is 0, 1, X=2 or Z=3; port is Boolean.
+talos_rt_status talos_rt_v1_saif_configure(talos_rt_context *context,
+                                           const char *output,
+                                           uint64_t precision_fs);
+talos_rt_status talos_rt_v1_saif_bind(talos_rt_context *context,
+                                      uint64_t handle, const char *instance,
+                                      uint64_t instance_bytes,
+                                      const char *signal, uint32_t port,
+                                      const char *virtual_type,
+                                      uint32_t initial);
+talos_rt_status talos_rt_v1_saif_seal(talos_rt_context *context);
+talos_rt_status talos_rt_v1_saif_finish(talos_rt_context *context);
+
 talos_rt_status talos_rt_v1_coverage_snapshot(talos_rt_context *context,
                                               uint32_t run_status,
                                               uint64_t simulation_time);

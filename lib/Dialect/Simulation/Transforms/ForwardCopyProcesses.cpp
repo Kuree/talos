@@ -1982,7 +1982,7 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
     else if (observed &&
              *observed != schedule::ComputeObservabilityKind::Invisible)
       sink.block("observable net");
-    else if (cov::has<cov::ToggleObservable>(decl))
+    else if (sim::hasTransitionObservers(decl))
       sink.block("toggle coverage");
     else if (state.dumpPorts)
       sink.block("waveform dump: extended VCD");
@@ -3103,7 +3103,7 @@ void TalosSimForwardCopyProcessesPass::runOnOperation() {
         decl.getObservability();
     if ((observed &&
          *observed != schedule::ComputeObservabilityKind::Invisible) ||
-        cov::has<cov::ToggleObservable>(decl))
+        sim::hasTransitionObservers(decl))
       state.observed.insert(keyOf(root));
   }
   for (auto decl : designBlock.getOps<sim::SimStorageDeclOp>()) {
@@ -3115,7 +3115,7 @@ void TalosSimForwardCopyProcessesPass::runOnOperation() {
         decl.getObservability();
     if ((observed &&
          *observed != schedule::ComputeObservabilityKind::Invisible) ||
-        cov::has<cov::ToggleObservable>(decl))
+        sim::hasTransitionObservers(decl))
       state.observed.insert(keyOf(root));
   }
   state.topology = analysis::getIsolatedWireDriverTopology(design);

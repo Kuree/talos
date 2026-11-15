@@ -1,0 +1,45 @@
+// RUN: %split-file %s %t
+// RUN: talos-opt %t/good.mlir --encode-talos-sim-to-bytecode='vpi=off' --convert-talos-sim-processes-to-llvm-coroutines -o %t.mlir
+// RUN: FileCheck %s --input-file=%t.mlir
+// RUN: not talos-opt %t/bad.mlir --encode-talos-sim-to-bytecode='vpi=off' --convert-talos-sim-processes-to-llvm-coroutines -o /dev/null 2>&1 | FileCheck %s --check-prefix=ERROR
+// CHECK: llvm.mlir.global internal constant @__talos_saif_bindings
+// CHECK-SAME: !llvm.array<2 x struct<(i64, i64, i64, i64, i64, i64, i64)>>
+// CHECK-LABEL: llvm.func @main(
+// CHECK: llvm.call @talos_rt_v1_saif_configure
+// CHECK: llvm.call @__talos_register_saif
+// CHECK: llvm.call @talos_rt_v1_saif_seal
+// CHECK: llvm.call @talos_rt_v1_saif_finish
+// CHECK-LABEL: llvm.func internal @__talos_register_saif(
+// CHECK-SAME: no_inline
+// CHECK: ^bb1(%[[ROW:.*]]: i64):
+// CHECK: llvm.icmp "ult" %[[ROW]]
+// CHECK: llvm.getelementptr %{{.*}}[%[[ROW]], 0]
+// CHECK: llvm.call @talos_rt_v1_saif_bind
+// CHECK: llvm.br ^bb1
+// ERROR: SAIF observation exceeds its native state root
+
+//--- good.mlir
+#a = #saif.binding<sourceId = 0, sourceIsNet = false, sourceLow = 0, instance = <[#saif.identifier<name = "top">]>, signal = <name = "q", index = "0">, port = false, initial = 2>
+#b = #saif.binding<sourceId = 0, sourceIsNet = false, sourceLow = 1, instance = <[#saif.identifier<name = "top">]>, signal = <name = "q", index = "1">, port = false, initial = 2>
+module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", saif.output = "out.saif", saif.bindings = [#a, #b]} {
+  simulation.design @design {
+    simulation.scope.decl 0
+    simulation.code_unit.decl 1 in 0 root_initializer hierarchy "top.root"
+    simulation.storage.decl 0 in 0 : !simulation.logic<2> design {simulation.transition_observable}
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 1 : i64} {
+      simulation.return
+    }
+  }
+}
+//--- bad.mlir
+#a = #saif.binding<sourceId = 0, sourceIsNet = false, sourceLow = 100, instance = <[#saif.identifier<name = "top">]>, signal = <name = "q">, port = false, initial = 2>
+module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", saif.output = "out.saif", saif.bindings = [#a]} {
+  simulation.design @design {
+    simulation.scope.decl 0
+    simulation.code_unit.decl 1 in 0 root_initializer hierarchy "top.root"
+    simulation.storage.decl 0 in 0 : !simulation.logic<1> design {simulation.transition_observable}
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 1 : i64} {
+      simulation.return
+    }
+  }
+}

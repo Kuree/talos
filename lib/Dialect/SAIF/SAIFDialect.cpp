@@ -2,6 +2,7 @@
 
 #include "talos/Dialect/SAIF/SAIFOps.h"
 
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Diagnostics.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/DenseSet.h"
@@ -32,6 +33,19 @@ using llvm::isSpace;
 #include "talos/Dialect/SAIF/SAIFOps.cpp.inc"
 
 namespace talos::saif {
+
+LogicalResult BindingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                                  uint64_t sourceId, bool sourceIsNet,
+                                  uint64_t sourceLow, PathAttr instance,
+                                  IdentifierAttr signal, bool port,
+                                  uint32_t initial, StringAttr virtualType) {
+  if (!instance || !signal || initial > 3)
+    return emitError()
+           << "binding requires an instance, signal and 0/1/X/Z initial value";
+  if (virtualType && !port)
+    return emitError() << "virtual instance bindings must be ports";
+  return success();
+}
 
 void SAIFDialect::initialize() {
   addAttributes<
@@ -615,6 +629,87 @@ static LogicalResult verifyContext(Operation *op, Form form) {
   return success();
 }
 } // namespace
+
+LogicalResult SAIFDialect::verifyOperationAttribute(Operation *operation,
+                                                    NamedAttribute attr) {
+  // Malformed unchecked attributes may not have a printable representation.
+  // Report by location without MLIR's automatic operation dump.
+  auto error = [&] {
+    auto diagnostic = mlir::emitError(operation->getLoc());
+    diagnostic << "'" << operation->getName() << "' op ";
+    return diagnostic;
+  };
+  StringRef name = attr.getName().strref();
+  if (name != Output::getNameStr() && name != Bindings::getNameStr())
+    return error() << "unknown SAIF attribute " << name;
+  if (!isa<ModuleOp>(operation))
+    return error() << "SAIF collection attributes belong on a module";
+  if (name == Output::getNameStr()) {
+    auto path = dyn_cast<StringAttr>(attr.getValue());
+    if (!path || path.getValue().empty() || path.getValue().contains('\0'))
+      return error() << "saif.output requires a nonempty file path";
+    return success();
+  }
+  auto bindings = dyn_cast<ArrayAttr>(attr.getValue());
+  if (!bindings || bindings.size() > (1 << 20))
+    return error() << "saif.bindings requires at most 1048576 bindings";
+  if (!has<Output>(operation))
+    return error() << "saif.bindings requires saif.output";
+  struct InstanceNode {
+    DenseMap<Attribute, unsigned> children;
+    DenseSet<std::pair<Attribute, uint32_t>> signals;
+    StringAttr virtualType;
+    bool hasNets = false;
+  };
+  SmallVector<InstanceNode> instances(1);
+  DenseMap<PathAttr, unsigned> instanceIndices;
+  AttributeVerifier verifier;
+  for (Attribute value : bindings) {
+    auto binding = dyn_cast<BindingAttr>(value);
+    if (!binding || !binding.getInstance() || !binding.getSignal() ||
+        binding.getInitial() > 3 || binding.getSourceLow() > INT32_MAX ||
+        (binding.getVirtualType() && !binding.getPort()))
+      return error() << "invalid SAIF observation binding";
+    if (failed(verifier.verify(binding.getInstance(), operation)) ||
+        failed(verifier.verify(binding.getSignal(), operation)))
+      return failure();
+    auto components = binding.getInstance().getComponents();
+    if (components.size() > 128)
+      return error() << "SAIF output instance hierarchy exceeds 128 components";
+    auto [found, first] = instanceIndices.try_emplace(binding.getInstance(), 0);
+    unsigned node = found->second;
+    if (first) {
+      for (Attribute component : components) {
+        if (instances[node].virtualType)
+          return error() << "SAIF virtual instance cannot have child instances";
+        auto [it, inserted] =
+            instances[node].children.try_emplace(component, instances.size());
+        node = it->second;
+        if (inserted)
+          instances.emplace_back();
+      }
+      found->second = node;
+    }
+    auto &instance = instances[node];
+    if (auto type = binding.getVirtualType()) {
+      if (any_of(type.getValue(),
+                 [](char c) { return !c || c == '\n' || c == '\r'; }))
+        return error() << "SAIF strings must be single-line and contain no NUL";
+      if (type.getValue().contains('"') ||
+          (instance.virtualType && instance.virtualType != type))
+        return error() << "inconsistent SAIF virtual instance type";
+      instance.virtualType = type;
+    }
+    instance.hasNets |= !binding.getPort();
+    if (instance.virtualType &&
+        (instance.hasNets || !instance.children.empty()))
+      return error() << "SAIF virtual instance may contain only ports";
+    if (!instance.signals.insert({binding.getSignal(), binding.getPort()})
+             .second)
+      return error() << "duplicate SAIF mapped output signal";
+  }
+  return success();
+}
 
 LogicalResult FileOp::verifyRegions() {
   std::array<HeaderOp, 10> headers{};

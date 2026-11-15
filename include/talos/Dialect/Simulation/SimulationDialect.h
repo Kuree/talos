@@ -24,6 +24,8 @@ using KnownLogicResult = TalosSimulationDialect::KnownLogicResultAttrHelper;
 using GCPolled = TalosSimulationDialect::GcPolledAttrHelper;
 using SnapshotPublications =
     TalosSimulationDialect::SnapshotPublicationsAttrHelper;
+using TransitionObservable =
+    TalosSimulationDialect::TransitionObservableAttrHelper;
 using InlineLegalityCache = TalosSimulationDialect::InlineLegalityAttrHelper;
 using NoNegativeTimingChecks =
     TalosSimulationDialect::NoNegativeTimingChecksAttrHelper;

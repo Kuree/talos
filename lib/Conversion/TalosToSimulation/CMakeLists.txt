@@ -31,6 +31,7 @@ add_mlir_library(TalosToSimulation
   LowerUnitTimingChecks.cpp
   MaterializeClockedSamples.cpp
   PrepareCoverage.cpp
+  PrepareSAIF.cpp
   PrepareCaptures.cpp
   PrepareLocals.cpp
   PrepareExpressions.cpp
@@ -59,6 +60,7 @@ add_mlir_library(TalosToSimulation
   TalosIR
   TalosUPF
   TalosCoverage
+  TalosSAIFIR
   TalosSimulationAnalysis
   TalosSimulationIR
   TalosSimulationTransforms

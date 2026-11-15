@@ -2055,6 +2055,9 @@ bool talos_rt_publish_signal_transition_batch_unlocked(
   if (context->coverage)
     talos_rt_coverage_record_transition_unlocked(context, stableID, bitWidth,
                                                  changed, newValue, newUnknown);
+  if (context->saif)
+    talos_rt_saif_record_transition_unlocked(context, stableID, bitWidth,
+                                             changed, newValue, newUnknown);
   ClockOccurrenceFeatureState *feature = context->clockOccurrences.get();
   if (edgeBitOffset == 0) {
     uint64_t sequence = 0;
@@ -2189,9 +2192,9 @@ bool talos_rt_transition_unconsumed_unlocked(const talos_rt_context *context,
   uint32_t staticID = 0;
   int64_t offset = 0;
   return decodeNativeStatic(stableID, staticID, offset) && !context->coverage &&
-         !context->clockOccurrences && !context->exactEvents &&
-         !context->vpiObservationDemand && !context->observerDepth &&
-         !context->observerForcesCanonicalPlane &&
+         !context->saif && !context->clockOccurrences &&
+         !context->exactEvents && !context->vpiObservationDemand &&
+         !context->observerDepth && !context->observerForcesCanonicalPlane &&
          context->signalValueSnapshots.empty() &&
          context->pendingNativeComputedWaiters.empty() &&
          context->pendingDesignComputedWaiters.empty() &&
@@ -2601,7 +2604,7 @@ bool staticTransitionTakesOrdinaryPath(const talos_rt_context *context) {
 bool publicationBatchCanMerge(const talos_rt_context *context) {
   return context->schedulerStatus == TALOS_RT_OK &&
          context->forceMask.empty() && context->assignMask.empty() &&
-         !context->coverage && !context->clockOccurrences &&
+         !context->coverage && !context->saif && !context->clockOccurrences &&
          !context->exactEvents && !context->vpiObservationDemand &&
          !context->observerDepth && !context->observerForcesCanonicalPlane &&
          context->signalValueSnapshots.empty() &&
@@ -2974,6 +2977,11 @@ extern "C" void talos_rt_v1_scheduler_static_transition(
   }
   if (context->coverage)
     talos_rt_coverage_record_transition_unlocked(
+        context, handle, bitWidth, reinterpret_cast<const uint8_t *>(&changed),
+        reinterpret_cast<const uint8_t *>(&newValue),
+        reinterpret_cast<const uint8_t *>(&newUnknown));
+  if (context->saif)
+    talos_rt_saif_record_transition_unlocked(
         context, handle, bitWidth, reinterpret_cast<const uint8_t *>(&changed),
         reinterpret_cast<const uint8_t *>(&newValue),
         reinterpret_cast<const uint8_t *>(&newUnknown));

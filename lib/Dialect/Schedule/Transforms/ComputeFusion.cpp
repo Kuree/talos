@@ -1286,10 +1286,10 @@ CombinationalFusionAnalysis::getInterleaveIndex() const {
   InterleaveIndex &index = interleaveIndex.emplace();
   auto design = this->design;
   for (auto storage : design.getOps<sim::SimStorageDeclOp>())
-    if (cov::has<cov::ToggleObservable>(storage))
+    if (sim::hasTransitionObservers(storage))
       index.toggleRoots.insert(static_cast<uint64_t>(storage.getId()));
   for (auto net : design.getOps<sim::SimNetDeclOp>())
-    if (cov::has<cov::ToggleObservable>(net))
+    if (sim::hasTransitionObservers(net))
       if (auto root = analysis::ActivationMemoryAnalysis::getRoot(
               schedule::ComputeResourceKind::Net, net.getId()))
         index.toggleRoots.insert(*root);
@@ -1436,14 +1436,14 @@ CombinationalFusionAnalysis::getGlitchInsensitiveStorage() const {
     auto observability = storage.getObservability();
     if ((!observability ||
          *observability == schedule::ComputeObservabilityKind::Invisible) &&
-        !cov::has<cov::ToggleObservable>(storage))
+        !sim::hasTransitionObservers(storage))
       result.insert(static_cast<uint64_t>(storage.getId()));
   }
   for (auto net : design.getOps<sim::SimNetDeclOp>()) {
     auto observability = net.getObservability();
     if ((!observability ||
          *observability == schedule::ComputeObservabilityKind::Invisible) &&
-        !cov::has<cov::ToggleObservable>(net))
+        !sim::hasTransitionObservers(net))
       if (auto root = analysis::ActivationMemoryAnalysis::getRoot(
               schedule::ComputeResourceKind::Net, net.getId()))
         result.insert(*root);
@@ -2017,7 +2017,7 @@ computeNBATransientObservers(sim::SimDesignOp design, bool guardedVPI) {
   }
   llvm::DenseSet<uint64_t> &observable = result.observable;
   design.walk([&](sim::SimStorageDeclOp storage) {
-    if (cov::has<cov::ToggleObservable>(storage))
+    if (sim::hasTransitionObservers(storage))
       observable.insert(storage.getId());
   });
   // Who can see an intermediate value of a process's own writes. An update
@@ -2044,11 +2044,11 @@ computeNBATransientObservers(sim::SimDesignOp design, bool guardedVPI) {
   };
   design.walk([&](Operation *operation) {
     if (auto storage = dyn_cast<sim::SimStorageDeclOp>(operation)) {
-      if (cov::has<cov::ToggleObservable>(storage))
+      if (sim::hasTransitionObservers(storage))
         watchWhole(schedule::ComputeResourceKind::Storage, storage.getId(),
                    nullptr);
     } else if (auto net = dyn_cast<sim::SimNetDeclOp>(operation)) {
-      if (cov::has<cov::ToggleObservable>(net))
+      if (sim::hasTransitionObservers(net))
         watchWhole(schedule::ComputeResourceKind::Net, net.getId(), nullptr);
     }
   });

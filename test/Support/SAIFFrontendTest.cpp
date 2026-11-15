@@ -276,6 +276,25 @@ static int apiTests(MLIRContext &context) {
       return 1;
   }
   scaleHeader.setScaleAttr(originalScale);
+  auto planModule =
+      OwningOpRef<ModuleOp>(ModuleOp::create(UnknownLoc::get(&context)));
+  talos::saif::set<talos::saif::Output>(*planModule,
+                                        StringAttr::get(&context, "out.saif"));
+  auto q = talos::saif::IdentifierAttr::get(
+      &context, StringAttr::get(&context, "q"), StringAttr{});
+  auto top =
+      talos::saif::PathAttr::get(&context, ArrayAttr::get(&context, {q}));
+  for (auto bad : {talos::saif::BindingAttr::get(&context, 0, false, 0,
+                                                 talos::saif::PathAttr(), q,
+                                                 false, 0, StringAttr{}),
+                   talos::saif::BindingAttr::get(&context, 0, false, 0, top,
+                                                 talos::saif::IdentifierAttr(),
+                                                 false, 0, StringAttr{})}) {
+    talos::saif::set<talos::saif::Bindings>(*planModule,
+                                            ArrayAttr::get(&context, {bad}));
+    if (!rejects(*planModule, "invalid SAIF observation binding"))
+      return 1;
+  }
 #endif
 
   // This must work with assertions enabled: attribute construction represents
@@ -399,6 +418,41 @@ static int benchmark(MLIRContext &context, unsigned count) {
   return 0;
 }
 
+static int benchmarkBindings(MLIRContext &context, unsigned count) {
+  context.getOrLoadDialect<talos::saif::SAIFDialect>();
+  auto module =
+      OwningOpRef<ModuleOp>(ModuleOp::create(UnknownLoc::get(&context)));
+  auto instance = talos::saif::PathAttr::get(
+      &context,
+      ArrayAttr::get(&context, {talos::saif::IdentifierAttr::get(
+                                   &context, StringAttr::get(&context, "top"),
+                                   StringAttr{})}));
+  SmallVector<Attribute> bindings;
+  for (unsigned index = 0; index < count; ++index) {
+    auto signal = talos::saif::IdentifierAttr::get(
+        &context, StringAttr::get(&context, "q"),
+        StringAttr::get(&context, std::to_string(index)));
+    bindings.push_back(talos::saif::BindingAttr::get(
+        &context, 0, false, index, instance, signal, false, 0, StringAttr{}));
+  }
+  talos::saif::set<talos::saif::Output>(*module,
+                                        StringAttr::get(&context, "out.saif"));
+  talos::saif::set<talos::saif::Bindings>(*module,
+                                          ArrayAttr::get(&context, bindings));
+  std::array<double, 3> samples;
+  for (double &sample : samples) {
+    auto start = std::chrono::steady_clock::now();
+    if (failed(verify(*module)))
+      return 1;
+    sample = std::chrono::duration<double, std::milli>(
+                 std::chrono::steady_clock::now() - start)
+                 .count();
+  }
+  std::sort(samples.begin(), samples.end());
+  llvm::outs() << "bindings=" << count << " verify_ms=" << samples[1] << '\n';
+  return 0;
+}
+
 int main(int argc, char **argv) {
   MLIRContext context;
   context.disableMultithreading();
@@ -407,6 +461,13 @@ int main(int argc, char **argv) {
     if (llvm::StringRef(argv[2]).getAsInteger(10, count) || count == 0)
       return 1;
     return benchmark(context, count);
+  }
+  if (argc == 3 && llvm::StringRef(argv[1]) == "--benchmark-bindings") {
+    unsigned count;
+    if (llvm::StringRef(argv[2]).getAsInteger(10, count) || count == 0 ||
+        count > (1 << 20))
+      return 1;
+    return benchmarkBindings(context, count);
   }
   return apiTests(context);
 }

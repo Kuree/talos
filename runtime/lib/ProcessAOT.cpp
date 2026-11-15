@@ -191,6 +191,9 @@ bool staticNBARootNeedsTransitions(const talos_rt_context *context,
          context->staticNBARootHasFanout[rootIndex] != 0 ||
          rootIndex >= context->nativeScheduleNBARootCount ||
          talos_rt_coverage_tracks_static_state_unlocked(
+             context,
+             context->nativeScheduleNBARoots[rootIndex].static_state) ||
+         talos_rt_saif_tracks_static_state_unlocked(
              context, context->nativeScheduleNBARoots[rootIndex].static_state);
 }
 

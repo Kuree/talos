@@ -2244,6 +2244,9 @@ bool talos_rt_append_signal_event_unlocked(talos_rt_context *context,
     if (context->coverage)
       talos_rt_coverage_record_transition_unlocked(
           context, bitOffset, 1, &changedBits, &newValueBits, &newUnknownBits);
+    if (context->saif)
+      talos_rt_saif_record_transition_unlocked(
+          context, bitOffset, 1, &changedBits, &newValueBits, &newUnknownBits);
     if (!talos_rt_publish_signal_occurrence_unlocked(context, bitOffset, 1,
                                                      edges, &sequence))
       return false;

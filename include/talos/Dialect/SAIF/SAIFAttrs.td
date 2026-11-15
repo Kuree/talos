@@ -55,6 +55,17 @@ def SAIFConditionAttr : SAIFAttr<"Condition", "condition"> {
   let genVerifyDecl = 1;
 }
 
+// A prepared, per-bit observation. Numeric source descriptors survive name
+// pruning; structured output names survive escaped source identifiers.
+def SAIFBindingAttr : SAIFAttr<"Binding", "binding"> {
+  let parameters = (ins "uint64_t":$sourceId, "bool":$sourceIsNet,
+      "uint64_t":$sourceLow, SAIFPathAttr:$instance,
+      SAIFIdentifierAttr:$signal, "bool":$port, "uint32_t":$initial,
+      OptionalParameter<"::mlir::StringAttr">:$virtualType);
+  let assemblyFormat = "`<` struct(params) `>`";
+  let genVerifyDecl = 1;
+}
+
 def SAIFTimeScaleAttr : SAIFAttr<"TimeScale", "timescale"> {
   let parameters = (ins SAIFNumberAttr:$amount, "::mlir::StringAttr":$unit);
   let assemblyFormat = "`<` struct(params) `>`";

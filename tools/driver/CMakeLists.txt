@@ -134,6 +134,8 @@ function(talos_configure_driver target)
   llvm_update_compile_flags(${target})
   target_link_libraries(${target} PRIVATE
     TalosFrontend
+    TalosSAIFFrontend
+    TalosSAIFIR
     TalosUPF
     TalosIR
     TalosRuntimeIR

@@ -19,9 +19,30 @@ def SAIFDialect : Dialect {
 
     This dialect describes exchange data, not executable power intent.
     Binding and collection lower into the existing simulation machinery.
+
+    The driver accepts `--saif=activity.saif` to collect source-authored
+    scalar and one-dimensional nonnegative-index packed integral signals.
+    `--saif-input=mapping.saif` optionally selects and renames points using
+    RTL forward mappings, including virtual instance PORT data. Backward and
+    library forward inputs cannot configure this initial collector.
+
+    `talos-sim-prepare-saif` resolves names before optimization and stores
+    verified per-bit bindings on the module. Native lowering emits a constant
+    registration table, and the runtime observes actual committed values in
+    both native and bytecode execution. With UPF, these include published
+    corruption, isolation and retention outputs. Residence times T0/T1/TX/TZ
+    are exact femtosecond integers; TC counts only 0-to-1 and 1-to-0 changes,
+    including intermediate changes within one scheduler slot. TB, TG, IG, IK
+    and state/path-dependent activity require driver or timing provenance and
+    are not synthesized from resolved values.
   }];
   let useDefaultAttributePrinterParser = 1;
   let usePropertiesForAttributes = 0;
+  let hasOperationAttrVerify = 1;
+  let discardableAttrs = (ins
+    "::mlir::StringAttr":$output,
+    "::mlir::ArrayAttr":$bindings
+  );
 }
 
 #endif // TALOS_DIALECT_SAIF_SAIFDIALECT_TD

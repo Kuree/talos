@@ -1781,11 +1781,20 @@ LogicalResult NativePipelineAnalysis::prepareFragments(
       staticFanoutPlan.exact) {
     DenseSet<uint32_t> observedRoots = staticFanoutPlan.runtimeTransitionStates;
     module.walk([&](sim::SimStorageDeclOp storage) {
-      if (!cov::has<cov::ToggleObservable>(storage))
+      if (!sim::hasTransitionObservers(storage))
         return;
       auto handle = stateLayout->storage.find(storage.getId());
       talos_rt_stable_handle_v1 decoded{};
       if (handle != stateLayout->storage.end() &&
+          talos_rt_stable_handle_decode(handle->second, &decoded))
+        observedRoots.insert(decoded.id);
+    });
+    module.walk([&](sim::SimNetDeclOp net) {
+      if (!sim::hasTransitionObservers(net))
+        return;
+      auto handle = stateLayout->nets.find(net.getId());
+      talos_rt_stable_handle_v1 decoded{};
+      if (handle != stateLayout->nets.end() &&
           talos_rt_stable_handle_decode(handle->second, &decoded))
         observedRoots.insert(decoded.id);
     });

@@ -33,6 +33,13 @@
 
 namespace talos::sim {
 
+/// Consumers need the complete sequence of committed values, including
+/// multiple changes within a single scheduler time slot.
+inline bool hasTransitionObservers(::mlir::Operation *operation) {
+  return has<metadata::TransitionObservable>(operation) ||
+         cov::has<cov::ToggleObservable>(operation);
+}
+
 /// Return the element type of a dynamic array, queue, or associative array.
 /// Returns a null type for every other input.
 ::mlir::Type getContainerElement(::mlir::Type type);

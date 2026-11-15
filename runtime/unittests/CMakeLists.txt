@@ -33,6 +33,7 @@ add_executable(TalosRuntimeTests
   CoverageDatabaseTest.cpp
   CoverageIndexTest.cpp
   CoverageTest.cpp
+  SAIFTest.cpp
   DesignBytecodeTest.cpp
   DPIOpenArrayTest.cpp
   InitializationRandomTest.cpp

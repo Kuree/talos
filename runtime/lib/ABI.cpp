@@ -1034,6 +1034,14 @@ ABI_FUNCTION(talos_rt_v1_coverage_toggle_bind,
                                  uint64_t));
 ABI_FUNCTION(talos_rt_v1_coverage_toggle_seal,
              talos_rt_status (*)(talos_rt_context *));
+ABI_FUNCTION(talos_rt_v1_saif_configure,
+             talos_rt_status (*)(talos_rt_context *, const char *, uint64_t));
+ABI_FUNCTION(talos_rt_v1_saif_bind,
+             talos_rt_status (*)(talos_rt_context *, uint64_t, const char *,
+                                 uint64_t, const char *, uint32_t, const char *,
+                                 uint32_t));
+ABI_FUNCTION(talos_rt_v1_saif_seal, talos_rt_status (*)(talos_rt_context *));
+ABI_FUNCTION(talos_rt_v1_saif_finish, talos_rt_status (*)(talos_rt_context *));
 ABI_FUNCTION(talos_rt_v1_coverage_reset,
              talos_rt_status (*)(talos_rt_context *,
                                  talos_rt_coverage_metric_v1, const uint8_t *,

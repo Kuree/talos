@@ -65,6 +65,7 @@ add_mlir_library(TalosSimulationToLLVMCoroutine
   SimulationScheduleActionLowering.cpp
   SimulationReadyRegionLowering.cpp
   SimulationSchedulerMainLowering.cpp
+  SimulationSAIFLowering.cpp
   SimulationStaticSpecializationLowering.cpp
   SimulationStateAccessLowering.cpp
   SimulationStatePlaneLowering.cpp
@@ -81,6 +82,7 @@ add_mlir_library(TalosSimulationToLLVMCoroutine
 
   LINK_LIBS PUBLIC
   TalosCoverage
+  TalosSAIFIR
   TalosSimulationToScheduleNative
   TalosScheduleNativeTransforms
   TalosSimulationAnalysis

@@ -1,0 +1,44 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --vpi=off --upf %t/design.upf --saif=%t.saif --mlir-verify-each -O0 %t/design.sv -o %t.o0 && %t.o0 && FileCheck %s --input-file=%t.saif
+// RUN: talos --vpi=off --upf %t/design.upf --saif=%t.saif --mlir-verify-each -O3 %t/design.sv -o %t.o3 && %t.o3 && FileCheck %s --input-file=%t.saif
+// RUN: talos --vpi=off --upf %t/design.upf --saif=%t.saif --execution-tier=bytecode --mlir-verify-each -O3 %t/design.sv -o %t.bc && %t.bc && FileCheck %s --input-file=%t.saif
+// IEEE 1801-2018 9.7 distinguishes output corruption from retained data.
+// The saved value is 1 during primary OFF; the observed output must be X.
+// CHECK: (TIMESCALE 1 fs) (DURATION 10000000)
+// CHECK: (INSTANCE dut
+// CHECK: (q (T0 1000000) (T1 6000000) (TX 3000000) (TZ 0) (TC 1))
+
+//--- design.sv
+module leaf(input logic clk, d, output logic q = 0);
+  timeunit 1ns; timeprecision 1ns;
+  always @(posedge clk) q <= d;
+endmodule
+module top;
+  timeunit 1ns; timeprecision 1ns;
+  import UPF::*;
+  logic clk = 0, d = 1, hold = 0;
+  wire q;
+  leaf dut(clk,d,q);
+  initial begin
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/AON.power") ||
+        !supply_on("/top/AON.ground", 0.0)) $fatal(1, "supplies");
+    #0 dut.q = 0;
+    #1 clk = 1;
+    #1 clk = 0; hold = 1;
+    #1;
+    if (!supply_off("/top/CORE.power")) $fatal(1, "OFF");
+    #0;
+    if (q !== 'x) $fatal(1, "retained output must corrupt");
+    #3;
+    if (!supply_on("/top/CORE.power")) $fatal(1, "ON");
+    #1;
+    if (q !== 1) $fatal(1, "restore");
+    #3 $finish;
+  end
+endmodule
+//--- design.upf
+create_supply_set AON
+create_supply_set CORE -function {ground AON.ground}
+create_power_domain PD -elements dut -supply {primary CORE}
+set_retention R -domain PD -elements dut/q -retention_supply AON -retention_condition hold
