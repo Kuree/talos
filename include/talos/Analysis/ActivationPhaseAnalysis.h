@@ -26,8 +26,9 @@ namespace talos::analysis {
 ///
 /// Time zero is tracked separately: a positive delay cannot observe startup
 /// publications. Activations can interleave only where their phase sets meet
-/// in the same slot category. Effects use verified graph summaries, with task
-/// formals resolved through call sites.
+/// in the same slot category. Synchronous function effects belong to their
+/// callers' verified graph summaries. Reference formals resolve through all
+/// direct task-call and spawn sites, including forwarded captures.
 class ActivationPhaseAnalysis {
 public:
   /// Bit i is phase i + 1; bit 31 also stands for every later phase, so NBA
@@ -71,6 +72,16 @@ public:
     mlir::StringAttr process;
   };
   using Copies = llvm::DenseMap<uint64_t, Copy>;
+
+  /// A whole-root copy with one writer and no other effects. An initialized
+  /// source can give the copy an extra startup transition, so this relation
+  /// does not certify identical value sequences or replacing its event wait.
+  /// Clock cadence proofs can follow the source while retaining the wait.
+  struct ClockCopy {
+    uint64_t source;
+    mlir::StringAttr process;
+  };
+  using ClockCopies = llvm::DenseMap<uint64_t, ClockCopy>;
 
   /// What one block contributes to the solve, from its own function and the
   /// compute graph. A block's phases are constant: they change only across
@@ -144,13 +155,15 @@ public:
   /// Phases in which a root (ActivationMemoryAnalysis root encoding) may
   /// change, including writes whose target is unresolved.
   Phases getChangePhases(uint64_t root) const;
-  /// Every root an effect of `function`'s graph fragments may denote. Task
-  /// formals resolve through every call site; nullopt when unresolved.
+  /// Every root an effect of `function`'s graph fragments may denote. Reference
+  /// formals resolve through every task-call/spawn site; nullopt when
+  /// unresolved.
   std::optional<llvm::SmallVector<uint64_t>>
   getEffectRoots(mlir::StringAttr function,
                  schedule::ComputeEffectAttr effect) const;
   /// Proven copies, keyed by destination root.
   const Copies &getCopies() const;
+  const ClockCopies &getClockCopies() const;
   /// The root a handle in `function` denotes, if it is known.
   std::optional<uint64_t> getRoot(sim::SimFuncOp function,
                                   mlir::Value handle) const;

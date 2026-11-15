@@ -60,10 +60,13 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <queue>
+
+#include <functional>
 
 using namespace mlir;
 
@@ -124,6 +127,10 @@ struct Member {
   uint64_t origin = 0;
   bool inverted = false;
   SmallVector<uint64_t, 2> clockChain;
+  /// Multi-edge controls (for example clock or asynchronous reset) retain
+  /// their complete wait. Their kernels require the deferred window proof.
+  DenseI64ArrayAttr eventSignature;
+  SmallVector<uint64_t, 2> eventRoots;
   uint32_t order = UINT32_MAX;
   llvm::DenseSet<uint64_t> reads, nbaWrites, writes;
   /// An update whose root is unresolved.
@@ -903,6 +910,12 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
     if (!fragment)
       continue;
     StringAttr function = fragment.getFunction().getAttr();
+    // Ordinary calls execute inside their caller's activation. Their effects
+    // are already expanded on the caller's graph fragments; counting the
+    // callee again invents an independent writer (notably for static init).
+    if (auto callee = symbols.lookup<sim::SimFuncOp>(function);
+        callee && callee.getEntryKind() == sim::EntryKind::Function)
+      continue;
     for (auto effect :
          fragment.getEffects().getAsRange<schedule::ComputeEffectAttr>()) {
       if (effect.getTarget() == schedule::ComputeTargetKind::Local)
@@ -1081,6 +1094,10 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
     return static_cast<sim::EdgeKind>(key.second & 0xff);
   };
   llvm::MapVector<GroupKey, std::vector<Member>> groups;
+  // Multi-edge signatures get variants beyond the single-edge startup
+  // variants (0..3); their low edge byte remains Change, so opposite-edge
+  // exclusion is never applied to a control with independent inputs.
+  DenseMap<Attribute, unsigned> multiEventGroups;
   for (sim::SimFuncOp function :
        design.getBody().front().getOps<sim::SimFuncOp>()) {
     if (function.isExternal() ||
@@ -1103,23 +1120,29 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
       reject("member region");
       continue;
     }
-    sim::SimSuspendEdgeOp wait;
+    Operation *wait = nullptr;
     unsigned suspensions = 0;
     function.walk([&](Operation *operation) {
       if (!isSuspension(operation))
         return;
       ++suspensions;
-      wait = dyn_cast<sim::SimSuspendEdgeOp>(operation);
+      wait = operation;
     });
-    if (suspensions != 1 || !wait || wait.getResumeRegionAttr() ||
-        !wait.getContinuationOperands().empty() ||
+    auto edgeWait = dyn_cast_or_null<sim::SimSuspendEdgeOp>(wait);
+    auto anyWait = dyn_cast_or_null<sim::SimSuspendAnyOp>(wait);
+    if (suspensions != 1 || (!edgeWait && !anyWait) ||
+        wait->hasAttr("resume_region") ||
+        !cast<BranchOpInterface>(wait)
+             .getSuccessorOperands(0)
+             .getForwardedOperands()
+             .empty() ||
         wait->getParentRegion() != &function.getBody()) {
       reject("member wait shape");
       continue;
     }
     member.wait = wait->getBlock();
-    member.body = wait.getContinuation();
-    member.edge = wait.getEdge();
+    member.body = wait->getSuccessor(0);
+    member.edge = edgeWait ? edgeWait.getEdge() : sim::EdgeKind::Change;
     Block &entry = function.getBody().front();
     auto entryBranch = dyn_cast<cf::BranchOp>(entry.getTerminator());
     if (!entryBranch || entryBranch.getDest() != member.wait ||
@@ -1146,25 +1169,70 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
       continue;
     }
     analysis::HandleFacts facts = provenance.derive(function);
-    Type watchedType = wait.getWatched().getType();
-    if (auto ref = dyn_cast<sim::RefType>(watchedType)) {
-      std::optional<uint64_t> clock =
-          wholeStorageRoot(wait.getWatched(), facts);
-      if (!clock || !isClockBit(ref.getElementType())) {
-        reject("member clock");
+    if (anyWait) {
+      struct Event {
+        uint64_t root, origin;
+        sim::EdgeKind edge;
+        unsigned variant;
+      };
+      SmallVector<Event> events;
+      bool supported = true;
+      for (auto [watched, encoded] :
+           llvm::zip_equal(anyWait.getWatched(), anyWait.getEdges())) {
+        auto ref = dyn_cast<sim::RefType>(watched.getType());
+        auto root = ref ? wholeStorageRoot(watched, facts) : std::nullopt;
+        auto edge = static_cast<sim::EdgeKind>(encoded);
+        if (!ref || !root || !isClockBit(ref.getElementType()) ||
+            (edge != sim::EdgeKind::Posedge &&
+             edge != sim::EdgeKind::Negedge)) {
+          supported = false;
+          break;
+        }
+        unsigned level = initialLevel(*root);
+        unsigned variant = level == Initialized             ? level
+                           : edge == sim::EdgeKind::Posedge ? level == High
+                                                            : level == Low;
+        events.push_back({*root, classes.find(*root), edge, variant});
+        member.eventRoots.push_back(*root);
+      }
+      if (!supported || events.empty()) {
+        reject("member multi-edge clock");
         continue;
       }
-      member.clock = member.origin = *clock;
+      llvm::sort(events, [](const Event &a, const Event &b) {
+        return std::tie(a.origin, a.edge, a.variant) <
+               std::tie(b.origin, b.edge, b.variant);
+      });
+      SmallVector<int64_t> signature;
+      for (const Event &event : events) {
+        signature.push_back(event.origin);
+        signature.push_back(static_cast<unsigned>(event.edge));
+        signature.push_back(event.variant);
+      }
+      member.eventSignature =
+          DenseI64ArrayAttr::get(design.getContext(), signature);
+      member.clock = member.origin = events.front().root;
     } else {
-      // An edge event of a copy is an edge event of its source (Table 9-2
-      // is symmetric under complement, since `~` maps x and z to x per
-      // Table 11-15); a value change is not (`~z` equals `~x`).
-      auto net = dyn_cast<sim::NetType>(watchedType);
-      if (!net || !isClockBit(net.getElementType()) ||
-          member.edge == sim::EdgeKind::Change ||
-          !resolveNetClock(wait.getWatched(), facts, member)) {
-        reject("member clock");
-        continue;
+      Type watchedType = edgeWait.getWatched().getType();
+      if (auto ref = dyn_cast<sim::RefType>(watchedType)) {
+        std::optional<uint64_t> clock =
+            wholeStorageRoot(edgeWait.getWatched(), facts);
+        if (!clock || !isClockBit(ref.getElementType())) {
+          reject("member clock");
+          continue;
+        }
+        member.clock = member.origin = *clock;
+      } else {
+        // An edge event of a copy is an edge event of its source (Table 9-2
+        // is symmetric under complement, since `~` maps x and z to x per
+        // Table 11-15); a value change is not (`~z` equals `~x`).
+        auto net = dyn_cast<sim::NetType>(watchedType);
+        if (!net || !isClockBit(net.getElementType()) ||
+            member.edge == sim::EdgeKind::Change ||
+            !resolveNetClock(edgeWait.getWatched(), facts, member)) {
+          reject("member clock");
+          continue;
+        }
       }
     }
     bool native = true;
@@ -1245,6 +1313,15 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
           member.clockReads.push_back(operation);
       });
     collectPreamble(member);
+    if (member.eventSignature) {
+      auto group =
+          multiEventGroups
+              .try_emplace(member.eventSignature, multiEventGroups.size() + 16)
+              .first;
+      groups[{classes.find(member.origin), group->second << 8}].push_back(
+          std::move(member));
+      continue;
+    }
     // Members are equivalent when their edge events coincide in every time
     // slot, including the time-zero updates of copies (4.9.1, 23.3.3.3).
     // Relative to the class, a complemented chain swaps posedge and negedge.
@@ -1463,9 +1540,18 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
   // a net it drives may move from z to it and then on to the final value.
   enum class SlotChanges { Any, OnceLater, Once };
   DenseMap<uint64_t, SlotChanges> slotChanges;
-  auto classSlotChanges = [&](uint64_t classRoot) -> SlotChanges {
+  unsigned slotProofDepth = 0;
+  std::function<SlotChanges(uint64_t)> classSlotChanges =
+      [&](uint64_t classRoot) -> SlotChanges {
     if (auto found = slotChanges.find(classRoot); found != slotChanges.end())
       return found->second;
+    // Memoize a conservative answer while following copy sources. Cycles and
+    // excessive capture depth cannot certify a new clock schedule.
+    slotChanges[classRoot] = SlotChanges::Any;
+    if (slotProofDepth == 128)
+      return SlotChanges::Any;
+    ++slotProofDepth;
+    llvm::scope_exit restoreDepth([&] { --slotProofDepth; });
     bool quietAtZero = true;
     // Returns why the class may change twice in a later slot, or an empty
     // string.
@@ -1507,8 +1593,19 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
             continue;
           if (write.kind == schedule::ComputeEffectKind::NBA)
             return "nba writer";
-          if (!isPeriodic(write.function))
-            return "aperiodic writer";
+          if (!isPeriodic(write.function)) {
+            // A clock copied from a statically initialized source has an
+            // extra startup evaluation, so it is not a value-sequence alias.
+            // It still changes at most once per later slot when its source
+            // has that certificate, and the source is quiet during startup.
+            // Retain this copy and its original watched root.
+            auto copy = phases.getClockCopies().find(root);
+            if (copy == phases.getClockCopies().end() ||
+                copy->second.process != write.function ||
+                classSlotChanges(classes.find(copy->second.source)) !=
+                    SlotChanges::Once)
+              return "aperiodic writer";
+          }
           if (source && source != write.function)
             return "second writer";
           source = write.function;
@@ -1621,6 +1718,7 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
                                                    largestGroups.end());
   for (auto &[key, members] : groups) {
     uint64_t classRoot = key.first;
+    bool multiEvent = bool(members.front().eventSignature);
     // A member that accesses any root of its clock class could observe a
     // copy that has not run yet when the kernel starts. It stays a process of
     // its own, which the root planning below treats like any non-member.
@@ -1633,6 +1731,16 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
         aliasRoots.insert(member.clock);
         aliasRoots.insert(member.clockChain.begin(), member.clockChain.end());
       }
+      DenseSet<uint64_t> triggerRoots(aliasRoots);
+      for (const Member &member : members)
+        for (uint64_t root : member.eventRoots) {
+          uint64_t origin = classes.find(root);
+          triggerRoots.insert(root);
+          triggerRoots.insert(origin);
+          if (auto found = classMembers.find(origin);
+              found != classMembers.end())
+            triggerRoots.insert(found->second.begin(), found->second.end());
+        }
       auto isAlias = [&](uint64_t root) { return aliasRoots.contains(root); };
       // A member that only reads its own watched clock can join: in the
       // reference algorithm it runs after that copy's update event, when the
@@ -1655,8 +1763,11 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
         return true;
       };
       llvm::erase_if(members, [&](Member &member) {
-        if (llvm::any_of(member.writes, isAlias) ||
-            llvm::any_of(member.nbaWrites, isAlias))
+        auto isTrigger = [&](uint64_t root) {
+          return triggerRoots.contains(root);
+        };
+        if (llvm::any_of(member.writes, isTrigger) ||
+            llvm::any_of(member.nbaWrites, isTrigger))
           return clockAccess("write");
         if (llvm::none_of(member.reads, isAlias))
           return false;
@@ -1702,6 +1813,13 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
     for (Member &member : members) {
       clockRoots.push_back(member.clock);
       llvm::append_range(clockRoots, member.clockChain);
+      for (uint64_t root : member.eventRoots) {
+        uint64_t origin = classes.find(root);
+        clockRoots.push_back(root);
+        clockRoots.push_back(origin);
+        if (auto found = classMembers.find(origin); found != classMembers.end())
+          llvm::append_range(clockRoots, found->second);
+      }
       for (uint64_t root : member.clockChain)
         if (root != member.origin)
           netCopies.insert(root);
@@ -1713,6 +1831,9 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
     // class changes in exactly the phases of the class root. A net copy can
     // additionally update at its own time-zero evaluation (4.9.1).
     Phases kernelPhases = phases.getChangePhases(classRoot);
+    if (multiEvent)
+      for (uint64_t root : clockRoots)
+        kernelPhases = kernelPhases | phases.getChangePhases(root);
     if (!netCopies.empty()) {
       // Net copies are edge-equivalent only while each root changes at most
       // once per phase. A source that also changes at time zero can change a
@@ -1778,7 +1899,10 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
     // (4.9.1) moves it once from z to its source's value, and later updates
     // track single source changes, so a phase still sees at most one edge of
     // each direction on every root of the class.
-    bool singleClockSource = [&] {
+    // A multi-edge control can be triggered by independent Active events.
+    // Keep its complete wait and defer the kernel until those events have
+    // drained; the window proof below protects every watched input.
+    bool singleClockSource = !multiEvent && [&] {
       DenseMap<std::pair<unsigned, unsigned>, StringAttr> sources;
       for (uint64_t root : clockRoots) {
         if (phases.getCopies().count(root) || netCopies.contains(root))
@@ -1788,8 +1912,14 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
             continue;
           if (write.kind == schedule::ComputeEffectKind::NBA)
             continue;
-          if (!isPeriodic(write.function))
-            return false;
+          if (!isPeriodic(write.function)) {
+            auto copy = phases.getClockCopies().find(root);
+            if (copy == phases.getClockCopies().end() ||
+                copy->second.process != write.function ||
+                classSlotChanges(classes.find(copy->second.source)) !=
+                    SlotChanges::Once)
+              return false;
+          }
           Phases at = phases.getPhases(write.function, write.block);
           for (auto [slot, set] : {std::pair{0u, at.zero}, {1u, at.later}})
             for (unsigned bit = 0; bit != 32; ++bit)

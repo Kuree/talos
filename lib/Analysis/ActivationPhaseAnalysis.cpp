@@ -10,6 +10,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/Threading.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/Format.h"
 
 using namespace mlir;
@@ -87,15 +88,21 @@ struct ActivationPhaseAnalysis::Shared {
   /// models; every other entry may occur in any phase.
   DenseSet<StringAttr> modeledStarts;
   DenseMap<StringAttr, SmallVector<sim::SimTaskCallOp>> taskCalls;
+  /// All direct entries supplying reference formals, including fork captures.
+  /// A spawned process keeps the supplied reference; it does not turn a
+  /// caller-local counter into an arbitrary design write (9.3.2, 13.5.2).
+  DenseMap<StringAttr, SmallVector<Operation *>> formalEntries;
   mutable DenseMap<StringAttr, bool> suspendingTasks;
   mutable DenseMap<StringAttr, HandleFacts> facts;
   mutable DenseMap<std::pair<StringAttr, uint32_t>,
                    std::optional<SmallVector<uint64_t>>>
       formalRoots;
+  mutable unsigned formalDepth = 0;
 
   /// Copy processes, by name, to the destination and source they connect.
   DenseMap<StringAttr, SmallVector<std::pair<uint64_t, uint64_t>>> copies;
   ActivationPhaseAnalysis::Copies copyRoots;
+  ActivationPhaseAnalysis::ClockCopies clockCopies;
   DenseMap<Block *, BlockInfo> summaries;
 
   Shared(sim::SimDesignOp design, const HandleDataflowAnalysis &handles)
@@ -136,45 +143,77 @@ struct ActivationPhaseAnalysis::Shared {
   }
 
   const std::optional<SmallVector<uint64_t>> &
-  resolveFormal(StringAttr task, uint32_t formal) const {
-    auto [found, inserted] = formalRoots.try_emplace({task, formal});
+  resolveFormal(StringAttr function, uint32_t formal) const {
+    // The provisional unknown also terminates recursive capture/call cycles.
+    // Such a cycle needs a separate fixed-point proof; never infer locality
+    // merely because one of its entries happens to be a private slot.
+    auto [found, inserted] = formalRoots.try_emplace({function, formal});
     if (!inserted)
       return found->second;
+    if (formalDepth == 128)
+      return found->second;
+    ++formalDepth;
+    llvm::scope_exit restoreDepth([&] { --formalDepth; });
     std::optional<SmallVector<uint64_t>> result;
-    auto calls = taskCalls.find(task);
-    if (calls != taskCalls.end() && modeledStarts.contains(task)) {
+    auto entries = formalEntries.find(function);
+    if (entries != formalEntries.end() && modeledStarts.contains(function)) {
       SmallVector<uint64_t> roots;
       bool resolved = true;
-      for (sim::SimTaskCallOp call : calls->second) {
-        auto arguments = call.getArguments();
+      for (Operation *entry : entries->second) {
+        auto arguments = isa<sim::SimSpawnOp>(entry)
+                             ? cast<sim::SimSpawnOp>(entry).getOperands()
+                             : cast<sim::SimTaskCallOp>(entry).getArguments();
         if (formal >= static_cast<uint32_t>(
                           std::distance(arguments.begin(), arguments.end()))) {
           resolved = false;
           break;
         }
-        auto caller = call->getParentOfType<sim::SimFuncOp>();
+        auto caller = entry->getParentOfType<sim::SimFuncOp>();
         Value actual = *std::next(arguments.begin(), formal);
         // Caller-local storage is no design root: an output or inout formal's
         // own slot, which the caller copies to the actual on return (IEEE
         // 1800-2023 13.5.1) in a fragment of its own, or a caller's automatic
         // variable passed by ref (13.5.2).
         const HandleFacts &callerFacts = factsOf(caller);
-        if (auto fact = callerFacts.find(actual);
-            fact != callerFacts.end() &&
-            fact->second.resource == schedule::ComputeResourceKind::Local)
-          continue;
-        std::optional<uint64_t> root = rootOf(caller, actual);
-        if (!root) {
+        auto known = callerFacts.find(actual);
+        if (known == callerFacts.end()) {
           resolved = false;
           break;
         }
-        roots.push_back(*root);
+        HandleFact fact = known->second;
+        if (fact.resource == schedule::ComputeResourceKind::Local)
+          continue;
+        if (fact.descriptor) {
+          auto root = ActivationMemoryAnalysis::getRoot(fact.resource,
+                                                        *fact.descriptor);
+          if (!root) {
+            resolved = false;
+            break;
+          }
+          roots.push_back(*root);
+        } else if (fact.formal) {
+          // A nested fork may forward a reference through several captures.
+          // Join every possible actual of the outer formal, rather than
+          // treating the inner formal as an unbounded global alias.
+          auto outer = resolveFormal(caller.getSymNameAttr(), *fact.formal);
+          if (!outer) {
+            resolved = false;
+            break;
+          }
+          llvm::append_range(roots, *outer);
+        } else {
+          resolved = false;
+          break;
+        }
       }
-      if (resolved)
+      if (resolved) {
+        llvm::sort(roots);
+        roots.erase(std::unique(roots.begin(), roots.end()), roots.end());
         result = std::move(roots);
+      }
     }
-    formalRoots[{task, formal}] = result;
-    return formalRoots[{task, formal}];
+    formalRoots[{function, formal}] = result;
+    return formalRoots[{function, formal}];
   }
 
   std::optional<SmallVector<uint64_t>>
@@ -440,8 +479,11 @@ void summarize(const ActivationPhaseAnalysis::Shared &shared,
     summary.terminator = terminator;
     summary.isReturn = isa<sim::SimReturnOp>(terminator);
     summary.returns = tasked && summary.isReturn;
+    // A synchronous function has no independent scheduler activation. Its
+    // verified call-site summary carries its writes in the caller's phases,
+    // including calls made by static initialization before processes start.
     if (auto index = shared.blockIndices.find(block);
-        index != shared.blockIndices.end())
+        kind != sim::EntryKind::Function && index != shared.blockIndices.end())
       summary.hasEffects = shared.fragmentEffects.count({name, index->second});
     successors.push_back(executableSuccessors(*block));
 
@@ -557,7 +599,10 @@ matchCopy(sim::SimFuncOp function, const HandleFacts &facts) {
 void ActivationPhaseAnalysis::findCopies(Shared &facts) {
   // Every writer of every root; an unresolved write could reach any root.
   DenseMap<uint64_t, DenseSet<StringAttr>> writers;
-  for (auto &[key, effects] : facts.fragmentEffects)
+  for (auto &[key, effects] : facts.fragmentEffects) {
+    if (auto function = facts.symbols.lookup<sim::SimFuncOp>(key.first);
+        function && function.getEntryKind() == sim::EntryKind::Function)
+      continue;
     for (auto effect : effects.getAsRange<schedule::ComputeEffectAttr>()) {
       if (!isWriteEffect(effect.getEffect()) ||
           effect.getTarget() == schedule::ComputeTargetKind::Local)
@@ -569,6 +614,7 @@ void ActivationPhaseAnalysis::findCopies(Shared &facts) {
       for (uint64_t root : *roots)
         writers[root].insert(key.first);
     }
+  }
   for (sim::SimFuncOp function :
        facts.design.getBody().front().getOps<sim::SimFuncOp>()) {
     sim::EntryKind kind = function.getEntryKind();
@@ -587,8 +633,11 @@ void ActivationPhaseAnalysis::findCopies(Shared &facts) {
     bool initialized =
         facts.rootInitializer &&
         writers[source].contains(facts.rootInitializer.getSymNameAttr());
-    if (initialized || destinationWriters.size() != 1 ||
+    if (destinationWriters.size() != 1 ||
         !destinationWriters.contains(function.getSymNameAttr()))
+      continue;
+    facts.clockCopies[destination] = {source, function.getSymNameAttr()};
+    if (initialized)
       continue;
     facts.copies[function.getSymNameAttr()].push_back({destination, source});
     facts.copyRoots[destination] = {source, function.getSymNameAttr()};
@@ -631,6 +680,8 @@ ActivationPhaseAnalysis::ActivationPhaseAnalysis(
                      owner.getEntryKind() != sim::EntryKind::Function;
       if (auto call = dyn_cast<sim::SimTaskCallOp>(user))
         facts.taskCalls[name].push_back(call);
+      if (isa<sim::SimSpawnOp, sim::SimTaskCallOp>(user))
+        facts.formalEntries[name].push_back(user);
       auto [found, inserted] = starts.try_emplace(name, modeled);
       if (!inserted)
         found->second &= modeled;
@@ -731,6 +782,11 @@ ActivationPhaseAnalysis::ActivationPhaseAnalysis(
 const ActivationPhaseAnalysis::Copies &
 ActivationPhaseAnalysis::getCopies() const {
   return shared->copyRoots;
+}
+
+const ActivationPhaseAnalysis::ClockCopies &
+ActivationPhaseAnalysis::getClockCopies() const {
+  return shared->clockCopies;
 }
 
 std::optional<uint64_t>

@@ -131,6 +131,12 @@ def TalosSimFuseClockedKernelsPass
     phase can observe its stores, so same-edge readers, testbench delays and
     their `$finish` no longer keep NBAs. The driver pipeline enables it
     (`--clocked-kernels=deferred`, the default).
+
+    Matching multi-edge controls, including clock-or-asynchronous-reset
+    controls, can form deferred kernels. The complete event control and each
+    member's reset branch are retained; every watched input must be proved
+    unchanged after the kernel in its phase. Different watched roots, edge
+    polarities or time-zero behavior remain separate controls.
   }];
   let options = [
     Option<"defer", "defer", "bool", /*default=*/"false",

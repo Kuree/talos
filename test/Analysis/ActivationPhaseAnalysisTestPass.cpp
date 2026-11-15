@@ -39,10 +39,14 @@ class ActivationPhaseAnalysisTestPass
                          OperationPass<ModuleOp>> {
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ActivationPhaseAnalysisTestPass)
+  ActivationPhaseAnalysisTestPass() = default;
+  ActivationPhaseAnalysisTestPass(const ActivationPhaseAnalysisTestPass &other)
+      : PassWrapper(other) {}
   StringRef getArgument() const final { return "test-talos-activation-phases"; }
   StringRef getDescription() const final {
     return "print time-slot phases of activations and root changes";
   }
+  Option<bool> effectRoots{*this, "effect-roots", llvm::cl::init(false)};
   void runOnOperation() final {
     namespace sim = talos::sim;
     getOperation().walk([&](sim::SimDesignOp design) {
@@ -53,13 +57,34 @@ public:
       for (auto function : design.getBody().front().getOps<sim::SimFuncOp>()) {
         if (function.isExternal() ||
             function.getEntryKind() == sim::EntryKind::RootInitializer ||
-            function.getEntryKind() == sim::EntryKind::Function)
+            (!effectRoots &&
+             function.getEntryKind() == sim::EntryKind::Function))
           continue;
         llvm::errs() << "  @" << function.getSymName() << ':';
         unsigned index = 0;
         for (Block &block : function.getBody()) {
           llvm::errs() << " ^" << index++;
           printPhases(llvm::errs(), analysis.getPhases(&block));
+          if (effectRoots)
+            if (auto effects = analysis.getFragmentEffects(&block))
+              for (auto effect :
+                   effects.getAsRange<talos::schedule::ComputeEffectAttr>()) {
+                auto kind = effect.getEffect();
+                if (kind != talos::schedule::ComputeEffectKind::Write &&
+                    kind != talos::schedule::ComputeEffectKind::Drive &&
+                    kind != talos::schedule::ComputeEffectKind::NBA)
+                  continue;
+                llvm::errs() << " writes=";
+                auto roots =
+                    analysis.getEffectRoots(function.getSymNameAttr(), effect);
+                if (!roots)
+                  llvm::errs() << "unknown";
+                else if (roots->empty())
+                  llvm::errs() << "local";
+                else
+                  for (uint64_t root : *roots)
+                    llvm::errs() << 's' << root << ',';
+              }
         }
         llvm::errs() << '\n';
       }
