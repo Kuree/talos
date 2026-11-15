@@ -69,11 +69,13 @@ mlir::LogicalResult freezeRandomConstraintPriorityInputs(
     uint64_t totalWidth, mlir::Builder &builder,
     llvm::function_ref<
         mlir::FailureOr<std::optional<RandomConstraintPath>>(mlir::Operation *)>
-        getPath);
+        getPath,
+    llvm::function_ref<mlir::Operation *(mlir::Type, unsigned)>
+        getStructureField);
 
 /// Expand validated pure expression calls. Actual arguments remain constraint
 /// variables; non-argument random reads introduced by a body become state.
-/// Eligible automatic scalar calls retain their ordinary body when expansion
+/// Eligible automatic value calls retain their ordinary body when expansion
 /// is unavailable or it contains other user calls. Random argument inventories
 /// schedule native calls between independent constraint-priority stages.
 mlir::LogicalResult expandRandomConstraintFunctions(

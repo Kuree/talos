@@ -506,6 +506,7 @@ static bool isSupportedRandomConstraintExpression(Operation *op) {
       semantic::SVReplicationExpressionOp,
       semantic::SVElementSelectExpressionOp,
       semantic::SVRangeSelectExpressionOp, semantic::SVMemberAccessExpressionOp,
+      semantic::SVSimpleAssignmentPatternExpressionOp,
       semantic::SVInsideExpressionOp, semantic::SVValueRangeExpressionOp,
       semantic::SVDistExpressionOp>(op);
 }
@@ -746,6 +747,27 @@ void TalosSimPreparePass::runOnOperation() {
   }
   semantic::SVRootSymbolOp semanticRoot = validated->root;
   llvm::StringMap<Operation *> &semanticSymbols = validated->symbols;
+  llvm::DenseMap<std::pair<Type, unsigned>, Operation *> randomStructureFields;
+  bool indexedRandomStructureFields = false;
+  auto getRandomStructureField = [&](Type type, unsigned ordinal) -> Operation * {
+    if (!indexedRandomStructureFields) {
+      // Index declarations once, lazily: scalar and array-only designs do not
+      // need field references for reconstructed qualified structure actuals.
+      semanticRoot->walk([&](semantic::SVFieldSymbolOp field) {
+        auto owner = dyn_cast<semantic::SVUnpackedStructTypeOp>(
+            field->getParentOp());
+        auto index = field->getAttrOfType<IntegerAttr>("field_index");
+        if (owner && index && !index.getValue().isNegative() &&
+            index.getValue().getActiveBits() <= 32)
+          randomStructureFields.try_emplace(
+              std::make_pair(owner.getSemanticType(),
+                             static_cast<unsigned>(index.getInt())),
+              field);
+      });
+      indexedRandomStructureFields = true;
+    }
+    return randomStructureFields.lookup({type, ordinal});
+  };
   OpBuilder coveragePlanBuilder(context);
   if (failed(materializeInheritedCovergroupPlans(semanticRoot,
                                                  coveragePlanBuilder)) ||
@@ -5978,7 +6000,8 @@ void TalosSimPreparePass::runOnOperation() {
     };
     for (Operation *root : constraintRoots)
       if (failed(freezeRandomConstraintPriorityInputs(
-              root, propertyOffsets, totalWidth, builder, getPath))) {
+              root, propertyOffsets, totalWidth, builder, getPath,
+              getRandomStructureField))) {
         invalid = true;
         return true;
       }
@@ -8346,8 +8369,8 @@ void TalosSimPreparePass::runOnOperation() {
     // the shared declaration of that leaf. Runtime object-identity equations
     // still unify aliases. Keep the receiver expression intact so creation
     // validity evaluates each null dereference under the normal guard algebra.
-    auto getNestedMemberIndex =
-        [&](Operation *expression) -> std::optional<unsigned> {
+    auto getMemberSourceAndOwner = [&](Operation *expression)
+        -> std::optional<std::pair<Operation *, ArrayAttr>> {
       if (!isa<semantic::SVMemberAccessExpressionOp>(expression))
         return std::nullopt;
       auto operands = getChildren(expression);
@@ -8425,8 +8448,14 @@ void TalosSimPreparePass::runOnOperation() {
                !llvm::is_contained(hierarchy, getOwningClass(rootSource)))
         return std::nullopt;
       llvm::append_range(fields, llvm::reverse(reversedFields));
-      auto found =
-          randomValueIndices.find({leaf->second, builder.getArrayAttr(fields)});
+      return std::make_pair(leaf->second, builder.getArrayAttr(fields));
+    };
+    auto getNestedMemberIndex =
+        [&](Operation *expression) -> std::optional<unsigned> {
+      auto member = getMemberSourceAndOwner(expression);
+      if (!member)
+        return std::nullopt;
+      auto found = randomValueIndices.find(*member);
       return found != randomValueIndices.end()
                  ? std::optional<unsigned>(found->second)
                  : std::nullopt;
@@ -8438,10 +8467,11 @@ void TalosSimPreparePass::runOnOperation() {
     // An unpacked structure contributes the leaves explicitly declared rand
     // or randc, rather than one packed solver variable for the entire value.
     // Ordinary members, including nonintegral members, remain state values.
-    std::function<Operation *(Operation *, SmallVectorImpl<int64_t> &)>
-        getStructureStoragePath =
-            [&](Operation *expression,
-                SmallVectorImpl<int64_t> &path) -> Operation * {
+    std::function<Operation *(Operation *, SmallVectorImpl<int64_t> &,
+                              Operation *&)>
+        getStructureStoragePath = [&](Operation *expression,
+                                      SmallVectorImpl<int64_t> &path,
+                                      Operation *&container) -> Operation * {
       if (isa<semantic::SVMemberAccessExpressionOp>(expression)) {
         auto operands = getChildren(expression);
         auto sourceType =
@@ -8458,7 +8488,8 @@ void TalosSimPreparePass::runOnOperation() {
           if (!ordinal || ordinal.getValue().isNegative() ||
               ordinal.getValue().getActiveBits() > 31)
             return nullptr;
-          Operation *source = getStructureStoragePath(operands.front(), path);
+          Operation *source =
+              getStructureStoragePath(operands.front(), path, container);
           if (!source)
             return nullptr;
           path.push_back(ordinal.getInt());
@@ -8470,31 +8501,59 @@ void TalosSimPreparePass::runOnOperation() {
       auto symbol = reference
                         ? semanticSymbols.find(reference.getLeafReference())
                         : semanticSymbols.end();
-      return symbol != semanticSymbols.end() &&
-                     isa<semantic::SVClassPropertySymbolOp>(symbol->second)
-                 ? symbol->second
-                 : nullptr;
+      if (symbol == semanticSymbols.end() ||
+          !isa<semantic::SVClassPropertySymbolOp>(symbol->second))
+        return nullptr;
+      container = expression;
+      return symbol->second;
     };
+    llvm::DenseMap<std::tuple<Operation *, ArrayAttr, Attribute>, unsigned>
+        structureValueIndices;
+    llvm::DenseMap<std::pair<Operation *, Attribute>, unsigned>
+        staticStructureValueIndices;
+    for (auto [index, property] : llvm::enumerate(properties))
+      if (property.storagePath) {
+        structureValueIndices[{property.source,
+                               getObjectFieldPath(property.nestedObjectField,
+                                                  property.nestedObjectPath),
+                               property.storagePath}] = index;
+        if (auto source =
+                dyn_cast<semantic::SVClassPropertySymbolOp>(property.source);
+            source && source.getLifetime() ==
+                          semantic::SVVariableLifetime::Static)
+          staticStructureValueIndices.try_emplace(
+              std::make_pair(property.source, Attribute(property.storagePath)),
+              index);
+      }
     auto getStructureMemberIndex =
         [&](Operation *expression) -> std::optional<unsigned> {
       SmallVector<int64_t> path;
-      Operation *source = getStructureStoragePath(expression, path);
+      Operation *container = nullptr;
+      Operation *source = getStructureStoragePath(expression, path, container);
       if (!source || path.empty())
         return std::nullopt;
-      for (auto [index, property] : llvm::enumerate(properties)) {
-        if (property.source != source || !property.storagePath ||
-            property.storagePath.asArrayRef() != ArrayRef<int64_t>(path))
-          continue;
-        if (randomValueOwner) {
-          if (property.nestedObjectField == randomValueOwner->field &&
-              objectPathsEqual(property.nestedObjectPath,
-                               randomValueOwner->nestedObjectPath))
-            return index;
-        } else if (!property.nestedObjectField) {
-          return index;
-        }
+      Attribute storage = builder.getDenseI64ArrayAttr(path);
+      if (auto property = dyn_cast<semantic::SVClassPropertySymbolOp>(source);
+          property && property.getLifetime() ==
+                          semantic::SVVariableLifetime::Static) {
+        auto found = staticStructureValueIndices.find({source, storage});
+        return found != staticStructureValueIndices.end()
+                   ? std::optional<unsigned>(found->second)
+                   : std::nullopt;
       }
-      return std::nullopt;
+      ArrayAttr owner = randomValueOwner
+                            ? randomOwnerPaths.lookup(randomValueOwner)
+                            : rootObjectPath;
+      if (isa<semantic::SVMemberAccessExpressionOp>(container)) {
+        auto member = getMemberSourceAndOwner(container);
+        if (!member || member->first != source)
+          return std::nullopt;
+        owner = member->second;
+      }
+      auto found = structureValueIndices.find({source, owner, storage});
+      return found != structureValueIndices.end()
+                 ? std::optional<unsigned>(found->second)
+                 : std::nullopt;
     };
     auto getRandomValuePath = [&](Operation *expression)
         -> FailureOr<std::optional<RandomConstraintPath>> {
@@ -8555,7 +8614,7 @@ void TalosSimPreparePass::runOnOperation() {
       randomValueOwner = getNestedConstraintOwner(root);
       if (failed(freezeRandomConstraintPriorityInputs(
               root, randomPropertyOffsets, randomPropertyOffset, builder,
-              getRandomValuePath))) {
+              getRandomValuePath, getRandomStructureField))) {
         invalid = true;
         return true;
       }

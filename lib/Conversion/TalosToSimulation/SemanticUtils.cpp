@@ -984,6 +984,8 @@ SmallVector<SemanticDimension> getSemanticDimensions(Type type) {
 std::optional<SemanticSelectionLayout> getSemanticSelectionLayout(Type type) {
   if (auto enumeration = dyn_cast<semantic::EnumType>(type))
     type = enumeration.getBaseType();
+  if (isa<semantic::TimeType>(type))
+    return SemanticSelectionLayout{63, 0, 1};
   std::optional<uint64_t> width = getSemanticBitstreamWidth(type);
   if (!width || *width == 0 || *width > std::numeric_limits<unsigned>::max())
     return std::nullopt;

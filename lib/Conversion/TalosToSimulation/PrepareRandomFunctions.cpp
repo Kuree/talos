@@ -8,6 +8,7 @@
 #include "mlir/IR/Diagnostics.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallString.h"
 
@@ -315,7 +316,8 @@ LogicalResult freezeRandomConstraintPriorityInputs(
     uint64_t randomPropertyOffset, Builder &builder,
     llvm::function_ref<
         FailureOr<std::optional<RandomConstraintPath>>(Operation *)>
-        getRandomConstraintPath) {
+        getRandomConstraintPath,
+    llvm::function_ref<Operation *(Type, unsigned)> getStructureField) {
   unsigned orderingWidth =
       static_cast<unsigned>(std::max<uint64_t>(64, randomPropertyOffset));
   uint64_t nextCondition = 0;
@@ -341,6 +343,209 @@ LogicalResult freezeRandomConstraintPriorityInputs(
     if (track)
       sim::set<sim::metadata::RandomPriorityCondition>(
           expression, builder.getI64IntegerAttr(nextCondition++));
+  });
+  if (invalid)
+    return failure();
+
+  // A rand unpacked structure contributes separately planned qualified
+  // members. Passing its complete value must capture those accepted members
+  // alongside ordinary pre-solve state, rather than load the old container.
+  std::function<bool(Operation *)> structureStorage = [&](Operation *source) {
+    if (isa<semantic::SVNamedValueExpressionOp,
+            semantic::SVHierarchicalValueExpressionOp>(source))
+      return true;
+    if (!isa<semantic::SVMemberAccessExpressionOp>(source))
+      return false;
+    auto parts = getChildren(source);
+    if (parts.size() != 1)
+      return false;
+    auto base = parts[0]->getAttrOfType<TypeAttr>("semantic_type");
+    return (base && isa<semantic::ClassHandleType>(base.getValue())) ||
+           structureStorage(parts[0]);
+  };
+  std::function<FailureOr<Operation *>(Operation *)> projectStructure;
+  projectStructure = [&](Operation *source) -> FailureOr<Operation *> {
+    if (sim::has<sim::metadata::RandomFunctionState>(source) ||
+        !structureStorage(source))
+      return static_cast<Operation *>(nullptr);
+    auto type = source->getAttrOfType<TypeAttr>("semantic_type");
+    SmallVector<std::pair<StringAttr, Type>> fields;
+    if (auto structure =
+            type ? dyn_cast<semantic::SourceAggregateType>(type.getValue())
+                 : semantic::SourceAggregateType{}) {
+      if (structure.getIsPacked() || structure.getIsUnion())
+        return static_cast<Operation *>(nullptr);
+      if (!llvm::any_of(structure.getFields(), [](Attribute attribute) {
+            auto field = dyn_cast<DictionaryAttr>(attribute);
+            auto mode =
+                field ? field.getAs<IntegerAttr>("rand_mode") : IntegerAttr{};
+            return mode && !mode.getValue().isZero();
+          }))
+        return static_cast<Operation *>(nullptr);
+      for (Attribute attribute : structure.getFields()) {
+        auto field = dyn_cast<DictionaryAttr>(attribute);
+        auto name = field ? field.getAs<StringAttr>("name") : StringAttr{};
+        auto fieldType = field ? field.getAs<TypeAttr>("type") : TypeAttr{};
+        if (!name || !fieldType)
+          return failure();
+        fields.emplace_back(name, fieldType.getValue());
+      }
+    } else if (auto structure = type ? dyn_cast<semantic::UnpackedStructType>(
+                                           type.getValue())
+                                     : semantic::UnpackedStructType{}) {
+      for (NamedAttribute field : structure.getFields()) {
+        auto fieldType = dyn_cast<TypeAttr>(field.getValue());
+        if (!fieldType)
+          return failure();
+        fields.emplace_back(field.getName(), fieldType.getValue());
+      }
+    } else {
+      return static_cast<Operation *>(nullptr);
+    }
+    auto make = [&](StringRef name, Type resultType) {
+      OperationState state(getSemanticLocation(source), name);
+      state.addAttribute("node_id", source->getAttr("node_id"));
+      state.addAttribute("semantic_type", TypeAttr::get(resultType));
+      state.addAttribute("is_signed",
+                         builder.getBoolAttr(isSignedSemanticType(resultType)));
+      state.addRegion();
+      Operation *result = Operation::create(state);
+      result->getRegion(0).push_back(new Block());
+      return result;
+    };
+    Operation *pattern = make(
+        semantic::SVSimpleAssignmentPatternExpressionOp::getOperationName(),
+        type.getValue());
+    auto cleanup = llvm::scope_exit([&] { pattern->destroy(); });
+    bool randomMember = false;
+    StringAttr missingField;
+    Block &members = pattern->getRegion(0).front();
+    for (auto [ordinal, field] : llvm::enumerate(fields)) {
+      Operation *member =
+          make(semantic::SVMemberAccessExpressionOp::getOperationName(),
+               field.second);
+      member->setAttr("member_name", field.first);
+      member->setAttr("field_ordinal", builder.getI64IntegerAttr(ordinal));
+      member->setAttr("packed_offset", builder.getI64IntegerAttr(0));
+      // Bind before recursion: a nested reconstruction clones this read as
+      // its base, and those clones need the same real declaration reference.
+      if (Operation *declaration =
+              getStructureField(type.getValue(), ordinal)) {
+        SmallVector<StringAttr> names;
+        for (Operation *scope = declaration; scope;
+             scope = scope->getParentOp())
+          if (auto name = SymbolTable::getSymbolName(scope))
+            names.push_back(name);
+        SmallVector<FlatSymbolRefAttr> nested;
+        for (StringAttr name : llvm::reverse(ArrayRef(names).drop_back()))
+          nested.push_back(FlatSymbolRefAttr::get(name));
+        member->setAttr("referenced_symbol",
+                        SymbolRefAttr::get(names.back(), nested));
+        auto path = declaration->getAttrOfType<StringAttr>("hierarchical_name");
+        member->setAttr("referenced_path", path ? path : names.front());
+        if (auto offset = declaration->getAttr("bit_offset"))
+          member->setAttr("packed_offset", offset);
+      } else {
+        missingField = field.first;
+      }
+      member->getRegion(0).front().push_back(source->clone());
+      members.push_back(member);
+      auto path = getRandomConstraintPath(member);
+      if (failed(path))
+        return failure();
+      if (*path && !(**path).isState) {
+        randomMember = true;
+        continue;
+      }
+      auto nested = projectStructure(member);
+      if (failed(nested))
+        return failure();
+      if (*nested) {
+        members.getOperations().insert(member->getIterator(), *nested);
+        member->erase();
+        randomMember = true;
+      }
+    }
+    if (!randomMember)
+      return static_cast<Operation *>(nullptr);
+    if (missingField) {
+      emitError(getSemanticLocation(source))
+          << "constraint function structure argument requires a declaration "
+             "for member "
+          << missingField.getValue();
+      return failure();
+    }
+    cleanup.release();
+    return pattern;
+  };
+  std::function<LogicalResult(Operation *)> materializeActual;
+  std::function<LogicalResult(Operation *)> materializeSelectedBase;
+  materializeSelectedBase = [&](Operation *source) -> LogicalResult {
+    // A direct storage path selects only its requested fields. A conditional,
+    // cast or constructor first computes a complete value, whose evaluation
+    // (including ambiguous whole-structure ?: semantics) must stay intact.
+    if (isa<semantic::SVNamedValueExpressionOp,
+            semantic::SVHierarchicalValueExpressionOp,
+            semantic::SVCallExpressionOp>(source))
+      return success();
+    if (isa<semantic::SVMemberAccessExpressionOp,
+            semantic::SVElementSelectExpressionOp,
+            semantic::SVRangeSelectExpressionOp>(source)) {
+      auto parts = getChildren(source);
+      if (parts.empty() || failed(materializeSelectedBase(parts.front())))
+        return failure();
+      for (Operation *index : ArrayRef(parts).drop_front())
+        if (failed(materializeActual(index)))
+          return failure();
+      return success();
+    }
+    return materializeActual(source);
+  };
+  materializeActual = [&](Operation *source) -> LogicalResult {
+    // Its actuals were already processed; a returned value cannot denote
+    // qualified random storage. Do not speculatively clone nested calls.
+    if (isa<semantic::SVCallExpressionOp>(source))
+      return success();
+    auto projected = projectStructure(source);
+    if (failed(projected))
+      return failure();
+    if (*projected) {
+      source->getBlock()->getOperations().insert(source->getIterator(),
+                                                 *projected);
+      source->erase();
+      return success();
+    }
+    // Nested user-call arguments have already been visited by the post-order
+    // walk. Preserve a selected storage path rather than expand its siblings.
+    if (isa<semantic::SVMemberAccessExpressionOp,
+            semantic::SVElementSelectExpressionOp,
+            semantic::SVRangeSelectExpressionOp>(source)) {
+      auto parts = getChildren(source);
+      if (parts.empty() || failed(materializeSelectedBase(parts.front())))
+        return failure();
+      for (Operation *index : ArrayRef(parts).drop_front())
+        if (failed(materializeActual(index)))
+          return failure();
+      return success();
+    }
+    for (Operation *child : getChildren(source))
+      if (failed(materializeActual(child)))
+        return failure();
+    return success();
+  };
+  root->walk<WalkOrder::PostOrder>([&](semantic::SVCallExpressionOp call) {
+    if (invalid || call.getIsSystemCall())
+      return;
+    auto parts = getChildren(call);
+    if (call.getArgumentCount() > parts.size()) {
+      invalid = true;
+      return;
+    }
+    for (Operation *actual : ArrayRef(parts).take_back(call.getArgumentCount()))
+      if (failed(materializeActual(actual))) {
+        invalid = true;
+        return;
+      }
   });
   if (invalid)
     return failure();
@@ -1964,13 +2169,14 @@ private:
 } // namespace
 
 // Native function captures need no expression-tree expansion. Admit a closed
-// automatic scalar call graph only after checking every write and call,
+// automatic value call graph only after checking every write and call,
 // including in unused initializers or return values. Operations whose ERROR
 // state needs constraint-specific instrumentation retain expression lowering.
 static bool
 canExecuteNativeConstraintFunction(semantic::SVSubroutineSymbolOp entry,
                                    const llvm::StringMap<Operation *> &symbols,
-                                   bool &hasCallees, bool &hasRealValues) {
+                                   bool &hasCallees, bool &hasRealValues,
+                                   bool &hasAggregateValues) {
   llvm::SmallPtrSet<Operation *, 16> visited;
   auto resolve = [&](Operation *expression) -> Operation * {
     auto reference =
@@ -1982,11 +2188,142 @@ canExecuteNativeConstraintFunction(semantic::SVSubroutineSymbolOp entry,
                semantic::RealtimeType>(type) ||
            type.isF32() || type.isF64();
   };
-  auto scalar = [&](Operation *symbol) {
+  llvm::DenseMap<Type, bool> valueTypes;
+  std::function<bool(Type)> valueType = [&](Type type) {
+    if (auto found = valueTypes.find(type); found != valueTypes.end())
+      return found->second;
+    valueTypes[type] = false;
+    auto finish = [&](bool supported) {
+      valueTypes[type] = supported;
+      return supported;
+    };
+    if (real(type)) {
+      hasRealValues = true;
+      return finish(true);
+    }
+    if (getSemanticPackedWidth(type) || isa<semantic::TimeType>(type))
+      return finish(true);
+    hasAggregateValues = true;
+    if (auto array = dyn_cast<semantic::RangedUnpackedArrayType>(type))
+      return finish(valueType(array.getElementType()));
+    if (auto array = dyn_cast<semantic::UnpackedArrayType>(type))
+      return finish(valueType(array.getElementType()));
+    if (auto aggregate = dyn_cast<semantic::SourceAggregateType>(type)) {
+      for (Attribute attribute : aggregate.getFields()) {
+        auto field = dyn_cast<DictionaryAttr>(attribute);
+        auto fieldType = field ? field.getAs<TypeAttr>("type") : TypeAttr{};
+        if (!fieldType || (!isa<semantic::VoidType>(fieldType.getValue()) &&
+                           !valueType(fieldType.getValue())))
+          return false;
+      }
+      return finish(true);
+    }
+    DictionaryAttr fields;
+    if (auto structure = dyn_cast<semantic::UnpackedStructType>(type))
+      fields = structure.getFields();
+    if (auto unionType = dyn_cast<semantic::UnpackedUnionType>(type))
+      fields = unionType.getFields();
+    if (!fields)
+      return false;
+    for (NamedAttribute field : fields) {
+      auto fieldType = dyn_cast<TypeAttr>(field.getValue());
+      if (!fieldType || !valueType(fieldType.getValue()))
+        return false;
+    }
+    return finish(true);
+  };
+  auto valueSymbol = [&](Operation *symbol) {
     auto type = symbol->getAttrOfType<TypeAttr>("semantic_type");
-    return type &&
-           (getSemanticPackedWidth(type.getValue()).has_value() ||
-            isa<semantic::TimeType>(type.getValue()) || real(type.getValue()));
+    return type && valueType(type.getValue());
+  };
+  auto totalMember = [&](Operation *expression) {
+    auto parts = getChildren(expression);
+    if (parts.size() != 1)
+      return false;
+    auto type = parts[0]->getAttrOfType<TypeAttr>("semantic_type");
+    auto ordinal = expression->getAttrOfType<IntegerAttr>("field_ordinal");
+    if (!type || !ordinal || ordinal.getValue().isNegative() ||
+        ordinal.getValue().getActiveBits() > 32)
+      return false;
+    Type base = type.getValue();
+    if (auto aggregate = dyn_cast<semantic::SourceAggregateType>(base))
+      // Inactive tagged members require body ERROR instrumentation. Copying
+      // the complete tagged value is safe and preserves its discriminant.
+      return ordinal.getValue().getZExtValue() < aggregate.getFields().size() &&
+             (!aggregate.getIsUnion() || !aggregate.getIsTagged());
+    DictionaryAttr fields;
+    if (auto structure = dyn_cast<semantic::PackedStructType>(base))
+      fields = structure.getFields();
+    if (auto structure = dyn_cast<semantic::UnpackedStructType>(base))
+      fields = structure.getFields();
+    if (auto unionType = dyn_cast<semantic::PackedUnionType>(base))
+      fields = unionType.getFields();
+    if (auto unionType = dyn_cast<semantic::UnpackedUnionType>(base))
+      fields = unionType.getFields();
+    return fields && ordinal.getValue().getZExtValue() < fields.size();
+  };
+  auto knownIndex = [&](Operation *expression) -> std::optional<int64_t> {
+    auto spelling = getConstantSpelling(expression);
+    auto type = expression->getAttrOfType<TypeAttr>("semantic_type");
+    auto width = type ? getSemanticPackedWidth(type.getValue()) : std::nullopt;
+    if (type && isa<semantic::TimeType>(type.getValue()))
+      width = 64;
+    if (!spelling || !width || !*width || *width > UINT_MAX)
+      return std::nullopt;
+    auto parsed =
+        parseSVInteger(*spelling, *width, getSemanticLocation(expression));
+    if (failed(parsed) || !parsed->unknown.isZero())
+      return std::nullopt;
+    bool signedIndex = isSignedSemanticType(type.getValue());
+    if (signedIndex ? !parsed->value.isSignedIntN(64)
+                    : parsed->value.getActiveBits() > 63)
+      return std::nullopt;
+    return signedIndex ? parsed->value.getSExtValue()
+                       : static_cast<int64_t>(parsed->value.getZExtValue());
+  };
+  auto totalSelection = [&](Operation *expression) {
+    auto parts = getChildren(expression);
+    bool element = isa<semantic::SVElementSelectExpressionOp>(expression);
+    if (parts.size() != (element ? 2u : 3u))
+      return false;
+    auto base = parts[0]->getAttrOfType<TypeAttr>("semantic_type");
+    auto result = expression->getAttrOfType<TypeAttr>("semantic_type");
+    auto layout =
+        base ? getSemanticSelectionLayout(base.getValue()) : std::nullopt;
+    auto width =
+        result ? getSemanticBitstreamWidth(result.getValue()) : std::nullopt;
+    auto first = knownIndex(parts[1]);
+    if (!layout || !width || !first)
+      return false;
+    APInt begin(65, static_cast<uint64_t>(*first), true), end = begin;
+    if (!element) {
+      auto second = knownIndex(parts[2]);
+      if (!second)
+        return false;
+      auto kind = cast<semantic::SVRangeSelectExpressionOp>(expression)
+                      .getSelectionKind();
+      if (kind == semantic::SVRangeSelectionKind::Simple)
+        end = APInt(65, static_cast<uint64_t>(*second), true);
+      else {
+        if (*second <= 0)
+          return false;
+        APInt span(65, static_cast<uint64_t>(*second - 1));
+        if (kind == semantic::SVRangeSelectionKind::IndexedUp)
+          end += span;
+        else if (kind == semantic::SVRangeSelectionKind::IndexedDown)
+          end -= span;
+        else
+          return false;
+      }
+    }
+    APInt low(65, static_cast<uint64_t>(std::min(layout->left, layout->right)),
+              true);
+    APInt high(65, static_cast<uint64_t>(std::max(layout->left, layout->right)),
+               true);
+    APInt count = (end.sge(begin) ? end - begin : begin - end) + 1;
+    return begin.sge(low) && begin.sle(high) && end.sge(low) && end.sle(high) &&
+           count.getActiveBits() <= 32 &&
+           count.getZExtValue() * layout->elementWidth == *width;
   };
   std::function<bool(semantic::SVSubroutineSymbolOp)> validate;
   validate = [&](semantic::SVSubroutineSymbolOp function) -> bool {
@@ -2003,7 +2340,7 @@ canExecuteNativeConstraintFunction(semantic::SVSubroutineSymbolOp entry,
     auto result = function.getReturnVariableSymbol();
     Operation *returnVariable =
         result ? symbols.lookup(result->getLeafReference()) : nullptr;
-    if (!returnVariable || !scalar(returnVariable))
+    if (!returnVariable || !valueSymbol(returnVariable))
       return false;
     visited.insert(function);
     llvm::SmallPtrSet<Operation *, 16> writable;
@@ -2016,7 +2353,7 @@ canExecuteNativeConstraintFunction(semantic::SVSubroutineSymbolOp entry,
             function.getThisVariableSymbol()->getLeafReference() ==
                 local.getSymName())
           return;
-        if (!scalar(local) ||
+        if (!valueSymbol(local) ||
             local.getLifetime() != semantic::SVVariableLifetime::Automatic) {
           valid = false;
           return;
@@ -2029,7 +2366,7 @@ canExecuteNativeConstraintFunction(semantic::SVSubroutineSymbolOp entry,
         bool constRef =
             formal.getDirection() == semantic::SVArgumentDirection::Ref &&
             formal.getIsConst().value_or(false);
-        if ((!input && !constRef) || !scalar(formal))
+        if ((!input && !constRef) || !valueSymbol(formal))
           valid = false;
         if (input && !formal.getIsConst().value_or(false))
           writable.insert(formal);
@@ -2037,10 +2374,18 @@ canExecuteNativeConstraintFunction(semantic::SVSubroutineSymbolOp entry,
     });
     if (!valid)
       return false;
-    auto writableLocal = [&](Operation *expression) {
-      return isa<semantic::SVNamedValueExpressionOp>(expression) &&
-             writable.contains(resolve(expression));
-    };
+    std::function<bool(Operation *)> writableLocal =
+        [&](Operation *expression) {
+          if (isa<semantic::SVNamedValueExpressionOp>(expression))
+            return writable.contains(resolve(expression));
+          if ((isa<semantic::SVMemberAccessExpressionOp>(expression) &&
+               totalMember(expression)) ||
+              (isa<semantic::SVElementSelectExpressionOp,
+                   semantic::SVRangeSelectExpressionOp>(expression) &&
+               totalSelection(expression)))
+            return writableLocal(getChildren(expression).front());
+          return false;
+        };
     auto checked = function->walk([&](Operation *node) -> WalkResult {
       SmallVector<Operation *> children = getChildren(node);
       if (auto assignment =
@@ -2068,13 +2413,16 @@ canExecuteNativeConstraintFunction(semantic::SVSubroutineSymbolOp entry,
           return WalkResult::interrupt();
       }
       if (isa<semantic::SVElementSelectExpressionOp,
-              semantic::SVRangeSelectExpressionOp,
-              semantic::SVNewClassExpressionOp,
+              semantic::SVRangeSelectExpressionOp>(node) &&
+          !totalSelection(node))
+        return WalkResult::interrupt();
+      if (isa<semantic::SVNewClassExpressionOp,
               semantic::SVCopyClassExpressionOp,
               semantic::SVNewArrayExpressionOp,
               semantic::SVNewCovergroupExpressionOp>(node))
         return WalkResult::interrupt();
-      if (isa<semantic::SVMemberAccessExpressionOp>(node)) {
+      if (isa<semantic::SVMemberAccessExpressionOp>(node) &&
+          !totalMember(node)) {
         // Only a method's own non-null receiver can be read without carrying
         // a nullable address's ERROR state back to constraint creation.
         Operation *base =
@@ -2327,9 +2675,11 @@ LogicalResult expandRandomConstraintFunctions(
       auto inputs = sim::get<sim::metadata::RandomGuardInputs>(source);
       bool hasCallees = false;
       bool hasRealValues = false;
+      bool hasAggregateValues = false;
       if (!functionBody && inputs &&
           canExecuteNativeConstraintFunction(*function, semanticSymbols,
-                                             hasCallees, hasRealValues)) {
+                                             hasCallees, hasRealValues,
+                                             hasAggregateValues)) {
         // Keep inexpensive integral leaves and proved bounded bodies available
         // for folding. A failed trial consumes neither the shared expansion
         // budget nor a diagnostic: the validated native body is the fallback.
@@ -2338,7 +2688,7 @@ LogicalResult expandRandomConstraintFunctions(
         // IEEE real operations round inside the function after its arguments
         // become state. Keep even inexpensive real bodies opaque rather than
         // asking the relation compiler to encode their floating-point graph.
-        if (!hasCallees && !hasRealValues) {
+        if (!hasCallees && !hasRealValues && !hasAggregateValues) {
           // A native fallback makes a large speculative expansion unnecessary.
           // Keep the folding trial cheap even for exponentially reused locals.
           uint64_t allowance = budget.available();

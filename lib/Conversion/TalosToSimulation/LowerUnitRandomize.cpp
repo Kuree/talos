@@ -6886,6 +6886,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
       // Capture each address operand once. Runtime reads of a null member or
       // an invalid element occur only on the valid edge; the other edge carries
       // a typed dummy and ERROR, allowing the guard algebra to sift it safely.
+      Value readEnabled;
       auto requireSafeRead = [&](Value condition) {
         valid = guardAnd(valid, condition);
         errors = guardAnd(errors, condition);
@@ -6914,9 +6915,14 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
               expression->getAttrOfType<IntegerAttr>("field_ordinal");
           if (!ordinal || ordinal.getValue().getActiveBits() > 32)
             return failure();
-          requireSafeRead(sim::SimUnionIsActiveOp::create(
+          // An opaque function's deferred dummy has no meaningful tag until
+          // its arguments become state. Keep the consumer RANDOM meanwhile,
+          // including when it is an enclosing constraint guard.
+          Value active = sim::SimUnionIsActiveOp::create(
               builder, location, builder.getI1Type(), values.front().value,
-              ordinal.getValue().getZExtValue()));
+              ordinal.getValue().getZExtValue());
+          readEnabled = guardNot(values.front().random);
+          requireSafeRead(guardOr(values.front().random, active));
         }
       }
       if (isa<semantic::SVElementSelectExpressionOp>(expression) &&
@@ -7211,7 +7217,9 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         setCurrent(done);
         return result;
       };
-      Value evaluate = errors;
+      // Deferred tagged data is semantically RANDOM, but reading an inactive
+      // dummy member would still trigger the ordinary runtime access guard.
+      Value evaluate = readEnabled ? guardAnd(errors, readEnabled) : errors;
       if (sim::has<sim::metadata::RandomNativeFunction>(expression))
         for (Operation *child = expression, *parent = child->getParentOp();
              parent && parent != op.getOperation();
