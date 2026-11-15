@@ -2777,12 +2777,14 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     bool functionPriority = false;
     Operation *source = nullptr;
     uint32_t origin = 0;
+    unsigned beforePath = UINT_MAX, afterPath = UINT_MAX;
 
     bool operator==(const SolveBeforeEdge &other) const {
       return beforeMask == other.beforeMask && afterMask == other.afterMask &&
              constraintBlock == other.constraintBlock &&
              functionPriority == other.functionPriority &&
-             source == other.source;
+             source == other.source && beforePath == other.beforePath &&
+             afterPath == other.afterPath;
     }
   };
   SmallVector<APInt> propertyMasks;
@@ -2794,12 +2796,14 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     solvePropertyOffset += property.width;
   }
   SmallVector<SolveBeforeEdge> solveBeforeEdges;
-  llvm::DenseSet<std::tuple<APInt, APInt, uint32_t, uint8_t, Operation *>>
+  llvm::DenseSet<std::tuple<APInt, APInt, uint32_t, uint8_t, Operation *,
+                            unsigned, unsigned>>
       solveBeforeEdgeKeys;
   auto appendSolveBeforeEdge = [&](const SolveBeforeEdge &edge) {
     if (solveBeforeEdgeKeys
             .insert({edge.beforeMask, edge.afterMask, edge.constraintBlock,
-                     static_cast<uint8_t>(edge.functionPriority), edge.source})
+                     static_cast<uint8_t>(edge.functionPriority), edge.source,
+                     edge.beforePath, edge.afterPath})
             .second)
       solveBeforeEdges.push_back(edge);
   };
@@ -2852,6 +2856,26 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     }
     return propertyMasks[index];
   };
+  struct PriorityPath {
+    APInt mask;
+    bool argument;
+    unsigned context;
+    bool local = true;
+  };
+  struct PriorityContext {
+    unsigned parent;
+    Operation *condition;
+    bool positive;
+  };
+  SmallVector<PriorityContext> priorityContexts{{0, nullptr, true}};
+  llvm::DenseMap<Operation *, SmallVector<PriorityPath>> priorityPaths;
+  auto hasConditionalPaths = [&](const SolveBeforeEdge &edge) {
+    if (edge.beforePath == UINT_MAX)
+      return false;
+    const auto &paths = priorityPaths.find(edge.source)->second;
+    return paths[edge.beforePath].context != 0 ||
+           paths[edge.afterPath].context != 0;
+  };
   for (auto [index, root] : llvm::enumerate(children)) {
     if (isReceiverChild(index))
       continue;
@@ -2866,17 +2890,108 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
       }
       solveConstraintBlock = static_cast<uint32_t>(value.getZExtValue());
     }
+    SmallVector<Operation *> sources;
+    root->walk([&](Operation *node) {
+      if (isa<semantic::SVExpressionConstraintOp,
+              semantic::SVUniquenessConstraintOp,
+              semantic::SVDisableSoftConstraintOp>(node))
+        sources.push_back(node);
+    });
+    SmallVector<unsigned> contextMap{0};
+    if (auto contexts = sim::get<sim::metadata::RandomPriorityContexts>(root)) {
+      llvm::DenseMap<uint64_t, std::pair<Operation *, unsigned>> conditions;
+      root->walk([&](Operation *expression) {
+        auto id = sim::get<sim::metadata::RandomPriorityCondition>(expression);
+        if (!id || id.getValue().isNegative() ||
+            id.getValue().getActiveBits() > 64)
+          return;
+        auto parts = getChildren(expression);
+        if (isa<semantic::SVConditionalExpressionOp>(expression) &&
+            parts.size() == 3)
+          // Retained actual evaluation inputs precede expanded copies.
+          conditions.try_emplace(id.getValue().getZExtValue(), parts.front(),
+                                 0);
+        else if (auto binary =
+                     dyn_cast<semantic::SVBinaryExpressionOp>(expression);
+                 binary && parts.size() == 2 &&
+                 (binary.getOperatorKind() ==
+                      semantic::SVBinaryOperator::LogicalAnd ||
+                  binary.getOperatorKind() ==
+                      semantic::SVBinaryOperator::LogicalOr))
+          conditions.try_emplace(id.getValue().getZExtValue(), expression, 1);
+      });
+      for (Attribute attribute : contexts) {
+        auto record = dyn_cast<DictionaryAttr>(attribute);
+        auto parent =
+            record ? record.getAs<IntegerAttr>("parent") : IntegerAttr{};
+        auto condition =
+            record ? record.getAs<IntegerAttr>("condition") : IntegerAttr{};
+        auto positive =
+            record ? record.getAs<BoolAttr>("positive") : BoolAttr{};
+        auto kind = record ? record.getAs<IntegerAttr>("kind") : IntegerAttr{};
+        if (!parent || !condition || !positive ||
+            (record.size() != 3 && record.size() != 4) ||
+            (record.size() == 4 && (!kind || kind.getValue().isNegative() ||
+                                    kind.getValue().getActiveBits() > 1)) ||
+            parent.getValue().isNegative() ||
+            parent.getValue().getActiveBits() > 64 ||
+            parent.getValue().getZExtValue() >= contextMap.size() ||
+            condition.getValue().isNegative() ||
+            condition.getValue().getActiveBits() > 64 ||
+            !conditions.contains(condition.getValue().getZExtValue())) {
+          emitError(getSemanticLocation(root))
+              << "constraint function branch context metadata is malformed";
+          return failure();
+        }
+        auto selected = conditions.lookup(condition.getValue().getZExtValue());
+        if (selected.second != (kind ? kind.getInt() : 0)) {
+          emitError(getSemanticLocation(root))
+              << "constraint function branch context kind is inconsistent";
+          return failure();
+        }
+        contextMap.push_back(priorityContexts.size());
+        priorityContexts.push_back(
+            {contextMap[parent.getValue().getZExtValue()], selected.first,
+             positive.getValue()});
+      }
+    }
+    for (Operation *source : sources)
+      if (auto paths = sim::get<sim::metadata::RandomPriorityPaths>(source)) {
+        auto &decoded = priorityPaths[source];
+        for (Attribute attribute : paths) {
+          auto record = dyn_cast<DictionaryAttr>(attribute);
+          auto mask =
+              record ? record.getAs<IntegerAttr>("mask") : IntegerAttr{};
+          auto argument =
+              record ? record.getAs<BoolAttr>("argument") : BoolAttr{};
+          auto context =
+              record ? record.getAs<IntegerAttr>("context") : IntegerAttr{};
+          auto local = record ? record.getAs<BoolAttr>("local") : BoolAttr{};
+          if (!mask || !argument || !context ||
+              (record.size() != 3 && record.size() != 4) ||
+              (record.size() == 4 && !local) ||
+              mask.getValue().getActiveBits() > assignmentWidth ||
+              !(mask.getValue().zextOrTrunc(assignmentWidth) &
+                ~randomAssignmentMask)
+                   .isZero() ||
+              context.getValue().isNegative() ||
+              context.getValue().getActiveBits() > 64 ||
+              context.getValue().getZExtValue() >= contextMap.size()) {
+            emitError(getSemanticLocation(source))
+                << "constraint function path inventory metadata is malformed";
+            return failure();
+          }
+          decoded.push_back({mask.getValue().zextOrTrunc(assignmentWidth),
+                             argument.getValue(),
+                             contextMap[context.getValue().getZExtValue()],
+                             local ? local.getValue() : true});
+        }
+      }
     if (Attribute order = sim::get<sim::metadata::RandomFunctionOrder>(root)) {
       hasSolveBefore = true;
       hasFunctionPriority = true;
-      SmallVector<Operation *> sources;
-      root->walk([&](Operation *node) {
-        if (isa<semantic::SVExpressionConstraintOp,
-                semantic::SVUniquenessConstraintOp,
-                semantic::SVDisableSoftConstraintOp>(node))
-          sources.push_back(node);
-      });
       SmallVector<Operation *> edgeSources;
+      SmallVector<std::pair<unsigned, unsigned>> edgePaths;
       SmallVector<APInt> pairs;
       if (auto dense = dyn_cast<DenseI64ArrayAttr>(order)) {
         for (int64_t value : dense.asArrayRef())
@@ -2887,7 +3002,8 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
             auto before = record.getAs<IntegerAttr>("before");
             auto after = record.getAs<IntegerAttr>("after");
             auto source = record.getAs<IntegerAttr>("source");
-            if (!before || !after || !source || record.size() != 3 ||
+            if (!before || !after || !source ||
+                (record.size() != 3 && record.size() != 5) ||
                 before.getValue().getActiveBits() > assignmentWidth ||
                 after.getValue().getActiveBits() > assignmentWidth ||
                 source.getValue().isNegative() ||
@@ -2901,7 +3017,39 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
             }
             pairs.push_back(before.getValue().zextOrTrunc(assignmentWidth));
             pairs.push_back(after.getValue().zextOrTrunc(assignmentWidth));
-            edgeSources.push_back(sources[source.getValue().getZExtValue()]);
+            Operation *sourceOp = sources[source.getValue().getZExtValue()];
+            edgeSources.push_back(sourceOp);
+            unsigned beforeIndex = UINT_MAX, afterIndex = UINT_MAX;
+            if (record.size() == 5) {
+              auto beforePath = record.getAs<IntegerAttr>("before_path");
+              auto afterPath = record.getAs<IntegerAttr>("after_path");
+              auto found = priorityPaths.find(sourceOp);
+              if (!beforePath || !afterPath || found == priorityPaths.end() ||
+                  beforePath.getValue().isNegative() ||
+                  afterPath.getValue().isNegative() ||
+                  beforePath.getValue().getActiveBits() > 32 ||
+                  afterPath.getValue().getActiveBits() > 32 ||
+                  beforePath.getValue().getZExtValue() >=
+                      found->second.size() ||
+                  afterPath.getValue().getZExtValue() >= found->second.size()) {
+                emitError(getSemanticLocation(root))
+                    << "constraint function ordering path metadata is "
+                       "malformed";
+                return failure();
+              }
+              beforeIndex = beforePath.getValue().getZExtValue();
+              afterIndex = afterPath.getValue().getZExtValue();
+              const auto &paths = found->second;
+              if (!paths[beforeIndex].argument || paths[afterIndex].argument ||
+                  paths[beforeIndex].mask != pairs[pairs.size() - 2] ||
+                  paths[afterIndex].mask != pairs.back()) {
+                emitError(getSemanticLocation(root))
+                    << "constraint function ordering path roles are "
+                       "inconsistent";
+                return failure();
+              }
+            }
+            edgePaths.emplace_back(beforeIndex, afterIndex);
             continue;
           }
           if (!edgeSources.empty()) {
@@ -2945,6 +3093,10 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         SolveBeforeEdge edge{beforeMask, afterMask, solveConstraintBlock, true,
                              edgeSources.empty() ? nullptr
                                                  : edgeSources[pair / 2]};
+        if (!edgePaths.empty()) {
+          edge.beforePath = edgePaths[pair / 2].first;
+          edge.afterPath = edgePaths[pair / 2].second;
+        }
         appendSolveBeforeEdge(edge);
       }
     }
@@ -3159,7 +3311,8 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
       SmallVector<SolveBeforeEdge> alwaysActiveEdges;
       llvm::MapVector<uint32_t, SmallVector<SolveBeforeEdge>> blockEdges;
       for (const SolveBeforeEdge &edge : solveBeforeEdges) {
-        if (edge.functionPriority && guardedSources.contains(edge.source))
+        if (edge.functionPriority &&
+            (guardedSources.contains(edge.source) || hasConditionalPaths(edge)))
           continue;
         if (edge.constraintBlock == TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1 ||
             ((fixedModes >> edge.constraintBlock) & 1) != 0)
@@ -6129,6 +6282,57 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     auto cast = object.getDefiningOp<sim::SimClassCastOp>();
     object = cast ? cast.getObject() : Value{};
   }
+  llvm::DenseMap<Operation *, Value> argumentInputMasks;
+  std::function<FailureOr<Value>(Operation *)> liveArgumentInputs;
+  liveArgumentInputs = [&](Operation *source) -> FailureOr<Value> {
+    if (auto found = argumentInputMasks.find(source);
+        found != argumentInputMasks.end())
+      return found->second;
+    Value mask = constantAssignment64(0);
+    if (sim::has<sim::metadata::RandomFunctionState>(source)) {
+      argumentInputMasks[source] = mask;
+      return mask;
+    }
+    auto parts = getChildren(source);
+    if (auto conditional =
+            dyn_cast<semantic::SVConditionalExpressionOp>(source);
+        conditional && conditional.getConditionCount() == 1 &&
+        conditional.getConditionPatternFlags().size() == 1 &&
+        conditional.getConditionPatternFlags().front() == 0 &&
+        parts.size() == 3) {
+      auto condition = safeConstraintValue(parts.front());
+      auto yes = liveArgumentInputs(parts[1]);
+      auto no = liveArgumentInputs(parts[2]);
+      if (failed(condition) || failed(yes) || failed(no))
+        return failure();
+      auto falseGuard = stateGuard(*condition, false);
+      auto trueGuard = stateGuard(*condition, true);
+      if (failed(falseGuard) || failed(trueGuard))
+        return failure();
+      mask = unionGuardInputs(
+          condition->inputs,
+          unionGuardInputs(selectGuardInputs(guardNot(*falseGuard), *yes),
+                           selectGuardInputs(guardNot(*trueGuard), *no)));
+    } else if (sim::has<sim::metadata::RandomVariable>(source) ||
+               sim::has<sim::metadata::RandomVariableBitOffset>(source)) {
+      mask = constantAssignment(sourceReferences(source));
+    } else {
+      if (auto call = dyn_cast<semantic::SVCallExpressionOp>(source);
+          call && !call.getIsSystemCall()) {
+        if (call.getArgumentCount() > parts.size())
+          return failure();
+        parts.erase(parts.begin(), parts.end() - call.getArgumentCount());
+      }
+      for (Operation *part : parts) {
+        auto inputs = liveArgumentInputs(part);
+        if (failed(inputs))
+          return failure();
+        mask = unionGuardInputs(mask, *inputs);
+      }
+    }
+    argumentInputMasks[source] = mask;
+    return mask;
+  };
   safeConstraintValue =
       [&](Operation *expression) -> FailureOr<SafeConstraintValue> {
     // Every recursive evaluation appends straight-line values and guarded
@@ -6167,8 +6371,16 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
       // Argument addresses and data are evaluated only after their random
       // inputs have been accepted. In particular, an old out-of-range index
       // must not reject an argument stage that has not chosen that index yet.
-      Value inputs = constantAssignment(priorityInputs(expression));
-      Value arguments = constantAssignment(sourceFunctionArguments(expression));
+      auto argumentMask = liveArgumentInputs(expression);
+      if (failed(argumentMask))
+        return failure();
+      Value inputs = *argumentMask;
+      Value arguments = *argumentMask;
+      APInt constantArguments;
+      bool dynamicInputs =
+          !matchPattern(arguments, m_ConstantInt(&constantArguments)) ||
+          constantArguments.zextOrTrunc(assignmentWidth) !=
+              sourceFunctionArguments(expression);
       Value unresolved =
           arith::AndIOp::create(builder, location, nativeRemaining, arguments);
       Value ready =
@@ -6197,12 +6409,14 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         auto savedRawState = std::move(safeRawStateValues);
         auto savedArithmetic = std::move(safeArithmeticValues);
         auto savedRawArithmetic = std::move(safeRawArithmeticValues);
+        auto savedInputMasks = std::move(argumentInputMasks);
         evaluatingNativeCalls.insert(expression);
         auto restore = llvm::scope_exit([&] {
           safeStateValues = std::move(savedState);
           safeRawStateValues = std::move(savedRawState);
           safeArithmeticValues = std::move(savedArithmetic);
           safeRawArithmeticValues = std::move(savedRawArithmetic);
+          argumentInputMasks = std::move(savedInputMasks);
           evaluatingNativeCalls.erase(expression);
         });
         evaluated = safeConstraintValue(expression);
@@ -6228,7 +6442,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
                                inputs,
                                arguments,
                                errors,
-                               false};
+                               dynamicInputs};
       if (stateKey && freezeSafeStateValues) {
         safeStateValues[stateKey] = safe;
         safeRawStateValues[stateKey] = safe;
@@ -6473,6 +6687,27 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
       guardArguments = unionGuardInputs(constantAssignment(remainingArguments),
                                         selectedArguments);
     }
+    if (auto count =
+            sim::get<sim::metadata::RandomEvaluationInputs>(expression);
+        count && sim::has<sim::metadata::RandomGuardInputs>(expression)) {
+      if (count.getValue().isNegative() ||
+          count.getValue().getActiveBits() > 64 ||
+          count.getValue().getZExtValue() + 1 != inputs.size())
+        return failure();
+      guardInputs = constantAssignment64(0);
+      for (Operation *actual :
+           ArrayRef(inputs).take_front(count.getValue().getZExtValue())) {
+        auto mask = liveArgumentInputs(actual);
+        if (failed(mask))
+          return failure();
+        guardInputs = unionGuardInputs(guardInputs, *mask);
+      }
+      guardArguments = guardInputs;
+      APInt sourceMask;
+      dynamicInputs |= !matchPattern(guardInputs, m_ConstantInt(&sourceMask)) ||
+                       sourceMask.zextOrTrunc(assignmentWidth) !=
+                           sourceFunctionArguments(expression);
+    }
     Value random =
         matchPattern(guardInputs, m_Zero())
             ? guardConstant(false)
@@ -6493,8 +6728,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         conditional && conditional.getConditionCount() == 1 &&
         conditional.getConditionPatternFlags().size() == 1 &&
         conditional.getConditionPatternFlags().front() == 0 &&
-        !values.empty() &&
-        sim::getPackedScalarType(values[0].value.getType())) {
+        !values.empty()) {
       if (values.size() != 3)
         return failure();
       if (sim::has<sim::metadata::RandomFunctionConditional>(expression) &&
@@ -6938,7 +7172,15 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
                                                       disabled, constant64(0)));
           }
           bool implication = isa<semantic::SVImplicationConstraintOp>(parent);
-          if (!implication && !isa<semantic::SVConditionalConstraintOp>(parent))
+          auto conditional =
+              dyn_cast<semantic::SVConditionalExpressionOp>(parent);
+          bool expressionBranch =
+              conditional && conditional.getConditionCount() == 1 &&
+              conditional.getConditionPatternFlags().size() == 1 &&
+              conditional.getConditionPatternFlags().front() == 0;
+          if (!implication &&
+              !isa<semantic::SVConditionalConstraintOp>(parent) &&
+              !expressionBranch)
             continue;
           SmallVector<Operation *> parts = getChildren(parent);
           if (parts.empty() || child == parts.front())
@@ -6951,7 +7193,9 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
           if (failed(eliminated))
             return failure();
           evaluate =
-              guardAnd(evaluate, guardAnd(guard->valid, guardNot(*eliminated)));
+              guardAnd(evaluate,
+                       guardAnd(expressionBranch ? guard->errors : guard->valid,
+                                guardNot(*eliminated)));
         }
       if (matchPattern(evaluate, m_One())) {
         FailureOr<Value> lowered = lowerEvaluatedExpression();
@@ -7137,37 +7381,142 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     }
     return valid;
   };
-  auto liveFunctionArguments = [&](Operation *source) -> FailureOr<Value> {
-    Value arguments = constantAssignment64(0);
-    auto result = source->walk([&](Operation *node) -> WalkResult {
-      auto inputs = sim::get<sim::metadata::RandomGuardInputs>(node);
-      if (!inputs || inputs.getValue().isZero())
-        return WalkResult::advance();
-      Value enabled = guardConstant(true);
-      for (Operation *child = node, *parent = child->getParentOp();
-           parent && parent != op.getOperation();
-           child = parent, parent = parent->getParentOp()) {
+  SmallVector<Value> priorityContextValues(priorityContexts.size());
+  priorityContextValues[0] = guardConstant(true);
+  llvm::DenseMap<Operation *, SafeConstraintValue> priorityConditionValues;
+  auto contextEnabled = [&](unsigned context) -> FailureOr<Value> {
+    SmallVector<unsigned> pending;
+    for (unsigned index = context; !priorityContextValues[index];
+         index = priorityContexts[index].parent)
+      pending.push_back(index);
+    for (unsigned index : llvm::reverse(pending)) {
+      const PriorityContext &entry = priorityContexts[index];
+      auto found = priorityConditionValues.find(entry.condition);
+      if (found == priorityConditionValues.end()) {
+        auto condition = safeConstraintValue(entry.condition);
+        if (failed(condition))
+          return failure();
+        found = priorityConditionValues.try_emplace(entry.condition, *condition)
+                    .first;
+      }
+      auto eliminated = stateGuard(found->second, !entry.positive);
+      if (failed(eliminated))
+        return failure();
+      priorityContextValues[index] =
+          guardAnd(priorityContextValues[entry.parent],
+                   guardAnd(found->second.errors, guardNot(*eliminated)));
+    }
+    return priorityContextValues[context];
+  };
+  struct LivePriorityInput {
+    Value references, arguments;
+  };
+  llvm::DenseMap<Operation *, LivePriorityInput> livePriorityInventories;
+  auto livePriorityInventory =
+      [&](Operation *source) -> FailureOr<LivePriorityInput> {
+    if (auto found = livePriorityInventories.find(source);
+        found != livePriorityInventories.end())
+      return found->second;
+    LivePriorityInput input{constantAssignment64(0), constantAssignment64(0)};
+    if (auto found = priorityPaths.find(source); found != priorityPaths.end()) {
+      for (const PriorityPath &path : found->second) {
+        if (!path.local)
+          continue;
+        auto enabled = contextEnabled(path.context);
+        if (failed(enabled))
+          return failure();
+        Value mask = selectGuardInputs(*enabled, constantAssignment(path.mask));
+        input.references = unionGuardInputs(input.references, mask);
+        if (path.argument)
+          input.arguments = unionGuardInputs(input.arguments, mask);
+      }
+    } else {
+      input.references = constantAssignment(sourceReferences(source));
+      input.arguments = constantAssignment(sourceFunctionArguments(source));
+    }
+    livePriorityInventories[source] = input;
+    return input;
+  };
+  struct PriorityGuards {
+    LivePriorityInput input;
+    Value enabled;
+    Value modesEnabled;
+    uint32_t block = TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1;
+  };
+  llvm::DenseMap<Operation *, PriorityGuards> priorityGuardInventories;
+  auto applyPriorityGuards = [&](Operation *source, LivePriorityInput input,
+                                 bool includeModes =
+                                     false) -> FailureOr<LivePriorityInput> {
+    auto found = priorityGuardInventories.find(source);
+    if (found == priorityGuardInventories.end()) {
+      PriorityGuards guards{{constantAssignment64(0), constantAssignment64(0)},
+                            guardConstant(true),
+                            Value{}};
+      for (Operation *node = source; node && node != op->getParentOp();
+           node = node->getParentOp()) {
+        if (auto block = sim::get<sim::metadata::RandomConstraintBlock>(node)) {
+          if (block.getValue().isNegative() ||
+              block.getValue().getActiveBits() > 6)
+            return failure();
+          guards.block = block.getValue().getZExtValue();
+        }
+        Operation *parent = node->getParentOp();
+        if (!parent || parent == op->getParentOp())
+          continue;
         bool implication = isa<semantic::SVImplicationConstraintOp>(parent);
         if (!implication && !isa<semantic::SVConditionalConstraintOp>(parent))
           continue;
         auto parts = getChildren(parent);
-        if (parts.empty() || child == parts.front())
+        if (parts.empty() || node == parts.front())
           continue;
         auto guard = safeConstraintValue(parts.front());
         if (failed(guard))
-          return WalkResult::interrupt();
-        auto eliminated =
-            stateGuard(*guard, !(implication || child == parts[1]));
+          return failure();
+        bool positive = implication || node == parts[1];
+        auto eliminated = stateGuard(*guard, !positive);
         if (failed(eliminated))
-          return WalkResult::interrupt();
-        enabled =
-            guardAnd(enabled, guardAnd(guard->valid, guardNot(*eliminated)));
+          return failure();
+        guards.enabled = guardAnd(
+            guards.enabled, guardAnd(guard->valid, guardNot(*eliminated)));
+        guards.input.references =
+            unionGuardInputs(guards.input.references, guard->inputs);
+        guards.input.arguments =
+            unionGuardInputs(guards.input.arguments, guard->arguments);
       }
-      arguments = unionGuardInputs(
-          arguments,
-          selectGuardInputs(
-              enabled, constantAssignment(
-                           inputs.getValue().zextOrTrunc(assignmentWidth))));
+      found = priorityGuardInventories.try_emplace(source, guards).first;
+    }
+    PriorityGuards &guards = found->second;
+    Value enabled = guards.enabled;
+    if (includeModes &&
+        guards.block != TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1) {
+      if (!guards.modesEnabled) {
+        Value disabled =
+            arith::AndIOp::create(builder, location, relevantConstraintMode,
+                                  constant64(uint64_t{1} << guards.block));
+        guards.modesEnabled =
+            arith::CmpIOp::create(builder, location, arith::CmpIPredicate::eq,
+                                  disabled, constant64(0));
+      }
+      enabled = guardAnd(enabled, guards.modesEnabled);
+    }
+    input.references = selectGuardInputs(
+        enabled, unionGuardInputs(input.references, guards.input.references));
+    input.arguments = selectGuardInputs(
+        enabled, unionGuardInputs(input.arguments, guards.input.arguments));
+    return input;
+  };
+  auto liveFunctionArguments = [&](Operation *source) -> FailureOr<Value> {
+    Value arguments = constantAssignment64(0);
+    auto result = source->walk([&](Operation *node) -> WalkResult {
+      if (!priorityPaths.contains(node))
+        return WalkResult::advance();
+      auto input = livePriorityInventory(node);
+      if (failed(input))
+        return WalkResult::interrupt();
+      input = applyPriorityGuards(node, *input);
+      if (failed(input))
+        return WalkResult::interrupt();
+      arguments = unionGuardInputs(arguments, input->arguments);
       return WalkResult::advance();
     });
     return result.wasInterrupted() ? FailureOr<Value>(failure())
@@ -7181,42 +7530,31 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
   bool hasDynamicGuardInputs = false;
   auto recordPriorityInputs =
       [&](APInt inputs, APInt arguments, Operation *source = nullptr,
-          Value liveArguments = Value{}) -> LogicalResult {
+          Value liveArguments = Value{}, Value extraReferences = Value{},
+          Value extraArguments = Value{}) -> LogicalResult {
     if (hasFunctionPriority) {
       uint32_t maskCapture = 0;
       if (source) {
-        Value mask = constantAssignment(sourceReferences(source));
-        Value argumentMask =
-            liveArguments ? liveArguments
-                          : constantAssignment(sourceFunctionArguments(source));
-        Value enabled = guardConstant(true);
-        for (Operation *child = source, *parent = child->getParentOp();
-             parent && parent != op->getParentOp();
-             child = parent, parent = parent->getParentOp()) {
-          bool implication = isa<semantic::SVImplicationConstraintOp>(parent);
-          if (!implication && !isa<semantic::SVConditionalConstraintOp>(parent))
-            continue;
-          SmallVector<Operation *> parts = getChildren(parent);
-          FailureOr<SafeConstraintValue> guard =
-              safeConstraintValue(parts.front());
-          if (failed(guard))
-            return failure();
-          bool positive = implication || child == parts[1];
-          FailureOr<Value> eliminated = stateGuard(*guard, !positive);
-          if (failed(eliminated))
-            return failure();
-          enabled =
-              guardAnd(enabled, guardAnd(guard->valid, guardNot(*eliminated)));
-          mask = unionGuardInputs(mask, guard->inputs);
-          argumentMask = unionGuardInputs(argumentMask, guard->arguments);
-        }
-        mask = unionGuardInputs(
-            mask, constantAssignment(inputs & ~priorityInputs(source)));
-        mask = selectGuardInputs(enabled, mask);
-        argumentMask = unionGuardInputs(
-            argumentMask,
-            constantAssignment(arguments & ~priorityArguments(source)));
-        argumentMask = selectGuardInputs(enabled, argumentMask);
+        auto live = livePriorityInventory(source);
+        if (failed(live))
+          return failure();
+        if (liveArguments)
+          live->arguments = liveArguments;
+        live->references = unionGuardInputs(
+            live->references,
+            extraReferences
+                ? extraReferences
+                : constantAssignment(inputs & ~priorityInputs(source)));
+        live->arguments = unionGuardInputs(
+            live->arguments,
+            extraArguments
+                ? extraArguments
+                : constantAssignment(arguments & ~priorityArguments(source)));
+        live = applyPriorityGuards(source, *live);
+        if (failed(live))
+          return failure();
+        Value mask = live->references;
+        Value argumentMask = live->arguments;
         APInt constant, constantArguments;
         if (!matchPattern(mask, m_ConstantInt(&constant)) ||
             constant.zextOrTrunc(assignmentWidth) != inputs ||
@@ -7495,12 +7833,23 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
                     softPriorities.lookup(soft));
         APInt inputs = priorityInputs(soft);
         APInt arguments = priorityArguments(soft);
+        Value extraReferences = constantAssignment64(0);
+        Value extraArguments = constantAssignment64(0);
         for (const SoftDisabler &disabler : softDisablers.lookup(soft)) {
           inputs |= priorityInputs(disabler.declaration->source);
           arguments |= priorityArguments(disabler.declaration->source);
+          auto live = livePriorityInventory(disabler.declaration->source);
+          if (failed(live))
+            return failure();
+          live = applyPriorityGuards(disabler.declaration->source, *live, true);
+          if (failed(live))
+            return failure();
+          extraReferences = unionGuardInputs(extraReferences, live->references);
+          extraArguments = unionGuardInputs(extraArguments, live->arguments);
         }
         if (failed(recordPriorityInputs(std::move(inputs), std::move(arguments),
-                                        soft)))
+                                        soft, Value{}, extraReferences,
+                                        extraArguments)))
           return failure();
         emittedSoft = true;
         activeSoftDistSource = nullptr;
@@ -7521,6 +7870,73 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
                                       std::move(arguments), disable.source)))
         return failure();
       emittedHard = true;
+    }
+  struct ConditionalOrderGroup {
+    Operation *source;
+    unsigned beforeContext, afterContext;
+    APInt before, references;
+    uint32_t origin = 0;
+  };
+  SmallVector<ConditionalOrderGroup> conditionalOrderGroups;
+  llvm::DenseMap<std::tuple<Operation *, unsigned, unsigned>, unsigned>
+      conditionalOrderIds;
+  for (const SolveBeforeEdge &edge : solveBeforeEdges) {
+    if (!hasConditionalPaths(edge))
+      continue;
+    const auto &paths = priorityPaths.find(edge.source)->second;
+    unsigned before = paths[edge.beforePath].context;
+    unsigned after = paths[edge.afterPath].context;
+    auto [found, inserted] = conditionalOrderIds.try_emplace(
+        {edge.source, before, after}, conditionalOrderGroups.size());
+    if (inserted)
+      conditionalOrderGroups.push_back({edge.source, before, after,
+                                        edge.beforeMask,
+                                        edge.beforeMask | edge.afterMask});
+    else {
+      auto &group = conditionalOrderGroups[found->second];
+      group.before |= edge.beforeMask;
+      group.references |= edge.beforeMask | edge.afterMask;
+    }
+  }
+  for (ConditionalOrderGroup &group : conditionalOrderGroups) {
+    auto before = contextEnabled(group.beforeContext);
+    auto after = contextEnabled(group.afterContext);
+    if (failed(before) || failed(after))
+      return failure();
+    Value enabled = guardAnd(*before, *after);
+    auto live = applyPriorityGuards(
+        group.source, LivePriorityInput{constantAssignment(group.references),
+                                        constantAssignment(group.before)});
+    if (failed(live))
+      return failure();
+    live->references = selectGuardInputs(enabled, live->references);
+    live->arguments = selectGuardInputs(enabled, live->arguments);
+    emitLiteral(true);
+    uint32_t block = priorityGuardInventories.find(group.source)->second.block;
+    instruction(TALOS_RT_RANDOM_END_HARD_V1, 1, false, block);
+    uint32_t capture = programCaptures.size() + 1;
+    programCaptures.push_back(live->references);
+    programCaptures.push_back(live->arguments);
+    priorityInputRecords.push_back(
+        {static_cast<uint32_t>(programInstructions.size() - 1),
+         priorityInputs(group.source), priorityArguments(group.source),
+         capture});
+    if (programInstructions.size() > (UINT32_MAX >> 1)) {
+      emitError(location) << "constraint function branch source index exceeds "
+                             "its 31-bit encoding";
+      return failure();
+    }
+    group.origin = programInstructions.size();
+    hasDynamicGuardInputs = true;
+    emittedHard = true;
+  }
+  for (SolveBeforeEdge &edge : solveBeforeEdges)
+    if (hasConditionalPaths(edge)) {
+      const auto &paths = priorityPaths.find(edge.source)->second;
+      auto key = std::make_tuple(edge.source, paths[edge.beforePath].context,
+                                 paths[edge.afterPath].context);
+      edge.origin =
+          conditionalOrderGroups[conditionalOrderIds.lookup(key)].origin;
     }
   for (auto [index, property] : llvm::enumerate(planned)) {
     if (!isa<FloatType>(property.type))
@@ -7772,7 +8188,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
   };
   bool hasFunctionEdgeOrigins = false;
   for (SolveBeforeEdge &edge : solveBeforeEdges)
-    if (edge.source) {
+    if (edge.source && !edge.origin) {
       auto found = prioritySourceInstructions.find(edge.source);
       if (found == prioritySourceInstructions.end() ||
           found->second >= (UINT32_MAX >> 1)) {
@@ -7783,6 +8199,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
       edge.origin = found->second + 1;
       hasFunctionEdgeOrigins = true;
     }
+  hasFunctionEdgeOrigins |= !conditionalOrderGroups.empty();
   uint32_t programFlags = emittedSoft ? TALOS_RT_RANDOM_PROGRAM_HAS_SOFT : 0;
   if (hasFunctionEdgeOrigins)
     programFlags |= TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_EDGE_ORIGINS;

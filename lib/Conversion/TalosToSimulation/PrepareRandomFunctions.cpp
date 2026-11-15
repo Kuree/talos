@@ -318,7 +318,50 @@ LogicalResult freezeRandomConstraintPriorityInputs(
         getRandomConstraintPath) {
   unsigned orderingWidth =
       static_cast<unsigned>(std::max<uint64_t>(64, randomPropertyOffset));
+  uint64_t nextCondition = 0;
   bool invalid = false;
+  root->walk<WalkOrder::PreOrder>([&](Operation *expression) {
+    bool track = false;
+    if (auto condition =
+            dyn_cast<semantic::SVConditionalExpressionOp>(expression))
+      track = condition.getConditionCount() == 1 &&
+              condition.getConditionPatternFlags().size() == 1 &&
+              condition.getConditionPatternFlags().front() == 0;
+    if (auto binary = dyn_cast<semantic::SVBinaryExpressionOp>(expression))
+      track |=
+          binary.getOperatorKind() == semantic::SVBinaryOperator::LogicalAnd ||
+          binary.getOperatorKind() == semantic::SVBinaryOperator::LogicalOr;
+    if (sim::has<sim::metadata::RandomPriorityCondition>(expression) &&
+        !track) {
+      emitError(getSemanticLocation(expression))
+          << "constraint priority condition metadata requires a conditional or "
+             "logical expression";
+      invalid = true;
+    }
+    if (track)
+      sim::set<sim::metadata::RandomPriorityCondition>(
+          expression, builder.getI64IntegerAttr(nextCondition++));
+  });
+  if (invalid)
+    return failure();
+  struct Context {
+    unsigned parent;
+    uint64_t condition;
+    bool positive;
+    unsigned kind;
+  };
+  SmallVector<Context> contexts;
+  llvm::DenseMap<std::tuple<unsigned, uint64_t, uint8_t, unsigned>, unsigned>
+      contextIds;
+  auto branchContext = [&](unsigned parent, uint64_t condition, bool positive,
+                           unsigned kind = 0) {
+    auto [found, inserted] = contextIds.try_emplace(
+        {parent, condition, static_cast<uint8_t>(positive), kind},
+        contexts.size() + 1);
+    if (inserted)
+      contexts.push_back({parent, condition, positive, kind});
+    return found->second;
+  };
   // Function expansion can replace a call by a constant or eliminate an
   // unused argument. Guards still classify the source call as RANDOM when
   // one of its input arguments names an active random variable (18.5.12).
@@ -362,7 +405,12 @@ LogicalResult freezeRandomConstraintPriorityInputs(
   };
   if (failed(guardInputs(root)))
     return failure();
-  SmallVector<std::tuple<APInt, APInt, uint64_t>> functionOrder;
+  struct Edge {
+    APInt before, after;
+    uint64_t source;
+    unsigned beforePath, afterPath;
+  };
+  SmallVector<Edge> functionOrder;
   uint64_t nextSource = 0;
   bool functionArgumentsPresent = false;
   root->walk([&](Operation *expression) {
@@ -371,14 +419,29 @@ LogicalResult freezeRandomConstraintPriorityInputs(
              semantic::SVDisableSoftConstraintOp>(expression))
       return;
     uint64_t source = nextSource++;
-    SmallVector<APInt> arguments;
-    SmallVector<APInt> nonArguments;
+    struct Path {
+      APInt mask;
+      bool argument;
+      unsigned context;
+    };
+    SmallVector<Path> paths;
+    llvm::DenseMap<std::tuple<APInt, uint8_t, unsigned>, unsigned> pathIds;
+    SmallVector<unsigned> arguments, nonArguments;
+    auto addPath = [&](APInt mask, bool argument, unsigned context) {
+      auto [found, inserted] = pathIds.try_emplace(
+          {mask, static_cast<uint8_t>(argument), context}, paths.size());
+      if (inserted) {
+        (argument ? arguments : nonArguments).push_back(found->second);
+        paths.push_back({std::move(mask), argument, context});
+      }
+    };
     APInt referencedInputs = APInt::getZero(orderingWidth);
     bool impreciseArguments = false;
     bool impreciseNonArguments = false;
     Operation *imprecisePath = nullptr;
-    std::function<void(Operation *, bool)> collectReferences =
-        [&](Operation *nested, bool inFunctionArgument) {
+    std::function<void(Operation *, bool, unsigned, bool)> collectReferences =
+        [&](Operation *nested, bool inFunctionArgument, unsigned context,
+            bool sifting) {
           if (auto function = dyn_cast<semantic::SVCallExpressionOp>(nested);
               function && !function.getIsSystemCall()) {
             SmallVector<Operation *> children = getChildren(function);
@@ -391,7 +454,44 @@ LogicalResult freezeRandomConstraintPriorityInputs(
             }
             for (Operation *argument :
                  ArrayRef(children).take_back(argumentCount))
-              collectReferences(argument, true);
+              collectReferences(argument, true, context, false);
+            return;
+          }
+          if (auto index =
+                  sim::get<sim::metadata::RandomPriorityCondition>(nested)) {
+            auto children = getChildren(nested);
+            uint64_t id = index.getValue().getZExtValue();
+            if (isa<semantic::SVConditionalExpressionOp>(nested)) {
+              if (children.size() != 3) {
+                invalid = true;
+                return;
+              }
+              collectReferences(children[0], inFunctionArgument, context,
+                                sifting);
+              collectReferences(children[1], inFunctionArgument,
+                                branchContext(context, id, true), sifting);
+              collectReferences(children[2], inFunctionArgument,
+                                branchContext(context, id, false), sifting);
+            } else {
+              auto binary = dyn_cast<semantic::SVBinaryExpressionOp>(nested);
+              if (!binary || (binary.getOperatorKind() !=
+                                  semantic::SVBinaryOperator::LogicalAnd &&
+                              binary.getOperatorKind() !=
+                                  semantic::SVBinaryOperator::LogicalOr)) {
+                emitError(getSemanticLocation(nested))
+                    << "constraint priority condition metadata has an invalid "
+                       "owner";
+                invalid = true;
+                return;
+              }
+              bool conjunction = binary.getOperatorKind() ==
+                                 semantic::SVBinaryOperator::LogicalAnd;
+              unsigned live = sifting
+                                  ? branchContext(context, id, conjunction, 1)
+                                  : context;
+              for (Operation *child : children)
+                collectReferences(child, inFunctionArgument, live, sifting);
+            }
             return;
           }
           FailureOr<std::optional<RandomConstraintPath>> path =
@@ -427,10 +527,7 @@ LogicalResult freezeRandomConstraintPriorityInputs(
               }
               APInt mask = APInt::getLowBitsSet(orderingWidth, valuePath.width)
                                .shl(globalOffset);
-              SmallVector<APInt> &target =
-                  inFunctionArgument ? arguments : nonArguments;
-              if (!llvm::is_contained(target, mask))
-                target.push_back(mask);
+              addPath(mask, inFunctionArgument, context);
             }
             // A selected path consumes its base. Selection indices remain
             // independent expressions and can themselves name rand state.
@@ -438,15 +535,16 @@ LogicalResult freezeRandomConstraintPriorityInputs(
             if (isa<semantic::SVElementSelectExpressionOp,
                     semantic::SVRangeSelectExpressionOp>(nested))
               for (Operation *index : ArrayRef(children).drop_front())
-                collectReferences(index, inFunctionArgument);
+                collectReferences(index, inFunctionArgument, context, sifting);
             return;
           }
           for (Operation *child : getChildren(nested))
-            collectReferences(child, inFunctionArgument);
+            collectReferences(child, inFunctionArgument, context, sifting);
         };
     if (!isa<semantic::SVDisableSoftConstraintOp>(expression))
       for (Operation *child : getChildren(expression))
-        collectReferences(child, false);
+        collectReferences(child, false, 0, false);
+    unsigned localPathCount = paths.size();
     for (Operation *parent = expression->getParentOp();
          parent && parent != root->getParentOp();
          parent = parent->getParentOp()) {
@@ -454,7 +552,7 @@ LogicalResult freezeRandomConstraintPriorityInputs(
               semantic::SVConditionalConstraintOp>(parent)) {
         SmallVector<Operation *> parts = getChildren(parent);
         if (!parts.empty())
-          collectReferences(parts.front(), false);
+          collectReferences(parts.front(), false, 0, true);
       }
     }
     sim::set<sim::metadata::RandomPriorityInputs>(
@@ -462,8 +560,8 @@ LogicalResult freezeRandomConstraintPriorityInputs(
         builder.getIntegerAttr(builder.getIntegerType(orderingWidth),
                                referencedInputs));
     APInt argumentInputs = APInt::getZero(orderingWidth);
-    for (const APInt &argument : arguments)
-      argumentInputs |= argument;
+    for (unsigned argument : arguments)
+      argumentInputs |= paths[argument].mask;
     sim::set<sim::metadata::RandomPriorityArguments>(
         expression, builder.getIntegerAttr(
                         builder.getIntegerType(orderingWidth), argumentInputs));
@@ -478,16 +576,33 @@ LogicalResult freezeRandomConstraintPriorityInputs(
       invalid = true;
       return;
     }
-    for (const APInt &before : arguments)
-      for (const APInt &after : nonArguments)
+    if (!impreciseArguments && !impreciseNonArguments) {
+      SmallVector<Attribute> encodedPaths;
+      for (auto [index, path] : llvm::enumerate(paths))
+        encodedPaths.push_back(builder.getDictionaryAttr(
+            {builder.getNamedAttr(
+                 "mask", builder.getIntegerAttr(
+                             builder.getIntegerType(orderingWidth), path.mask)),
+             builder.getNamedAttr("argument",
+                                  builder.getBoolAttr(path.argument)),
+             builder.getNamedAttr("local",
+                                  builder.getBoolAttr(index < localPathCount)),
+             builder.getNamedAttr("context",
+                                  builder.getI64IntegerAttr(path.context))}));
+      sim::set<sim::metadata::RandomPriorityPaths>(
+          expression, builder.getArrayAttr(encodedPaths));
+    }
+    for (unsigned before : arguments)
+      for (unsigned after : nonArguments)
         // Each path inventory is already unique within this source atom.
-        if ((before & after).isZero())
-          functionOrder.emplace_back(before, after, source);
+        if ((paths[before].mask & paths[after].mask).isZero())
+          functionOrder.push_back(
+              {paths[before].mask, paths[after].mask, source, before, after});
   });
   if (!functionOrder.empty() || functionArgumentsPresent) {
     SmallVector<Attribute> encoded;
     encoded.reserve(functionOrder.size());
-    for (auto &[before, after, source] : functionOrder)
+    for (auto &[before, after, source, beforePath, afterPath] : functionOrder)
       encoded.push_back(builder.getDictionaryAttr(
           {builder.getNamedAttr(
                "before", builder.getIntegerAttr(
@@ -495,9 +610,28 @@ LogicalResult freezeRandomConstraintPriorityInputs(
            builder.getNamedAttr(
                "after", builder.getIntegerAttr(
                             builder.getIntegerType(orderingWidth), after)),
-           builder.getNamedAttr("source", builder.getI64IntegerAttr(source))}));
+           builder.getNamedAttr("source", builder.getI64IntegerAttr(source)),
+           builder.getNamedAttr("before_path",
+                                builder.getI64IntegerAttr(beforePath)),
+           builder.getNamedAttr("after_path",
+                                builder.getI64IntegerAttr(afterPath))}));
     sim::set<sim::metadata::RandomFunctionOrder>(root,
                                                  builder.getArrayAttr(encoded));
+  }
+  if (!contexts.empty()) {
+    SmallVector<Attribute> encoded;
+    for (const Context &context : contexts)
+      encoded.push_back(builder.getDictionaryAttr(
+          {builder.getNamedAttr("parent",
+                                builder.getI64IntegerAttr(context.parent)),
+           builder.getNamedAttr("condition",
+                                builder.getI64IntegerAttr(context.condition)),
+           builder.getNamedAttr("positive",
+                                builder.getBoolAttr(context.positive)),
+           builder.getNamedAttr("kind",
+                                builder.getI64IntegerAttr(context.kind))}));
+    sim::set<sim::metadata::RandomPriorityContexts>(
+        root, builder.getArrayAttr(encoded));
   }
   return failure(invalid);
 }

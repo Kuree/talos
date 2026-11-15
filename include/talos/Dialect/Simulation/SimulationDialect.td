@@ -144,7 +144,13 @@ def TalosSimulationDialect : Dialect {
     "::talos::sim::RandomizeHookAttr":$random_post_hook,
     "::talos::sim::RandomizeHookAttr":$random_pre_hook,
     "::mlir::IntegerAttr":$random_priority_arguments,
+    // Stable conditional/logical expression identity, preserved by expansion.
+    "::mlir::IntegerAttr":$random_priority_condition,
+    // Parent/condition/polarity contexts for conditional source paths.
+    "::mlir::ArrayAttr":$random_priority_contexts,
     "::mlir::IntegerAttr":$random_priority_inputs,
+    // Per-atom path masks, argument roles, and branch context indices.
+    "::mlir::ArrayAttr":$random_priority_paths,
     // `#simulation.random_property` entries.
     "::mlir::ArrayAttr":$random_properties,
     "::mlir::UnitAttr":$random_real_finite,

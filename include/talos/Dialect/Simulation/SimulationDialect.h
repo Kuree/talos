@@ -124,6 +124,12 @@ using RandomPostHook = TalosSimulationDialect::RandomPostHookAttrHelper;
 using RandomPreHook = TalosSimulationDialect::RandomPreHookAttrHelper;
 using RandomPriorityArguments =
     TalosSimulationDialect::RandomPriorityArgumentsAttrHelper;
+using RandomPriorityCondition =
+    TalosSimulationDialect::RandomPriorityConditionAttrHelper;
+using RandomPriorityContexts =
+    TalosSimulationDialect::RandomPriorityContextsAttrHelper;
+using RandomPriorityPaths =
+    TalosSimulationDialect::RandomPriorityPathsAttrHelper;
 using RandomPriorityInputs =
     TalosSimulationDialect::RandomPriorityInputsAttrHelper;
 using RandomProperties = TalosSimulationDialect::RandomPropertiesAttrHelper;

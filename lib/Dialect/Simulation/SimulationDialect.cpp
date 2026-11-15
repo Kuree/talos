@@ -605,6 +605,8 @@ static const llvm::StringMap<discardable::PayloadCheck> &declarations() {
       metadata::RandomNestedStatePath, metadata::RandomNestedStateStorageType,
       metadata::RandomObjectEdge, metadata::RandomPostHook,
       metadata::RandomPreHook, metadata::RandomPriorityArguments,
+      metadata::RandomPriorityCondition, metadata::RandomPriorityContexts,
+      metadata::RandomPriorityPaths,
       metadata::RandomPriorityInputs, metadata::RandomProperties,
       metadata::RandomRealFinite, metadata::RandomReceiverIndex,
       metadata::RandomRecursiveAliasGuards, metadata::RandomStateField,
