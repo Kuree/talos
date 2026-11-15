@@ -24,7 +24,7 @@ struct RetentionRegister {
   upf_detail::Descriptor visible{}, backing{};
 };
 using RetentionPlans =
-    llvm::DenseMap<mlir::Operation *, llvm::SmallVector<RetentionRegister, 0>>;
+    llvm::DenseMap<mlir::Operation *, llvm::SmallVector<RetentionRegister, 1>>;
 mlir::LogicalResult
 planRetentions(sim::SimDesignOp design, sim::SimFuncOp root,
                const llvm::StringMap<upf_detail::Descriptor> &descriptors,
