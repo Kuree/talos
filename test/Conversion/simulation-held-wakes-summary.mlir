@@ -1,4 +1,6 @@
-// RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-replicate,simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' | FileCheck %s
+// RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-replicate,simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o %t.mlir
+// RUN: FileCheck %s < %t.mlir
+// RUN: FileCheck %s --check-prefix=CLEAR < %t.mlir
 
 // A store marked as an NBA update performed early (as a clocked kernel's
 // direct store is) publishes the wakes of its 66 readers into the held
@@ -33,15 +35,15 @@
 // then moves the one leaf each set bit names,
 // CHECK:      ^bb2(%[[REST:[0-9]+]]: i64):
 // CHECK:      ^bb3:
-// CHECK-NEXT: %[[LEAF:[0-9]+]] = "llvm.intr.cttz"(%[[REST]])
+// CHECK:      %[[LEAF:[0-9]+]] = "llvm.intr.cttz"(%[[REST]])
 // CHECK:      %[[HL:[0-9]+]] = llvm.getelementptr %[[HELD]][%[[LEAF]]]
 // CHECK-NEXT: %[[IL:[0-9]+]] = llvm.getelementptr %[[IN]][%[[LEAF]]]
 // CHECK-NEXT: %[[HV:[0-9]+]] = llvm.load %[[HL]]
 // CHECK-NEXT: %[[IV:[0-9]+]] = llvm.load %[[IL]]
 // CHECK-NEXT: %[[MV:[0-9]+]] = llvm.or %[[IV]], %[[HV]]
 // CHECK-NEXT: llvm.store %[[MV]], %[[IL]]
-// CHECK-NEXT: llvm.mlir.constant(0 : i64)
-// CHECK-NEXT: llvm.store %{{[0-9]+}}, %[[HL]]
+// CHECK-NOT: llvm.store
+// CHECK:      llvm.store %{{[0-9]+}}, %[[HL]]
 // and there is no minimum cache to maintain.
 // CHECK:      ^bb4:
 // CHECK-NEXT: llvm.return
@@ -53,6 +55,18 @@
 // CHECK-COUNT-5: llvm.call @__talos_eval_nba_held_merge_v1()
 // CHECK-NOT: llvm.call @__talos_eval_nba_held_merge_v1()
 // CHECK: {{^  }}llvm.func
+
+// The clearing value may be materialized before the leaf address. Check its
+// value separately while CHECK above pins the order of the two stores.
+// CLEAR-LABEL: llvm.func internal @__talos_eval_nba_held_merge_v1()
+// CLEAR: %[[HELD:[0-9]+]] = llvm.mlir.addressof @__talos_eval_nba_held_wakes_v1
+// CLEAR: ^bb2(%[[REST:[0-9]+]]: i64):
+// CLEAR: ^bb3:
+// CLEAR-DAG: %[[LEAF:[0-9]+]] = "llvm.intr.cttz"(%[[REST]])
+// CLEAR-DAG: %[[HL:[0-9]+]] = llvm.getelementptr %[[HELD]][%[[LEAF]]]
+// CLEAR-DAG: llvm.store %[[ZERO:[0-9]+]], %[[HL]]
+// CLEAR-DAG: %[[ZERO]] = llvm.mlir.constant(0 : i64)
+// CLEAR: ^bb4:
 
 !clk = !simulation.ref<i1>
 !int = !simulation.ref<i32>

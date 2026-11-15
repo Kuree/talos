@@ -14,7 +14,8 @@
 // PRIORITY-NEXT: 129: ^
 // PRIORITY-NEXT: ]
 // PRIORITY-LABEL: llvm.func @__talos_eval_dispatch_v1.word_0(
-// PRIORITY: llvm.call @talos_rt_v1_scheduler_priority_signal_pending(%arg0)
-// PRIORITY-NEXT: llvm.mlir.constant(0 : i32)
-// PRIORITY-NEXT: llvm.icmp "ne"
-// PRIORITY-NEXT: llvm.mlir.constant(20 : i32)
+// PRIORITY-DAG: %[[PENDING:.*]] = llvm.call @talos_rt_v1_scheduler_priority_signal_pending(%arg0)
+// PRIORITY-DAG: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
+// PRIORITY-DAG: %[[CHECKPOINT:.*]] = llvm.mlir.constant(20 : i32)
+// PRIORITY-DAG: %[[HAS_PRIORITY:.*]] = llvm.icmp "ne" %[[PENDING]], %[[ZERO]]
+// PRIORITY-NEXT: llvm.cond_br %[[HAS_PRIORITY]], ^{{bb[0-9]+}}(%[[CHECKPOINT]] : i32),

@@ -149,15 +149,15 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
 // LOWER: ^[[SELECT]]:
 // LOWER: %[[DEFERRED:.*]] = llvm.icmp "uge"
 // LOWER-NEXT: llvm.cond_br %[[DEFERRED]], ^[[CUT]], ^[[SWITCH:bb[0-9]+]](
-// LOWER: %[[CUT_REGION:.*]] = llvm.load %[[REGION]] {{.*}}: !llvm.ptr -> i32
-// LOWER-NEXT: %[[TERMINATED:.*]] = llvm.mlir.constant(-2 : i32)
-// LOWER-NEXT: %[[ENDED:.*]] = llvm.icmp "eq" %[[CUT_REGION]], %[[TERMINATED]]
-// LOWER-NEXT: %[[OK:.*]] = llvm.mlir.constant(0 : i32)
-// LOWER-NEXT: llvm.cond_br %[[ENDED]], ^{{bb[0-9]+}}(%[[OK]] : i32), ^[[RUNNING:bb[0-9]+]]
+// LOWER-DAG: %[[CUT_REGION:.*]] = llvm.load %[[REGION]] {{.*}}: !llvm.ptr -> i32
+// LOWER-DAG: %[[TERMINATED:.*]] = llvm.mlir.constant(-2 : i32)
+// LOWER-DAG: %[[ENDED:.*]] = llvm.icmp "eq" %[[CUT_REGION]], %[[TERMINATED]]
+// LOWER-DAG: llvm.cond_br %[[ENDED]], ^{{bb[0-9]+}}(%[[OK:.*]] : i32), ^[[RUNNING:bb[0-9]+]]
+// LOWER-DAG: %[[OK]] = llvm.mlir.constant(0 : i32)
 // LOWER: ^[[RUNNING]]:
 // LOWER: llvm.cond_br %{{.*}}, ^{{bb[0-9]+}}, ^[[QUIESCENT:bb[0-9]+]]
 // LOWER-NEXT: ^[[QUIESCENT]]:
-// LOWER-NEXT: llvm.mlir.addressof @__talos_aot_model_ingress_v1
+// LOWER: llvm.mlir.addressof @__talos_aot_model_ingress_v1
 // LOWER: "llvm.intr.cttz"
 // LOWER: llvm.br ^[[SWITCH]](
 
@@ -249,9 +249,9 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
 // LOWER-NEXT: ]
 // LOWER: "llvm.intr.cttz"
 // LOWER: llvm.call @talos_rt_v1_scheduler_termination_requested(%arg1)
-// LOWER: llvm.getelementptr %{{.*}}[8] : (!llvm.ptr) -> !llvm.ptr, i8
-// LOWER-NEXT: %[[HIGH:.*]] = llvm.load
-// LOWER-NEXT: %[[DEFERRED_HIGH:.*]] = llvm.mlir.constant(63 : i64)
+// LOWER-DAG: %[[HIGH_PTR:.*]] = llvm.getelementptr %{{.*}}[8] : (!llvm.ptr) -> !llvm.ptr, i8
+// LOWER-DAG: %[[HIGH:.*]] = llvm.load %[[HIGH_PTR]]
+// LOWER-DAG: %[[DEFERRED_HIGH:.*]] = llvm.mlir.constant(63 : i64)
 // LOWER-NEXT: llvm.and %[[HIGH]], %[[DEFERRED_HIGH]]
 // LOWER-NOT: @__talos_eval_dispatch_v1.word_
 

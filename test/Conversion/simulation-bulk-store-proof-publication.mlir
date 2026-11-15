@@ -47,9 +47,9 @@
 // when it prepares the schedule. Its new bytes are the splatted fill byte;
 // whole words are published in a loop, then the 24-bit tail, before the fill.
 // FILL-LABEL: llvm.func @__talos_aot_schedule_run_v1(
-// FILL: %[[PLANE:.*]] = llvm.mlir.addressof @__talos_state_unknown
-// FILL-NEXT: %[[FILL:.*]] = llvm.mlir.constant(0 : i8)
-// FILL-NEXT: %[[BYTES:.*]] = llvm.mlir.constant(171 : i64)
+// FILL-DAG: %[[PLANE:.*]] = llvm.mlir.addressof @__talos_state_unknown
+// FILL-DAG: %[[FILL:.*]] = llvm.mlir.constant(0 : i8)
+// FILL-DAG: %[[BYTES:.*]] = llvm.mlir.constant(171 : i64)
 // FILL: llvm.icmp "ult"
 // FILL: %[[OLD:.*]] = llvm.load %{{.*}} -> i64
 // FILL: %[[WIDE:.*]] = llvm.zext %[[FILL]] : i8 to i64

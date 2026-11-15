@@ -23,8 +23,8 @@
 // GUARD-NEXT: %[[ACTIVE0B:.*]] = llvm.icmp "ne" %[[VALID0B]], %[[ZERO0B]] : i32
 // GUARD-NEXT: llvm.cond_br %[[ACTIVE0B]], ^{{bb[0-9]+}}, ^[[LAST0:bb[0-9]+]]
 // GUARD: ^[[LAST0]]:
-// GUARD-NEXT: %[[CLEAR0:.*]] = llvm.mlir.constant(0 : i32) : i32
-// GUARD-NEXT: %[[SUMMARY0:.*]] = llvm.mlir.addressof @__talos_eval_nba_dynamic_pending_v1
+// GUARD-DAG: %[[CLEAR0:.*]] = llvm.mlir.constant(0 : i32) : i32
+// GUARD-DAG: %[[SUMMARY0:.*]] = llvm.mlir.addressof @__talos_eval_nba_dynamic_pending_v1
 // GUARD-NEXT: llvm.store %[[CLEAR0]], %[[SUMMARY0]]
 // This commit stages no accumulator unknown data for a canonical two-state
 // variant to zero, so that variant would copy the commit unchanged; there is
@@ -45,8 +45,8 @@
 // GUARD-NEXT: %[[ACTIVE2B:.*]] = llvm.icmp "ne" %[[VALID2B]], %[[ZERO2B]] : i32
 // GUARD-NEXT: llvm.cond_br %[[ACTIVE2B]], ^{{bb[0-9]+}}, ^[[LAST2:bb[0-9]+]]
 // GUARD: ^[[LAST2]]:
-// GUARD-NEXT: %[[CLEAR2:.*]] = llvm.mlir.constant(0 : i32) : i32
-// GUARD-NEXT: %[[SUMMARY2:.*]] = llvm.mlir.addressof @__talos_eval_nba_dynamic_pending_v1
+// GUARD-DAG: %[[CLEAR2:.*]] = llvm.mlir.constant(0 : i32) : i32
+// GUARD-DAG: %[[SUMMARY2:.*]] = llvm.mlir.addressof @__talos_eval_nba_dynamic_pending_v1
 // GUARD-NEXT: llvm.store %[[CLEAR2]], %[[SUMMARY2]]
 // Read-only reflection admits cbValueChange, which runs after every value
 // change (IEEE 1800-2017 38.36.1), so an intermediate NBA value is observable

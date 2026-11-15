@@ -636,7 +636,9 @@ struct NativeReadyPublicationBatch {
   uint64_t generation = 0;
   bool valid = false;
   std::vector<uint64_t> tokens;
-  std::unordered_set<uint64_t> queued;
+  // MSVC's empty unordered_set allocates. Bytecode and dormant native runs
+  // never publish a batch, so construct membership only for a live cohort.
+  std::optional<std::unordered_set<uint64_t>> queued;
 };
 
 struct ProcessCallerDepths {
@@ -3222,7 +3224,7 @@ inline void talos_rt_record_native_ready_publication_unlocked(
     return;
   if (!inserted || batch->generation != previous ||
       context->schedulerSelectionGeneration == 1 ||
-      batch->queued.count(token)) {
+      batch->queued->count(token)) {
     batch->valid = false;
     return;
   }

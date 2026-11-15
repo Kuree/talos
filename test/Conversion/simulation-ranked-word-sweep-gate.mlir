@@ -8,15 +8,15 @@
 // word, so a chunk call is followed directly by the next chunk's test.
 // CHECK-NOT: .segment(
 // CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1.word_0(
-// CHECK: %[[READY:.*]] = llvm.mlir.addressof @__talos_aot_model_ingress_v1
-// CHECK-NEXT: %[[LOW:.*]] = llvm.load %[[READY]]
-// CHECK-NEXT: %[[FIRST:.*]] = llvm.mlir.constant(1 : i64)
+// CHECK-DAG: %[[READY:.*]] = llvm.mlir.addressof @__talos_aot_model_ingress_v1
+// CHECK-DAG: %[[LOW:.*]] = llvm.load %[[READY]]
+// CHECK-DAG: %[[FIRST:.*]] = llvm.mlir.constant(1 : i64)
 // CHECK-NEXT: llvm.and %[[LOW]], %[[FIRST]]
 // CHECK: llvm.call @__talos_eval_ranked_group_0(%arg0)
 // CHECK-NEXT: llvm.br ^[[NEXT:bb[0-9]+]]
 // CHECK: ^[[NEXT]]:
-// CHECK: %[[AGAIN:.*]] = llvm.load %{{.*}} : !llvm.ptr -> i64
-// CHECK-NEXT: %[[SECOND:.*]] = llvm.mlir.constant(2 : i64)
+// CHECK-DAG: %[[AGAIN:.*]] = llvm.load %{{.*}} : !llvm.ptr -> i64
+// CHECK-DAG: %[[SECOND:.*]] = llvm.mlir.constant(2 : i64)
 // CHECK-NEXT: llvm.and %[[AGAIN]], %[[SECOND]]
 // CHECK: llvm.call @__talos_eval_ranked_group_1(%arg0)
 // CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1.word_1(

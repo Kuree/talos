@@ -19,8 +19,8 @@
 // CHECK-DAG: %[[EV:.*]] = simulation.ref.extract %[[E]] from 0 : {{.*}} -> !simulation.ref<i2>
 // CHECK-DAG: %[[LV:.*]] = simulation.ref.load %[[EV]] : !simulation.ref<i2> -> i2
 // CHECK: %[[NOT:.*]] = arith.xori %[[MV]], %{{.*}} : i2
-// CHECK: %[[T:.*]] = arith.andi %[[MV]], %[[DV]] : i2
-// CHECK: %[[F:.*]] = arith.andi %[[NOT]], %[[LV]] : i2
+// CHECK-DAG: %[[T:.*]] = arith.andi %[[MV]], %[[DV]] : i2
+// CHECK-DAG: %[[F:.*]] = arith.andi %[[NOT]], %[[LV]] : i2
 // CHECK: %[[W:.*]] = arith.ori %[[T]], %[[F]] : i2
 // CHECK: %[[NV:.*]] = simulation.ref.extract %[[N]] from 0 : {{.*}} -> !simulation.ref<i2>
 // CHECK: simulation.ref.store %[[W]] to %[[NV]] {simulation.continuous_store} : i2, !simulation.ref<i2>

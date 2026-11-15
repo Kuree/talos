@@ -190,8 +190,8 @@ module attributes {
 // CHECK: %[[SLOT:.+]] = llvm.mlir.addressof @__talos_eval_nba_valid_
 // CHECK: llvm.cond_br %{{.+}}, ^[[CONSUME:bb[0-9]+]], ^[[NEXT:bb[0-9]+]]
 // CHECK: ^[[NEXT]]:
-// CHECK-NEXT: %[[ZERO:.+]] = llvm.mlir.constant(0 : i32) : i32
-// CHECK-NEXT: %[[SUMMARY:.+]] = llvm.mlir.addressof @__talos_eval_nba_dynamic_pending_v1
+// CHECK-DAG: %[[ZERO:.+]] = llvm.mlir.constant(0 : i32) : i32
+// CHECK-DAG: %[[SUMMARY:.+]] = llvm.mlir.addressof @__talos_eval_nba_dynamic_pending_v1
 // CHECK-NEXT: llvm.store %[[ZERO]], %[[SUMMARY]]
 // CHECK: llvm.store %{{.+}}, %[[SLOT]] {{.*}} : i32, !llvm.ptr
 // CHECK: llvm.br ^[[NEXT]]

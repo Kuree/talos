@@ -7,17 +7,19 @@
 // state (IEEE 1800-2023 6.3.1); the proven (1) path is unchanged.
 
 // CHECK-LABEL: llvm.func @__talos_eval_kernel_promotion_scan_v1(
-// CHECK: %[[FAILED:[0-9]+]] = llvm.mlir.constant(2 : i8) : i8
-// CHECK-NEXT: %[[LATCHES:[0-9]+]] = llvm.mlir.addressof @__talos_eval_kernel_promotion_latched_v1
-// CHECK-NEXT: %[[LATCH:[0-9]+]] = llvm.getelementptr %[[LATCHES]][%arg0]
+// CHECK: llvm.cond_br %{{.*}}, ^[[FAILED_BLOCK:bb[0-9]+]],
+// CHECK: ^[[FAILED_BLOCK]]:
+// CHECK-DAG: %[[FAILED:[0-9]+]] = llvm.mlir.constant(2 : i8) : i8
+// CHECK-DAG: %[[LATCHES:[0-9]+]] = llvm.mlir.addressof @__talos_eval_kernel_promotion_latched_v1
+// CHECK-DAG: %[[LATCH:[0-9]+]] = llvm.getelementptr %[[LATCHES]][%arg0]
 // CHECK-NEXT: llvm.store %[[FAILED]], %[[LATCH]]
 // CHECK-NEXT: %[[NO:[0-9]+]] = llvm.mlir.constant(false) : i1
 // CHECK-NEXT: llvm.return %[[NO]] : i1
 // A cached latch (KNOWN 1 or FAILED 2) answers with its low bit; only an
 // UNKNOWN latch scans.
 // CHECK-LABEL: llvm.func @__talos_eval_kernel_promotion_ready_v1(
-// CHECK: %[[STATE:[0-9]+]] = llvm.load
-// CHECK-NEXT: %[[ZERO:[0-9]+]] = llvm.mlir.constant(0 : i8) : i8
+// CHECK-DAG: %[[STATE:[0-9]+]] = llvm.load
+// CHECK-DAG: %[[ZERO:[0-9]+]] = llvm.mlir.constant(0 : i8) : i8
 // CHECK-NEXT: %[[CACHED:[0-9]+]] = llvm.icmp "ne" %[[STATE]], %[[ZERO]] : i8
 // CHECK-NEXT: llvm.cond_br %[[CACHED]], ^[[ANSWER:bb[0-9]+]], ^[[SCAN:bb[0-9]+]]
 // CHECK-NEXT: ^[[ANSWER]]:

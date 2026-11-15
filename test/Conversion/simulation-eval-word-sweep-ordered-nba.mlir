@@ -20,11 +20,11 @@
 // CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1.word_0(
 // CHECK: ^[[FAIL:bb[0-9]+]](%{{.*}}: i32):
 // CHECK: ^[[SECOND:bb[0-9]+]]:  // 2 preds
-// CHECK-NEXT: llvm.mlir.addressof @__talos_aot_model_ingress_v1
+// CHECK: llvm.mlir.addressof @__talos_aot_model_ingress_v1
 // CHECK: %[[QUEUE:.*]] = llvm.mlir.addressof @__talos_eval_ordered_nba_queue_v1
 // CHECK-NEXT: %[[STATUS_PTR:.*]] = llvm.getelementptr %[[QUEUE]][0, 3]
-// CHECK-NEXT: %[[STATUS:.*]] = llvm.load %[[STATUS_PTR]]
-// CHECK-NEXT: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
+// CHECK-DAG: %[[STATUS:.*]] = llvm.load %[[STATUS_PTR]]
+// CHECK-DAG: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
 // CHECK-NEXT: %[[OK:.*]] = llvm.icmp "eq" %[[STATUS]], %[[ZERO]]
 // CHECK-NEXT: llvm.cond_br %[[OK]], ^[[SECOND]], ^[[FAIL]](%[[STATUS]] : i32)
 

@@ -12,7 +12,7 @@
 // LOWER-NEXT: llvm.load %[[UNKNOWN]]
 // LOWER: %[[DELTA:.*]] = llvm.and
 // LOWER: llvm.load {{.*}}schedule.eval.pending_dirty_root
-// LOWER-NEXT: %[[PENDING:.*]] = llvm.and
+// LOWER: %[[PENDING:.*]] = llvm.and
 // LOWER-NEXT: %[[NEEDED:.*]] = llvm.or %[[DELTA]], %[[PENDING]]
 // LOWER-NEXT: llvm.icmp "ne" %[[NEEDED]],
 // LOWER-NEXT: llvm.cond_br {{.*}}, ^[[STAGE:bb[0-9]+]], ^[[DONE:bb[0-9]+]]

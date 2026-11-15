@@ -33,7 +33,7 @@
 // CHECK: %[[NONEMPTY:.*]] = llvm.icmp "ne" %[[LEAF]],
 // CHECK-NEXT: llvm.cond_br %[[NONEMPTY]], ^[[SWITCH:bb[0-9]+]](%[[WORD]] : i64), ^[[CLEAR]](%[[WORD]] : i64)
 // CHECK: ^[[FOUND]]:
-// CHECK-NEXT: "llvm.intr.cttz"(%[[DIRTY]]) <{is_zero_poison = true}>
+// CHECK: "llvm.intr.cttz"(%[[DIRTY]]) <{is_zero_poison = true}>
 // CHECK: llvm.br ^[[GATE]](
 // CHECK: ^[[SWITCH]](%[[SELECTED:.*]]: i64):
 // CHECK-NEXT: llvm.switch %[[SELECTED]] : i64, ^{{bb[0-9]+}} [

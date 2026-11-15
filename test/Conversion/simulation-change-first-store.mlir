@@ -1,4 +1,6 @@
-// RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-compute-fusion,talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' | FileCheck %s
+// RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-compute-fusion,talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o %t.mlir
+// RUN: FileCheck %s < %t.mlir
+// RUN: FileCheck %s --check-prefix=STORES < %t.mlir
 
 // A clean direct 4-state store with a waiter tests old against new once, over
 // both planes, before it writes anything. Only a change stores the value and
@@ -16,11 +18,11 @@
 // CHECK-NOT: llvm.store
 // CHECK: %[[SU:[0-9]+]] = llvm.load %{{[0-9]+}} {alignment = 1 : i64} : !llvm.ptr -> i8
 // CHECK-NOT: llvm.store
-// CHECK: %[[DV:[0-9]+]] = llvm.xor %{{[0-9]+}}, %{{[0-9]+}} : i64
-// CHECK-NOT: llvm.store
-// CHECK: %[[DU:[0-9]+]] = llvm.xor %{{[0-9]+}}, %{{[0-9]+}} : i64
-// CHECK-NOT: llvm.store
-// CHECK: %[[CHANGE:[0-9]+]] = llvm.or %[[DV]], %[[DU]] : i64
+// Bind both deltas at their use: either XOR may be constructed first.
+// The separate STORES check forbids writes throughout this DAG, too.
+// CHECK-DAG: %[[CHANGE:[0-9]+]] = llvm.or %[[DV:[0-9]+]], %[[DU:[0-9]+]] : i64
+// CHECK-DAG: %[[DV]] = llvm.xor %{{[0-9]+}}, %{{[0-9]+}} : i64
+// CHECK-DAG: %[[DU]] = llvm.xor %{{[0-9]+}}, %{{[0-9]+}} : i64
 // CHECK-NOT: llvm.store
 // CHECK: %[[SAME:[0-9]+]] = llvm.icmp "eq" %[[CHANGE]], %{{[0-9]+}} : i64
 // CHECK-NEXT: llvm.cond_br %[[SAME]], ^[[DONE:bb[0-9]+]], ^[[STORE:bb[0-9]+]]
@@ -42,6 +44,13 @@
 // CHECK: llvm.store %{{[0-9]+}}, %{{[0-9]+}} {alignment = 1 : i64} : i8, !llvm.ptr
 // CHECK-NOT: @__talos_state_unknown
 // CHECK: ^[[DONE2]]:
+
+// STORES-LABEL: llvm.func @writer.__talos_eval_body_0(
+// STORES-NOT: llvm.store
+// STORES: llvm.cond_br
+// STORES-LABEL: llvm.func @writer.__talos_eval_body_0.__talos_two_state_0(
+// STORES-NOT: llvm.store
+// STORES: llvm.cond_br
 
 !clk = !simulation.ref<i1>
 !byte = !simulation.ref<!simulation.logic<8>>

@@ -8,9 +8,9 @@
 // CHECK: simulation.func private @bit0.coalesced(
 // CHECK-SAME: %[[D:[^:]*]]: !simulation.net<!simulation.packed_array<1 : 0 x i1>>
 // CHECK-SAME: %[[S:[^:]*]]: !simulation.net<i1>
-// CHECK: %[[SV:.*]] = simulation.net.read %[[S]]
-// CHECK: %[[DV:.*]] = simulation.net.read {{.*}} -> i2
-// CHECK: %[[SW:.*]] = arith.extsi %[[SV]] : i1 to i2
+// CHECK-DAG: %[[SV:.*]] = simulation.net.read %[[S]]
+// CHECK-DAG: %[[DV:.*]] = simulation.net.read {{.*}} -> i2
+// CHECK-DAG: %[[SW:.*]] = arith.extsi %[[SV]] : i1 to i2
 // CHECK: %[[AND:.*]] = arith.andi %[[DV]], %[[SW]] : i2
 // CHECK: %[[X:.*]] = arith.xori %[[AND]], %{{.*}} : i2
 // CHECK: simulation.driver.drive %{{.*}} = %[[X]] : !simulation.driver<i2>, i2

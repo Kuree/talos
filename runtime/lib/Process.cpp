@@ -4647,7 +4647,7 @@ talos_rt_status runScheduler(talos_rt_context *context,
   auto pushCachedNativeReady = [&](const CachedNativeReady &ready) {
     ContextMutexLock lock(context);
     if (context->nativeReadyPublicationBatch == &publications &&
-        (!publications.queued.insert(ready.token).second || ready.urgent))
+        (!publications.queued->insert(ready.token).second || ready.urgent))
       publications.valid = false;
     cachedNativeDynamicReady.push_back(ready);
     std::push_heap(cachedNativeDynamicReady.begin(),
@@ -4655,7 +4655,7 @@ talos_rt_status runScheduler(talos_rt_context *context,
   };
   auto pushCachedNativeSlowCandidate = [&](uint64_t token) {
     if (context->nativeReadyPublicationBatch == &publications)
-      publications.queued.insert(token);
+      publications.queued->insert(token);
     cachedNativeSlowCandidates.push_back(token);
   };
   auto cachedNativeReadyEmpty = [&] {
@@ -4675,9 +4675,9 @@ talos_rt_status runScheduler(talos_rt_context *context,
   };
   auto popCachedNativeReady = [&](bool dynamic) {
     if (context->nativeReadyPublicationBatch == &publications)
-      publications.queued.erase(dynamic ? cachedNativeDynamicReady.front().token
-                                : cachedNativeReadyIsHeap
-                                    ? cachedNativeReady.front().token
+      publications.queued->erase(
+          dynamic                   ? cachedNativeDynamicReady.front().token
+          : cachedNativeReadyIsHeap ? cachedNativeReady.front().token
                                     : cachedNativeReady.back().token);
     if (!dynamic) {
       if (cachedNativeReadyIsHeap)
@@ -4702,7 +4702,8 @@ talos_rt_status runScheduler(talos_rt_context *context,
     context->nativeReadyPublicationBatch = nullptr;
     publications.valid = false;
     publications.tokens.clear();
-    publications.queued.clear();
+    if (publications.queued)
+      publications.queued->clear();
     cachedNativeReady.clear();
     cachedNativeDynamicReady.clear();
     cachedNativeSlowCandidates.clear();
@@ -5130,7 +5131,7 @@ talos_rt_status runScheduler(talos_rt_context *context,
             size_t index = SIZE_MAX;
             auto ready = classifyNativeToken(token, signalResume, index);
             if (!ready || !signalResume || ready->urgent ||
-                publications.queued.count(token)) {
+                publications.queued->count(token)) {
               publications.valid = false;
               break;
             }
@@ -5286,12 +5287,14 @@ talos_rt_status runScheduler(talos_rt_context *context,
               // scheduling, or by the small allocation-free ready scanner.
               if (cachedNativeUrgentCount == 0 &&
                   unstartedActorRegion == UINT32_MAX) {
-                publications.queued.reserve(cachedNativeReady.size() +
-                                            cachedNativeSlowCandidates.size());
+                if (!publications.queued)
+                  publications.queued.emplace();
+                publications.queued->reserve(cachedNativeReady.size() +
+                                             cachedNativeSlowCandidates.size());
                 for (const auto &ready : cachedNativeReady)
-                  publications.queued.insert(ready.token);
-                publications.queued.insert(cachedNativeSlowCandidates.begin(),
-                                           cachedNativeSlowCandidates.end());
+                  publications.queued->insert(ready.token);
+                publications.queued->insert(cachedNativeSlowCandidates.begin(),
+                                            cachedNativeSlowCandidates.end());
                 publications.generation = context->schedulerSelectionGeneration;
                 publications.valid = true;
                 context->nativeReadyPublicationBatch = &publications;

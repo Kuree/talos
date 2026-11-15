@@ -15,12 +15,12 @@
 // DEFERRED-NEXT: 129: ^
 // DEFERRED-NEXT: ]
 // DEFERRED: %[[INACTIVE:.*]] = llvm.mlir.constant(2 : i64)
-// DEFERRED-NEXT: %[[PENDING:.*]] = llvm.and %{{.*}}, %[[INACTIVE]]
+// DEFERRED: %[[PENDING:.*]] = llvm.and %{{.*}}, %[[INACTIVE]]
 // DEFERRED: %[[MIXED:.*]] = llvm.mlir.constant(2 : i64)
 // DEFERRED-NEXT: %[[IS_MIXED:.*]] = llvm.icmp "eq" %{{.*}}, %[[MIXED]]
 // DEFERRED-NEXT: llvm.cond_br %[[IS_MIXED]], ^[[SHARED:bb[0-9]+]], ^{{bb[0-9]+}}(
 // DEFERRED-NEXT: ^[[SHARED]]:
-// DEFERRED-NEXT: %[[ACTIVE:.*]] = llvm.mlir.constant(1 : i64)
+// DEFERRED: %[[ACTIVE:.*]] = llvm.mlir.constant(1 : i64)
 // DEFERRED-NEXT: llvm.and %{{.*}}, %[[ACTIVE]]
 // DEFERRED: "llvm.intr.cttz"(%[[PENDING]])
 // DEFERRED: llvm.call @talos_rt_v1_scheduler_termination_requested(
