@@ -78,6 +78,71 @@ getRandomSelectionLayout(Operation *source) {
                                layout->elementWidth};
 }
 
+std::optional<uint64_t> RandomSelectionWindow::offset(int64_t index) const {
+  if (index < first || index > last)
+    return std::nullopt;
+  APInt selected(65, static_cast<uint64_t>(index), true);
+  APInt boundary(65, static_cast<uint64_t>(source.right), true);
+  APInt ordinal =
+      source.left >= source.right ? selected - boundary : boundary - selected;
+  if (ordinal.isNegative() || ordinal.getActiveBits() > 32)
+    return std::nullopt;
+  uint64_t bits = ordinal.getZExtValue() * source.elementWidth;
+  if (bits < lowAdjustment)
+    return std::nullopt;
+  return bits - lowAdjustment;
+}
+
+std::optional<RandomSelectionWindow>
+getRandomSelectionWindow(Operation *selection) {
+  auto parts = getChildren(selection);
+  auto range = dyn_cast<semantic::SVRangeSelectExpressionOp>(selection);
+  if ((!isa<semantic::SVElementSelectExpressionOp>(selection) ||
+       parts.size() != 2) &&
+      (!range || parts.size() != 3 ||
+       range.getSelectionKind() == semantic::SVRangeSelectionKind::Simple))
+    return std::nullopt;
+  auto layout = getRandomSelectionLayout(parts.front());
+  auto sourceType = getNormalizedSemanticType(parts.front());
+  auto resultType = getNormalizedSemanticType(selection);
+  auto sourceWidth = succeeded(sourceType) ? getRandomPropertyWidth(*sourceType)
+                                           : std::nullopt;
+  auto width = succeeded(resultType) ? getRandomPropertyWidth(*resultType)
+                                     : std::nullopt;
+  if (!layout || !layout->elementWidth || !sourceWidth || !width || !*width ||
+      *width % layout->elementWidth ||
+      (!range && *width != layout->elementWidth))
+    return std::nullopt;
+  int64_t first = std::min(layout->left, layout->right);
+  int64_t last = std::max(layout->left, layout->right);
+  APInt low(65, static_cast<uint64_t>(first), true);
+  APInt high(65, static_cast<uint64_t>(last), true);
+  APInt extent = high - low + 1;
+  if (*sourceWidth % layout->elementWidth ||
+      extent != *sourceWidth / layout->elementWidth)
+    return std::nullopt;
+  unsigned count = *width / layout->elementWidth;
+  unsigned adjustment = 0;
+  if (range) {
+    bool descending = layout->left >= layout->right;
+    bool up =
+        range.getSelectionKind() == semantic::SVRangeSelectionKind::IndexedUp;
+    if (descending != up)
+      adjustment = *width - layout->elementWidth;
+    if (extent.ult(count)) {
+      first = 1;
+      last = 0;
+    } else if (up) {
+      high -= count - 1;
+      last = high.getSExtValue();
+    } else {
+      low += count - 1;
+      first = low.getSExtValue();
+    }
+  }
+  return RandomSelectionWindow{*layout, *width, adjustment, first, last};
+}
+
 std::optional<FixedRandomArrayLayout> getFixedRandomArrayLayout(Type type) {
   if (!isa<sim::UnpackedArrayType>(type))
     return std::nullopt;
@@ -367,12 +432,31 @@ LogicalResult freezeRandomConstraintPriorityInputs(
       track |=
           binary.getOperatorKind() == semantic::SVBinaryOperator::LogicalAnd ||
           binary.getOperatorKind() == semantic::SVBinaryOperator::LogicalOr;
-    if (hasFunctionCalls &&
-        isa<semantic::SVElementSelectExpressionOp>(expression)) {
+    if (hasFunctionCalls) {
       auto parts = getChildren(expression);
-      auto layout = parts.size() == 2 ? getRandomSelectionLayout(parts.front())
-                                      : std::nullopt;
-      track |= layout && !getConstantSpelling(parts[1]);
+      auto window = getRandomSelectionWindow(expression);
+      if (window && isa<semantic::SVRangeSelectExpressionOp>(expression)) {
+        auto spelling = getConstantSpelling(parts[2]);
+        auto type = parts[2]->getAttrOfType<TypeAttr>("semantic_type");
+        auto width =
+            type ? getSemanticPackedWidth(type.getValue()) : std::nullopt;
+        auto count = spelling ? parseSVInteger(*spelling, width ? *width : 64,
+                                               getSemanticLocation(parts[2]))
+                              : FailureOr<ParsedConstant>(failure());
+        if (failed(count) || !count->unknown.isZero() ||
+            (type && isSignedSemanticType(type.getValue()) &&
+             count->value.isNegative()) ||
+            count->value.getActiveBits() > 32 ||
+            count->value.getZExtValue() !=
+                window->width / window->source.elementWidth) {
+          emitError(getSemanticLocation(expression))
+              << "constraint function ordering indexed selection width is "
+                 "inconsistent";
+          invalid = true;
+          return;
+        }
+      }
+      track |= window && !getConstantSpelling(parts[1]);
     }
     if (sim::has<sim::metadata::RandomPriorityCondition>(expression) &&
         !track) {
@@ -629,11 +713,42 @@ LogicalResult freezeRandomConstraintPriorityInputs(
       if (failed(path))
         return failure();
       if (*path) {
-        inputs |= APInt::getLowBitsSet(orderingWidth, (*path)->width)
-                      .shl(randomPropertyOffsets[(*path)->property] +
-                           (*path)->offset);
-        if (isa<semantic::SVElementSelectExpressionOp,
-                semantic::SVRangeSelectExpressionOp>(expression))
+        bool invalidSelection =
+            sim::has<sim::metadata::RandomEvaluationError>(expression);
+        for (Operation *selected = expression; !invalidSelection;) {
+          auto window = getRandomSelectionWindow(selected);
+          invalidSelection = window && window->first > window->last;
+          auto parts = getChildren(selected);
+          if (!isa<semantic::SVElementSelectExpressionOp,
+                   semantic::SVRangeSelectExpressionOp,
+                   semantic::SVMemberAccessExpressionOp>(selected) ||
+              parts.empty())
+            break;
+          selected = parts.front();
+        }
+        // An always-invalid address has ERROR but no actual storage role.
+        // In particular it must not request native argument stages whose
+        // priority inventory necessarily has no valid argument edge.
+        if (!invalidSelection)
+          inputs |= APInt::getLowBitsSet(orderingWidth, (*path)->width)
+                        .shl(randomPropertyOffsets[(*path)->property] +
+                             (*path)->offset);
+        if (invalidSelection) {
+          // Retain every address expression, including addresses below an
+          // outer member/element of an always-invalid intermediate slice.
+          children.clear();
+          for (Operation *selected = expression;;) {
+            auto parts = getChildren(selected);
+            if (!isa<semantic::SVElementSelectExpressionOp,
+                     semantic::SVRangeSelectExpressionOp,
+                     semantic::SVMemberAccessExpressionOp>(selected) ||
+                parts.empty())
+              break;
+            children.append(parts.begin() + 1, parts.end());
+            selected = parts.front();
+          }
+        } else if (isa<semantic::SVElementSelectExpressionOp,
+                       semantic::SVRangeSelectExpressionOp>(expression))
           children.erase(children.begin());
         else
           children.clear();
@@ -657,6 +772,7 @@ LogicalResult freezeRandomConstraintPriorityInputs(
     APInt before, after;
     uint64_t source;
     unsigned beforePath, afterPath;
+    bool projectArguments = false;
   };
   SmallVector<Edge> functionOrder;
   uint64_t nextSource = 0;
@@ -676,16 +792,22 @@ LogicalResult freezeRandomConstraintPriorityInputs(
       APInt mask;
       bool argument;
       unsigned context;
+      bool local = true;
+      unsigned call = 0;
     };
     SmallVector<Path> paths;
-    llvm::DenseMap<std::tuple<APInt, uint8_t, unsigned>, unsigned> pathIds;
+    llvm::DenseMap<std::tuple<APInt, uint8_t, unsigned, unsigned>, unsigned>
+        pathIds;
     SmallVector<unsigned> arguments, nonArguments;
+    llvm::DenseMap<Operation *, unsigned> argumentCalls;
+    unsigned argumentCall = 0;
     auto addPath = [&](APInt mask, bool argument, unsigned context) {
+      unsigned call = argument ? argumentCall : 0;
       auto [found, inserted] = pathIds.try_emplace(
-          {mask, static_cast<uint8_t>(argument), context}, paths.size());
+          {mask, static_cast<uint8_t>(argument), context, call}, paths.size());
       if (inserted) {
         (argument ? arguments : nonArguments).push_back(found->second);
-        paths.push_back({std::move(mask), argument, context});
+        paths.push_back({std::move(mask), argument, context, true, call});
       }
     };
     APInt referencedInputs = APInt::getZero(orderingWidth);
@@ -705,6 +827,13 @@ LogicalResult freezeRandomConstraintPriorityInputs(
               invalid = true;
               return;
             }
+            unsigned savedCall = argumentCall;
+            auto restoreCall =
+                llvm::scope_exit([&] { argumentCall = savedCall; });
+            if (!argumentCall)
+              argumentCall =
+                  argumentCalls.try_emplace(function, argumentCalls.size() + 1)
+                      .first->second;
             for (Operation *argument :
                  ArrayRef(children).take_back(argumentCount))
               collectReferences(argument, true, context, false);
@@ -712,7 +841,7 @@ LogicalResult freezeRandomConstraintPriorityInputs(
           }
           if (auto index =
                   sim::get<sim::metadata::RandomPriorityCondition>(nested);
-              index && !isa<semantic::SVElementSelectExpressionOp>(nested)) {
+              index && !getRandomSelectionWindow(nested)) {
             auto children = getChildren(nested);
             uint64_t id = index.getValue().getZExtValue();
             if (isa<semantic::SVConditionalExpressionOp>(nested)) {
@@ -772,8 +901,7 @@ LogicalResult freezeRandomConstraintPriorityInputs(
               unsigned depth = 0;
               for (;;) {
                 auto parts = getChildren(selection);
-                if (isa<semantic::SVElementSelectExpressionOp>(selection) &&
-                    parts.size() == 2 &&
+                if (getRandomSelectionWindow(selection) &&
                     sim::has<sim::metadata::RandomPriorityCondition>(
                         selection) &&
                     !getConstantSpelling(parts[1]))
@@ -790,8 +918,8 @@ LogicalResult freezeRandomConstraintPriorityInputs(
               }
               if (selection) {
                 auto parts = getChildren(selection);
-                auto layout = getRandomSelectionLayout(parts.front());
-                if (!layout) {
+                auto window = getRandomSelectionWindow(selection);
+                if (!window) {
                   invalid = true;
                   return;
                 }
@@ -809,9 +937,8 @@ LogicalResult freezeRandomConstraintPriorityInputs(
                         .getZExtValue();
                 uint64_t operations = 0;
                 nested->walk([&](Operation *) { ++operations; });
-                int64_t first = std::min(layout->left, layout->right);
-                int64_t last = std::max(layout->left, layout->right);
-                for (int64_t address = first;; ++address) {
+                int64_t first = window->first, last = window->last;
+                for (int64_t address = first; first <= last; ++address) {
                   if (operations > remainingPathOperations) {
                     emitError(getSemanticLocation(nested))
                         << "constraint function selected-path inventory "
@@ -936,45 +1063,116 @@ LogicalResult freezeRandomConstraintPriorityInputs(
       invalid = true;
       return;
     }
+    for (auto [index, path] : llvm::enumerate(paths))
+      path.local = index < localPathCount;
+    auto spendOrdering = [&](uint64_t work) {
+      if (work > remainingPathOperations) {
+        emitError(getSemanticLocation(expression))
+            << "constraint function ordering exceeds its expansion budget";
+        invalid = true;
+        return false;
+      }
+      remainingPathOperations -= work;
+      return true;
+    };
+    auto canCoexist = [&](unsigned lhs, unsigned rhs) {
+      for (unsigned a = lhs; a; a = contexts[a - 1].parent) {
+        const Context &left = contexts[a - 1];
+        if (left.kind != 2)
+          continue;
+        for (unsigned b = rhs; b; b = contexts[b - 1].parent) {
+          const Context &right = contexts[b - 1];
+          if (right.kind == 2 && left.condition == right.condition &&
+              left.index != right.index)
+            return false;
+        }
+      }
+      // Ambiguous data conditionals can retain both arms. Only distinct
+      // known addresses of one storage selection are mutually exclusive.
+      return true;
+    };
+    llvm::DenseMap<unsigned, APInt> callArguments;
+    for (unsigned argument : arguments) {
+      const Path &path = paths[argument];
+      auto found =
+          callArguments.try_emplace(path.call, APInt::getZero(orderingWidth))
+              .first;
+      found->second |= path.mask;
+    }
+    for (unsigned before : arguments)
+      for (unsigned after : nonArguments) {
+        if (!canCoexist(paths[before].context, paths[after].context))
+          continue;
+        APInt target = paths[after].mask;
+        unsigned afterPath = after;
+        bool projectArguments =
+            !(target & callArguments.find(paths[before].call)->second).isZero();
+        if (!(paths[before].mask & target).isZero()) {
+          target &= ~paths[before].mask;
+          if (target.isZero())
+            continue;
+          // Keep an exact, disjoint target fragment. Other arguments of this
+          // call are excluded by their live contexts during lowering.
+          auto [position, inserted] = pathIds.try_emplace(
+              std::make_tuple(target, uint8_t{0}, paths[after].context, 0u),
+              paths.size());
+          afterPath = position->second;
+          if (inserted) {
+            if (!spendOrdering(target.getNumWords()))
+              return;
+            paths.push_back(
+                {target, false, paths[after].context, paths[after].local, 0});
+          }
+        }
+        if (!spendOrdering(paths[before].mask.getNumWords() +
+                           target.getNumWords()))
+          return;
+        functionOrder.push_back({paths[before].mask, std::move(target), source,
+                                 before, afterPath, projectArguments});
+      }
     if (!impreciseArguments && !impreciseNonArguments) {
       SmallVector<Attribute> encodedPaths;
-      for (auto [index, path] : llvm::enumerate(paths))
-        encodedPaths.push_back(builder.getDictionaryAttr(
-            {builder.getNamedAttr(
-                 "mask", builder.getIntegerAttr(
-                             builder.getIntegerType(orderingWidth), path.mask)),
-             builder.getNamedAttr("argument",
-                                  builder.getBoolAttr(path.argument)),
-             builder.getNamedAttr("local",
-                                  builder.getBoolAttr(index < localPathCount)),
-             builder.getNamedAttr("context",
-                                  builder.getI64IntegerAttr(path.context))}));
+      for (const Path &path : paths) {
+        SmallVector<NamedAttribute> fields{
+            builder.getNamedAttr(
+                "mask", builder.getIntegerAttr(
+                            builder.getIntegerType(orderingWidth), path.mask)),
+            builder.getNamedAttr("argument",
+                                 builder.getBoolAttr(path.argument)),
+            builder.getNamedAttr("local", builder.getBoolAttr(path.local)),
+            builder.getNamedAttr("context",
+                                 builder.getI64IntegerAttr(path.context))};
+        if (path.call)
+          fields.push_back(builder.getNamedAttr(
+              "call", builder.getI64IntegerAttr(path.call)));
+        encodedPaths.push_back(builder.getDictionaryAttr(fields));
+      }
       sim::set<sim::metadata::RandomPriorityPaths>(
           expression, builder.getArrayAttr(encodedPaths));
     }
-    for (unsigned before : arguments)
-      for (unsigned after : nonArguments)
-        // Each path inventory is already unique within this source atom.
-        if ((paths[before].mask & paths[after].mask).isZero())
-          functionOrder.push_back(
-              {paths[before].mask, paths[after].mask, source, before, after});
   });
   if (!functionOrder.empty() || functionArgumentsPresent) {
     SmallVector<Attribute> encoded;
     encoded.reserve(functionOrder.size());
-    for (auto &[before, after, source, beforePath, afterPath] : functionOrder)
-      encoded.push_back(builder.getDictionaryAttr(
-          {builder.getNamedAttr(
-               "before", builder.getIntegerAttr(
-                             builder.getIntegerType(orderingWidth), before)),
-           builder.getNamedAttr(
-               "after", builder.getIntegerAttr(
-                            builder.getIntegerType(orderingWidth), after)),
-           builder.getNamedAttr("source", builder.getI64IntegerAttr(source)),
-           builder.getNamedAttr("before_path",
-                                builder.getI64IntegerAttr(beforePath)),
-           builder.getNamedAttr("after_path",
-                                builder.getI64IntegerAttr(afterPath))}));
+    for (auto &[before, after, source, beforePath, afterPath,
+                projectArguments] : functionOrder) {
+      SmallVector<NamedAttribute> fields{
+          builder.getNamedAttr(
+              "before", builder.getIntegerAttr(
+                            builder.getIntegerType(orderingWidth), before)),
+          builder.getNamedAttr(
+              "after", builder.getIntegerAttr(
+                           builder.getIntegerType(orderingWidth), after)),
+          builder.getNamedAttr("source", builder.getI64IntegerAttr(source)),
+          builder.getNamedAttr("before_path",
+                               builder.getI64IntegerAttr(beforePath)),
+          builder.getNamedAttr("after_path",
+                               builder.getI64IntegerAttr(afterPath))};
+      if (projectArguments)
+        fields.push_back(builder.getNamedAttr("project_arguments",
+                                              builder.getBoolAttr(true)));
+      encoded.push_back(builder.getDictionaryAttr(fields));
+    }
     sim::set<sim::metadata::RandomFunctionOrder>(root,
                                                  builder.getArrayAttr(encoded));
   }

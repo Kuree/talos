@@ -2838,13 +2838,15 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     Operation *source = nullptr;
     uint32_t origin = 0;
     unsigned beforePath = UINT_MAX, afterPath = UINT_MAX;
+    bool projectArguments = false;
 
     bool operator==(const SolveBeforeEdge &other) const {
       return beforeMask == other.beforeMask && afterMask == other.afterMask &&
              constraintBlock == other.constraintBlock &&
              functionPriority == other.functionPriority &&
              source == other.source && beforePath == other.beforePath &&
-             afterPath == other.afterPath;
+             afterPath == other.afterPath &&
+             projectArguments == other.projectArguments;
     }
   };
   SmallVector<APInt> propertyMasks;
@@ -2857,13 +2859,14 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
   }
   SmallVector<SolveBeforeEdge> solveBeforeEdges;
   llvm::DenseSet<std::tuple<APInt, APInt, uint32_t, uint8_t, Operation *,
-                            unsigned, unsigned>>
+                            unsigned, unsigned, uint8_t>>
       solveBeforeEdgeKeys;
   auto appendSolveBeforeEdge = [&](const SolveBeforeEdge &edge) {
     if (solveBeforeEdgeKeys
             .insert({edge.beforeMask, edge.afterMask, edge.constraintBlock,
                      static_cast<uint8_t>(edge.functionPriority), edge.source,
-                     edge.beforePath, edge.afterPath})
+                     edge.beforePath, edge.afterPath,
+                     static_cast<uint8_t>(edge.projectArguments)})
             .second)
       solveBeforeEdges.push_back(edge);
   };
@@ -2921,6 +2924,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     bool argument;
     unsigned context;
     bool local = true;
+    unsigned call = 0;
   };
   struct PriorityContext {
     unsigned parent;
@@ -2931,6 +2935,8 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
   SmallVector<PriorityContext> priorityContexts{{0, nullptr, true}};
   llvm::DenseMap<Operation *, SmallVector<PriorityPath>> priorityPaths;
   auto hasConditionalPaths = [&](const SolveBeforeEdge &edge) {
+    if (edge.projectArguments)
+      return true;
     if (edge.beforePath == UINT_MAX)
       return false;
     const auto &paths = priorityPaths.find(edge.source)->second;
@@ -2981,16 +2987,12 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
                   binary.getOperatorKind() ==
                       semantic::SVBinaryOperator::LogicalOr))
           conditions.try_emplace(id.getValue().getZExtValue(), expression, 1);
-        else if (isa<semantic::SVElementSelectExpressionOp>(expression) &&
-                 parts.size() == 2) {
-          auto layout = getRandomSelectionLayout(parts.front());
+        else if (auto window = getRandomSelectionWindow(expression)) {
           auto indexType = getNormalizedSemanticType(parts[1]);
-          if (layout && succeeded(indexType) &&
-              sim::getPackedWidth(*indexType)) {
+          if (succeeded(indexType) && sim::getPackedWidth(*indexType)) {
             conditions.try_emplace(id.getValue().getZExtValue(), parts[1], 2);
             selectionBounds.try_emplace(id.getValue().getZExtValue(),
-                                        std::min(layout->left, layout->right),
-                                        std::max(layout->left, layout->right));
+                                        window->first, window->last);
           }
         }
       });
@@ -3061,9 +3063,16 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
           auto context =
               record ? record.getAs<IntegerAttr>("context") : IntegerAttr{};
           auto local = record ? record.getAs<BoolAttr>("local") : BoolAttr{};
+          auto call =
+              record ? record.getAs<IntegerAttr>("call") : IntegerAttr{};
           if (!mask || !argument || !context ||
-              (record.size() != 3 && record.size() != 4) ||
-              (record.size() == 4 && !local) ||
+              (record.size() != 3 && record.size() != 4 &&
+               record.size() != 5) ||
+              (record.size() >= 4 && !local) ||
+              (record.size() == 5 &&
+               (!call || !argument.getValue() || call.getValue().isNegative() ||
+                call.getValue().getActiveBits() > 32 || call.getInt() == 0)) ||
+              (record.size() != 5 && call) ||
               mask.getValue().getActiveBits() > assignmentWidth ||
               !(mask.getValue().zextOrTrunc(assignmentWidth) &
                 ~randomAssignmentMask)
@@ -3078,7 +3087,8 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
           decoded.push_back({mask.getValue().zextOrTrunc(assignmentWidth),
                              argument.getValue(),
                              contextMap[context.getValue().getZExtValue()],
-                             local ? local.getValue() : true});
+                             local ? local.getValue() : true,
+                             call ? static_cast<unsigned>(call.getInt()) : 0});
         }
       }
     if (Attribute order = sim::get<sim::metadata::RandomFunctionOrder>(root)) {
@@ -3086,6 +3096,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
       hasFunctionPriority = true;
       SmallVector<Operation *> edgeSources;
       SmallVector<std::pair<unsigned, unsigned>> edgePaths;
+      SmallVector<uint8_t> edgeProjections;
       SmallVector<APInt> pairs;
       if (auto dense = dyn_cast<DenseI64ArrayAttr>(order)) {
         for (int64_t value : dense.asArrayRef())
@@ -3096,8 +3107,13 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
             auto before = record.getAs<IntegerAttr>("before");
             auto after = record.getAs<IntegerAttr>("after");
             auto source = record.getAs<IntegerAttr>("source");
+            auto projectArguments = record.getAs<BoolAttr>("project_arguments");
             if (!before || !after || !source ||
-                (record.size() != 3 && record.size() != 5) ||
+                (record.size() != 3 && record.size() != 5 &&
+                 record.size() != 6) ||
+                (record.size() == 6 &&
+                 (!projectArguments || !projectArguments.getValue())) ||
+                (record.size() != 6 && projectArguments) ||
                 before.getValue().getActiveBits() > assignmentWidth ||
                 after.getValue().getActiveBits() > assignmentWidth ||
                 source.getValue().isNegative() ||
@@ -3114,7 +3130,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
             Operation *sourceOp = sources[source.getValue().getZExtValue()];
             edgeSources.push_back(sourceOp);
             unsigned beforeIndex = UINT_MAX, afterIndex = UINT_MAX;
-            if (record.size() == 5) {
+            if (record.size() >= 5) {
               auto beforePath = record.getAs<IntegerAttr>("before_path");
               auto afterPath = record.getAs<IntegerAttr>("after_path");
               auto found = priorityPaths.find(sourceOp);
@@ -3135,6 +3151,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
               afterIndex = afterPath.getValue().getZExtValue();
               const auto &paths = found->second;
               if (!paths[beforeIndex].argument || paths[afterIndex].argument ||
+                  (projectArguments && paths[beforeIndex].call == 0) ||
                   paths[beforeIndex].mask != pairs[pairs.size() - 2] ||
                   paths[afterIndex].mask != pairs.back()) {
                 emitError(getSemanticLocation(root))
@@ -3144,6 +3161,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
               }
             }
             edgePaths.emplace_back(beforeIndex, afterIndex);
+            edgeProjections.push_back(static_cast<bool>(projectArguments));
             continue;
           }
           if (!edgeSources.empty()) {
@@ -3190,6 +3208,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         if (!edgePaths.empty()) {
           edge.beforePath = edgePaths[pair / 2].first;
           edge.afterPath = edgePaths[pair / 2].second;
+          edge.projectArguments = edgeProjections[pair / 2];
         }
         appendSolveBeforeEdge(edge);
       }
@@ -6610,11 +6629,19 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     for (Operation *path : llvm::reverse(paths)) {
       auto parts = getChildren(path);
       auto parentWidth = widthOf(parts.front()), childWidth = widthOf(path);
-      if (!parentWidth || !*parentWidth || !childWidth || !*childWidth ||
-          *childWidth > *parentWidth)
+      if (!parentWidth || !*parentWidth || !childWidth || !*childWidth)
         return failure();
       SelectionStep step;
-      if (!isa<semantic::SVElementSelectExpressionOp>(path)) {
+      auto window = getRandomSelectionWindow(path);
+      if (sim::has<sim::metadata::RandomEvaluationError>(path) ||
+          (window && window->first > window->last)) {
+        steps.push_back(std::move(step));
+        continue;
+      }
+      if (*childWidth > *parentWidth)
+        return failure();
+      bool dynamicWindow = window && !getConstantSpelling(parts[1]);
+      if (!isa<semantic::SVElementSelectExpressionOp>(path) && !dynamicWindow) {
         // Treat the immediate parent as a standalone variable to resolve a
         // member or constant range's relative offset without cloning data.
         uint64_t width = *parentWidth;
@@ -6637,8 +6664,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         }
         step.choices.push_back({(**relative).offset, guardConstant(true)});
       } else {
-        auto layout = getRandomSelectionLayout(parts.front());
-        if (parts.size() != 2 || !layout || layout->elementWidth != *childWidth)
+        if (!window || window->width != *childWidth)
           return failure();
         if (dependsOnCandidate(parts[1])) {
           emitError(getSemanticLocation(parts[1]))
@@ -6660,9 +6686,8 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
                         .getResult();
         auto type = cast<IntegerType>((*address).getType());
         Value known = guardAnd(index->valid, index->errors);
-        int64_t first = std::min(layout->left, layout->right);
-        int64_t last = std::max(layout->left, layout->right);
-        for (int64_t selected = first;; ++selected) {
+        int64_t first = window->first, last = window->last;
+        for (int64_t selected = first; first <= last; ++selected) {
           if (!remainingStorageMaskOperations) {
             emitError(getSemanticLocation(path))
                 << "constraint function selection mask exceeds its "
@@ -6670,11 +6695,8 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
             return failure();
           }
           --remainingStorageMaskOperations;
-          uint64_t ordinal = layout->left >= layout->right
-                                 ? uint64_t(selected) - uint64_t(layout->right)
-                                 : uint64_t(layout->right) - uint64_t(selected);
-          if (ordinal > *parentWidth / layout->elementWidth ||
-              ordinal * layout->elementWidth > *parentWidth - *childWidth)
+          auto offset = window->offset(selected);
+          if (!offset || *offset > *parentWidth - *childWidth)
             return failure();
           Value expected = arith::ConstantOp::create(
               builder, location, type,
@@ -6682,8 +6704,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
                   type, APInt(type.getWidth(), uint64_t(selected), true)));
           Value equal = arith::CmpIOp::create(
               builder, location, arith::CmpIPredicate::eq, *address, expected);
-          step.choices.push_back(
-              {ordinal * layout->elementWidth, guardAnd(known, equal)});
+          step.choices.push_back({*offset, guardAnd(known, equal)});
           if (selected == last)
             break;
         }
@@ -7472,56 +7493,109 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
       if (isa<semantic::SVRangeSelectExpressionOp>(expression) &&
           values.size() == 3 &&
           !sim::has<sim::metadata::RandomEvaluationError>(expression)) {
-        auto sourceWidth = sim::getPackedWidth(values[0].value.getType());
-        auto selectedWidth = sim::getPackedWidth(*resultType);
-        if (sourceWidth && selectedWidth) {
-          if (*selectedWidth > *sourceWidth) {
-            requireSafeRead(guardConstant(false));
-          } else {
-            // The ordinary selection lowering already normalizes declared
-            // coordinates, directions, element widths and indexed bases in
-            // a widened arithmetic type. Reuse that exact address for bounds
-            // validation, retaining X/Z from the original index operands.
-            SmallVector<std::pair<Operation *, Value>> previous;
-            for (unsigned index = 1; index < inputs.size(); ++index) {
-              previous.push_back(
-                  {inputs[index], expressionCaptures.lookup(inputs[index])});
-              expressionCaptures[inputs[index]] = values[index].value;
-            }
-            auto restore = llvm::scope_exit([&] {
-              for (auto [input, value] : llvm::reverse(previous)) {
-                if (value)
-                  expressionCaptures[input] = value;
-                else
-                  expressionCaptures.erase(input);
+        auto requireFixedIndex = [&](unsigned operand, int64_t first,
+                                     int64_t last) -> LogicalResult {
+          auto index = toArrayIndex(values[operand].value,
+                                    isSignedNode(inputs[operand]), location);
+          if (failed(index))
+            return failure();
+          Value known = guardConstant(true);
+          if (auto logic = dyn_cast<sim::LogicType>((*index).getType())) {
+            Value bits = sim::SimLogicToBitsOp::create(
+                builder, location, builder.getIntegerType(logic.getWidth()),
+                *index);
+            Value restored =
+                sim::SimLogicFromBitsOp::create(builder, location, logic, bits);
+            known = sim::SimLogicCompareOp::create(
+                builder, location, builder.getI1Type(),
+                sim::CompareKind::CaseEq, *index, restored);
+            index = bits;
+          }
+          auto boundary = [&](int64_t value) -> Value {
+            auto type = cast<IntegerType>((*index).getType());
+            return arith::ConstantOp::create(
+                builder, location, type,
+                builder.getIntegerAttr(type, APInt(type.getWidth(),
+                                                   static_cast<uint64_t>(value),
+                                                   true)));
+          };
+          Value inRange =
+              guardAnd(arith::CmpIOp::create(builder, location,
+                                             arith::CmpIPredicate::sge, *index,
+                                             boundary(first)),
+                       arith::CmpIOp::create(builder, location,
+                                             arith::CmpIPredicate::sle, *index,
+                                             boundary(last)));
+          requireSafeRead(guardAnd(known, inRange));
+          return success();
+        };
+        if (auto window = getRandomSelectionWindow(expression)) {
+          // Array defaults and two-state conversions may consume unknown
+          // data. The original address remains a structural error, including
+          // unpacked IEEE slices and ranges wider than their source.
+          if (failed(requireFixedIndex(1, window->first, window->last)))
+            return failure();
+        } else if (isa<sim::UnpackedArrayType>(values[0].value.getType())) {
+          auto layout = getRandomSelectionLayout(inputs[0]);
+          if (!layout ||
+              failed(
+                  requireFixedIndex(1, std::min(layout->left, layout->right),
+                                    std::max(layout->left, layout->right))) ||
+              failed(requireFixedIndex(2, std::min(layout->left, layout->right),
+                                       std::max(layout->left, layout->right))))
+            return failure();
+        } else {
+          auto sourceWidth = sim::getPackedWidth(values[0].value.getType());
+          auto selectedWidth = sim::getPackedWidth(*resultType);
+          if (sourceWidth && selectedWidth) {
+            if (*selectedWidth > *sourceWidth) {
+              requireSafeRead(guardConstant(false));
+            } else {
+              // The ordinary selection lowering already normalizes declared
+              // coordinates, directions, element widths and indexed bases in
+              // a widened arithmetic type. Reuse that exact address for bounds
+              // validation, retaining X/Z from the original index operands.
+              SmallVector<std::pair<Operation *, Value>> previous;
+              for (unsigned index = 1; index < inputs.size(); ++index) {
+                previous.push_back(
+                    {inputs[index], expressionCaptures.lookup(inputs[index])});
+                expressionCaptures[inputs[index]] = values[index].value;
               }
-            });
-            auto address = lowerPackedSelectionAddress(
-                expression, values[0].value.getType(), *resultType);
-            if (failed(address))
-              return failure();
-            if (!address->constant) {
-              Value low = address->dynamicLow;
-              Value known = guardConstant(true);
-              if (auto logic = dyn_cast<sim::LogicType>(low.getType())) {
-                Value bits = sim::SimLogicToBitsOp::create(
-                    builder, location, builder.getIntegerType(logic.getWidth()),
-                    low);
-                Value restored = sim::SimLogicFromBitsOp::create(
-                    builder, location, logic, bits);
-                known = sim::SimLogicCompareOp::create(
-                    builder, location, builder.getI1Type(),
-                    sim::CompareKind::CaseEq, low, restored);
-                low = bits;
+              auto restore = llvm::scope_exit([&] {
+                for (auto [input, value] : llvm::reverse(previous)) {
+                  if (value)
+                    expressionCaptures[input] = value;
+                  else
+                    expressionCaptures.erase(input);
+                }
+              });
+              auto address = lowerPackedSelectionAddress(
+                  expression, values[0].value.getType(), *resultType);
+              if (failed(address))
+                return failure();
+              if (!address->constant) {
+                Value low = address->dynamicLow;
+                Value known = guardConstant(true);
+                if (auto logic = dyn_cast<sim::LogicType>(low.getType())) {
+                  Value bits = sim::SimLogicToBitsOp::create(
+                      builder, location,
+                      builder.getIntegerType(logic.getWidth()), low);
+                  Value restored = sim::SimLogicFromBitsOp::create(
+                      builder, location, logic, bits);
+                  known = sim::SimLogicCompareOp::create(
+                      builder, location, builder.getI1Type(),
+                      sim::CompareKind::CaseEq, low, restored);
+                  low = bits;
+                }
+                Value inRange = guardAnd(
+                    arith::CmpIOp::create(builder, location,
+                                          arith::CmpIPredicate::sge, low,
+                                          constantLike(low, 0)),
+                    arith::CmpIOp::create(
+                        builder, location, arith::CmpIPredicate::sle, low,
+                        constantLike(low, *sourceWidth - *selectedWidth)));
+                requireSafeRead(guardAnd(known, inRange));
               }
-              Value inRange = guardAnd(
-                  arith::CmpIOp::create(builder, location,
-                                        arith::CmpIPredicate::sge, low,
-                                        constantLike(low, 0)),
-                  arith::CmpIOp::create(
-                      builder, location, arith::CmpIPredicate::sle, low,
-                      constantLike(low, *sourceWidth - *selectedWidth)));
-              requireSafeRead(guardAnd(known, inRange));
             }
           }
         }
@@ -7964,6 +8038,30 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     }
     livePriorityInventories[source] = input;
     return input;
+  };
+  llvm::DenseMap<std::pair<Operation *, unsigned>, Value> liveCallArgumentMasks;
+  auto liveCallArguments = [&](Operation *source,
+                               unsigned call) -> FailureOr<Value> {
+    auto key = std::make_pair(source, call);
+    if (auto found = liveCallArgumentMasks.find(key);
+        found != liveCallArgumentMasks.end())
+      return found->second;
+    auto found = priorityPaths.find(source);
+    if (found == priorityPaths.end() || !call)
+      return failure();
+    Value arguments = constantAssignment64(0);
+    for (const PriorityPath &path : found->second) {
+      if (!path.argument || path.call != call)
+        continue;
+      auto enabled = contextEnabled(path.context);
+      if (failed(enabled))
+        return failure();
+      arguments = unionGuardInputs(
+          arguments,
+          selectGuardInputs(*enabled, constantAssignment(path.mask)));
+    }
+    liveCallArgumentMasks[key] = arguments;
+    return arguments;
   };
   struct PriorityGuards {
     LivePriorityInput input;
@@ -8414,11 +8512,19 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     Operation *source;
     unsigned beforeContext, afterContext;
     APInt before, references;
+    unsigned argumentCall = 0;
     uint32_t origin = 0;
   };
   SmallVector<ConditionalOrderGroup> conditionalOrderGroups;
-  llvm::DenseMap<std::tuple<Operation *, unsigned, unsigned>, unsigned>
+  llvm::DenseMap<std::tuple<Operation *, unsigned, unsigned, unsigned>,
+                 unsigned>
       conditionalOrderIds;
+  auto orderGroupKey = [&](const SolveBeforeEdge &edge) {
+    const auto &paths = priorityPaths.find(edge.source)->second;
+    return std::make_tuple(edge.source, paths[edge.beforePath].context,
+                           paths[edge.afterPath].context,
+                           edge.projectArguments ? edge.beforePath : UINT_MAX);
+  };
   for (const SolveBeforeEdge &edge : solveBeforeEdges) {
     if (!hasConditionalPaths(edge))
       continue;
@@ -8426,11 +8532,12 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     unsigned before = paths[edge.beforePath].context;
     unsigned after = paths[edge.afterPath].context;
     auto [found, inserted] = conditionalOrderIds.try_emplace(
-        {edge.source, before, after}, conditionalOrderGroups.size());
+        orderGroupKey(edge), conditionalOrderGroups.size());
     if (inserted)
-      conditionalOrderGroups.push_back({edge.source, before, after,
-                                        edge.beforeMask,
-                                        edge.beforeMask | edge.afterMask});
+      conditionalOrderGroups.push_back(
+          {edge.source, before, after, edge.beforeMask,
+           edge.beforeMask | edge.afterMask,
+           edge.projectArguments ? paths[edge.beforePath].call : 0});
     else {
       auto &group = conditionalOrderGroups[found->second];
       group.before |= edge.beforeMask;
@@ -8448,6 +8555,24 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
                                         constantAssignment(group.before)});
     if (failed(live))
       return failure();
+    if (group.argumentCall) {
+      auto arguments = liveCallArguments(group.source, group.argumentCall);
+      if (failed(arguments))
+        return failure();
+      // Only this call's currently selected actuals can consume a target.
+      // Other calls retain their owned dependencies. Restrict after applying
+      // inherited guards so their extra references cannot restore the bits.
+      Value blocked = arith::AndIOp::create(
+          builder, location, *arguments,
+          constantAssignment(group.references & ~group.before));
+      Value keep = arith::XOrIOp::create(
+          builder, location, blocked,
+          constantAssignment(APInt::getAllOnes(assignmentWidth)));
+      live->references =
+          arith::AndIOp::create(builder, location, live->references, keep);
+      live->arguments =
+          arith::AndIOp::create(builder, location, live->arguments, keep);
+    }
     live->references = selectGuardInputs(enabled, live->references);
     live->arguments = selectGuardInputs(enabled, live->arguments);
     emitLiteral(true);
@@ -8471,9 +8596,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
   }
   for (SolveBeforeEdge &edge : solveBeforeEdges)
     if (hasConditionalPaths(edge)) {
-      const auto &paths = priorityPaths.find(edge.source)->second;
-      auto key = std::make_tuple(edge.source, paths[edge.beforePath].context,
-                                 paths[edge.afterPath].context);
+      auto key = orderGroupKey(edge);
       edge.origin =
           conditionalOrderGroups[conditionalOrderIds.lookup(key)].origin;
     }

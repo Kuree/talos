@@ -40,6 +40,22 @@ struct RandomSelectionLayout {
 std::optional<RandomSelectionLayout>
 getRandomSelectionLayout(mlir::Operation *source);
 
+struct RandomSelectionWindow {
+  RandomSelectionLayout source;
+  unsigned width;
+  unsigned lowAdjustment;
+  int64_t first;
+  int64_t last;
+
+  /// An empty interval represents a selection with no fully valid address.
+  std::optional<uint64_t> offset(int64_t index) const;
+};
+
+/// Finite element or indexed-range storage selection. Bounds describe valid
+/// source index values, while offsets and widths use sampling coordinates.
+std::optional<RandomSelectionWindow>
+getRandomSelectionWindow(mlir::Operation *selection);
+
 /// The IEEE scalar leaf of a real property or fixed unpacked real array.
 mlir::FloatType getRandomRealElementType(mlir::Type type);
 

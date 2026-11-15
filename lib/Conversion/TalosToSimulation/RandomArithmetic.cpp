@@ -24,6 +24,7 @@ struct RandomArithmetic::Impl {
   Binding binding;
   bool frozenVariables;
   uint64_t remainingArrayPlaneElements = uint64_t{1} << 20;
+  uint64_t remainingRealSelectionChoices = uint64_t{1} << 20;
   // Temporary expressions retain the target layout used by their original
   // module, including layouts of unpacked values beneath a packed selection.
   OwningOpRef<ModuleOp> expressions;
@@ -787,8 +788,8 @@ struct RandomArithmetic::Impl {
             {*value}));
       }
     }
-    if (!offset && isa<semantic::SVElementSelectExpressionOp>(source) &&
-        parts.size() == 2) {
+    if (!offset && getRandomSelectionWindow(source)) {
+      auto window = *getRandomSelectionWindow(source);
       auto baseType = parts.front()->getAttrOfType<TypeAttr>("semantic_type");
       auto array = baseType ? realDimension(baseType.getValue()) : std::nullopt;
       if (array) {
@@ -799,9 +800,12 @@ struct RandomArithmetic::Impl {
         }
         auto index = get(parts[1]);
         auto indexWidth = width(parts[1]);
-        unsigned leaves = *coordinateWidth / *leafWidth;
-        if (failed(index) || failed(indexWidth) || array->count == 0 ||
-            array->count > UINT32_MAX / leaves)
+        auto baseType = getNormalizedSemanticType(parts.front());
+        auto baseWidth = succeeded(baseType) ? getRandomPropertyWidth(*baseType)
+                                             : std::nullopt;
+        if (failed(index) || failed(indexWidth) || !baseWidth ||
+            window.width != *coordinateWidth ||
+            *indexWidth == std::numeric_limits<unsigned>::max())
           return failure();
         unsigned comparisonWidth =
             std::max(64u, *indexWidth + unsigned(!sign(parts[1])));
@@ -814,19 +818,33 @@ struct RandomArithmetic::Impl {
               APInt(comparisonWidth, static_cast<uint64_t>(value), true), true);
         };
         SmallVector<std::pair<int64_t, Operation *>> choices;
-        int64_t first = std::min(array->left, array->right);
-        for (unsigned index = 0; index != array->count; ++index) {
-          int64_t address = first + index;
-          uint64_t element = array->left <= array->right
-                                 ? static_cast<uint64_t>(address) -
-                                       static_cast<uint64_t>(array->left)
-                                 : static_cast<uint64_t>(array->left) -
-                                       static_cast<uint64_t>(address);
-          auto value = realLeaf(parts.front(), element * leaves + ordinal);
+        int64_t first = window.first, last = window.last;
+        for (int64_t address = first; first <= last; ++address) {
+          if (!remainingRealSelectionChoices) {
+            emitError(source->getLoc())
+                << "real array selection exceeds its expansion budget";
+            return failure();
+          }
+          --remainingRealSelectionChoices;
+          auto low = window.offset(address);
+          if (!low || *coordinateWidth > *baseWidth ||
+              *low > *baseWidth - *coordinateWidth || *low % *leafWidth)
+            return failure();
+          unsigned start = (*baseWidth - *low - *coordinateWidth) / *leafWidth;
+          auto value = realLeaf(parts.front(), start + ordinal);
           if (failed(value))
             return failure();
           choices.push_back({address, *value});
+          if (address == last)
+            break;
         }
+        Operation *zero = makeTyped(
+            source, semantic::SVRealLiteralOp::getOperationName(), realType,
+            {builder.getNamedAttr("constant_value",
+                                  builder.getStringAttr("0"))},
+            {});
+        if (choices.empty())
+          return remember(zero);
         std::function<Operation *(unsigned, unsigned)> choose =
             [&](unsigned begin, unsigned end) {
               if (end - begin == 1)
@@ -837,22 +855,16 @@ struct RandomArithmetic::Impl {
               return selectReal(source, realType, condition,
                                 choose(begin, middle), choose(middle, end));
             };
-        Operation *inRange =
-            bitAnd(source,
-                   binary(source, Binary::GreaterThanEqual, selected,
-                          boundary(first), 1),
-                   binary(source, Binary::LessThanEqual, selected,
-                          boundary(std::max(array->left, array->right)), 1),
-                   1);
+        Operation *inRange = bitAnd(
+            source,
+            binary(source, Binary::GreaterThanEqual, selected, boundary(first),
+                   1),
+            binary(source, Binary::LessThanEqual, selected, boundary(last), 1),
+            1);
         if (index->unknown)
           inRange = bitAnd(
               source, inRange,
               notBool(source, nonzero(source, index->unknown, *indexWidth)), 1);
-        Operation *zero = makeTyped(
-            source, semantic::SVRealLiteralOp::getOperationName(), realType,
-            {builder.getNamedAttr("constant_value",
-                                  builder.getStringAttr("0"))},
-            {});
         return remember(selectReal(source, realType, inRange,
                                    choose(0, choices.size()), zero));
       }
