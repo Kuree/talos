@@ -39,6 +39,7 @@ def main():
         choices=[
             "relational", "independent", "popcount", "native-functions",
             "native-guards",
+            "real-equality",
         ],
         default="relational",
     )

@@ -341,6 +341,8 @@ public:
   /// cofactors lets the sampler construct only the final relation's decision
   /// diagram, without constructing diagrams for intermediate arithmetic.
   ID cofactor(ID root, uint32_t variable, bool high) {
+    // Complemented handles share one memo: restricting !f negates the
+    // restriction of f. Pending entries always name the positive node.
     auto known = [&](ID id, ID &result) {
       if (firstVariable(id) > variable ||
           (nodes[id / 2].opcode == PlanOpcode::RandomBit &&
@@ -348,13 +350,17 @@ public:
         result = id;
         return true;
       }
-      const auto *found = cofactors.find((uint64_t(id) << 32) | variable);
+      const auto *found =
+          cofactors.find((uint64_t(id & ~ID(1)) << 32) | variable);
       if (!found)
         return false;
       result = high ? found->second : found->first;
-      return result != missing;
+      if (result == missing)
+        return false;
+      result ^= id & 1;
+      return true;
     };
-    std::vector<ID> pending{root};
+    std::vector<ID> pending{root & ~ID(1)};
     ID result = 0;
     while (!pending.empty()) {
       ID id = pending.back();
@@ -364,18 +370,21 @@ public:
       }
       PlanNode node = nodes[id / 2];
       if (node.opcode == PlanOpcode::RandomBit)
-        result = ID(high) ^ (id & 1);
+        result = ID(high);
       else {
         ID a = 0, b = 0;
-        if (!known(node.a, a)) {
-          pending.push_back(node.a);
+        bool knownA = known(node.a, a), knownB = known(node.b, b);
+        // A false child settles either polarity without visiting its sibling.
+        if ((knownA && a == 0) || (knownB && b == 0))
+          result = 0;
+        else if (!knownA) {
+          pending.push_back(node.a & ~ID(1));
           continue;
-        }
-        if (!known(node.b, b)) {
-          pending.push_back(node.b);
+        } else if (!knownB) {
+          pending.push_back(node.b & ~ID(1));
           continue;
-        }
-        result = conjunction(a, b) ^ (id & 1);
+        } else
+          result = a == node.a && b == node.b ? id : conjunction(a, b);
       }
       auto *found = cofactors
                         .insert((uint64_t(id) << 32) | variable,
@@ -384,7 +393,7 @@ public:
       (high ? found->second : found->first) = result;
       pending.pop_back();
     }
-    return result;
+    return result ^ (root & 1);
   }
 
   /// Substitute arbitrary accepted stage inputs. Only reachable nodes are

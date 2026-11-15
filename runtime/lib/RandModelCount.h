@@ -689,10 +689,11 @@ private:
   ID negate(ID a) { return conditional(a, 0, 1); }
   ID exclusiveOr(ID a, ID b) { return conditional(a, negate(b), b); }
 
-  /// Substitute mandatory literals before branching through arithmetic gates.
-  /// A positive AND forces both children; a negated AND does not. Restore the
-  /// literals in the diagram so counting, projection and weighted intersections
-  /// retain exactly the original relation and the same input inventory.
+  /// Propagate facts through the reachable AND graph in both directions.
+  /// Input facts are restored as literals in the diagram. Internal facts may
+  /// cut arithmetic cones only while retaining their defining obligations:
+  /// a false AND with two unknown children remains a negated-AND frontier.
+  /// All other known gates follow from child facts by topological induction.
   bool extractLiterals(random::BooleanCircuit::ID predicate,
                        random::BooleanCircuit::ID &remaining, ID &literals,
                        size_t &budget, size_t circuitBudget,
@@ -700,51 +701,149 @@ private:
     using CircuitID = random::BooleanCircuit::ID;
     remaining = predicate;
     literals = 1;
-    if (!circuit->hasMandatoryLiteral(remaining))
+    if (!circuit->hasMandatoryLiteral(predicate))
       return true;
-    std::vector<bool> selected(variableCount, false);
-    std::vector<bool> values(variableCount, false);
-    for (;;) {
-      if (!circuit->hasMandatoryLiteral(remaining))
-        break;
-      bool changed = false;
-      std::vector<bool> visited(circuit->getNodes().size(), false);
-      std::vector<CircuitID> pending{remaining};
-      while (!pending.empty()) {
-        if ((budget && --budget == 0) ||
-            (circuitBudget && circuit->getNodes().size() > circuitBudget))
+    const auto &gates = circuit->getNodes();
+    constexpr uint32_t absent = UINT32_MAX;
+    struct Fanout {
+      uint32_t parent, next;
+    };
+    std::vector<uint32_t> first(gates.size(), absent);
+    std::vector<Fanout> fanouts;
+    std::vector<bool> visited(gates.size(), false);
+    std::vector<uint32_t> pending{predicate / 2};
+    auto exhausted = [&] {
+      return (budget && --budget == 0) ||
+             (circuitBudget && circuit->getNodes().size() > circuitBudget);
+    };
+    while (!pending.empty()) {
+      if (exhausted())
+        return false;
+      uint32_t index = pending.back();
+      pending.pop_back();
+      if (visited[index])
+        continue;
+      visited[index] = true;
+      const auto &gate = gates[index];
+      if (index == 0)
+        continue;
+      if (gate.opcode == random::PlanOpcode::RandomBit) {
+        if (gate.b >= variableCount)
           return false;
-        CircuitID id = pending.back();
-        pending.pop_back();
-        if (id == 0) {
+        continue;
+      }
+      if (gate.opcode != random::PlanOpcode::And)
+        return false;
+      for (CircuitID child : {gate.a, gate.b}) {
+        uint32_t input = child / 2;
+        if (fanouts.size() >= absent)
+          return false;
+        uint32_t link = fanouts.size();
+        fanouts.push_back({index, first[input]});
+        first[input] = link;
+        pending.push_back(input);
+      }
+    }
+    // The graph is immutable until every implication reaches a fixed point.
+    constexpr uint8_t unknown = 2;
+    std::vector<uint8_t> known(gates.size(), unknown);
+    known[0] = 0;
+    auto assign = [&](CircuitID id, bool desired) {
+      uint32_t index = id / 2;
+      uint8_t value = uint8_t(desired) ^ (id & 1);
+      if (known[index] != unknown)
+        return known[index] == value;
+      known[index] = value;
+      pending.push_back(index);
+      return true;
+    };
+    auto value = [&](CircuitID id) -> uint8_t {
+      uint8_t result = known[id / 2];
+      return result == unknown ? unknown : result ^ (id & 1);
+    };
+    auto propagate = [&](uint32_t index) {
+      const auto &gate = gates[index];
+      if (gate.opcode != random::PlanOpcode::And)
+        return true;
+      uint8_t a = value(gate.a), b = value(gate.b);
+      if ((a == 0 || b == 0) && !assign(index * 2, false))
+        return false;
+      if (a == 1 && b == 1 && !assign(index * 2, true))
+        return false;
+      if (known[index] == 1)
+        return assign(gate.a, true) && assign(gate.b, true);
+      if (known[index] == 0)
+        return (a != 1 || assign(gate.b, false)) &&
+               (b != 1 || assign(gate.a, false));
+      return true;
+    };
+    if (!assign(predicate, true)) {
+      remaining = 0;
+      return true;
+    }
+    std::vector<bool> selected(variableCount, false),
+        values(variableCount, false);
+    while (!pending.empty()) {
+      if (exhausted())
+        return false;
+      uint32_t index = pending.back();
+      pending.pop_back();
+      const auto &gate = gates[index];
+      if (gate.opcode == random::PlanOpcode::RandomBit) {
+        if (gate.b >= variableCount)
+          return false;
+        bool bit = known[index] != 0;
+        if (selected[gate.b] && values[gate.b] != bit) {
           remaining = 0;
           return true;
         }
-        if (id == 1 || !circuit->hasMandatoryLiteral(id) || visited[id / 2])
-          continue;
-        auto node = circuit->getNodes()[id / 2];
-        // Opposite polarities of an AND have different implications. Mark
-        // only the positive occurrence, which is the one we can decompose.
-        if (node.opcode == random::PlanOpcode::And && !(id & 1)) {
-          visited[id / 2] = true;
-          pending.push_back(node.a);
-          pending.push_back(node.b);
-        } else if (node.opcode == random::PlanOpcode::RandomBit) {
-          if (node.b >= variableCount)
-            return false;
-          bool value = !(id & 1);
-          if (selected[node.b] && values[node.b] != value) {
-            remaining = 0;
-            return true;
-          }
-          changed |= !selected[node.b];
-          selected[node.b] = true;
-          values[node.b] = value;
-        }
+        selected[gate.b] = true;
+        values[gate.b] = bit;
       }
-      if (!changed)
-        break;
-      remaining = circuit->restrict(remaining, values, selected);
+      if (!propagate(index)) {
+        remaining = 0;
+        return true;
+      }
+      for (uint32_t link = first[index]; link != absent;
+           link = fanouts[link].next)
+        if (!propagate(fanouts[link].parent)) {
+          remaining = 0;
+          return true;
+        }
+    }
+    // Rebuild unknown gates under the internal facts. Keeping every frontier
+    // obligation, rather than replacing the asserted root by true, preserves
+    // its exact solutions. Only input facts may leave this circuit as literals.
+    size_t originalSize = known.size();
+    std::vector<CircuitID> rewritten(originalSize, 0), frontier;
+    auto term = [&](CircuitID id) { return rewritten[id / 2] ^ (id & 1); };
+    for (size_t index = 1; index != originalSize; ++index) {
+      if (!visited[index])
+        continue;
+      if (exhausted())
+        return false;
+      auto gate = circuit->getNodes()[index];
+      if (known[index] != unknown) {
+        rewritten[index] = known[index];
+        if (known[index] == 0 && gate.opcode == random::PlanOpcode::And &&
+            value(gate.a) == unknown && value(gate.b) == unknown)
+          frontier.push_back(circuit->conjunction(term(gate.a), term(gate.b)) ^
+                             1);
+      } else if (gate.opcode == random::PlanOpcode::RandomBit)
+        rewritten[index] =
+            selected[gate.b] ? CircuitID(values[gate.b]) : index * 2;
+      else if (gate.opcode == random::PlanOpcode::And) {
+        CircuitID a = term(gate.a), b = term(gate.b);
+        rewritten[index] =
+            a == gate.a && b == gate.b ? index * 2 : circuit->conjunction(a, b);
+      } else
+        rewritten[index] = index * 2;
+    }
+    remaining = 1;
+    for (CircuitID condition : frontier) {
+      if (exhausted())
+        return false;
+      remaining = circuit->conjunction(remaining, condition);
     }
     for (size_t variable = variableCount; variable-- != 0;)
       if (selected[variable] && (!keep || (*keep)[variable]))

@@ -283,6 +283,251 @@ TEST_F(RandModelCountTest, CountsCrossInlineStorage) {
   EXPECT_EQ(half.shifted(70).compare(ModelCount::powerOfTwo(197)), 0);
 }
 
+// Evaluate all six-input truth assignments independently of either Shannon
+// expansion or implication propagation. Duplicate input nodes share ordinals.
+uint64_t truthTable(const BooleanCircuit &circuit, ID root) {
+  const auto &nodes = circuit.getNodes();
+  std::vector<uint64_t> values(nodes.size());
+  auto value = [&](ID id) {
+    return values[id / 2] ^ ((id & 1) ? UINT64_MAX : 0);
+  };
+  for (size_t index = 1; index != nodes.size(); ++index) {
+    const auto &node = nodes[index];
+    if (node.opcode == PlanOpcode::RandomBit) {
+      for (unsigned assignment = 0; assignment != 64; ++assignment)
+        if ((assignment >> node.b) & 1)
+          values[index] |= uint64_t{1} << assignment;
+    } else
+      values[index] = value(node.a) & value(node.b);
+  }
+  return value(root);
+}
+
+unsigned lexicographicValue(unsigned rank) {
+  unsigned value = 0;
+  for (unsigned bit = 0; bit != 6; ++bit)
+    value |= ((rank >> (5 - bit)) & 1) << bit;
+  return value;
+}
+
+TEST_F(RandModelCountTest, CofactorsPreserveTruthAndSkipFalseSiblings) {
+  std::vector<ID> inputs;
+  for (unsigned index = 0; index != 6; ++index)
+    inputs.push_back(bit(index));
+  uint32_t state = 7;
+  auto next = [&] { return state = state * 1664525u + 1013904223u; };
+  std::vector<ID> expressions = inputs;
+  for (unsigned index = 0; index != 64; ++index) {
+    ID a = expressions[next() % expressions.size()] ^ (next() & 1);
+    ID b = expressions[next() % expressions.size()] ^ (next() & 1);
+    expressions.push_back(index % 3 == 0 ? context.conjunction(a, b)
+                          : index % 3 == 1
+                              ? context.exclusiveOr(a, b)
+                              : context.conditional(inputs[index % 6], a, b));
+  }
+  for (ID expression :
+       std::vector<ID>(expressions.end() - 12, expressions.end()))
+    for (bool negate : {false, true}) {
+      ID root = expression ^ ID(negate);
+      uint64_t original = truthTable(context, root);
+      for (unsigned variable = 0; variable != 7; ++variable)
+        for (bool high : {false, true}) {
+          uint64_t expected = 0;
+          for (unsigned assignment = 0; assignment != 64; ++assignment) {
+            unsigned fixed = variable == 6 ? assignment
+                                           : (assignment & ~(1u << variable)) |
+                                                 (unsigned(high) << variable);
+            expected |= ((original >> fixed) & 1) << assignment;
+          }
+          EXPECT_EQ(truthTable(context, context.cofactor(root, variable, high)),
+                    expected);
+        }
+    }
+
+  BooleanCircuit large;
+  ID guard = large.input(PlanOpcode::RandomBit, 0, 0), parity = guard;
+  for (unsigned index = 1; index != 2048; ++index)
+    parity = large.exclusiveOr(
+        parity, large.input(PlanOpcode::RandomBit, index, index));
+  ID guarded = large.conjunction(guard, parity);
+  size_t before = large.getNodes().size();
+  EXPECT_EQ(large.cofactor(guarded, 0, false), 0u);
+  EXPECT_EQ(large.cofactor(guarded ^ 1, 0, false), 1u);
+  EXPECT_EQ(large.getNodes().size(), before);
+  ID late =
+      large.conjunction(guard, large.input(PlanOpcode::RandomBit, 2048, 2048));
+  EXPECT_EQ(large.cofactor(late, 0, false), 0u);
+  ID second = large.conjunction(parity, late);
+  before = large.getNodes().size();
+  EXPECT_EQ(large.cofactor(second, 0, false), 0u);
+  EXPECT_EQ(large.getNodes().size(), before);
+}
+
+TEST_F(RandModelCountTest, PropagatedFrontiersMatchCountsRanksAndProjections) {
+  std::vector<ID> inputs;
+  for (unsigned index = 0; index != 6; ++index)
+    inputs.push_back(bit(index));
+  std::vector<ID> expressions = inputs;
+  uint32_t state = 11;
+  auto next = [&] { return state = state * 1664525u + 1013904223u; };
+  for (unsigned index = 0; index != 72; ++index) {
+    ID a = expressions[next() % expressions.size()] ^ (next() & 1);
+    ID b = expressions[next() % expressions.size()] ^ (next() & 1);
+    expressions.push_back(index % 3 == 0 ? context.conjunction(a, b)
+                          : index % 3 == 1
+                              ? context.exclusiveOr(a, b)
+                              : context.conditional(inputs[index % 6], a, b));
+    if (index % 8 == 0)
+      expressions.push_back(context.input(PlanOpcode::RandomBit, 0, index % 6));
+  }
+  for (unsigned test = 0; test != 16; ++test) {
+    ID root = expressions[expressions.size() - 1 - test] ^ ID(test & 1);
+    if (test & 2)
+      root = context.conjunction(inputs[0], root);
+    uint64_t expected = truthTable(context, root);
+    ModelCounter full(context, inputs);
+    ASSERT_TRUE(full.build(root));
+    std::vector<unsigned> choices;
+    for (unsigned rank = 0; rank != 64; ++rank) {
+      unsigned value = lexicographicValue(rank);
+      if ((expected >> value) & 1)
+        choices.push_back(value);
+    }
+    ASSERT_EQ(full.count().compare(ModelCount(choices.size())), 0);
+    for (unsigned rank = 0; rank != choices.size(); ++rank) {
+      auto bits = full.assignment(ModelCount(rank));
+      unsigned value = 0;
+      for (unsigned bit = 0; bit != 6; ++bit)
+        value |= unsigned(bits[bit]) << bit;
+      EXPECT_EQ(value, choices[rank]);
+    }
+    for (unsigned mask : {0u, 0x15u, 0x2au, 0x3fu}) {
+      std::vector<bool> keep(6);
+      for (unsigned bit = 0; bit != 6; ++bit)
+        keep[bit] = (mask >> bit) & 1;
+      ModelCounter projected(context, inputs);
+      ASSERT_TRUE(projected.buildProjection(root, keep));
+      std::set<unsigned> values;
+      for (unsigned value : choices)
+        values.insert(value & mask);
+      EXPECT_EQ(projected.count().compare(ModelCount(values.size())), 0);
+      unsigned rank = 0;
+      for (unsigned lexical = 0; lexical != 64; ++lexical) {
+        unsigned value = lexicographicValue(lexical);
+        if (!values.count(value))
+          continue;
+        auto bits = projected.assignment(ModelCount(rank++));
+        unsigned actual = 0;
+        for (unsigned bit = 0; bit != 6; ++bit)
+          actual |= unsigned(bits[bit]) << bit;
+        EXPECT_EQ(actual, value);
+      }
+    }
+  }
+}
+
+TEST_F(RandModelCountTest, WideFrontierObligationsRetainFreeChoices) {
+  std::vector<ID> inputs;
+  for (unsigned index = 0; index != 135; ++index)
+    inputs.push_back(bit(index));
+  ID p = context.disjunction(inputs[1], inputs[2]);
+  ID q = context.disjunction(inputs[3], inputs[4]);
+  ID predicate = context.conjunction(
+      inputs[0], context.conjunction(p, context.conditional(p, q, inputs[5])));
+  ModelCount expected = ModelCount(9).shifted(130);
+  ModelCounter full(context, inputs);
+  ASSERT_TRUE(full.build(predicate));
+  EXPECT_EQ(full.count().compare(expected), 0);
+  auto first = full.assignment(ModelCount());
+  EXPECT_TRUE(first[0]);
+  EXPECT_FALSE(first[1]);
+  EXPECT_TRUE(first[2]);
+  EXPECT_FALSE(first[3]);
+  EXPECT_TRUE(first[4]);
+  EXPECT_EQ(std::count(first.begin() + 5, first.end(), true), 0);
+  expected.subtract(ModelCount(1));
+  auto last = full.assignment(expected);
+  EXPECT_EQ(std::count(last.begin(), last.end(), true), 135);
+
+  std::vector<bool> values(135), fixed(135);
+  fixed[1] = fixed[130] = true;
+  values[130] = true;
+  full.restrict(values, fixed);
+  EXPECT_EQ(full.count().compare(ModelCount(3).shifted(129)), 0);
+  std::vector<bool> keep(135);
+  for (unsigned bit : {0u, 1u, 3u, 5u, 129u, 130u})
+    keep[bit] = true;
+  ModelCounter projected(context, inputs);
+  ASSERT_TRUE(projected.buildProjection(predicate, keep));
+  EXPECT_EQ(projected.count().compare(ModelCount(32)), 0);
+
+  // The repeated guard prevents decision() from peeling it off before fact
+  // propagation. Its false AND forces the distant input without fixing any
+  // of the 133 free inputs or changing their lexicographic order.
+  ID sharedGuard = context.conjunction(
+      inputs[0], context.conjunction(inputs[0], inputs[130]) ^ 1);
+  ModelCounter shared(context, inputs);
+  ASSERT_TRUE(shared.build(sharedGuard));
+  EXPECT_EQ(shared.count().compare(ModelCount::powerOfTwo(133)), 0);
+  first = shared.assignment(ModelCount());
+  EXPECT_TRUE(first[0]);
+  EXPECT_EQ(std::count(first.begin(), first.end(), true), 1);
+  ModelCount finalRank = ModelCount::powerOfTwo(133);
+  finalRank.subtract(ModelCount(1));
+  last = shared.assignment(finalRank);
+  EXPECT_FALSE(last[130]);
+  EXPECT_EQ(std::count(last.begin(), last.end(), true), 134);
+}
+
+TEST_F(RandModelCountTest, FrontierValidationAndBudgetedPreparation) {
+  std::vector<ID> inputs;
+  for (unsigned index = 0; index != 6; ++index)
+    inputs.push_back(bit(index));
+  ID p = context.disjunction(inputs[1], inputs[2]);
+  ID q = context.disjunction(inputs[3], inputs[4]);
+  ID predicate = context.conjunction(
+      inputs[0], context.conjunction(context.disjunction(inputs[0] ^ 1, p), q));
+  bool incomplete = false, complete = false;
+  for (size_t budget : {1u, 4u, 16u, 64u, 10000u}) {
+    BooleanCircuit copy = context;
+    ModelCounter prepared(copy, inputs);
+    if (!prepared.prepareDiagram(predicate, budget, 10000)) {
+      incomplete = true;
+      ModelCounter fallback(copy, inputs);
+      ASSERT_TRUE(fallback.build(predicate));
+      EXPECT_EQ(fallback.count().compare(ModelCount(18)), 0);
+      continue;
+    }
+    complete = true;
+    BooleanCircuit exported;
+    std::vector<ID> renamed;
+    for (unsigned bit = 0; bit != 6; ++bit)
+      renamed.push_back(exported.input(PlanOpcode::RandomBit, bit, bit));
+    ID root = prepared.exportDiagram(exported, renamed);
+    EXPECT_EQ(truthTable(exported, root), truthTable(context, predicate));
+  }
+  EXPECT_TRUE(incomplete);
+  EXPECT_TRUE(complete);
+
+  for (bool forced : {false, true}) {
+    BooleanCircuit invalid;
+    ID a = invalid.input(PlanOpcode::RandomBit, 0, 0);
+    ID b = invalid.input(PlanOpcode::RandomBit, 1, 1);
+    ID bad = invalid.input(PlanOpcode::RandomBit, 2, 2);
+    ID root =
+        invalid.conjunction(a, forced ? bad : invalid.disjunction(b, bad));
+    ModelCounter counter(invalid, {a, b});
+    EXPECT_FALSE(counter.build(root));
+  }
+  BooleanCircuit unsupported;
+  ID a = unsupported.input(PlanOpcode::RandomBit, 0, 0);
+  ID b = unsupported.input(PlanOpcode::RandomBit, 1, 1);
+  ID parameter = unsupported.input(PlanOpcode::CaptureBit, 0);
+  ModelCounter counter(unsupported, {a, b});
+  EXPECT_FALSE(counter.build(unsupported.conjunction(
+      unsupported.conjunction(a, parameter), unsupported.disjunction(a, b))));
+}
+
 TEST(RandomFlatMapTest, FindsEveryEntryAcrossGrowth) {
   talos::random::FlatMap<uint64_t, uint32_t> map;
   for (uint32_t key = 0; key != 5000; ++key)
