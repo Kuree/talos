@@ -1,0 +1,61 @@
+// RUN: talos-translate --import-saif %s | FileCheck %s
+// RUN: talos-translate --import-saif %s | talos-opt | FileCheck %s
+// RUN: talos-translate --import-saif %s | talos-opt --mlir-print-op-generic | talos-opt | FileCheck %s
+
+(SAIFILE
+  (SAIFVERSION "2.0")
+  (DIRECTION "backward")
+  (DESIGN "dut") (DATE) (VENDOR "talos")
+  (PROGRAM_NAME "test") (PROGRAM_VERSION "1")
+  (DIVIDER /) (TIMESCALE 010 ns) (DURATION 2.4e2)
+  (INSTANCE "dut" top/u
+    (NET
+      (clk (T0 100) (T1 92.5) (TX 7.5) (TZ .7) (TB 0)
+           (TC 012) (TG 2) (IG 6) (IK 5.3e-1))
+      (clk\(4\) (TC 0))
+      (clk[0004] (TC 0))
+      (clk\[4\] (TC 0))
+      (\1clk (TC 0))
+      (mod\/net (TC 0))
+      (\NET (TC 0)))
+    (PORT
+      (Y (T0 100) (T1 140)
+        (COND A (RISE) (IOPATH B (TC 1))
+         COND A (FALL) (IOPATH B (TC 2))
+         COND_DEFAULT (RISE) (TC 0)
+         COND_DEFAULT (FALL) (TC 0))
+        (IOPATH A (TC 1) IOPATH B C (TG 2) IOPATH_DEFAULT (IG 0))))
+    (LEAKAGE
+      (COND A|B^C*!D (T1 2) (T0 8)
+       COND_DEFAULT (T1 8) (T0 2)))
+    (INSTANCE sub (NET (q (T0 240))))
+    (VIRTUAL_INSTANCE "sequential" A_reg (PORT (Q (TC 122))))))
+
+// CHECK: saif.file
+// CHECK: saif.header version {text = "2.0"}
+// CHECK: saif.header timescale {scale = #saif.timescale<amount = <"010">, unit = "ns">}
+// CHECK: saif.header duration {value = #saif.number<"2.4e2">}
+// CHECK: saif.instance #saif.path<[#saif.identifier<name = "top">, #saif.identifier<name = "u">]>
+// CHECK: saif.metric T0 #saif.number<"100">
+// CHECK: saif.metric IK #saif.number<"5.3e-1">
+// CHECK: saif.signal #saif.path<[#saif.identifier<name = "clk(4)">]>
+// CHECK: saif.signal #saif.path<[#saif.identifier<name = "clk", index = "4">]>
+// CHECK: saif.signal #saif.path<[#saif.identifier<name = "clk[4]">]>
+// CHECK: saif.signal #saif.path<[#saif.identifier<name = "1clk">]>
+// CHECK: saif.signal #saif.path<[#saif.identifier<name = "mod/net">]>
+// CHECK: saif.signal #saif.path<[#saif.identifier<name = "NET">]>
+// CHECK: saif.conditions
+// CHECK: edge rise
+// CHECK: saif.paths
+// CHECK: saif.related_pins
+// CHECK: edge fall
+// CHECK: saif.leakage
+// CHECK: opcode = pin, pin = <name = "A">
+// CHECK-SAME: opcode = pin, pin = <name = "B">
+// CHECK-SAME: opcode = pin, pin = <name = "C">
+// CHECK-SAME: opcode = pin, pin = <name = "D">
+// CHECK-SAME: opcode = not
+// CHECK-SAME: opcode = and
+// CHECK-SAME: opcode = xor
+// CHECK-SAME: opcode = or
+// CHECK: is_virtual = true

@@ -69,6 +69,14 @@ set_target_properties(talos-source-tokens-test PROPERTIES
   CXX_STANDARD_REQUIRED ON
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 
+add_llvm_executable(talos-saif-frontend-test EXCLUDE_FROM_ALL
+  Support/SAIFFrontendTest.cpp)
+llvm_update_compile_flags(talos-saif-frontend-test)
+target_link_libraries(talos-saif-frontend-test PRIVATE
+  TalosSAIFFrontend TalosSAIFIR MLIRIR MLIRSupport)
+set_target_properties(talos-saif-frontend-test PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+
 if(TALOS_ENABLE_UPF)
   add_executable(talos-tcl-core-test EXCLUDE_FROM_ALL Support/TclCoreTest.cpp)
   target_link_libraries(talos-tcl-core-test PRIVATE TalosTclCore)
@@ -559,6 +567,7 @@ set(TALOS_TEST_DEPENDS
   talos-coverage-fixture
   talos-coverage-scaling-fixture
   talos-source-tokens-test
+  talos-saif-frontend-test
   talos-cov
   ${_talos_driver_test_dependencies}
   ${TALOS_RUNTIME_UNIT_TARGETS}

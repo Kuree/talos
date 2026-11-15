@@ -1,0 +1,3 @@
+// RUN: talos-translate --import-saif %S/backward.saif | talos-opt --pass-pipeline='builtin.module(saif.file(canonicalize,cse))' | FileCheck %S/backward.saif
+// RUN: talos-translate --import-saif %S/library-forward.saif | talos-opt --pass-pipeline='builtin.module(saif.file(canonicalize,cse))' | FileCheck %S/library-forward.saif
+// RUN: talos-translate --import-saif %S/rtl-forward.saif | talos-opt --pass-pipeline='builtin.module(saif.file(canonicalize,cse))' | FileCheck %S/rtl-forward.saif

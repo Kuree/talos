@@ -13,7 +13,7 @@ from talos_lit_format import TalosShTest
 
 config.name = "TALOS"
 config.test_format = TalosShTest()
-config.suffixes = [".mlir", ".sv", ".test", ".sdf", ".ll"]
+config.suffixes = [".mlir", ".sv", ".test", ".sdf", ".saif", ".ll"]
 config.test_source_root = os.path.dirname(__file__)
 config.test_exec_root = os.path.join(config.talos_obj_root, "test")
 
@@ -66,6 +66,9 @@ config.substitutions.append(
 )
 config.substitutions.append(
     ("%source-tokens-test", config.talos_source_tokens_test_executable)
+)
+config.substitutions.append(
+    ("%saif-frontend-test", config.talos_saif_frontend_test_executable)
 )
 config.substitutions.append(("%tcl-core-test", '"{}"'.format(config.talos_tcl_core_test_executable)))
 config.substitutions.append(("%tcl-library", config.talos_tcl_library_dir))

@@ -1,0 +1,3 @@
+// RUN: not talos-translate --import-saif --saif-max-input-bytes=2 %S/backward.saif 2>&1 | FileCheck %s
+
+// CHECK: error: SAIF syntax: input exceeds the SAIF byte limit

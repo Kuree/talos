@@ -8,6 +8,7 @@ config.talos_host_c_runtime_test_executable = "@PROJECT_BINARY_DIR@/tools/driver
 config.talos_coverage_fixture_executable = "@PROJECT_BINARY_DIR@/test/talos-coverage-fixture"
 config.talos_coverage_scaling_fixture_executable = "@PROJECT_BINARY_DIR@/test/talos-coverage-scaling-fixture"
 config.talos_source_tokens_test_executable = "@PROJECT_BINARY_DIR@/test/talos-source-tokens-test"
+config.talos_saif_frontend_test_executable = "@PROJECT_BINARY_DIR@/test/talos-saif-frontend-test"
 config.talos_tcl_core_test_executable = "@PROJECT_BINARY_DIR@/test/talos-tcl-core-test"
 config.talos_tcl_library_dir = r"@TALOS_TCL_LIBRARY_DIR@"
 config.talos_resource_dir = "@PROJECT_BINARY_DIR@/lib/talos"

@@ -20,6 +20,7 @@ target_link_libraries(talos-opt
     TalosIR
     TalosRuntimeIR
     TalosSDFIR
+    TalosSAIFIR
     TalosUPFIR
     TalosUPF
     TalosRuntimeToLLVM

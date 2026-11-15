@@ -8,13 +8,13 @@ import sys
 
 
 sdk, source, build = map(Path, sys.argv[1:])
-dialects = {"slang", "talos", "simulation", "schedule", "runtime", "sdf"}
+dialects = {"slang", "talos", "simulation", "schedule", "runtime", "sdf", "saif"}
 inputs = [
     build / "include/talos/Dialect/Slang/SlangOps.td",
     build / "include/talos/Dialect/Talos/TalosASTOps.td",
     *[
         source / f"include/talos/Dialect/{name}/{name}Ops.td"
-        for name in ["Talos", "Simulation", "Schedule", "Runtime", "SDF"]
+        for name in ["Talos", "Simulation", "Schedule", "Runtime", "SDF", "SAIF"]
     ],
 ]
 seen = set()

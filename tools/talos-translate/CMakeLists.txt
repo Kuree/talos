@@ -11,6 +11,8 @@ target_link_libraries(talos-translate
     TalosFrontend
     TalosNativeIR
     TalosRuntimeIR
+    TalosSAIFFrontend
+    TalosSAIFIR
     TalosSDFIR
     TalosScheduleIR
     TalosSimulationAnalysis

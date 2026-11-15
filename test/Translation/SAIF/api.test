@@ -1,0 +1,3 @@
+// RUN: %saif-frontend-test | FileCheck %s
+
+// CHECK: PASS: SAIF syntax/verification boundary and unchecked IR

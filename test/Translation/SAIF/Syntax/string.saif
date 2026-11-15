@@ -1,0 +1,5 @@
+(SAIFILE (DESIGN "two
+lines"))
+
+// RUN: not talos-translate --import-saif %s 2>&1 | FileCheck %s
+// CHECK: error: SAIF syntax: unterminated single-line string

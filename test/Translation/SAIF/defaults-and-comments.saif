@@ -1,0 +1,15 @@
+// RUN: talos-translate --import-saif %s | talos-opt | FileCheck %s
+
+/* Header fields can be empty and comments can span lines.
+   A // sequence inside a block comment has no special meaning. */
+(SAIFILE
+  (SAIFVERSION /* version */ "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+  (DIVIDER) /* default '.' */ (TIMESCALE) /* default 1 ns */ (DURATION 10)
+  (INSTANCE top.child /* dot is the default separator */
+    (NET (q (T0 10) /* no toggles */ (TC 0)))))
+
+// CHECK: saif.header divider {text = "."}
+// CHECK: saif.header timescale {scale = #saif.timescale<amount = <"1">, unit = "ns">}
+// CHECK: saif.instance #saif.path<[#saif.identifier<name = "top">, #saif.identifier<name = "child">]>
+// CHECK: saif.metric TC #saif.number<"0">

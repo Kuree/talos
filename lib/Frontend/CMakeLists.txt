@@ -1,4 +1,5 @@
 add_subdirectory(SourceTokens)
+add_subdirectory(SAIF)
 
 if(WIN32)
   # Slang's expected<> header follows the Microsoft STL exception setting.

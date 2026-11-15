@@ -1,0 +1,30 @@
+// RUN: talos-translate --import-saif %s | FileCheck %s
+// RUN: talos-translate --import-saif %s | talos-opt | FileCheck %s
+
+(SAIFILE
+  (SAIFVERSION "2.0" "LIB") (DIRECTION "forward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION) (DIVIDER)
+  (LIBRARY "cells" "lib/cells"
+    (MODULE AND3
+      (PORT A (COND B RISE_FALL COND_DEFAULT))
+      (PORT B (COND A RISE_FALL COND_DEFAULT RISE_FALL))
+      (PORT Y (IOPATH A IOPATH B C IOPATH_DEFAULT)
+              (COND A RISE_FALL (IOPATH B)
+               COND B RISE_FALL (IOPATH A)
+               COND_DEFAULT RISE_FALL (IOPATH A IOPATH B IOPATH_DEFAULT)))
+      (LEAKAGE
+        (COND (A*B*C) COND (!A*B*C) COND A*!(B*C)
+         COND B COND C COND_DEFAULT)))
+    (MODULE EMPTY (PORT Z) (LEAKAGE))))
+
+// CHECK: saif.header version {qualifier = "LIB", text = "2.0"}
+// CHECK: saif.header divider {text = "."}
+// CHECK: saif.library "cells" attributes {directory = "lib/cells"}
+// CHECK: saif.cell #saif.path<[#saif.identifier<name = "AND3">]>
+// CHECK: saif.port_directive
+// CHECK: edge rise_fall
+// CHECK: saif.paths
+// CHECK: saif.related_pins
+// CHECK: is_default = true
+// CHECK: saif.leakage
+// CHECK: saif.cell #saif.path<[#saif.identifier<name = "EMPTY">]>

@@ -8,8 +8,10 @@
 #include "talos/Dialect/DPI/DPIDialect.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
+#include "talos/Dialect/SAIF/SAIFDialect.h"
 #include "talos/Dialect/SDF/SDFDialect.h"
 #include "talos/Dialect/Schedule/ScheduleDialect.h"
+#include "talos/Frontend/SAIF.h"
 #include "talos/Frontend/SDF.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -27,6 +29,17 @@ static llvm::cl::opt<uint64_t> sdfMaxInputBytes(
     "sdf-max-input-bytes", llvm::cl::ReallyHidden,
     llvm::cl::desc("Largest SDF input --import-sdf accepts"),
     llvm::cl::init(talos::frontend::SDFResourceLimits().maxFileBytes));
+
+static llvm::cl::opt<uint64_t> saifMaxInputBytes(
+    "saif-max-input-bytes", llvm::cl::ReallyHidden,
+    llvm::cl::desc("Largest SAIF input --import-saif accepts"),
+    llvm::cl::init(talos::frontend::SAIFResourceLimits().maxInputBytes));
+
+static llvm::cl::opt<bool> saifVerify(
+    "saif-verify", llvm::cl::ReallyHidden,
+    llvm::cl::desc(
+        "Verify imported SAIF data (disable to inspect illegal data)"),
+    llvm::cl::init(true));
 
 int main(int argc, char **argv) {
   TranslateFromMLIRRegistration exportLLVM(
@@ -63,6 +76,25 @@ int main(int argc, char **argv) {
       },
       [](DialectRegistry &registry) {
         registry.insert<talos::sdf::TalosSDFDialect>();
+      });
+
+  // Unlike TranslateToMLIRRegistration, this does not implicitly verify the
+  // module a second time or prevent syntax-only inspection of illegal data.
+  TranslateRegistration importSAIF(
+      "import-saif", "import IEEE 1801-2018 Annex I SAIF data",
+      [](const std::shared_ptr<llvm::SourceMgr> &sourceMgr,
+         llvm::raw_ostream &output, MLIRContext *context) -> LogicalResult {
+        const llvm::MemoryBuffer *buffer = sourceMgr->getMemoryBuffer(1);
+        talos::frontend::SAIFResourceLimits limits;
+        limits.maxInputBytes = saifMaxInputBytes;
+        auto module = talos::frontend::importSAIF(buffer->getBufferIdentifier(),
+                                                  buffer->getBuffer(), *context,
+                                                  saifVerify, limits);
+        if (failed(module))
+          return failure();
+        (*module)->print(output);
+        output << '\n';
+        return success();
       });
 
   return failed(mlirTranslateMain(argc, argv, "Talos translation driver"));

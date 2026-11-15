@@ -9,6 +9,7 @@
 #include "talos/Dialect/DPI/DPIDialect.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
+#include "talos/Dialect/SAIF/SAIFDialect.h"
 #include "talos/Dialect/SDF/SDFDialect.h"
 #include "talos/Dialect/Schedule/Transforms/Passes.h"
 #include "talos/Dialect/Simulation/SimulationDialect.h"
@@ -82,12 +83,13 @@ int main(int argc, char **argv) {
 
   mlir::DialectRegistry registry;
   mlir::registerAllDialects(registry);
-  registry.insert<talos::slangir::SlangDialect, talos::ir::TalosDialect,
-                  talos::upf::UPFDialect, talos::cov::CoverageDialect,
-                  talos::dpi::DPIDialect, talos::native::NativeDialect,
-                  talos::runtime::TalosRuntimeDialect,
-                  talos::sdf::TalosSDFDialect, talos::schedule::ScheduleDialect,
-                  talos::sim::TalosSimulationDialect>();
+  registry
+      .insert<talos::slangir::SlangDialect, talos::ir::TalosDialect,
+              talos::upf::UPFDialect, talos::cov::CoverageDialect,
+              talos::dpi::DPIDialect, talos::native::NativeDialect,
+              talos::runtime::TalosRuntimeDialect, talos::sdf::TalosSDFDialect,
+              talos::saif::SAIFDialect, talos::schedule::ScheduleDialect,
+              talos::sim::TalosSimulationDialect>();
 
   return mlir::asMainReturnCode(
       mlir::MlirOptMain(argc, argv, "Talos IR optimizer\n", registry));

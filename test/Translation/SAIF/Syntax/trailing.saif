@@ -1,0 +1,4 @@
+(SAIFILE) (SAIFILE)
+
+// RUN: not talos-translate --import-saif %s 2>&1 | FileCheck %s
+// CHECK: error: SAIF syntax: unexpected text after SAIFILE

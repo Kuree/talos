@@ -1,0 +1,20 @@
+// RUN: talos-translate --import-saif %s | FileCheck %s
+// RUN: talos-translate --import-saif %s | talos-opt | FileCheck %s
+
+(SAIFILE
+  (SAIFVERSION "2.0") (DIRECTION "forward")
+  (DESIGN "alu") (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION) (DIVIDER .)
+  (INSTANCE "rtl" top
+    (PORT (a[02] top.u.A[2]) (q top.q_reg.Q "sequential"))
+    (NET (literal\.dot mapped\.name) (bus[0] top.u.bus[0]))
+    (INSTANCE u (PORT) (NET))))
+
+// CHECK: saif.instance #saif.path<[#saif.identifier<name = "top">]>
+// CHECK: saif.mapping #saif.path<[#saif.identifier<name = "a", index = "2">]>
+// CHECK-SAME: to #saif.path<[#saif.identifier<name = "top">, #saif.identifier<name = "u">, #saif.identifier<name = "A", index = "2">]>
+// CHECK: virtual_type = "sequential"
+// CHECK: name = "literal.dot"
+// CHECK-SAME: name = "mapped.name"
+// CHECK: saif.instance #saif.path<[#saif.identifier<name = "u">]>
+// CHECK: saif.ports
+// CHECK: saif.nets
