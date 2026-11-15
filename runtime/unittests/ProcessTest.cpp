@@ -9781,6 +9781,69 @@ TEST(Scheduler, GeneratedNBA256SnapshotsAndPreservesGenericLastWrite) {
   talos_rt_v1_context_destroy(context);
 }
 
+// A wide generated accumulator stages known values and binds no unknown plane.
+// A four-state generic stage of the same root in the same step binds it, and a
+// later two-state stage keeps it, so the barrier stores every staged unknown.
+TEST(Scheduler, GeneratedNBA256AdoptsUnknownPlaneOfFourStateStage) {
+  AOTTestState state;
+  talos_rt_generated_nba_accumulator_256 generated{};
+  const talos_rt_static_nba_root roots[] = {
+      {17, 1, 256, &generated, nullptr, 0},
+  };
+  const talos_rt_static_nba_site sites[] = {
+      {7, 0, TALOS_RT_STATIC_NBA_ROOT_ACCUMULATOR},
+  };
+  std::array<uint8_t, 32> valuePlane{};
+  std::array<uint8_t, 32> unknownPlane{};
+  unknownPlane.fill(0xff);
+  talos_rt_native_schedule_plan plan = makeAOTPlan(state, 1);
+  plan.flags = TALOS_RT_NATIVE_SCHEDULE_FULLY_STATIC;
+  plan.state_value = valuePlane.data();
+  plan.state_unknown = unknownPlane.data();
+  plan.state_bit_count = 256;
+  plan.nba_roots = roots;
+  plan.nba_root_count = std::size(roots);
+  plan.nba_sites = sites;
+  plan.nba_site_count = std::size(sites);
+
+  talos_rt_execution_descriptor_v1 execution{};
+  execution.version = TALOS_RT_VERSION;
+  execution.state_bit_count = 256;
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+            TALOS_RT_OK);
+  context->stateUnknown.assign(4, 0);
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 0, 256),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
+
+  generated.value[0] = 0x55;
+  generated.write_mask[0] = UINT32_MAX;
+  generated.valid = 1;
+  generated.exec_region = TALOS_RT_REGION_NBA;
+  uint64_t root = talos_rt_v1_native_state_static_handle(1);
+  uint8_t value = 0xaa, unknown = 0x01;
+  ASSERT_EQ(talos_rt_v1_scheduler_static_nba(context, 7, valuePlane.data(),
+                                             unknownPlane.data(), 256, root, 8,
+                                             &value, &unknown),
+            TALOS_RT_OK);
+  uint8_t known = 0x33;
+  ASSERT_EQ(talos_rt_v1_scheduler_static_nba(
+                context, 7, valuePlane.data(), nullptr, 256,
+                talos_rt_v1_native_handle_offset(root, 8), 8, &known, nullptr),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+  EXPECT_EQ(unknownPlane[0], 0x01);
+  EXPECT_EQ(valuePlane[0] & 0xfe, 0xaa);
+  EXPECT_EQ(valuePlane[1], 0x33);
+  EXPECT_EQ(unknownPlane[1], 0x00);
+  EXPECT_EQ(unknownPlane[2], 0x00);
+  EXPECT_EQ(unknownPlane[3], 0x00);
+  EXPECT_EQ(unknownPlane[4], 0xff);
+  EXPECT_EQ(context->stateUnknown[0] & 0xffff, 0x0001u);
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(RuntimeInternals, WritableNBADirectCommitRequiresCleanLockedBoundary) {
   talos_rt_execution_descriptor_v1 execution{};
   execution.version = TALOS_RT_VERSION;

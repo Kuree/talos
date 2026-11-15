@@ -102,6 +102,30 @@ consumeGeneratedNBASlots(const talos_rt_static_nba_root &root, Consume consume,
   return TALOS_RT_OK;
 }
 
+// Binds a root accumulator to the planes of a stage, or rejects a stage aimed
+// at other planes or another region. Every stage merges its unknown bits into
+// the accumulator; the unknown plane only says whether the barrier stores
+// them. Known-only stages bind none (wide generated roots, two-state callers),
+// so a four-state stage of the same root in the same step adds the plane and a
+// later known-only stage keeps it (IEEE 1800-2023 4.9.4, 10.4.2).
+static bool bindStaticNBAPlanes(StaticNBAAccumulator &accumulator,
+                                uint8_t *valuePlane, uint8_t *unknownPlane,
+                                uint64_t planeBitCount, uint32_t execRegion) {
+  if (accumulator.valid &&
+      (accumulator.valuePlane != valuePlane ||
+       accumulator.planeBitCount != planeBitCount ||
+       accumulator.execRegion != execRegion ||
+       (accumulator.unknownPlane && unknownPlane &&
+        accumulator.unknownPlane != unknownPlane)))
+    return false;
+  accumulator.valuePlane = valuePlane;
+  if (!accumulator.valid || unknownPlane)
+    accumulator.unknownPlane = unknownPlane;
+  accumulator.planeBitCount = planeBitCount;
+  accumulator.execRegion = execRegion;
+  return true;
+}
+
 // Record staged bits that a new write replaces with a different value before
 // merging it. `mask`, `value` and `unknown` are positioned within `word`.
 static void recordStaticNBATransient(StaticNBAAccumulator &accumulator,
@@ -455,18 +479,11 @@ static talos_rt_status schedulerNBA(
         // share the root accumulator's ordered last-write merge.
         StaticNBAAccumulator &accumulator =
             context->staticNBAAccumulators[staticRoot];
-        if (accumulator.valid &&
-            (accumulator.valuePlane != valuePlane ||
-             accumulator.unknownPlane != unknownPlane ||
-             accumulator.planeBitCount != planeBitCount ||
-             accumulator.execRegion != update.execRegion)) {
+        if (!bindStaticNBAPlanes(accumulator, valuePlane, unknownPlane,
+                                 planeBitCount, update.execRegion)) {
           context->schedulerStatus = TALOS_RT_INVALID_LIFECYCLE;
           return TALOS_RT_INVALID_LIFECYCLE;
         }
-        accumulator.valuePlane = valuePlane;
-        accumulator.unknownPlane = unknownPlane;
-        accumulator.planeBitCount = planeBitCount;
-        accumulator.execRegion = update.execRegion;
         markStaticNBAAccumulatorPending(context, staticRoot, accumulator);
         bool packedStage =
             bitWidth <= 64 && offset >= 0 &&
@@ -2899,17 +2916,11 @@ static talos_rt_status stageStaticNBAPacked(
   }
 
   StaticNBAAccumulator &accumulator = context->staticNBAAccumulators[rootIndex];
-  if (accumulator.valid && (accumulator.valuePlane != valuePlane ||
-                            accumulator.unknownPlane != unknownPlane ||
-                            accumulator.planeBitCount != planeBitCount ||
-                            accumulator.execRegion != execRegion)) {
+  if (!bindStaticNBAPlanes(accumulator, valuePlane, unknownPlane, planeBitCount,
+                           execRegion)) {
     context->schedulerStatus = TALOS_RT_INVALID_LIFECYCLE;
     return context->schedulerStatus;
   }
-  accumulator.valuePlane = valuePlane;
-  accumulator.unknownPlane = unknownPlane;
-  accumulator.planeBitCount = planeBitCount;
-  accumulator.execRegion = execRegion;
   markStaticNBAAccumulatorPending(context, rootIndex, accumulator);
 
   uint64_t sourceMask = packedWidthMask(bitWidth);
@@ -3021,11 +3032,12 @@ talos_rt_status materializeGeneratedNBAAccumulatorUnlocked(
     accumulator.execRegion = execRegion;
     accumulator.sequence = context->nextSchedulerSequence++;
     markStaticNBAAccumulatorPending(context, rootIndex, accumulator);
-  } else if (accumulator.execRegion != execRegion ||
-             accumulator.valuePlane != plan->state_value ||
-             (root.bit_width <= TALOS_RT_SCALAR_NBA_MAX_BITS &&
-              accumulator.unknownPlane != plan->state_unknown) ||
-             accumulator.planeBitCount != plan->state_bit_count) {
+  } else if (!bindStaticNBAPlanes(
+                 accumulator, plan->state_value,
+                 root.bit_width <= TALOS_RT_SCALAR_NBA_MAX_BITS
+                     ? plan->state_unknown
+                     : nullptr,
+                 plan->state_bit_count, execRegion)) {
     return TALOS_RT_INVALID_LIFECYCLE;
   }
   size_t words = static_cast<size_t>((root.bit_width + 63) / 64);
@@ -3094,6 +3106,11 @@ extern "C" void talos_rt_v1_static_nba_stage_wide(
     accumulator.execRegion = execRegion;
     accumulator.sequence = context->nextSchedulerSequence++;
     markStaticNBAAccumulatorPending(context, rootIndex, accumulator);
+  } else if (!bindStaticNBAPlanes(accumulator, plan->state_value,
+                                  hasUnknown ? plan->state_unknown : nullptr,
+                                  plan->state_bit_count, execRegion)) {
+    context->schedulerStatus = TALOS_RT_INVALID_LIFECYCLE;
+    return;
   }
   uint64_t sourceMask = packedWidthMask(bitWidth);
   value &= sourceMask;
