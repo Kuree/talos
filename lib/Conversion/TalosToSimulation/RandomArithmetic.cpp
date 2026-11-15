@@ -2,6 +2,7 @@
 
 #include "RandomArithmetic.h"
 #include "Detail.h"
+#include "PrepareRandomFunctions.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "llvm/ADT/FoldingSet.h"
@@ -31,6 +32,8 @@ struct RandomArithmetic::Impl {
   llvm::DenseMap<Operation *, bool> needs;
   llvm::DenseMap<Operation *, RandomArithmeticPlanes> planes;
   llvm::DenseMap<Operation *, Operation *> knownPredicates;
+  llvm::DenseMap<Operation *, Operation *> realExpressions;
+  llvm::DenseMap<std::pair<Operation *, unsigned>, Operation *> realLeaves;
   llvm::DenseMap<Operation *, std::optional<APInt>> constants;
   struct CanonicalExpression : llvm::FoldingSetNode {
     Operation *expression;
@@ -140,13 +143,12 @@ struct RandomArithmetic::Impl {
       ++uses[operand];
     }
   }
-  Operation *make(Operation *source, StringRef name, unsigned precision,
-                  bool isSigned, ArrayRef<NamedAttribute> attributes,
-                  ArrayRef<Operation *> operands) {
+  Operation *makeTyped(Operation *source, StringRef name, Type resultType,
+                       ArrayRef<NamedAttribute> attributes,
+                       ArrayRef<Operation *> operands) {
     OperationState state(source->getLoc(), name);
     state.addAttribute("node_id", source->getAttr("node_id"));
-    state.addAttribute("semantic_type",
-                       TypeAttr::get(type(precision, isSigned)));
+    state.addAttribute("semantic_type", TypeAttr::get(resultType));
     state.addAttribute(sim::metadata::RandomArithmeticNode::getNameStr(),
                        builder.getUnitAttr());
     if (expressionIsFunction(source))
@@ -162,6 +164,12 @@ struct RandomArithmetic::Impl {
     expressions->getBody()->push_back(node);
     nodes.push_back(node);
     return node;
+  }
+  Operation *make(Operation *source, StringRef name, unsigned precision,
+                  bool isSigned, ArrayRef<NamedAttribute> attributes,
+                  ArrayRef<Operation *> operands) {
+    return makeTyped(source, name, type(precision, isSigned), attributes,
+                     operands);
   }
   bool expressionIsFunction(Operation *source) const {
     return sim::has<sim::metadata::RandomFunctionExpression>(source);
@@ -635,6 +643,355 @@ struct RandomArithmetic::Impl {
                    result.highImpedance, precision);
     }
     return std::optional<RandomArithmeticPlanes>(result);
+  }
+
+  struct RealDimension {
+    Type element;
+    int64_t left, right;
+    uint64_t count;
+  };
+  std::optional<RealDimension> realDimension(Type type) {
+    if (auto array = dyn_cast<sim::UnpackedArrayType>(type))
+      return RealDimension{array.getElementType(), array.getLeft(),
+                           array.getRight(), sim::getAggregateNumElements(array)};
+    if (auto array = dyn_cast<semantic::RangedUnpackedArrayType>(type)) {
+      APInt extent(65, static_cast<uint64_t>(array.getLeft()), true);
+      extent -= APInt(65, static_cast<uint64_t>(array.getRight()), true);
+      if (extent.isNegative())
+        extent = -extent;
+      ++extent;
+      if (extent.getActiveBits() > 32)
+        return std::nullopt;
+      return RealDimension{array.getElementType(), array.getLeft(),
+                           array.getRight(), extent.getZExtValue()};
+    }
+    if (auto array = dyn_cast<semantic::UnpackedArrayType>(type))
+      return RealDimension{array.getElementType(), 0,
+                           static_cast<int64_t>(array.getSize()) - 1,
+                           array.getSize()};
+    return std::nullopt;
+  }
+  Operation *selectReal(Operation *source, Type resultType,
+                        Operation *condition, Operation *yes, Operation *no) {
+    return makeTyped(
+        source, semantic::SVConditionalExpressionOp::getOperationName(),
+        resultType,
+        {builder.getNamedAttr("condition_count", builder.getI64IntegerAttr(1)),
+         builder.getNamedAttr("condition_pattern_flags",
+                              builder.getDenseI64ArrayAttr({0})),
+         builder.getNamedAttr("is_signed", builder.getBoolAttr(false))},
+        {condition, yes, no});
+  }
+  FailureOr<Operation *> realLeaf(Operation *source, unsigned ordinal) {
+    auto key = std::make_pair(source, ordinal);
+    if (auto found = realLeaves.find(key); found != realLeaves.end())
+      return found->second;
+    auto normalized = getNormalizedSemanticType(source);
+    if (failed(normalized))
+      return failure();
+    auto real = getRandomRealElementType(*normalized);
+    auto coordinateWidth = getRandomPropertyWidth(*normalized);
+    auto leafWidth = real ? getRandomPropertyWidth(real) : std::nullopt;
+    if (!real || !coordinateWidth || !leafWidth || *coordinateWidth == 0 ||
+        ordinal >= *coordinateWidth / *leafWidth)
+      return failure();
+    Type sourceType =
+        source->getAttrOfType<TypeAttr>("semantic_type").getValue();
+    Type realType = sourceType;
+    while (auto array = realDimension(realType))
+      realType = array->element;
+    auto parts = operands(source);
+    auto remember = [&](Operation *value) -> FailureOr<Operation *> {
+      realLeaves[key] = value;
+      return value;
+    };
+    std::optional<unsigned> offset;
+    if (auto bound = sim::get<sim::metadata::RandomVariableBitOffset>(source)) {
+      if (bound.getValue().isNegative() ||
+          bound.getValue().getActiveBits() > 32 ||
+          bound.getValue().getZExtValue() > UINT32_MAX - *coordinateWidth) {
+        emitError(source->getLoc())
+            << "real array value-path binding is out of range";
+        return failure();
+      }
+      offset = static_cast<unsigned>(bound.getValue().getZExtValue());
+    } else {
+      auto path = binding(source);
+      if (failed(path))
+        return failure();
+      offset = *path;
+    }
+    if (!offset && isa<semantic::SVConditionalExpressionOp>(source) &&
+        parts.size() == 3) {
+      auto yes = realLeaf(parts[1], ordinal), no = realLeaf(parts[2], ordinal);
+      if (failed(yes) || failed(no))
+        return failure();
+      auto conditionType = getNormalizedSemanticType(parts.front());
+      if (failed(conditionType))
+        return failure();
+      if (!sim::getPackedWidth(*conditionType)) {
+        Operation *predicate = parts.front();
+        if (!candidate(predicate)) {
+          // Capture the ordinary truth conversion of strings/handles and
+          // other nonpacked state selectors, rather than encode their value
+          // as a numeric sampling operand.
+          predicate = unary(source, Unary::LogicalNot, predicate, 1);
+          predicate = unary(source, Unary::LogicalNot, predicate, 1);
+        }
+        return remember(selectReal(source, realType, predicate, *yes, *no));
+      }
+      auto condition = get(parts.front());
+      if (failed(condition))
+        return failure();
+      auto predicate = truth(source, *condition);
+      Operation *chosen =
+          selectReal(source, realType, predicate.value, *yes, *no);
+      if (predicate.unknown) {
+        // IEEE 11.4.11 merges ambiguous nonintegral arms numerically: an
+        // equal element survives; a different element becomes default 0.0.
+        Operation *zero = makeTyped(
+            source, semantic::SVRealLiteralOp::getOperationName(), realType,
+            {builder.getNamedAttr("constant_value",
+                                  builder.getStringAttr("0"))},
+            {});
+        Operation *equal = binary(source, Binary::Equality, *yes, *no, 1);
+        Operation *merged = selectReal(source, realType, equal, *yes, zero);
+        chosen =
+            selectReal(source, realType, predicate.unknown, merged, chosen);
+      }
+      return remember(chosen);
+    }
+    if (!offset && isa<semantic::SVConversionExpressionOp>(source) &&
+        parts.size() == 1) {
+      auto inputType = getNormalizedSemanticType(parts.front());
+      if (succeeded(inputType) && getRandomRealElementType(*inputType)) {
+        auto value = realLeaf(parts.front(), ordinal);
+        if (failed(value))
+          return failure();
+        return remember(makeTyped(
+            source, semantic::SVConversionExpressionOp::getOperationName(),
+            realType,
+            {builder.getNamedAttr("is_implicit", builder.getBoolAttr(true))},
+            {*value}));
+      }
+    }
+    if (!offset && isa<semantic::SVElementSelectExpressionOp>(source) &&
+        parts.size() == 2) {
+      auto baseType = parts.front()->getAttrOfType<TypeAttr>("semantic_type");
+      auto array = baseType ? realDimension(baseType.getValue()) : std::nullopt;
+      if (array) {
+        if (candidate(parts[1])) {
+          emitError(source->getLoc()) << "random real array indices require "
+                                         "candidate-dependent address validity";
+          return failure();
+        }
+        auto index = get(parts[1]);
+        auto indexWidth = width(parts[1]);
+        unsigned leaves = *coordinateWidth / *leafWidth;
+        if (failed(index) || failed(indexWidth) || array->count == 0 ||
+            array->count > UINT32_MAX / leaves)
+          return failure();
+        unsigned comparisonWidth =
+            std::max(64u, *indexWidth + unsigned(!sign(parts[1])));
+        auto widened = resize(source, *index, comparisonWidth, sign(parts[1]));
+        Operation *selected =
+            cast(source, widened.value, comparisonWidth, true);
+        auto boundary = [&](int64_t value) {
+          return literal(
+              source,
+              APInt(comparisonWidth, static_cast<uint64_t>(value), true), true);
+        };
+        SmallVector<std::pair<int64_t, Operation *>> choices;
+        int64_t first = std::min(array->left, array->right);
+        for (unsigned index = 0; index != array->count; ++index) {
+          int64_t address = first + index;
+          uint64_t element = array->left <= array->right
+                                 ? static_cast<uint64_t>(address) -
+                                       static_cast<uint64_t>(array->left)
+                                 : static_cast<uint64_t>(array->left) -
+                                       static_cast<uint64_t>(address);
+          auto value = realLeaf(parts.front(), element * leaves + ordinal);
+          if (failed(value))
+            return failure();
+          choices.push_back({address, *value});
+        }
+        std::function<Operation *(unsigned, unsigned)> choose =
+            [&](unsigned begin, unsigned end) {
+              if (end - begin == 1)
+                return choices[begin].second;
+              unsigned middle = begin + (end - begin) / 2;
+              Operation *condition = binary(source, Binary::LessThan, selected,
+                                            boundary(choices[middle].first), 1);
+              return selectReal(source, realType, condition,
+                                choose(begin, middle), choose(middle, end));
+            };
+        Operation *inRange =
+            bitAnd(source,
+                   binary(source, Binary::GreaterThanEqual, selected,
+                          boundary(first), 1),
+                   binary(source, Binary::LessThanEqual, selected,
+                          boundary(std::max(array->left, array->right)), 1),
+                   1);
+        if (index->unknown)
+          inRange = bitAnd(
+              source, inRange,
+              notBool(source, nonzero(source, index->unknown, *indexWidth)), 1);
+        Operation *zero = makeTyped(
+            source, semantic::SVRealLiteralOp::getOperationName(), realType,
+            {builder.getNamedAttr("constant_value",
+                                  builder.getStringAttr("0"))},
+            {});
+        return remember(selectReal(source, realType, inRange,
+                                   choose(0, choices.size()), zero));
+      }
+    }
+    if (isa<FloatType>(*normalized))
+      return remember(source);
+    Operation *projected = source;
+    Type selectedType = sourceType;
+    unsigned remaining = ordinal;
+    unsigned leaves = *coordinateWidth / *leafWidth;
+    while (auto array = realDimension(selectedType)) {
+      if (array->count == 0 || leaves % array->count != 0)
+        return failure();
+      unsigned stride = leaves / array->count;
+      unsigned element = remaining / stride;
+      remaining %= stride;
+      leaves = stride;
+      int64_t address = array->left <= array->right ? array->left + element
+                                                    : array->left - element;
+      Operation *index = literal(
+          source, APInt(65, static_cast<uint64_t>(address), true), true);
+      projected = makeTyped(
+          source, semantic::SVElementSelectExpressionOp::getOperationName(),
+          array->element, {}, {projected, index});
+      selectedType = array->element;
+    }
+    if (offset)
+      sim::set<sim::metadata::RandomVariableBitOffset>(
+          projected, builder.getI64IntegerAttr(*offset + *coordinateWidth -
+                                               (ordinal + 1) * *leafWidth));
+    return remember(projected);
+  }
+  FailureOr<Operation *> realExpression(Operation *expression) {
+    if (sim::has<sim::metadata::RandomArithmeticNode>(expression))
+      return static_cast<Operation *>(nullptr);
+    auto ieee = [](Type type) {
+      return isa<semantic::RealType, semantic::ShortRealType,
+                 semantic::RealtimeType, FloatType>(type);
+    };
+    bool selected = false, comparison = false;
+    if (isa<semantic::SVElementSelectExpressionOp,
+            semantic::SVConditionalExpressionOp>(expression)) {
+      auto type = expression->getAttrOfType<TypeAttr>("semantic_type");
+      selected = type && ieee(type.getValue());
+    }
+    if (auto binary = dyn_cast<semantic::SVBinaryExpressionOp>(expression)) {
+      Binary kind = binary.getOperatorKind();
+      if (kind == Binary::Equality || kind == Binary::Inequality ||
+          kind == Binary::CaseEquality || kind == Binary::CaseInequality) {
+        auto parts = operands(expression);
+        auto type =
+            parts.size() == 2
+                ? parts.front()->getAttrOfType<TypeAttr>("semantic_type")
+                : TypeAttr{};
+        if (type && realDimension(type.getValue())) {
+          Type leaf = type.getValue();
+          while (auto array = realDimension(leaf))
+            leaf = array->element;
+          comparison = ieee(leaf);
+        }
+      }
+    }
+    if (!selected && !comparison)
+      return static_cast<Operation *>(nullptr);
+    Operation *key = canonical(expression);
+    if (auto found = realExpressions.find(key); found != realExpressions.end())
+      return found->second;
+    Operation *result = nullptr;
+    auto type = getNormalizedSemanticType(expression);
+    if (failed(type))
+      return failure();
+    if (isa<FloatType>(*type) &&
+        (isa<semantic::SVConditionalExpressionOp,
+             semantic::SVElementSelectExpressionOp>(expression) &&
+         candidate(expression)) &&
+        !sim::has<sim::metadata::RandomVariableBitOffset>(expression)) {
+      auto value = realLeaf(expression, 0);
+      if (failed(value))
+        return failure();
+      if (*value != expression)
+        result = *value;
+    }
+    if (auto comparison =
+            dyn_cast<semantic::SVBinaryExpressionOp>(expression)) {
+      Binary kind = comparison.getOperatorKind();
+      if (kind == Binary::Equality || kind == Binary::Inequality ||
+          kind == Binary::CaseEquality || kind == Binary::CaseInequality) {
+        auto parts = operands(expression);
+        auto leftType = parts.size() == 2 ? getNormalizedSemanticType(parts[0])
+                                          : FailureOr<Type>(failure());
+        auto rightType = parts.size() == 2 ? getNormalizedSemanticType(parts[1])
+                                           : FailureOr<Type>(failure());
+        if (succeeded(leftType) && succeeded(rightType) &&
+            isa<sim::UnpackedArrayType>(*leftType) &&
+            isa<sim::UnpackedArrayType>(*rightType) &&
+            getRandomRealElementType(*leftType) &&
+            getRandomRealElementType(*rightType)) {
+          auto a =
+              parts[0]->getAttrOfType<TypeAttr>("semantic_type").getValue();
+          auto b =
+              parts[1]->getAttrOfType<TypeAttr>("semantic_type").getValue();
+          uint64_t count = 1;
+          for (;;) {
+            auto x = realDimension(a), y = realDimension(b);
+            if (static_cast<bool>(x) != static_cast<bool>(y) ||
+                (x && (x->count != y->count || x->count == 0 ||
+                       x->count > UINT32_MAX / count))) {
+              emitError(expression->getLoc())
+                  << "real array comparison has incompatible or excessive "
+                     "dimensions";
+              return failure();
+            }
+            if (!x)
+              break;
+            count *= x->count;
+            a = x->element;
+            b = y->element;
+          }
+          if (getRandomRealElementType(*leftType) !=
+              getRandomRealElementType(*rightType)) {
+            emitError(expression->getLoc())
+                << "real array comparison leaf types do not match";
+            return failure();
+          }
+          bool equality =
+              kind == Binary::Equality || kind == Binary::CaseEquality;
+          SmallVector<Operation *> comparisons;
+          for (unsigned ordinal = 0; ordinal != count; ++ordinal) {
+            auto left = realLeaf(parts[0], ordinal),
+                 right = realLeaf(parts[1], ordinal);
+            if (failed(left) || failed(right))
+              return failure();
+            comparisons.push_back(binary(
+                expression, equality ? Binary::Equality : Binary::Inequality,
+                *left, *right, 1));
+          }
+          std::function<Operation *(unsigned, unsigned)> join =
+              [&](unsigned begin, unsigned end) {
+                if (end - begin == 1)
+                  return comparisons[begin];
+                unsigned middle = begin + (end - begin) / 2;
+                return binary(expression,
+                              equality ? Binary::LogicalAnd : Binary::LogicalOr,
+                              join(begin, middle), join(middle, end), 1);
+              };
+          result = join(0, comparisons.size());
+        }
+      }
+    }
+    realExpressions[key] = result;
+    return result;
   }
 
   FailureOr<RandomArithmeticPlanes> packedSelection(Operation *expression,
@@ -1560,6 +1917,9 @@ bool RandomArithmetic::needed(Operation *expression) {
 }
 FailureOr<RandomArithmeticPlanes> RandomArithmetic::get(Operation *expression) {
   return impl->get(expression);
+}
+FailureOr<Operation *> RandomArithmetic::realExpression(Operation *expression) {
+  return impl->realExpression(expression);
 }
 FailureOr<Operation *> RandomArithmetic::known(Operation *expression) {
   return impl->known(expression);

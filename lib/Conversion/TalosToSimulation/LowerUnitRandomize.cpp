@@ -4252,6 +4252,11 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
   emitProgramNode = [&](Operation *expression) -> LogicalResult {
     if (arithmeticFailure)
       return failure();
+    auto realSelection = arithmetic.realExpression(expression);
+    if (failed(realSelection))
+      return failure();
+    if (*realSelection)
+      return emitProgramExpression(*realSelection);
     if (!isa<semantic::SVDistExpressionOp>(expression) &&
         arithmetic.needed(expression)) {
       auto planes = arithmetic.get(expression);
@@ -5410,8 +5415,17 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     // are constant or state-only. Only the original state leaves and raw
     // unknown-plane projections become parameters of the Z3 plan.
     if (!dependsOnCandidate(expression) &&
-        !sim::has<sim::metadata::RandomArithmeticNode>(expression))
+        (!sim::has<sim::metadata::RandomArithmeticNode>(expression) ||
+         (floating && isa<semantic::SVElementSelectExpressionOp>(expression))))
       return captureExpression();
+    if (auto unary = dyn_cast<semantic::SVUnaryExpressionOp>(expression);
+        unary &&
+        unary.getOperatorKind() == semantic::SVUnaryOperator::LogicalNot &&
+        !dependsOnCandidate(expression) && nested.size() == 1) {
+      auto inputType = getNormalizedSemanticType(nested.front());
+      if (succeeded(inputType) && !sim::getPackedWidth(*inputType))
+        return captureExpression();
+    }
 
     if (auto call = dyn_cast<semantic::SVCallExpressionOp>(expression);
         call && call.getIsSystemCall() &&
@@ -6846,6 +6860,9 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
       auto restore =
           llvm::scope_exit([&] { preserveArithmeticSource = saved; });
       preserveArithmeticSource |= consumesSymbols;
+      bool realConditional =
+          isa<semantic::SVConditionalExpressionOp>(expression) &&
+          getRandomRealElementType(*resultType);
       for (auto [index, input] : llvm::enumerate(inputs)) {
         // X/Z in an address is a structural evaluation error, even if a
         // surrounding two-state cast consumes unknown data bits. Bounds
@@ -6853,6 +6870,9 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         // arithmetic value bits that replace those symbols with zero.
         preserveArithmeticSource =
             saved || consumesSymbols ||
+            // IEEE data conditionals consume an ambiguous selector by
+            // merging their arms; retain X/Z instead of its zero value plane.
+            (index == 0 && realConditional) ||
             (index != 0 &&
              isa<semantic::SVElementSelectExpressionOp,
                  semantic::SVRangeSelectExpressionOp>(expression));
@@ -6878,14 +6898,17 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
       // unknown data values. Their structural evaluation must still succeed.
       valid = guardAnd(values.front().valid, errors);
     }
-    APInt inputMask = graphNode ? APInt::getZero(assignmentWidth)
-                                : priorityInputs(expression);
+    bool boundPath =
+        sim::has<sim::metadata::RandomVariable>(expression) ||
+        sim::has<sim::metadata::RandomVariableBitOffset>(expression);
+    APInt inputMask = graphNode && !boundPath ? APInt::getZero(assignmentWidth)
+                                              : priorityInputs(expression);
     Value guardInputs = constantAssignment(inputMask);
     Value guardArguments =
         graphNode ? constantAssignment64(0)
                   : constantAssignment(sourceFunctionArguments(expression));
     bool dynamicInputs = false;
-    if (graphNode) {
+    if (graphNode && !boundPath) {
       for (const SafeConstraintValue &value : values) {
         guardInputs = unionGuardInputs(guardInputs, value.inputs);
         guardArguments = unionGuardInputs(guardArguments, value.arguments);
@@ -6974,7 +6997,8 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         return failure();
       Value yesEnabled = guardNot(*falseGuard);
       Value noEnabled = guardNot(*trueGuard);
-      valid = guardAnd(values[0].valid,
+      bool realData = static_cast<bool>(getRandomRealElementType(*resultType));
+      valid = guardAnd(realData ? values[0].errors : values[0].valid,
                        guardAnd(guardOr(*falseGuard, values[1].valid),
                                 guardOr(*trueGuard, values[2].valid)));
       errors = guardAnd(values[0].errors,
@@ -7500,6 +7524,23 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
             result, restored);
         valid = guardAnd(valid, guardOr(random, known));
       }
+    if (!preserveArithmeticSource) {
+      auto selected = arithmetic.realExpression(expression);
+      if (failed(selected))
+        return failure();
+      if (*selected) {
+        auto value = safeConstraintValue(*selected);
+        if (failed(value))
+          return failure();
+        result = value->value;
+        valid = guardAnd(valid, value->valid);
+        errors = guardAnd(errors, value->errors);
+        random = value->random;
+        guardInputs = value->inputs;
+        guardArguments = value->arguments;
+        dynamicInputs = true;
+      }
+    }
     if (!preserveArithmeticSource &&
         !sim::has<sim::metadata::RandomNativeFunction>(expression) &&
         !isa<semantic::SVDistExpressionOp>(expression) &&

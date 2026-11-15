@@ -53,6 +53,10 @@ public:
   /// Safe captures can reuse a value across copies of the same expression.
   mlir::Operation *canonical(mlir::Operation *expression);
   mlir::FailureOr<RandomArithmeticPlanes> get(mlir::Operation *expression);
+  /// Typed scalar lookups and elementwise IEEE array comparisons. Null means
+  /// the source needs no expansion. Shared operands keep their source identity.
+  mlir::FailureOr<mlir::Operation *>
+  realExpression(mlir::Operation *expression);
   mlir::FailureOr<mlir::Operation *> known(mlir::Operation *expression);
 
 private:
