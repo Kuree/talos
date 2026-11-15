@@ -1963,24 +1963,30 @@ private:
 
 } // namespace
 
-// Native state captures need no expression-tree expansion. Admit a closed
+// Native function captures need no expression-tree expansion. Admit a closed
 // automatic scalar call graph only after checking every write and call,
 // including in unused initializers or return values. Operations whose ERROR
 // state needs constraint-specific instrumentation retain expression lowering.
 static bool
 canExecuteNativeConstraintFunction(semantic::SVSubroutineSymbolOp entry,
                                    const llvm::StringMap<Operation *> &symbols,
-                                   bool &hasCallees) {
+                                   bool &hasCallees, bool &hasRealValues) {
   llvm::SmallPtrSet<Operation *, 16> visited;
   auto resolve = [&](Operation *expression) -> Operation * {
     auto reference =
         expression->getAttrOfType<SymbolRefAttr>("referenced_symbol");
     return reference ? symbols.lookup(reference.getLeafReference()) : nullptr;
   };
-  auto integral = [](Operation *symbol) {
+  auto real = [](Type type) {
+    return isa<semantic::RealType, semantic::ShortRealType,
+               semantic::RealtimeType>(type) ||
+           type.isF32() || type.isF64();
+  };
+  auto scalar = [&](Operation *symbol) {
     auto type = symbol->getAttrOfType<TypeAttr>("semantic_type");
-    return type && (getSemanticPackedWidth(type.getValue()).has_value() ||
-                    isa<semantic::TimeType>(type.getValue()));
+    return type &&
+           (getSemanticPackedWidth(type.getValue()).has_value() ||
+            isa<semantic::TimeType>(type.getValue()) || real(type.getValue()));
   };
   std::function<bool(semantic::SVSubroutineSymbolOp)> validate;
   validate = [&](semantic::SVSubroutineSymbolOp function) -> bool {
@@ -1997,18 +2003,20 @@ canExecuteNativeConstraintFunction(semantic::SVSubroutineSymbolOp entry,
     auto result = function.getReturnVariableSymbol();
     Operation *returnVariable =
         result ? symbols.lookup(result->getLeafReference()) : nullptr;
-    if (!returnVariable || !integral(returnVariable))
+    if (!returnVariable || !scalar(returnVariable))
       return false;
     visited.insert(function);
     llvm::SmallPtrSet<Operation *, 16> writable;
     bool valid = true;
     function->walk([&](Operation *node) {
+      if (auto type = node->getAttrOfType<TypeAttr>("semantic_type"))
+        hasRealValues |= real(type.getValue());
       if (auto local = dyn_cast<semantic::SVVariableSymbolOp>(node)) {
         if (function.getThisVariableSymbol() &&
             function.getThisVariableSymbol()->getLeafReference() ==
                 local.getSymName())
           return;
-        if (!integral(local) ||
+        if (!scalar(local) ||
             local.getLifetime() != semantic::SVVariableLifetime::Automatic) {
           valid = false;
           return;
@@ -2021,7 +2029,7 @@ canExecuteNativeConstraintFunction(semantic::SVSubroutineSymbolOp entry,
         bool constRef =
             formal.getDirection() == semantic::SVArgumentDirection::Ref &&
             formal.getIsConst().value_or(false);
-        if ((!input && !constRef) || !integral(formal))
+        if ((!input && !constRef) || !scalar(formal))
           valid = false;
         if (input && !formal.getIsConst().value_or(false))
           writable.insert(formal);
@@ -2318,15 +2326,19 @@ LogicalResult expandRandomConstraintFunctions(
       FailureOr<Operation *> result = failure();
       auto inputs = sim::get<sim::metadata::RandomGuardInputs>(source);
       bool hasCallees = false;
+      bool hasRealValues = false;
       if (!functionBody && inputs &&
           canExecuteNativeConstraintFunction(*function, semanticSymbols,
-                                             hasCallees)) {
-        // Keep inexpensive leaf expressions and proved bounded bodies available
+                                             hasCallees, hasRealValues)) {
+        // Keep inexpensive integral leaves and proved bounded bodies available
         // for folding. A failed trial consumes neither the shared expansion
         // budget nor a diagnostic: the validated native body is the fallback.
         // Retain closed graphs containing user calls as a whole: an immediate
         // return expression can still call an unbounded or recursive body.
-        if (!hasCallees) {
+        // IEEE real operations round inside the function after its arguments
+        // become state. Keep even inexpensive real bodies opaque rather than
+        // asking the relation compiler to encode their floating-point graph.
+        if (!hasCallees && !hasRealValues) {
           // A native fallback makes a large speculative expansion unnecessary.
           // Keep the folding trial cheap even for exponentially reused locals.
           uint64_t allowance = budget.available();
