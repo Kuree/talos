@@ -3,10 +3,12 @@
 
 // IEEE 1800-2023 4.6(b), 10.4.2: nonblocking updates of one variable apply in
 // execution order. An NBA through a virtual interface (25.9) may write any
-// instance's variable, here the same i0.s the next statement writes, so no
-// root may commit from a static accumulator ahead of the ordered runtime
-// queue: static specialization plans no NBA root, and the body keeps its
-// runtime checkpoint (i0.s ends as a + 8'h10, not a).
+// instance's variable, here the same i0.s the next statement writes. The
+// final CFG preparation specializes the finite reference choice on each
+// incoming edge, exposing both roots while preserving the two NBAs' source
+// order (i0.s ends as a + 8'h10). No unrooted commit remains to prevent static
+// specialization; simulation-static-handle-tail-nba.mlir checks both paths
+// and the conservative policy before that normalization.
 interface ifc;
   logic [7:0] s = 0;
 endinterface
@@ -29,5 +31,4 @@ module top;
   end
 endmodule
 
-// CHECK: talos eval executor inventory: tier1=0 tier2=0 runtime_checkpoints=1
-// CHECK: talos native NBA batch: candidates=0 roots=0
+// CHECK: talos native NBA batch: candidates=0 roots=2

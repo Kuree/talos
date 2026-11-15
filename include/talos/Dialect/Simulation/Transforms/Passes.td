@@ -150,6 +150,12 @@ def TalosSimRefineContinuousSensitivityPass
 def TalosSimThreadSuspensionPass
     : Pass<"talos-sim-thread-suspension", "talos::sim::SimFuncOp"> {
   let summary = "Thread promoted SSA state through suspension continuations";
+  let options = [
+    Option<"specializeHandleTails", "specialize-handle-tails", "bool", "false",
+           "Expose edge-specific static references before graph construction">,
+    Option<"activePreemptionsOnly", "active-preemptions-only", "bool", "false",
+           "Only thread processes with an implementation Active preemption">
+  ];
   let dependentDialects = [
     "talos::sim::TalosSimulationDialect",
     "mlir::cf::ControlFlowDialect"

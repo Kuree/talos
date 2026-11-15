@@ -1134,7 +1134,9 @@ static void buildTalosToSimulationPipelineImpl(
     // Record the remaining loop proofs before those new arguments obscure
     // the induction shape, then freeze the complete suspension operands.
     functions.addPass(createTalosSimMarkBoundedLoopsPass());
-    functions.addPass(createTalosSimThreadSuspensionPass());
+    TalosSimThreadSuspensionPassOptions threadingOptions;
+    threadingOptions.specializeHandleTails = optLevel >= 3;
+    functions.addPass(createTalosSimThreadSuspensionPass(threadingOptions));
   }
 
   if (optLevel > 0)
@@ -1164,8 +1166,18 @@ static void buildTalosToSimulationPipelineImpl(
     // after the last fusion round; O0 has no later round.
     TalosSimMaterializeComputeFusionPassOptions materializeOptions;
     materializeOptions.materializeEvalBodies = optLevel == 0;
+    // Choosing a terminating legal Active interleaving is useful at every
+    // optimization level. O3 performs it with the later statement-SCC plan;
+    // lower levels use this existing materialization boundary.
+    materializeOptions.interleaveRearms = optLevel < 3;
     designManager.addPass(createTalosSimMaterializeComputeFusionPass(
         std::move(materializeOptions)));
+    if (optLevel < 3) {
+      TalosSimThreadSuspensionPassOptions preemptionFrames;
+      preemptionFrames.activePreemptionsOnly = true;
+      designManager.nest<sim::SimFuncOp>().addPass(
+          createTalosSimThreadSuspensionPass(preemptionFrames));
+    }
     TalosSimBuildComputeGraphPassOptions primitiveGraphOptions;
     primitiveGraphOptions.workers = workers;
     primitiveGraphOptions.vpi = vpiMode.str();
@@ -1195,8 +1207,13 @@ static void buildTalosToSimulationPipelineImpl(
           createPlanCombinationalStatementsPass(std::move(statementOptions)));
       TalosSimMaterializeComputeFusionPassOptions materializeOptions;
       materializeOptions.materializeEvalBodies = false;
+      materializeOptions.interleaveRearms = true;
       designManager.addPass(createTalosSimMaterializeComputeFusionPass(
           std::move(materializeOptions)));
+      TalosSimThreadSuspensionPassOptions preemptionFrames;
+      preemptionFrames.activePreemptionsOnly = true;
+      designManager.nest<sim::SimFuncOp>().addPass(
+          createTalosSimThreadSuspensionPass(preemptionFrames));
       TalosSimBuildComputeGraphPassOptions statementGraphOptions;
       statementGraphOptions.workers = workers;
       statementGraphOptions.vpi = vpiMode.str();
@@ -1260,10 +1277,10 @@ void buildTalosToSimulationPipeline(OpPassManager &manager, uint32_t workers,
                                     StringRef clockedKernels,
                                     StringRef forwardCopies, bool enableUPF,
                                     bool pruneVPIInventory, bool closedModel) {
-  buildTalosToSimulationPipelineImpl(
-      manager, workers, vpiMode, optLevel, staticSpecialization, earlySymbolDCE,
-      clockedKernels, false, forwardCopies, enableUPF, pruneVPIInventory,
-      closedModel);
+  buildTalosToSimulationPipelineImpl(manager, workers, vpiMode, optLevel,
+                                     staticSpecialization, earlySymbolDCE,
+                                     clockedKernels, false, forwardCopies,
+                                     enableUPF, pruneVPIInventory, closedModel);
 }
 
 void buildTalosToSimulationPipeline(OpPassManager &manager) {

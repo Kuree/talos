@@ -653,6 +653,8 @@ public:
     SmallVector<Attribute> fusions;
     DenseSet<unsigned> planned;
     unsigned dataflowCount = 0;
+    analysis::ActivationInterleavingPreparation preparation(handles);
+    analysis::ActivationInterleavingAnalysis interleaving(preparation);
     auto plan = [&](ArrayRef<unsigned> component) {
       SmallVector<sim::SimFuncOp> members;
       SmallVector<int64_t> memberFragments;
@@ -674,9 +676,14 @@ public:
           reordered.push_back(candidates[member]);
         cost += analysis::getSimulationOperationCost(candidates[member]);
       }
+      SmallVector<analysis::ActivationRegionStep> cycle;
+      auto getInterleaving = [&] {
+        preparation.prepare(memberActivations);
+        return interleaving.getOrder(memberActivations,
+                                     explain ? &cycle : nullptr);
+      };
       CombinationalFusionFailure observerReason;
       ComponentRejection reason = ComponentRejection::None;
-      SmallVector<analysis::ActivationRegionStep> cycle;
       SmallVector<analysis::ActivationRegionStep> dataCycle;
       SmallVector<StringAttr> contractionPath;
       bool dataflow = false;
@@ -695,8 +702,7 @@ public:
                             [&](auto member) {
                               return requiresReordering.contains(member);
                             }) ||
-               !analysis::getActivationRegionOrder(
-                   memberActivations, explain ? &cycle : nullptr)) {
+               !getInterleaving()) {
         // Statement order is cyclic. Without each process's source order
         // (4.6(a)), a data-dependence order is valid under 4.3 only when no
         // outside observer sees the transitions it removes.
@@ -786,7 +792,8 @@ public:
             if (from.activation == to.activation)
               continue;
             auto describe = [&](const analysis::ActivationRegionStep &step) {
-              auto owner = llvm::find(memberActivations, step.activation) -
+              auto owner = llvm::find(memberActivations,
+                                      step.activation->getSourceActivation()) -
                            memberActivations.begin();
               auto nodes = step.activation->getNodes();
               auto node = llvm::find_if(nodes, [&](const auto &node) {
@@ -856,6 +863,21 @@ public:
           analysis::getActivationSliceSchedule(selected, {&atomic, &cyclic});
       if (!schedule)
         return;
+      if (explain) {
+        std::map<unsigned, llvm::SetVector<StringAttr>> feedback;
+        for (auto [node, step] : llvm::enumerate(schedule->nodes)) {
+          unsigned id = schedule->componentOf[node];
+          if (schedule->cyclic[id])
+            feedback[id].insert(
+                step.activation->getActivationFunction().getSymNameAttr());
+        }
+        for (const auto &[id, owners] : feedback) {
+          llvm::errs() << "talos statement recovery feedback:";
+          for (StringAttr owner : owners)
+            llvm::errs() << " @" << owner.getValue();
+          llvm::errs() << '\n';
+        }
+      }
       SmallVector<StringAttr> remaining;
       for (unsigned owner : component)
         if (!planned.contains(owner) &&

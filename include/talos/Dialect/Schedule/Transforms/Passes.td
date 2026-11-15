@@ -187,7 +187,9 @@ def TalosSimMaterializeComputeFusionPass
   ];
   let options = [
     Option<"materializeEvalBodies", "materialize-eval-bodies", "bool", "true",
-           "Clone native evaluators after the final body-fusion round">
+           "Clone native evaluators after the final body-fusion round">,
+    Option<"interleaveRearms", "interleave-rearms", "bool", "false",
+           "Materialize proven pulse-SCC re-arm interleavings of original processes">
   ];
 }
 

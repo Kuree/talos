@@ -7,6 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "talos/Analysis/ActivationControlFlow.h"
 #include "talos/Conversion/SimulationToSchedule/Utils.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 
@@ -42,10 +43,31 @@ class TalosSimThreadSuspensionPass
     : public impl::TalosSimThreadSuspensionPassBase<
           TalosSimThreadSuspensionPass> {
 public:
+  using TalosSimThreadSuspensionPassBase::TalosSimThreadSuspensionPassBase;
   void runOnOperation() override {
     sim::SimFuncOp function = getOperation();
     if (function.getBody().empty())
       return;
+    if (activePreemptionsOnly &&
+        !function
+             .walk([](sim::SimSuspendDelayOp delay) {
+               auto constant =
+                   delay.getDelay().getDefiningOp<sim::SimTimeConstantOp>();
+               return constant && !constant.getValue() &&
+                              delay.getResumeRegion() ==
+                                  sim::EventRegion::Active
+                          ? WalkResult::interrupt()
+                          : WalkResult::advance();
+             })
+             .wasInterrupted())
+      return;
+
+    // The final CFG preparation precedes graph/effect summaries. Shared case
+    // tails otherwise turn distinct static references into an unknown handle
+    // phi before fusion eligibility can inspect them. Keep the exact path and
+    // operation order, then thread any newly exposed continuation operands.
+    if (specializeHandleTails)
+      analysis::specializeStaticHandleTails(function.getBody());
 
     // Canonicalization can sink a packed load through a constant selection,
     // leaving a primitive body with an exact scalar reference even though

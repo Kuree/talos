@@ -14,6 +14,7 @@
 #include "mlir/Support/LLVM.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
@@ -71,6 +72,21 @@ public:
   std::optional<uint32_t> getEntryRank(mlir::Operation *function) const;
   std::optional<uint32_t> getBlockRank(mlir::Block *block) const;
 
+  /// Independent, transitive Active producers of inputs read before an
+  /// interrupted actor's first handoff. They must settle before its first
+  /// read: a publication during its partial execution cannot wake its already
+  /// completed event control (9.4.2). Value-dependent feedback uses the source
+  /// handoff order instead. Unrelated outputs of one producer stay separate.
+  llvm::ArrayRef<sim::SimFuncOp>
+  getPreemptionPrerequisites(mlir::Operation *function) const;
+  /// Interrupted actors with an input read before their first handoff whose
+  /// producers could not be proved independent of the cohort. Realizing
+  /// their handoffs could expose partial state or lose an update.
+  const llvm::DenseSet<mlir::Operation *> &
+  getUnprovedPreemptionOwners() const {
+    return unprovedPreemptionOwners;
+  }
+
   const llvm::DenseMap<mlir::Operation *, uint32_t> &getEntryRanks() const {
     return entryRanks;
   }
@@ -81,6 +97,9 @@ public:
 private:
   llvm::DenseMap<mlir::Operation *, uint32_t> entryRanks;
   llvm::DenseMap<mlir::Block *, uint32_t> blockRanks;
+  llvm::DenseMap<mlir::Operation *, llvm::SmallVector<sim::SimFuncOp>>
+      preemptionPrerequisites;
+  llvm::DenseSet<mlir::Operation *> unprovedPreemptionOwners;
 };
 
 } // namespace talos::analysis

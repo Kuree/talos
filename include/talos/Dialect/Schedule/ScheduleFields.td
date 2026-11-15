@@ -5,6 +5,24 @@ class ScheduleField<string name, string wire, string type> {
   string wireName = wire;
   string attributeType = type;
 }
+// Source actors, in the exact chosen run order, between an interrupted actor's
+// prefix and continuation. Shared native/bytecode rank analysis preserves this
+// phase order, including the original actor's first run and final re-arm.
+def ActivePreemptionAfter : ScheduleField<"ActivePreemptionAfter", "schedule.active_preemption_after",
+    "::mlir::ArrayAttr">;
+// General source interleavings distinguish runs of the same actor. Every
+// handoff carries the complete ordered actor list and its continuation's
+// index into that list, including virtual re-arms. References remain ordinary
+// function symbols; no transformation-owned operation identity escapes.
+def ActivePreemptionRuns : ScheduleField<"ActivePreemptionRuns", "schedule.active_preemption_runs",
+    "::mlir::ArrayAttr">;
+def ActivePreemptionResume : ScheduleField<"ActivePreemptionResume", "schedule.active_preemption_resume",
+    "::mlir::IntegerAttr">;
+// The handoff follows the actor's complete body and precedes only its
+// original event control (a virtual re-arm). The body runs atomically, so no
+// partial publication is exposed and no prefix-input proof is required.
+def ActivePreemptionRearm : ScheduleField<"ActivePreemptionRearm", "schedule.active_preemption_rearm",
+    "::mlir::UnitAttr">;
 def EvalActivationEntry : ScheduleField<"EvalActivationEntry", "schedule.eval.activation_entry",
     "::mlir::IntegerAttr">;
 def EvalAllowedCallees : ScheduleField<"EvalAllowedCallees", "schedule.eval.allowed_callees",

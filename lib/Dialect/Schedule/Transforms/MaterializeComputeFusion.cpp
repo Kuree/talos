@@ -7,11 +7,13 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
+#include "talos/Analysis/ActivationControlFlow.h"
 #include "talos/Analysis/BoundedLoopAnalysis.h"
 #include "talos/Analysis/DPIEffectAnalysis.h"
 #include "talos/Analysis/LocalStorageAnalysis.h"
 #include "talos/Analysis/NBAInfluenceAnalysis.h"
 #include "talos/Analysis/SSAValueAnalysis.h"
+#include "talos/Analysis/SimulationScheduleAnalysis.h"
 #include "talos/Analysis/SourceMemoryAnalysis.h"
 #include "talos/Analysis/StorageWriteAnalysis.h"
 #include "talos/Conversion/SimulationToSchedule/ComputeGraph.h"
@@ -28,6 +30,7 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/SymbolTable.h"
@@ -2686,6 +2689,8 @@ FailureOr<sim::SimFuncOp> materializeStraightLineKernel(
     return cloned->getResult(result);
   };
   if (rankedCombinational) {
+    analysis::ActivationInterleavingPreparation preparation(provenance);
+    analysis::ActivationInterleavingAnalysis interleavingAnalysis(preparation);
     std::optional<SmallVector<analysis::ActivationRegionStep>> interleaving;
     DenseMap<StringAttr, unsigned> owners;
     for (auto [index, candidate] : llvm::enumerate(candidates))
@@ -2753,7 +2758,8 @@ FailureOr<sim::SimFuncOp> materializeStraightLineKernel(
             return bail("region: incomplete atomic member");
         }
       } else {
-        interleaving = analysis::getActivationRegionOrder(activations);
+        preparation.prepare(activations);
+        interleaving = interleavingAnalysis.getOrder(activations);
         if (!interleaving)
           return bail("region: region ordering");
       }
@@ -2875,10 +2881,23 @@ FailureOr<sim::SimFuncOp> materializeStraightLineKernel(
         }
       else
         for (const auto &step : *interleaving) {
-          unsigned owner = ownerForActivation.at(step.activation);
+          const auto *source = step.activation->getSourceActivation();
+          unsigned owner = ownerForActivation.at(source);
+          IRMapping &mapping = *mappingForActivation.at(source);
+          if (source != step.activation)
+            for (auto [original, refined] :
+                 llvm::zip_equal(source->getActivationFunction()
+                                     .getBody()
+                                     .front()
+                                     .getArguments(),
+                                 step.activation->getActivationFunction()
+                                     .getBody()
+                                     .front()
+                                     .getArguments()))
+              mapping.map(refined, mapping.lookup(original));
           tail = emitActivationNode(
               builder, wait, tail, *step.activation->getNode(step.operation),
-              *mappingForActivation.at(step.activation),
+              mapping,
               [&](Operation *cloned) { preserveSourceOwner(cloned, owner); });
         }
     } else
@@ -4450,8 +4469,584 @@ FailureOr<sim::SimFuncOp> materializeFusion(
   return fused;
 }
 
+/// A fusion needs settled-value and observer certificates. An Active
+/// preemption of an original process needs neither: its reads, publications,
+/// identity and original event control all remain (1800-2023 4.6/4.7/9.4.2).
+/// Only a proved possible pulse cycle selects a different execution order.
+std::optional<SmallVector<Operation *>>
+mapPreemptionSites(ArrayRef<analysis::ActivationRegionStep> preemptions,
+                   const analysis::HandleDataflowAnalysis &handles) {
+  SmallVector<Operation *> sites;
+  for (auto point : preemptions) {
+    auto *source = point.activation->getSourceActivation();
+    if (!point.operation) {
+      sites.push_back(source->getSuspension());
+      continue;
+    }
+    const auto *node = point.activation->getNode(point.operation);
+    const auto &memory = point.activation->getMemory();
+    SmallVector<Operation *> reads;
+    if (!node->isRegion())
+      reads.push_back(point.operation);
+    else {
+      DenseSet<Block *> visited;
+      SmallVector<Block *> pending(node->operation->getSuccessors());
+      while (!pending.empty()) {
+        Block *block = pending.pop_back_val();
+        if (block == node->join) {
+          sites.push_back(source->getSuspension());
+          continue;
+        }
+        if (!visited.insert(block).second)
+          continue;
+        Operation *first = nullptr;
+        for (Operation &op : *block)
+          if (memory.getReads().contains(&op) ||
+              memory.getWrites().contains(&op)) {
+            first = &op;
+            break;
+          }
+        if (first)
+          reads.push_back(first);
+        else
+          llvm::append_range(pending, block->getSuccessors());
+      }
+    }
+    auto function = source->getSuspension()->getParentOfType<sim::SimFuncOp>();
+    auto facts = handles.derive(function);
+    DominanceInfo dominance(function);
+    Block *body = source->getSuspension()->getSuccessor(0);
+    for (Operation *read : reads) {
+      auto load = dyn_cast<sim::SimRefLoadOp>(read);
+      auto found = memory.getReads().find(read);
+      if (!load || found == memory.getReads().end() ||
+          found->second.size() != 1)
+        return std::nullopt;
+      auto range = found->second.front();
+      Operation *matched = nullptr;
+      bool ambiguous = false;
+      function.walk([&](sim::SimRefLoadOp original) {
+        // A unique exact memory site has one source snapshot. Debug
+        // locations are not identity, and two same-range loads must never
+        // be conflated to manufacture a handoff boundary.
+        if (!dominance.dominates(body, original->getBlock()))
+          return;
+        auto handle = facts.find(original.getReference());
+        if (handle == facts.end() || handle->second.dynamic ||
+            !handle->second.descriptor || handle->second.low != range.low ||
+            handle->second.width != range.width)
+          return;
+        auto root = analysis::ActivationMemoryAnalysis::getRoot(
+            handle->second.resource, *handle->second.descriptor);
+        if (!root || *root != range.root)
+          return;
+        ambiguous |= matched != nullptr;
+        matched = original;
+      });
+      if (!matched || ambiguous)
+        return std::nullopt;
+      sites.push_back(matched);
+    }
+  }
+  return sites;
+}
+
+void materializeRearmInterleavings(sim::SimDesignOp design) {
+  // The eval coordinator never executes an implementation Active preemption;
+  // a design the user forced onto it keeps its source schedule instead of
+  // becoming a compile error. Auto requests fall back to the generic tier.
+  ModuleOp module = design->getParentOfType<ModuleOp>();
+  if (auto scheduler =
+          schedule::get<schedule::Field::NativeScheduler>(module);
+      scheduler &&
+      scheduler.getValue() == schedule::NativeSchedulerMode::Eval &&
+      !schedule::has<schedule::Field::NativeSchedulerAutoRequested>(module))
+    return;
+  analysis::HandleDataflowAnalysis handles(design);
+  handles.prepare(design);
+  analysis::ControlActivationAnalysis controlActivations(design);
+  SmallVector<std::unique_ptr<analysis::ActivationRegionAnalysis>> owned;
+  SmallVector<const analysis::ActivationRegionAnalysis *> activations;
+  DenseMap<const analysis::ActivationRegionAnalysis *, sim::SimFuncOp> sources;
+  for (auto function : design.getOps<sim::SimFuncOp>()) {
+    if (function.getEntryKind() != sim::EntryKind::AlwaysComb ||
+        schedule::has<schedule::Field::NativeRegionBody>(function))
+      continue;
+    unsigned stores = 0;
+    if (!function
+             .walk([&](sim::SimRefStoreOp) {
+               return ++stores == 2 ? WalkResult::interrupt()
+                                    : WalkResult::advance();
+             })
+             .wasInterrupted())
+      continue;
+    analysis::ActivationPreparationOptions preparation;
+    preparation.controls = &controlActivations;
+    auto activation = std::make_unique<analysis::ActivationRegionAnalysis>(
+        analysis::prepareActivation(function, preparation), handles);
+    if (!activation->isValid())
+      continue;
+    sources[activation.get()] = function;
+    activations.push_back(activation.get());
+    owned.push_back(std::move(activation));
+  }
+  // One realizable choice of source handoffs: its sites and their encodings.
+  struct Encoding {
+    SmallVector<Operation *> sites;
+    DenseMap<Operation *, ArrayAttr> afters, runOrders;
+    DenseMap<Operation *, unsigned> resumeRuns;
+    bool ordered = false;
+  };
+  struct CohortPlan {
+    SmallVector<sim::SimFuncOp> members;
+    SmallVector<Encoding> alternatives;
+  };
+  SmallVector<CohortPlan> cohortPlans;
+  bool trace =
+      native::has<native::DebugTiming>(design->getParentOfType<ModuleOp>());
+  for (const auto &cohort :
+       analysis::getActivationPulseComponents(activations)) {
+    auto plan = analysis::getActivationRearmPlan(cohort);
+    if (trace && (!plan || plan->preemptions.empty()))
+      llvm::errs() << "talos Active re-arm candidate: members=" << cohort.size()
+                   << " witness=" << (plan ? "unproved" : "unavailable")
+                   << '\n';
+    if (!plan || plan->preemptions.empty())
+      continue;
+    analysis::ActivationInterleavingPreparation preparation(handles);
+    preparation.prepare(cohort);
+    analysis::ActivationInterleavingAnalysis interleaving(preparation);
+    bool hasOrdered = false;
+    SmallVector<Operation *> orderedSites;
+    auto order = interleaving.getOrder(cohort);
+    if (order && interleaving.hasProvenLivelock())
+      if (auto sites =
+              mapPreemptionSites(interleaving.getPreemptions(), handles)) {
+        orderedSites = *sites;
+        hasOrdered = !sites->empty();
+      }
+    if (order && !hasOrdered)
+      continue;
+    auto encode = [&](bool ordered) -> std::optional<Encoding> {
+      Encoding encoding;
+      encoding.ordered = ordered;
+      SmallVector<Operation *> selectedSites;
+      if (ordered)
+        selectedSites = orderedSites;
+      else
+        for (const auto *activation : plan->preemptions)
+          selectedSites.push_back(activation->getSuspension());
+      llvm::SetVector<Operation *> selectedOwners;
+      for (Operation *site : selectedSites)
+        selectedOwners.insert(site->getParentOfType<sim::SimFuncOp>());
+      SmallVector<sim::SimFuncOp> runs;
+      for (const auto *activation :
+           ordered ? interleaving.getRuns() : ArrayRef(plan->runs))
+        runs.push_back(sources.lookup(activation->getSourceActivation()));
+      unsigned handoffs =
+          ordered ? *interleaving.getMinimumHandoffs() : plan->minimumHandoffs;
+      if (runs.size() != handoffs + 1 ||
+          llvm::is_contained(runs, sim::SimFuncOp{}))
+        return std::nullopt;
+      // Keep the compact legacy encoding when exactly one actor hands off
+      // once. General orders must distinguish every run of an actor,
+      // including virtual re-arms; whole-peer priorities would add cycles.
+      auto interrupted = cast<sim::SimFuncOp>(selectedOwners.front());
+      DenseSet<Operation *> peersSeen;
+      bool compact = selectedOwners.size() == 1 &&
+                     runs.size() == cohort.size() + 1 &&
+                     handoffs == cohort.size() &&
+                     runs.front() == interrupted && runs.back() == interrupted;
+      SmallVector<Attribute> peers;
+      if (compact)
+        for (auto peer :
+             ArrayRef<sim::SimFuncOp>(runs).drop_front().drop_back()) {
+          if (peer == interrupted || !peersSeen.insert(peer).second) {
+            compact = false;
+            break;
+          }
+          peers.push_back(FlatSymbolRefAttr::get(peer));
+        }
+      if (compact) {
+        ArrayAttr after = ArrayAttr::get(design.getContext(), peers);
+        for (Operation *site : selectedSites) {
+          if (!llvm::is_contained(encoding.sites, site))
+            encoding.sites.push_back(site);
+          encoding.afters[site] = after;
+        }
+        return encoding;
+      }
+      SmallVector<Attribute> names;
+      DenseMap<Operation *, SmallVector<unsigned>> occurrences;
+      for (auto [index, function] : llvm::enumerate(runs)) {
+        names.push_back(FlatSymbolRefAttr::get(function));
+        occurrences[function].push_back(index);
+      }
+      DenseMap<Operation *, unsigned> nextOccurrence, targets;
+      bool supported = true;
+      auto addBoundary = [&](ArrayRef<Operation *> sites,
+                             sim::SimFuncOp function) {
+        unsigned occurrence = ++nextOccurrence[function];
+        auto &positions = occurrences[function];
+        if (occurrence >= positions.size()) {
+          supported = false;
+          return;
+        }
+        unsigned resume = positions[occurrence];
+        for (Operation *site : sites) {
+          auto [found, inserted] = targets.try_emplace(site, resume);
+          // Distinct proof boundaries cannot share one executable operation.
+          // Mapping ambiguity stays unsupported instead of losing a phase.
+          supported &= inserted || found->second == resume;
+        }
+      };
+      if (ordered) {
+        for (auto point : interleaving.getPreemptions()) {
+          auto sites = mapPreemptionSites({point}, handles);
+          if (!sites) {
+            supported = false;
+            break;
+          }
+          addBoundary(*sites,
+                      sources.lookup(point.activation->getSourceActivation()));
+        }
+      } else {
+        for (const auto *activation : plan->preemptions)
+          addBoundary({activation->getSuspension()},
+                      sources.lookup(activation));
+      }
+      for (auto &[owner, positions] : occurrences)
+        supported &= nextOccurrence.lookup(owner) + 1 == positions.size();
+      if (!supported)
+        return std::nullopt;
+      ArrayAttr runOrder = ArrayAttr::get(design.getContext(), names);
+      for (auto [site, resume] : targets) {
+        encoding.sites.push_back(site);
+        encoding.runOrders[site] = runOrder;
+        encoding.resumeRuns[site] = resume;
+      }
+      return encoding;
+    };
+    // A source-ordered cut settles in one pass but needs prefix-input
+    // proofs. Whole bodies with virtual re-arms and net-change rechecks need
+    // none and remain the fallback (IEEE 1800-2023 4.7, 9.4.2).
+    CohortPlan cohortPlan;
+    for (const auto *activation : cohort)
+      cohortPlan.members.push_back(sources.lookup(activation));
+    if (hasOrdered)
+      if (auto encoding = encode(true))
+        cohortPlan.alternatives.push_back(std::move(*encoding));
+    if (auto encoding = encode(false))
+      cohortPlan.alternatives.push_back(std::move(*encoding));
+    if (cohortPlan.alternatives.empty() ||
+        llvm::is_contained(cohortPlan.members, sim::SimFuncOp{}))
+      continue;
+    if (trace)
+      llvm::errs() << "talos Active re-arm interleaving: members="
+                   << cohort.size()
+                   << " handoffs=" << plan->minimumHandoffs
+                   << " source-ordered=" << hasOrdered << " alternatives="
+                   << cohortPlan.alternatives.size() << '\n';
+    cohortPlans.push_back(std::move(cohortPlan));
+  }
+  // Finish all revision-local queries before changing an executable body.
+  auto originalGraph = design.getComputeGraphAttr();
+  // A virtual re-arm runs after the complete body. If a peer then changes a
+  // watched value, choose the legal interleaving in which this process
+  // re-armed just before that last write (4.7, 9.4.2): resume its body
+  // instead of losing the change. A glitch that restores the snapshot value
+  // needs no new activation; that is what ends a pulse ping-pong.
+  auto watchedHandles =
+      [](Operation *wait) -> std::optional<SmallVector<Value>> {
+    if (auto change = dyn_cast<sim::SimSuspendChangeOp>(wait))
+      return SmallVector<Value>{change.getWatched()};
+    if (auto any = dyn_cast<sim::SimSuspendAnyOp>(wait)) {
+      if (llvm::any_of(any.getEdges(), [](int32_t edge) {
+            return edge != static_cast<int32_t>(sim::EdgeKind::Change);
+          }))
+        return std::nullopt;
+      return SmallVector<Value>(any.getWatched());
+    }
+    return std::nullopt;
+  };
+  auto loadWatched = [](OpBuilder &builder, Location loc,
+                        Value handle) -> Value {
+    Value value;
+    if (auto ref = dyn_cast<sim::RefType>(handle.getType()))
+      value = sim::SimRefLoadOp::create(builder, loc, ref.getElementType(),
+                                        handle);
+    else if (auto net = dyn_cast<sim::NetType>(handle.getType()))
+      value = sim::SimNetReadOp::create(builder, loc, net.getElementType(),
+                                        handle);
+    else
+      return {};
+    Type scalar = sim::getPackedScalarType(value.getType());
+    if (!scalar)
+      return {};
+    if (value.getType() != scalar)
+      value = sim::SimPackedFlattenOp::create(builder, loc, scalar, value);
+    return value;
+  };
+  // Snapshot before `delay`; its resumption compares and either re-enters
+  // the body or continues to `rearm`, the block holding the original wait.
+  auto insertRecheck = [&](sim::SimSuspendDelayOp delay, Operation *wait,
+                           Block *rearm) {
+    auto handles = watchedHandles(wait);
+    if (!handles)
+      return false;
+    Location loc = wait->getLoc();
+    OpBuilder builder(delay);
+    SmallVector<Value> snapshot;
+    for (Value handle : *handles) {
+      Value value = loadWatched(builder, loc, handle);
+      if (!value)
+        return false;
+      snapshot.push_back(value);
+    }
+    auto *recheck = new Block;
+    rearm->getParent()->getBlocks().insert(rearm->getIterator(), recheck);
+    delay->setSuccessor(recheck, 0);
+    builder.setInsertionPointToEnd(recheck);
+    Value changed = arith::ConstantIntOp::create(builder, loc, 0, 1);
+    for (auto [handle, before] : llvm::zip_equal(*handles, snapshot)) {
+      Value now = loadWatched(builder, loc, handle);
+      changed = arith::OrIOp::create(
+          builder, loc, changed,
+          createPackedCaseComparison(builder, loc, sim::CompareKind::CaseNe,
+                                     now, before));
+    }
+    SmallVector<Value> forwarded(cast<BranchOpInterface>(wait)
+                                     .getSuccessorOperands(0)
+                                     .getForwardedOperands());
+    cf::CondBranchOp::create(builder, loc, changed, wait->getSuccessor(0),
+                             forwarded, rearm, ValueRange{});
+    return true;
+  };
+  auto createPreemption = [&](const Encoding &encoding, Operation *point) {
+    ArrayAttr after = encoding.afters.lookup(point);
+    Block *from = point->getBlock();
+    Block *continuation = from->splitBlock(point->getIterator());
+    OpBuilder builder = OpBuilder::atBlockEnd(from);
+    Value zero = sim::SimTimeConstantOp::create(builder, point->getLoc(), 0);
+    auto delay = sim::SimSuspendDelayOp::create(
+        builder, point->getLoc(), zero, schedule::TimingSiteAttr{},
+        ValueRange{}, schedule::ContinuationSiteAttr{},
+        sim::EventRegionAttr::get(design.getContext(),
+                                  sim::EventRegion::Active),
+        continuation);
+    if (after)
+      schedule::set<schedule::Field::ActivePreemptionAfter>(delay, after);
+    else {
+      schedule::set<schedule::Field::ActivePreemptionRuns>(
+          delay, encoding.runOrders.lookup(point));
+      schedule::set<schedule::Field::ActivePreemptionResume>(
+          delay, builder.getI32IntegerAttr(encoding.resumeRuns.lookup(point)));
+    }
+    if (sim::isSuspensionOp(point))
+      schedule::set<schedule::Field::ActivePreemptionRearm>(
+          delay, builder.getUnitAttr());
+    return delay;
+  };
+  // Cohorts own disjoint processes. Each one is applied, then certified
+  // together with every cohort already accepted, and withdrawn on failure.
+  auto applyCohort = [&](const Encoding &encoding) {
+    ArrayRef<Operation *> preemptions = encoding.sites;
+    DenseSet<Operation *> interruptedBodies;
+    for (Operation *site : preemptions)
+      if (!sim::isSuspensionOp(site))
+        interruptedBodies.insert(site->getParentOfType<sim::SimFuncOp>());
+    DenseMap<Operation *, Operation *> conditionalRearms;
+    DenseSet<Operation *> bodyCuts;
+    bool supported = true;
+    for (Operation *wait : preemptions) {
+      auto function = wait->getParentOfType<sim::SimFuncOp>();
+      if (sim::isSuspensionOp(wait) && interruptedBodies.contains(function))
+        conditionalRearms[function] = wait;
+      else {
+        auto delay = createPreemption(encoding, wait);
+        if (!sim::isSuspensionOp(wait))
+          bodyCuts.insert(delay);
+        else
+          supported &= insertRecheck(delay, wait, wait->getBlock());
+      }
+      function.removeEffectSummaryAttr();
+      function.removeFragmentAbiAttr();
+      // A previously prepared atomic evaluator no longer implements this
+      // source activation's handoffs. The original process keeps its
+      // identity; native planning must use its updated continuations.
+      schedule::remove<schedule::Field::EvalBody>(function);
+    }
+    for (auto [owner, wait] : conditionalRearms) {
+      auto function = cast<sim::SimFuncOp>(owner);
+      Region &region = function.getBody();
+      Block *from = wait->getBlock();
+      Block *rearm = from->splitBlock(wait->getIterator());
+      auto *empty = new Block;
+      region.getBlocks().insert(rearm->getIterator(), empty);
+      OpBuilder entry = OpBuilder::atBlockBegin(&region.front());
+      Value no = arith::ConstantIntOp::create(entry, wait->getLoc(), 0, 1);
+      Value yes = arith::ConstantIntOp::create(entry, wait->getLoc(), 1, 1);
+      OpBuilder builder = OpBuilder::atBlockEnd(from);
+      auto choice = cf::CondBranchOp::create(builder, wait->getLoc(), no,
+                                             rearm, ValueRange{}, empty,
+                                             ValueRange{});
+      builder.setInsertionPointToEnd(empty);
+      Value zero = sim::SimTimeConstantOp::create(builder, wait->getLoc(), 0);
+      auto delay = sim::SimSuspendDelayOp::create(
+          builder, wait->getLoc(), zero, schedule::TimingSiteAttr{},
+          ValueRange{}, schedule::ContinuationSiteAttr{},
+          sim::EventRegionAttr::get(design.getContext(),
+                                    sim::EventRegion::Active),
+          rearm);
+      if (auto after = encoding.afters.lookup(wait))
+        schedule::set<schedule::Field::ActivePreemptionAfter>(delay, after);
+      else {
+        schedule::set<schedule::Field::ActivePreemptionRuns>(
+            delay, encoding.runOrders.lookup(wait));
+        schedule::set<schedule::Field::ActivePreemptionResume>(
+            delay, builder.getI32IntegerAttr(encoding.resumeRuns.lookup(wait)));
+      }
+      schedule::set<schedule::Field::ActivePreemptionRearm>(
+          delay, builder.getUnitAttr());
+      supported &= insertRecheck(delay, wait, rearm);
+      // Carry only the execution path: a body which already handed off must
+      // encounter its original wait directly. Empty conditional paths hand
+      // off there instead. This is SSA control state, never a design
+      // variable. A recheck that re-enters the body passes false as well.
+      DenseMap<Block *, Value> passed;
+      passed[&region.front()] = no;
+      for (Block &block : llvm::drop_begin(region))
+        passed[&block] = block.addArgument(builder.getI1Type(), wait->getLoc());
+      choice.getConditionMutable().assign(passed.lookup(from));
+      for (Block &block : region) {
+        Operation *term = block.getTerminator();
+        auto branch = cast<BranchOpInterface>(term);
+        // Only an alternative boundary of this same run bypasses its wait
+        // handoff. An earlier, distinct run does not discharge a later re-arm.
+        bool sameBoundary = bodyCuts.contains(term);
+        if (auto run = encoding.runOrders.lookup(wait))
+          sameBoundary &=
+              schedule::get<schedule::Field::ActivePreemptionRuns>(term) ==
+                  run &&
+              schedule::get<schedule::Field::ActivePreemptionResume>(term)
+                      .getInt() == encoding.resumeRuns.lookup(wait);
+        Value value = term == wait   ? no
+                      : sameBoundary ? yes
+                                     : passed.lookup(&block);
+        for (unsigned index = 0; index < term->getNumSuccessors(); ++index)
+          branch.getSuccessorOperands(index).append(value);
+      }
+    }
+    return supported;
+  };
+  bool changed = false;
+  for (CohortPlan &cohortPlan : cohortPlans) {
+    // A withdrawn alternative restores clones of the members, so later
+    // alternatives address their sites through the restore mapping.
+    DenseMap<Operation *, Operation *> current;
+    auto translate = [&](const Encoding &encoding) {
+      Encoding result;
+      result.ordered = encoding.ordered;
+      for (Operation *site : encoding.sites) {
+        Operation *now = current.lookup(site);
+        now = now ? now : site;
+        result.sites.push_back(now);
+        if (auto after = encoding.afters.lookup(site))
+          result.afters[now] = after;
+        if (auto run = encoding.runOrders.lookup(site))
+          result.runOrders[now] = run;
+        if (auto found = encoding.resumeRuns.find(site);
+            found != encoding.resumeRuns.end())
+          result.resumeRuns[now] = found->second;
+      }
+      return result;
+    };
+    for (const Encoding &alternative : cohortPlan.alternatives) {
+      Encoding encoding = translate(alternative);
+      IRMapping backupMapping;
+      llvm::MapVector<Operation *, OwningOpRef<sim::SimFuncOp>> originals;
+      for (sim::SimFuncOp member : cohortPlan.members)
+        if (!originals.count(member))
+          originals.insert(
+              {member, cast<sim::SimFuncOp>(member->clone(backupMapping))});
+      bool realized = applyCohort(encoding);
+      std::string reason = realized ? "" : "unsupported recheck";
+      // Locally optimal choices need a global realization certificate too:
+      // independent input prerequisites can connect otherwise disjoint pulse
+      // SCCs into a rank cycle, and a body cut's prefix input whose producers
+      // cannot be ordered around it would expose partial state or lose an
+      // update. A failed optional proof restores this cohort's source IR; it
+      // must not reject a legal design or drop arbitrary priority edges.
+      if (realized) {
+        std::string first;
+        ScopedDiagnosticHandler speculative(
+            design.getContext(), [&](Diagnostic &diagnostic) {
+              if (first.empty())
+                first = diagnostic.str();
+              return success();
+            });
+        auto graph = simlowering::deriveComputeGraph(
+            design, {1, schedule::ComputeVPIMode::Off});
+        realized = succeeded(graph);
+        if (!realized)
+          reason = "compute graph: " + first;
+        if (realized) {
+          design.setComputeGraphAttr(graph->graph);
+          auto ranks = analysis::SimulationScheduleAnalysis::compute(design);
+          realized = succeeded(ranks) &&
+                     ranks->getUnprovedPreemptionOwners().empty();
+          if (failed(ranks))
+            reason = "phase ranks: " + first;
+          else if (!realized) {
+            reason = "unproved prefix input of";
+            for (Operation *owner : ranks->getUnprovedPreemptionOwners())
+              reason += " @" + cast<sim::SimFuncOp>(owner).getSymName().str();
+          }
+        }
+      }
+      if (realized) {
+        changed = true;
+        if (trace)
+          llvm::errs() << "talos Active re-arm interleaving realized: "
+                       << (encoding.ordered ? "source-ordered cut"
+                                            : "whole-body re-arm")
+                       << '\n';
+        break;
+      }
+      for (auto &[operation, original] : originals) {
+        auto function = cast<sim::SimFuncOp>(operation);
+        function->setAttrs(original.get()->getAttrs());
+        function.getBody().takeBody(original->getBody());
+      }
+      for (const Encoding &other : cohortPlan.alternatives)
+        for (Operation *site : other.sites) {
+          Operation *now = current.lookup(site);
+          now = now ? now : site;
+          if (Operation *restored = backupMapping.lookupOrNull(now))
+            current[site] = restored;
+        }
+      if (trace)
+        llvm::errs() << "talos Active re-arm interleaving withdrawn: " << reason
+                     << "; preserved source processes\n";
+    }
+  }
+  design.removeComputeGraphAttr();
+  if (!changed && originalGraph)
+    design.setComputeGraphAttr(originalGraph);
+}
+
 void TalosSimMaterializeComputeFusionPass::runOnOperation() {
   sim::SimDesignOp design = getOperation();
+  auto originalGraph = design.getComputeGraphAttr();
+  bool rearm = interleaveRearms && originalGraph &&
+               originalGraph.getWorkers() == 1 &&
+               originalGraph.getVpi() == schedule::ComputeVPIMode::Off;
+  // Fusion analyses below are destroyed first. The new query then sees the
+  // final original owners; materialized evaluators are never preempted.
+  llvm::scope_exit finishRearms([&] {
+    if (rearm)
+      materializeRearmInterleavings(design);
+  });
   // One mutable index serves every cohort and standalone activation. Keep
   // creations and rejected clones in sync so lookup is independent of the
   // total design size without retaining erased operations.
