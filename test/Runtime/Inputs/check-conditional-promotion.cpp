@@ -10,8 +10,8 @@ extern uint8_t __talos_state_value[];
 extern uint8_t __talos_state_unknown[];
 extern uint8_t __talos_eval_kernel_promotion_latched_v1[];
 extern uint8_t __talos_eval_step_four_state_fallback_v1;
-bool __talos_eval_kernel_conditional_ready_0_v1();
-bool __talos_eval_kernel_promotion_ready_v1(uint64_t);
+uint32_t __talos_eval_kernel_conditional_ready_0_v1_i32();
+uint32_t __talos_eval_kernel_promotion_ready_v1_i32(uint64_t);
 void __talos_eval_promotion_invalidate_range_v1(uint64_t, uint64_t);
 void __talos_eval_promotion_invalidate_v1();
 void __talos_eval_promotion_recheck_range_v1(uint64_t, uint64_t);
@@ -45,7 +45,7 @@ int main() {
     std::memcpy(oldValues, values, bytes);
     std::memcpy(oldUnknown, unknown, bytes);
     for (unsigned repeat = 0; repeat != 4; ++repeat)
-      assert(__talos_eval_kernel_conditional_ready_0_v1() == expected);
+      assert(__talos_eval_kernel_conditional_ready_0_v1_i32() == expected);
     assert(std::memcmp(oldValues, values, bytes) == 0);
     assert(std::memcmp(oldUnknown, unknown, bytes) == 0);
     if (unknown[2]) {
@@ -53,7 +53,7 @@ int main() {
       // proof. A value-only enable update can make this payload relevant.
       assert(__talos_eval_kernel_promotion_latched_v1[0] !=
              TALOS_RT_PROMOTION_LATCH_KNOWN);
-      assert(!__talos_eval_kernel_promotion_ready_v1(0));
+      assert(!__talos_eval_kernel_promotion_ready_v1_i32(0));
     }
   };
   check(true);

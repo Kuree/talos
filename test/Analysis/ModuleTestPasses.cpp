@@ -82,12 +82,15 @@ public:
     return "test-talos-export-llvm-symbols";
   }
   StringRef getDescription() const final {
-    return "give named LLVM globals external linkage and rename main";
+    return "expose LLVM globals and predicates to C++ oracles and rename main";
   }
 
   ListOption<std::string> globals{
       *this, "globals",
       llvm::cl::desc("internal LLVM globals to give external linkage")};
+  ListOption<std::string> predicates{
+      *this, "i32-predicates",
+      llvm::cl::desc("i1-returning LLVM functions to wrap as <name>_i32")};
   Option<std::string> main{
       *this, "main",
       llvm::cl::desc("new name for the generated main function")};
@@ -144,6 +147,44 @@ public:
         return signalPassFailure();
       }
       global.setLinkage(LLVM::Linkage::External);
+    }
+    for (const std::string &name : predicates) {
+      auto function = table.lookup<LLVM::LLVMFuncOp>(name);
+      if (!function || function.isVarArg() ||
+          !function.getFunctionType().getReturnType().isInteger(1)) {
+        module.emitError() << "no non-variadic i1-returning LLVM function @"
+                           << name;
+        return signalPassFailure();
+      }
+      std::string wrapperName = name + "_i32";
+      if (table.lookup(wrapperName)) {
+        module.emitError() << "LLVM predicate wrapper already exists @"
+                           << wrapperName;
+        return signalPassFailure();
+      }
+      // An unextended LLVM i1 return is not the C++ bool ABI. Cross that
+      // boundary with a canonical i32 while preserving the helper's ABI.
+      OpBuilder builder(module.getContext());
+      builder.setInsertionPointToEnd(module.getBody());
+      auto loc = function.getLoc();
+      auto wrapper = LLVM::LLVMFuncOp::create(
+          builder, loc, wrapperName,
+          LLVM::LLVMFunctionType::get(builder.getI32Type(),
+                                      function.getFunctionType().getParams()));
+      table.insert(wrapper);
+      if (auto attrs = function.getArgAttrsAttr())
+        wrapper.setArgAttrsAttr(attrs);
+      builder.setInsertionPointToStart(wrapper.addEntryBlock(builder));
+      auto call =
+          LLVM::CallOp::create(builder, loc, function, wrapper.getArguments());
+      call.setCConv(function.getCConv());
+      if (auto attrs = function.getArgAttrsAttr())
+        call.setArgAttrsAttr(attrs);
+      if (auto attrs = function.getResAttrsAttr())
+        call.setResAttrsAttr(attrs);
+      Value result = LLVM::ZExtOp::create(builder, loc, builder.getI32Type(),
+                                          call.getResult());
+      LLVM::ReturnOp::create(builder, loc, result);
     }
     if (main.empty())
       return;

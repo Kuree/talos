@@ -1,4 +1,4 @@
-// RUN: talos-opt %S/../Conversion/native-promotion-word-mask-compaction.mlir --materialize-native-group-promotion-readiness --materialize-native-promotion-range-index | talos-opt --pass-pipeline='builtin.module(llvm.func(lower-native-state-access))' | %llvm_dist/bin/mlir-opt --convert-arith-to-llvm --convert-cf-to-llvm | talos-translate --mlir-to-llvmir -o %t.ll
+// RUN: talos-opt %S/../Conversion/native-promotion-word-mask-compaction.mlir --materialize-native-group-promotion-readiness --materialize-native-promotion-range-index | talos-opt --pass-pipeline='builtin.module(llvm.func(lower-native-state-access),test-talos-export-llvm-symbols{i32-predicates=__talos_eval_group_promotion_ready_v1})' | %llvm_dist/bin/mlir-opt --convert-arith-to-llvm --convert-cf-to-llvm | talos-translate --mlir-to-llvmir -o %t.ll
 // RUN: %target_cxx -O0 %t.ll -I%S/../../runtime/include %S/Inputs/check-native-promotion-word-mask-compaction.cpp %runtime_link_flags -o %t.o0
 // RUN: %t.o0
 // RUN: %target_cxx -O3 %t.ll -I%S/../../runtime/include %S/Inputs/check-native-promotion-word-mask-compaction.cpp %runtime_link_flags -o %t.o3

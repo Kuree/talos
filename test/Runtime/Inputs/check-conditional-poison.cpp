@@ -7,7 +7,7 @@ extern "C" {
 extern uint8_t __talos_state_value[];
 extern uint8_t __talos_state_unknown[];
 extern uint8_t __talos_eval_step_four_state_fallback_v1;
-bool __talos_eval_kernel_conditional_ready_0_v1();
+uint32_t __talos_eval_kernel_conditional_ready_0_v1_i32();
 void __talos_eval_promotion_invalidate_v1();
 int __talos_eval_four_state_nba_handoff_v1(void *, void *, void *);
 }
@@ -31,7 +31,7 @@ int main() {
       values[3] = 0x55;
       values[4] = 37;
       __talos_eval_promotion_invalidate_v1();
-      assert(__talos_eval_kernel_conditional_ready_0_v1());
+      assert(__talos_eval_kernel_conditional_ready_0_v1_i32());
       __talos_eval_step_four_state_fallback_v1 = 0;
       assert(executeSelectedLane(nullptr) == 0);
       assert(!__talos_eval_step_four_state_fallback_v1);
@@ -44,7 +44,7 @@ int main() {
   // A valid taken truncation still observes the unknown payload and stages
   // its X arithmetic result for later NBA publication (LRM 10.4.2).
   values[1] = 1;
-  assert(!__talos_eval_kernel_conditional_ready_0_v1());
+  assert(!__talos_eval_kernel_conditional_ready_0_v1_i32());
   __talos_eval_step_four_state_fallback_v1 = 0;
   assert(executeSelectedLane(nullptr) == 0);
   assert(__talos_eval_step_four_state_fallback_v1);

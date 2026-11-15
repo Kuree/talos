@@ -31,13 +31,13 @@ void executeFourStateWork(void *) asm(
 void executeOtherFourStateWork(void *) asm(
     TALOS_TEST_SYMBOL("other_work.__talos_eval_body_0"));
 void __talos_eval_promotion_invalidate_mask_v1(uint64_t, uint64_t);
-bool __talos_eval_kernel_promotion_ready_v1(uint64_t);
+uint32_t __talos_eval_kernel_promotion_ready_v1_i32(uint64_t);
 void __talos_eval_promotion_invalidate_range_v1(uint64_t, uint64_t);
 }
 
 static void refreshProofs() {
-  (void)__talos_eval_kernel_promotion_ready_v1(0);
-  (void)__talos_eval_kernel_promotion_ready_v1(1);
+  (void)__talos_eval_kernel_promotion_ready_v1_i32(0);
+  (void)__talos_eval_kernel_promotion_ready_v1_i32(1);
 }
 
 static bool certified(unsigned bit) {
@@ -63,8 +63,8 @@ int main() {
     refreshProofs();
     assert(__talos_eval_kernel_promotion_latched_v1[1] == known);
     assert(__talos_eval_kernel_promotion_latched_v1[0] == otherKnown);
-    assert(__talos_eval_kernel_promotion_ready_v1(0));
-    assert(__talos_eval_kernel_promotion_ready_v1(1));
+    assert(__talos_eval_kernel_promotion_ready_v1_i32(0));
+    assert(__talos_eval_kernel_promotion_ready_v1_i32(1));
     assert(__talos_eval_promotion_pending_mask_v1[0] == 0);
     __talos_eval_promotion_invalidate_range_v1(bit, 1);
     assert((__talos_eval_kernel_promotion_latched_v1[1] != known) ==
@@ -93,8 +93,8 @@ int main() {
     for (unsigned bit = 400; bit != bits; ++bit)
       if (__talos_state_unknown[bit / 8] & (1u << (bit % 8)))
         otherExpectedKnown = false;
-    assert(__talos_eval_kernel_promotion_ready_v1(0) == otherExpectedKnown);
-    assert(__talos_eval_kernel_promotion_ready_v1(1) == expectedKnown);
+    assert(__talos_eval_kernel_promotion_ready_v1_i32(0) == otherExpectedKnown);
+    assert(__talos_eval_kernel_promotion_ready_v1_i32(1) == expectedKnown);
     assert((__talos_eval_kernel_promotion_latched_v1[0] ==
             TALOS_RT_PROMOTION_LATCH_KNOWN) == otherExpectedKnown);
     assert((__talos_eval_kernel_promotion_latched_v1[1] ==
@@ -140,24 +140,24 @@ int main() {
   for (unsigned byte = 56; byte != 64; ++byte)
     __talos_state_unknown[byte] = 0xff;
   __talos_eval_promotion_invalidate_range_v1(448, 8);
-  assert(__talos_eval_kernel_promotion_ready_v1(0));
+  assert(__talos_eval_kernel_promotion_ready_v1_i32(0));
   __talos_eval_fast_nba_roots_v1[0] = 3;
   __talos_state_unknown[55] = 0x80;
   __talos_eval_promotion_invalidate_range_v1(447, 1);
-  assert(__talos_eval_kernel_promotion_ready_v1(0));
+  assert(__talos_eval_kernel_promotion_ready_v1_i32(0));
   assert(__talos_eval_fast_nba_roots_v1[0] == 1 ||
          __talos_eval_fast_nba_roots_v1[0] == 2);
   __talos_state_unknown[53] = 0x80;
   __talos_eval_promotion_invalidate_range_v1(431, 1);
   for (unsigned retry = 0; retry != 8; ++retry)
-    assert(!__talos_eval_kernel_promotion_ready_v1(0));
-  assert(__talos_eval_kernel_promotion_ready_v1(1));
+    assert(!__talos_eval_kernel_promotion_ready_v1_i32(0));
+  assert(__talos_eval_kernel_promotion_ready_v1_i32(1));
   __talos_state_unknown[53] = 0;
   __talos_eval_promotion_recheck_range_v1(431, 1);
-  assert(__talos_eval_kernel_promotion_ready_v1(0));
+  assert(__talos_eval_kernel_promotion_ready_v1_i32(0));
   __talos_state_unknown[55] = 0;
   __talos_eval_promotion_recheck_range_v1(447, 1);
-  assert(__talos_eval_kernel_promotion_ready_v1(0));
+  assert(__talos_eval_kernel_promotion_ready_v1_i32(0));
   for (unsigned byte = 56; byte != 64; ++byte) {
     assert(__talos_state_unknown[byte] == 0xff);
     __talos_state_unknown[byte] = 0;
@@ -188,8 +188,8 @@ int main() {
   __talos_eval_promotion_recheck_range_v1(0, bytes * 8);
   auto promote = [&] {
     refreshProofs();
-    assert(__talos_eval_kernel_promotion_ready_v1(0));
-    assert(__talos_eval_kernel_promotion_ready_v1(1));
+    assert(__talos_eval_kernel_promotion_ready_v1_i32(0));
+    assert(__talos_eval_kernel_promotion_ready_v1_i32(1));
   };
   promote();
   executeFourStateWork(nullptr);
@@ -329,15 +329,15 @@ int main() {
   refreshProofs();
   __talos_state_unknown[11 / 8] |= 1u << (11 % 8);
   __talos_eval_promotion_invalidate_range_v1(11, 1);
-  assert(!__talos_eval_kernel_promotion_ready_v1(1));
+  assert(!__talos_eval_kernel_promotion_ready_v1_i32(1));
   assert(__talos_eval_promotion_pending_mask_v1[0] == 2);
   __talos_state_unknown[11 / 8] = 0;
   __talos_eval_promotion_invalidate_range_v1(400, 1);
-  assert(__talos_eval_kernel_promotion_ready_v1(0));
+  assert(__talos_eval_kernel_promotion_ready_v1_i32(0));
   assert(__talos_eval_kernel_promotion_latched_v1[1] != known);
   assert(__talos_eval_promotion_pending_mask_v1[0] == 2);
   __talos_eval_promotion_recheck_range_v1(11, 1);
-  assert(__talos_eval_kernel_promotion_ready_v1(1));
+  assert(__talos_eval_kernel_promotion_ready_v1_i32(1));
   assert(__talos_eval_promotion_pending_mask_v1[0] == 0);
   std::puts("promotion word scans passed");
 }

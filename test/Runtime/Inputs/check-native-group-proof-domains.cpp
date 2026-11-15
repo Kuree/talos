@@ -2,7 +2,7 @@
 #include <cstdio>
 
 extern "C" {
-bool __talos_eval_group_promotion_ready_v1(uint64_t);
+uint32_t __talos_eval_group_promotion_ready_v1_i32(uint64_t);
 void __talos_eval_promotion_invalidate_range_v1(uint64_t, uint64_t);
 void __talos_eval_promotion_recheck_range_v1(uint64_t, uint64_t);
 uint64_t *group_test_unknown();
@@ -24,7 +24,7 @@ int main() {
   auto *latches = group_test_latches();
   auto *members = group_test_member_latches();
   auto *pending = group_test_pending();
-  auto query = __talos_eval_group_promotion_ready_v1;
+  auto query = __talos_eval_group_promotion_ready_v1_i32;
   auto write = [&](unsigned bit, bool x) {
     uint64_t mask = uint64_t{1} << (bit % 64);
     if (x) {

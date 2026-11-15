@@ -10,7 +10,7 @@ extern "C" {
 extern uint8_t __talos_state_unknown[];
 extern uint8_t __talos_eval_kernel_promotion_latched_v1[];
 extern uint64_t __talos_eval_promotion_pending_mask_v1[];
-bool __talos_eval_kernel_promotion_ready_v1(uint64_t);
+uint32_t __talos_eval_kernel_promotion_ready_v1_i32(uint64_t);
 void __talos_eval_promotion_invalidate_range_v1(uint64_t, uint64_t);
 void __talos_eval_promotion_recheck_range_v1(uint64_t, uint64_t);
 }
@@ -42,7 +42,7 @@ int main() {
   std::memset(__talos_state_unknown, 0, 10);
   assert(pending[0] == UINT64_MAX && pending[1] == 1);
   for (unsigned owner = 0; owner != 65; ++owner)
-    assert(__talos_eval_kernel_promotion_ready_v1(owner));
+    assert(__talos_eval_kernel_promotion_ready_v1_i32(owner));
   assert(!pending[0] && !pending[1]);
 
   // A failed proof in word one must remain independent of word zero.
@@ -52,26 +52,26 @@ int main() {
   assert(latches[0] == TALOS_RT_PROMOTION_LATCH_KNOWN &&
          latches[63] == TALOS_RT_PROMOTION_LATCH_KNOWN &&
          latches[64] != TALOS_RT_PROMOTION_LATCH_KNOWN);
-  assert(!__talos_eval_kernel_promotion_ready_v1(64));
+  assert(!__talos_eval_kernel_promotion_ready_v1_i32(64));
   __talos_state_unknown[bit64 / 8] &= ~(1u << (bit64 % 8));
   change(bit63, true);
-  assert(!__talos_eval_kernel_promotion_ready_v1(63));
+  assert(!__talos_eval_kernel_promotion_ready_v1_i32(63));
   assert(latches[64] != TALOS_RT_PROMOTION_LATCH_KNOWN);
   assert(pending[0] == (uint64_t{1} << 63) && pending[1] == 1);
   change(bit64, false);
-  assert(__talos_eval_kernel_promotion_ready_v1(64));
+  assert(__talos_eval_kernel_promotion_ready_v1_i32(64));
   assert(latches[63] != TALOS_RT_PROMOTION_LATCH_KNOWN && !pending[1]);
   change(bit63, false);
-  assert(__talos_eval_kernel_promotion_ready_v1(63));
+  assert(__talos_eval_kernel_promotion_ready_v1_i32(63));
 
   // A shared input invalidates both words; padding belongs to neither.
   change(0, true);
   assert(pending[0] == UINT64_MAX && pending[1] == 1);
   for (unsigned owner = 0; owner != 65; ++owner)
-    assert(!__talos_eval_kernel_promotion_ready_v1(owner));
+    assert(!__talos_eval_kernel_promotion_ready_v1_i32(owner));
   change(0, false);
   for (unsigned owner = 0; owner != 65; ++owner)
-    assert(__talos_eval_kernel_promotion_ready_v1(owner));
+    assert(__talos_eval_kernel_promotion_ready_v1_i32(owner));
   change(1, true);
   assert(!pending[0] && !pending[1]);
   assert(latches[0] == TALOS_RT_PROMOTION_LATCH_KNOWN &&
@@ -84,14 +84,14 @@ int main() {
     std::memset(__talos_state_unknown, 0, 10);
     __talos_eval_promotion_recheck_range_v1(0, 80);
     for (unsigned owner = 0; owner != 65; ++owner)
-      assert(__talos_eval_kernel_promotion_ready_v1(owner));
+      assert(__talos_eval_kernel_promotion_ready_v1_i32(owner));
     auto &kernelPending = __talos_eval_promotion_pending_mask_v1;
     assert(!kernelPending[0] && !kernelPending[1]);
     change(bit, true);
     uint64_t expected[2] = {};
     for (unsigned owner = 0; owner != 65; ++owner) {
       bool affected = bit == 0 || bit == writers[owner] + 8;
-      assert(__talos_eval_kernel_promotion_ready_v1(owner) == !affected);
+      assert(__talos_eval_kernel_promotion_ready_v1_i32(owner) == !affected);
       assert((__talos_eval_kernel_promotion_latched_v1[owner] ==
               TALOS_RT_PROMOTION_LATCH_KNOWN) == !affected);
       if (affected)
@@ -101,7 +101,7 @@ int main() {
     assert(__talos_state_unknown[bit / 8] == (1u << (bit % 8)));
     change(bit, false);
     for (unsigned owner = 0; owner != 65; ++owner)
-      assert(__talos_eval_kernel_promotion_ready_v1(owner));
+      assert(__talos_eval_kernel_promotion_ready_v1_i32(owner));
     assert(!kernelPending[0] && !kernelPending[1]);
   }
   std::puts("promotion word scans passed");

@@ -6,7 +6,7 @@
 #include <initializer_list>
 
 extern "C" {
-bool __talos_eval_group_promotion_ready_v1(uint64_t);
+uint32_t __talos_eval_group_promotion_ready_v1_i32(uint64_t);
 void __talos_eval_promotion_invalidate_range_v1(uint64_t, uint64_t);
 void __talos_eval_promotion_recheck_range_v1(uint64_t, uint64_t);
 uint64_t *compaction_test_unknown();
@@ -50,7 +50,7 @@ int main() {
             (unknown[bit / 64] & (uint64_t{1} << (bit % 64))))
           expected = false;
       }
-      assert(__talos_eval_group_promotion_ready_v1(domain) == expected);
+      assert(__talos_eval_group_promotion_ready_v1_i32(domain) == expected);
       assert((latches[domain] == TALOS_RT_PROMOTION_LATCH_KNOWN) == expected);
     }
     assert(std::memcmp(snapshot, unknown, sizeof(snapshot)) == 0);
