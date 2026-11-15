@@ -36,7 +36,10 @@ def main():
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
         "--case",
-        choices=["relational", "independent", "popcount", "native-functions"],
+        choices=[
+            "relational", "independent", "popcount", "native-functions",
+            "native-guards",
+        ],
         default="relational",
     )
     parser.add_argument("--iterations", type=int, default=10000)

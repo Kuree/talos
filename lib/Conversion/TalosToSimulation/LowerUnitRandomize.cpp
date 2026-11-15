@@ -6279,6 +6279,122 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
   unsigned safeEvaluationDepth = 0;
   bool freezeSafeStateValues = true;
   bool preserveArithmeticSource = false;
+  // Several source calls can share an arbitrarily deep guard ancestry. Keep
+  // one persistent prefix per branch, rather than rescan and rebuild all its
+  // enclosing predicates independently for every call and priority input.
+  struct GuardPrefix {
+    size_t previous = 0;
+    Operation *owner = nullptr;
+    Operation *predicate = nullptr;
+    bool positive = true;
+    bool expressionBranch = false;
+    std::optional<uint32_t> block;
+  };
+  SmallVector<GuardPrefix> guardPrefixes(1);
+  llvm::DenseMap<Operation *, size_t> guardEntryPrefixes;
+  llvm::DenseMap<Operation *, size_t> guardChildPrefixes;
+  std::function<FailureOr<size_t>(Operation *)> guardEntryPrefix;
+  std::function<FailureOr<size_t>(Operation *)> guardChildPrefix;
+  guardChildPrefix = [&](Operation *source) -> FailureOr<size_t> {
+    if (auto found = guardChildPrefixes.find(source);
+        found != guardChildPrefixes.end())
+      return found->second;
+    auto entry = guardEntryPrefix(source);
+    if (failed(entry))
+      return failure();
+    size_t prefix = *entry;
+    if (auto block = sim::get<sim::metadata::RandomConstraintBlock>(source)) {
+      if (block.getValue().isNegative() || block.getValue().getActiveBits() > 6)
+        return failure();
+      guardPrefixes.push_back({prefix, source, nullptr, true, false,
+                               uint32_t(block.getValue().getZExtValue())});
+      prefix = guardPrefixes.size() - 1;
+    }
+    guardChildPrefixes[source] = prefix;
+    return prefix;
+  };
+  guardEntryPrefix = [&](Operation *source) -> FailureOr<size_t> {
+    if (source == op.getOperation() || !source->getParentOp())
+      return size_t{0};
+    if (auto found = guardEntryPrefixes.find(source);
+        found != guardEntryPrefixes.end())
+      return found->second;
+    Operation *parent = source->getParentOp();
+    auto inherited = guardChildPrefix(parent);
+    if (failed(inherited))
+      return failure();
+    size_t prefix = *inherited;
+    bool implication = isa<semantic::SVImplicationConstraintOp>(parent);
+    auto conditional = dyn_cast<semantic::SVConditionalExpressionOp>(parent);
+    bool expressionBranch =
+        conditional && conditional.getConditionCount() == 1 &&
+        conditional.getConditionPatternFlags().size() == 1 &&
+        conditional.getConditionPatternFlags().front() == 0;
+    if (implication || isa<semantic::SVConditionalConstraintOp>(parent) ||
+        expressionBranch) {
+      auto parts = getChildren(parent);
+      if (!parts.empty() && source != parts.front()) {
+        if (parts.size() < 2)
+          return failure();
+        guardPrefixes.push_back({prefix,
+                                 parent,
+                                 parts.front(),
+                                 implication || source == parts[1],
+                                 expressionBranch,
+                                 {}});
+        prefix = guardPrefixes.size() - 1;
+      }
+    }
+    guardEntryPrefixes[source] = prefix;
+    return prefix;
+  };
+  llvm::DenseMap<size_t, Value> nativeGuardValues;
+  SmallVector<size_t> emittedNativeGuardPrefixes;
+  std::function<FailureOr<Value>(size_t)> nativeGuardPrefixValue;
+  nativeGuardPrefixValue = [&](size_t index) -> FailureOr<Value> {
+    if (!index)
+      return guardConstant(true);
+    if (auto found = nativeGuardValues.find(index);
+        found != nativeGuardValues.end())
+      return found->second;
+    // Evaluating a predicate can discover more prefixes. Keep this record by
+    // value so growing the persistent inventory cannot invalidate it.
+    GuardPrefix prefix = guardPrefixes[index];
+    auto previous = nativeGuardPrefixValue(prefix.previous);
+    if (failed(previous))
+      return failure();
+    Value enabled = *previous;
+    if (prefix.predicate) {
+      auto guard = safeConstraintValue(prefix.predicate);
+      if (failed(guard))
+        return failure();
+      auto eliminated = stateGuard(*guard, !prefix.positive);
+      if (failed(eliminated))
+        return failure();
+      enabled =
+          guardAnd(enabled, guardAnd(prefix.expressionBranch ? guard->errors
+                                                             : guard->valid,
+                                     guardNot(*eliminated)));
+    } else if (prefix.owner != op.getOperation()) {
+      Value disabled =
+          arith::AndIOp::create(builder, location, relevantConstraintMode,
+                                constant64(uint64_t{1} << *prefix.block));
+      enabled =
+          guardAnd(enabled, arith::CmpIOp::create(builder, location,
+                                                  arith::CmpIPredicate::eq,
+                                                  disabled, constant64(0)));
+    }
+    if (freezeSafeStateValues) {
+      nativeGuardValues[index] = enabled;
+      emittedNativeGuardPrefixes.push_back(index);
+    }
+    return enabled;
+  };
+  auto nativeGuardValue = [&](Operation *source) -> FailureOr<Value> {
+    auto prefix = guardEntryPrefix(source);
+    return failed(prefix) ? FailureOr<Value>(failure())
+                          : nativeGuardPrefixValue(*prefix);
+  };
   llvm::SmallDenseSet<Operation *> evaluatingNativeCalls;
   llvm::SmallDenseSet<Value> nonNullReceivers;
   for (Value object = receiver; object;) {
@@ -6372,6 +6488,10 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     if (nativeRemaining &&
         sim::has<sim::metadata::RandomNativeFunction>(expression) &&
         !evaluatingNativeCalls.contains(expression)) {
+      // Materialize the shared prefix before entering this call's private
+      // argument-ready branch. It then dominates sibling calls and stages.
+      if (failed(nativeGuardValue(expression)))
+        return failure();
       // Argument addresses and data are evaluated only after their random
       // inputs have been accepted. In particular, an old out-of-range index
       // must not reject an argument stage that has not chosen that index yet.
@@ -6414,6 +6534,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         auto savedArithmetic = std::move(safeArithmeticValues);
         auto savedRawArithmetic = std::move(safeRawArithmeticValues);
         auto savedInputMasks = std::move(argumentInputMasks);
+        size_t savedGuardPrefixes = emittedNativeGuardPrefixes.size();
         evaluatingNativeCalls.insert(expression);
         auto restore = llvm::scope_exit([&] {
           safeStateValues = std::move(savedState);
@@ -6421,6 +6542,10 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
           safeArithmeticValues = std::move(savedArithmetic);
           safeRawArithmeticValues = std::move(savedRawArithmetic);
           argumentInputMasks = std::move(savedInputMasks);
+          // Existing prefixes dominate this branch. Prefixes first emitted
+          // inside it must not escape to a sibling call or a later root.
+          while (emittedNativeGuardPrefixes.size() > savedGuardPrefixes)
+            nativeGuardValues.erase(emittedNativeGuardPrefixes.pop_back_val());
           evaluatingNativeCalls.erase(expression);
         });
         evaluated = safeConstraintValue(expression);
@@ -7220,49 +7345,12 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
       // Deferred tagged data is semantically RANDOM, but reading an inactive
       // dummy member would still trigger the ordinary runtime access guard.
       Value evaluate = readEnabled ? guardAnd(errors, readEnabled) : errors;
-      if (sim::has<sim::metadata::RandomNativeFunction>(expression))
-        for (Operation *child = expression, *parent = child->getParentOp();
-             parent && parent != op.getOperation();
-             child = parent, parent = parent->getParentOp()) {
-          if (auto block =
-                  sim::get<sim::metadata::RandomConstraintBlock>(parent)) {
-            const APInt &index = block.getValue();
-            if (index.isNegative() || index.getActiveBits() > 6)
-              return failure();
-            Value disabled = arith::AndIOp::create(
-                builder, location, relevantConstraintMode,
-                constant64(uint64_t{1} << index.getZExtValue()));
-            evaluate = guardAnd(evaluate,
-                                arith::CmpIOp::create(builder, location,
-                                                      arith::CmpIPredicate::eq,
-                                                      disabled, constant64(0)));
-          }
-          bool implication = isa<semantic::SVImplicationConstraintOp>(parent);
-          auto conditional =
-              dyn_cast<semantic::SVConditionalExpressionOp>(parent);
-          bool expressionBranch =
-              conditional && conditional.getConditionCount() == 1 &&
-              conditional.getConditionPatternFlags().size() == 1 &&
-              conditional.getConditionPatternFlags().front() == 0;
-          if (!implication &&
-              !isa<semantic::SVConditionalConstraintOp>(parent) &&
-              !expressionBranch)
-            continue;
-          SmallVector<Operation *> parts = getChildren(parent);
-          if (parts.empty() || child == parts.front())
-            continue;
-          auto guard = safeConstraintValue(parts.front());
-          if (failed(guard))
-            return failure();
-          bool positive = implication || child == parts[1];
-          auto eliminated = stateGuard(*guard, !positive);
-          if (failed(eliminated))
-            return failure();
-          evaluate =
-              guardAnd(evaluate,
-                       guardAnd(expressionBranch ? guard->errors : guard->valid,
-                                guardNot(*eliminated)));
-        }
+      if (sim::has<sim::metadata::RandomNativeFunction>(expression)) {
+        auto enabled = nativeGuardValue(expression);
+        if (failed(enabled))
+          return failure();
+        evaluate = guardAnd(evaluate, *enabled);
+      }
       if (matchPattern(evaluate, m_One())) {
         FailureOr<Value> lowered = lowerEvaluatedExpression();
         if (failed(lowered))
@@ -7510,36 +7598,32 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     uint32_t block = TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1;
   };
   llvm::DenseMap<Operation *, PriorityGuards> priorityGuardInventories;
-  auto applyPriorityGuards = [&](Operation *source, LivePriorityInput input,
-                                 bool includeModes =
-                                     false) -> FailureOr<LivePriorityInput> {
-    auto found = priorityGuardInventories.find(source);
-    if (found == priorityGuardInventories.end()) {
-      PriorityGuards guards{{constantAssignment64(0), constantAssignment64(0)},
-                            guardConstant(true),
-                            Value{}};
-      for (Operation *node = source; node && node != op->getParentOp();
-           node = node->getParentOp()) {
-        if (auto block = sim::get<sim::metadata::RandomConstraintBlock>(node)) {
-          if (block.getValue().isNegative() ||
-              block.getValue().getActiveBits() > 6)
-            return failure();
-          guards.block = block.getValue().getZExtValue();
-        }
-        Operation *parent = node->getParentOp();
-        if (!parent || parent == op->getParentOp())
-          continue;
-        bool implication = isa<semantic::SVImplicationConstraintOp>(parent);
-        if (!implication && !isa<semantic::SVConditionalConstraintOp>(parent))
-          continue;
-        auto parts = getChildren(parent);
-        if (parts.empty() || node == parts.front())
-          continue;
-        auto guard = safeConstraintValue(parts.front());
+  llvm::DenseMap<size_t, PriorityGuards> priorityPrefixInventories;
+  std::function<FailureOr<PriorityGuards>(size_t)> priorityPrefixInventory;
+  priorityPrefixInventory = [&](size_t index) -> FailureOr<PriorityGuards> {
+    if (auto found = priorityPrefixInventories.find(index);
+        found != priorityPrefixInventories.end())
+      return found->second;
+    PriorityGuards guards{{constantAssignment64(0), constantAssignment64(0)},
+                          guardConstant(true),
+                          Value{}};
+    if (index) {
+      GuardPrefix prefix = guardPrefixes[index];
+      auto previous = priorityPrefixInventory(prefix.previous);
+      if (failed(previous))
+        return failure();
+      guards = *previous;
+      if (prefix.block) {
+        // The old inward-to-outward walk retained the outermost block.
+        if (guards.block == TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1)
+          guards.block = *prefix.block;
+      } else if (!prefix.expressionBranch) {
+        // Expression-arm dependencies already have their own path inventory;
+        // only enclosing constraint guards contribute at this boundary.
+        auto guard = safeConstraintValue(prefix.predicate);
         if (failed(guard))
           return failure();
-        bool positive = implication || node == parts[1];
-        auto eliminated = stateGuard(*guard, !positive);
+        auto eliminated = stateGuard(*guard, !prefix.positive);
         if (failed(eliminated))
           return failure();
         guards.enabled = guardAnd(
@@ -7549,7 +7633,22 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         guards.input.arguments =
             unionGuardInputs(guards.input.arguments, guard->arguments);
       }
-      found = priorityGuardInventories.try_emplace(source, guards).first;
+    }
+    priorityPrefixInventories[index] = guards;
+    return guards;
+  };
+  auto applyPriorityGuards = [&](Operation *source, LivePriorityInput input,
+                                 bool includeModes =
+                                     false) -> FailureOr<LivePriorityInput> {
+    auto found = priorityGuardInventories.find(source);
+    if (found == priorityGuardInventories.end()) {
+      auto prefix = guardChildPrefix(source);
+      if (failed(prefix))
+        return failure();
+      auto guards = priorityPrefixInventory(*prefix);
+      if (failed(guards))
+        return failure();
+      found = priorityGuardInventories.try_emplace(source, *guards).first;
     }
     PriorityGuards &guards = found->second;
     Value enabled = guards.enabled;
