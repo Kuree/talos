@@ -5192,6 +5192,7 @@ def SimAggregateExtractOp : SimOp<"aggregate.extract", [Pure]> {
   let assemblyFormat = "$input `[` $index `]` attr-dict `:` functional-type(operands, results)";
   let hasVerifier = 1;
   let hasCanonicalizer = 1;
+  let hasFolder = 1;
 }
 
 def SimAggregateInsertOp : SimOp<"aggregate.insert", [Pure]> {

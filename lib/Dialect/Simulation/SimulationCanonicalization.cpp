@@ -66,6 +66,31 @@ static ArrayAttr getLogicAttribute(MLIRContext *context, LogicPlanes planes) {
                                   IntegerAttr::get(type, planes.unknown)});
 }
 
+/// IEEE 1800-2023 7.2.1: packed members are exact bit slices. Slice both
+/// planes before coercing a two-state field; unrelated X/Z bits do not affect
+/// it. Reading only the selected words also handles large configuration values.
+static std::optional<LogicPlanes>
+getPackedFieldConstant(SimAggregateExtractOp op) {
+  auto unpack = op.getInput().getDefiningOp<SimPackedUnflattenOp>();
+  if (!unpack)
+    return std::nullopt;
+  auto field =
+      getAggregateProvenanceSubelement(op.getInput().getType(), op.getIndex());
+  auto inputWidth = getPackedWidth(unpack.getInput().getType());
+  auto width = getPackedWidth(op.getResult().getType());
+  if (!field || !inputWidth || !width || field->second != *width ||
+      *width > *inputWidth || field->first > *inputWidth - *width)
+    return std::nullopt;
+  if (auto constant = unpack.getInput().getDefiningOp<SimLogicConstantOp>())
+    return LogicPlanes{constant.getValue().extractBits(*width, field->first),
+                       constant.getUnknown().extractBits(*width, field->first)};
+  if (auto constant = unpack.getInput().getDefiningOp<arith::ConstantOp>())
+    if (auto integer = dyn_cast<IntegerAttr>(constant.getValue()))
+      return LogicPlanes{integer.getValue().extractBits(*width, field->first),
+                         APInt(*width, 0)};
+  return std::nullopt;
+}
+
 /// Planes of a logic constant without X or Z bits whose value satisfies
 /// `predicate`.
 static bool isKnownPlanes(const std::optional<LogicPlanes> &planes,
@@ -1173,6 +1198,21 @@ OpFoldResult SimLogicInsertOp::fold(FoldAdaptor adaptor) {
   return getLogicAttribute(getContext(),
                            {insertPlane(input->value, replacement->value),
                             insertPlane(input->unknown, replacement->unknown)});
+}
+
+OpFoldResult SimAggregateExtractOp::fold(FoldAdaptor) {
+  // Aggregate results require a scalar constant plus an unflatten operation,
+  // so those remain a canonicalization pattern. Scalar fields are ordinary
+  // fold results available to every OperationFolder/constant-propagation user.
+  Type type = getResult().getType();
+  if (!isa<IntegerType, LogicType>(type))
+    return {};
+  auto planes = getPackedFieldConstant(*this);
+  if (!planes)
+    return {};
+  if (isa<IntegerType>(type))
+    return IntegerAttr::get(type, planes->value & ~planes->unknown);
+  return getLogicAttribute(getContext(), std::move(*planes));
 }
 
 LogicalResult SimLogicConcatOp::verify() {
@@ -2997,6 +3037,21 @@ struct SimplifyAggregateExtract final
   LogicalResult matchAndRewrite(SimAggregateExtractOp op,
                                 PatternRewriter &rewriter) const override {
     unsigned index = op.getIndex();
+    Type resultType = op.getResult().getType();
+    Type scalar = getPackedScalarType(resultType);
+    if (scalar && scalar != resultType)
+      if (auto planes = getPackedFieldConstant(op)) {
+        Value value =
+            isa<IntegerType>(scalar)
+                ? createIntegerConstant(rewriter, op.getLoc(), scalar,
+                                        planes->value & ~planes->unknown)
+                : createLogicConstant(rewriter, op.getLoc(),
+                                      planes->value.getBitWidth(),
+                                      planes->value, planes->unknown);
+        rewriter.replaceOpWithNewOp<SimPackedUnflattenOp>(op, resultType,
+                                                          value);
+        return success();
+      }
     if (auto splat = op.getInput().getDefiningOp<SimAggregateSplatOp>()) {
       rewriter.replaceOp(op, splat.getInput());
       return success();
