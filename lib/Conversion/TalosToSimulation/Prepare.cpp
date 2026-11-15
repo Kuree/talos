@@ -7971,7 +7971,8 @@ void TalosSimPreparePass::runOnOperation() {
         llvm::all_of(properties, [](const RandomProperty &property) {
           return property.field && !property.referencePath &&
                  !property.isContainerSize && !property.nestedObjectField &&
-                 !property.storagePath && !isa<FloatType>(property.type);
+                 !property.storagePath &&
+                 !getRandomRealElementType(property.type);
         });
     if (templateEligible) {
       sim::set<sim::metadata::RandomizeConstraintTemplate>(call,
@@ -9494,7 +9495,7 @@ void TalosSimPreparePass::runOnOperation() {
               : sim::get<sim::metadata::StaticRandomArrayModeStorage>(property);
       if (!bitmap && !storage) {
         emitError(getSemanticLocation(call))
-            << "array rand_mode has no integral element mode inventory";
+            << "array rand_mode has no element mode inventory";
         invalid = true;
         return true;
       }
@@ -9506,7 +9507,7 @@ void TalosSimPreparePass::runOnOperation() {
                                                  TypeAttr::get(*propertyType));
     } else if (selectionCount) {
       emitError(getSemanticLocation(call))
-          << "selected rand_mode requires a fixed unpacked integral array";
+          << "selected rand_mode requires a fixed unpacked numeric array";
       invalid = true;
       return true;
     }

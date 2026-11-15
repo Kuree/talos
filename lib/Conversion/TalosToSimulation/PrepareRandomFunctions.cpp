@@ -27,12 +27,11 @@ std::optional<unsigned> getIntegralRandomWidth(Type type) {
     return width;
   if (auto array = dyn_cast<sim::UnpackedArrayType>(type)) {
     auto elementWidth = getIntegralRandomWidth(array.getElementType());
-    if (!elementWidth)
+    uint64_t count = sim::getAggregateNumElements(array);
+    if (!elementWidth || *elementWidth == 0 ||
+        count > std::numeric_limits<unsigned>::max() / *elementWidth)
       return std::nullopt;
-    uint64_t width =
-        uint64_t{*elementWidth} * sim::getAggregateNumElements(array);
-    if (width <= std::numeric_limits<unsigned>::max())
-      return static_cast<unsigned>(width);
+    return static_cast<unsigned>(uint64_t{*elementWidth} * count);
   }
   return std::nullopt;
 }
@@ -42,16 +41,30 @@ std::optional<unsigned> getRandomPropertyWidth(Type type) {
     return TALOS_RT_REAL32_RANK_BITS;
   if (type.isF64())
     return TALOS_RT_REAL64_RANK_BITS;
+  if (auto array = dyn_cast<sim::UnpackedArrayType>(type)) {
+    auto elementWidth = getRandomPropertyWidth(array.getElementType());
+    uint64_t count = sim::getAggregateNumElements(array);
+    if (!elementWidth || *elementWidth == 0 ||
+        count > std::numeric_limits<unsigned>::max() / *elementWidth)
+      return std::nullopt;
+    return static_cast<unsigned>(uint64_t{*elementWidth} * count);
+  }
   return getIntegralRandomWidth(type);
+}
+
+FloatType getRandomRealElementType(Type type) {
+  while (auto array = dyn_cast<sim::UnpackedArrayType>(type))
+    type = array.getElementType();
+  return dyn_cast<FloatType>(type);
 }
 
 std::optional<FixedRandomArrayLayout> getFixedRandomArrayLayout(Type type) {
   if (!isa<sim::UnpackedArrayType>(type))
     return std::nullopt;
-  auto width = getIntegralRandomWidth(type);
+  auto width = getRandomPropertyWidth(type);
   while (auto array = dyn_cast<sim::UnpackedArrayType>(type))
     type = array.getElementType();
-  auto elementWidth = sim::getPackedWidth(type);
+  auto elementWidth = getRandomPropertyWidth(type);
   if (!width || !elementWidth || *elementWidth == 0 || *width == 0 ||
       *width % *elementWidth != 0)
     return std::nullopt;
@@ -152,11 +165,11 @@ getRandomConstraintPath(Operation *expression,
     return base;
   FailureOr<Type> resultType = getNormalizedSemanticType(expression);
   std::optional<unsigned> resultWidth =
-      succeeded(resultType) ? getIntegralRandomWidth(*resultType)
+      succeeded(resultType) ? getRandomPropertyWidth(*resultType)
                             : std::nullopt;
   if (!resultWidth || *resultWidth == 0) {
     emitError(getSemanticLocation(expression))
-        << "constraint function ordering path has no fixed integral width";
+        << "constraint function ordering path has no fixed sampling width";
     return failure();
   }
 
@@ -223,6 +236,14 @@ getRandomConstraintPath(Operation *expression,
     // A selection from a runtime-sized container has no fixed bit position;
     // its ordering path covers the whole variable.
     auto layout = getSemanticSelectionLayout(sourceTypeAttr.getValue());
+    auto normalizedSource = getNormalizedSemanticType(children.front());
+    if (succeeded(normalizedSource))
+      if (auto array = dyn_cast<sim::UnpackedArrayType>(*normalizedSource)) {
+        auto elementWidth = getRandomPropertyWidth(array.getElementType());
+        if (elementWidth)
+          layout = SemanticSelectionLayout{array.getLeft(), array.getRight(),
+                                           *elementWidth};
+      }
     if (!layout) {
       (**base).precise = false;
       return base;

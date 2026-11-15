@@ -962,7 +962,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     return failure();
   }
   bool hasRealProperties = llvm::any_of(planned, [](const Property &property) {
-    return isa<FloatType>(property.type);
+    return static_cast<bool>(getRandomRealElementType(property.type));
   });
 #ifndef TALOS_ENABLE_Z3
   if (hasRealProperties) {
@@ -2120,6 +2120,13 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
   Value mutableMask = zeroAssignment;
   SmallVector<Value> propertyEnabled;
   SmallVector<Value> propertyMutableMasks;
+  struct RealPropertyLeaf {
+    unsigned property, offset, width;
+    FloatType type;
+    Value current, enabled;
+  };
+  SmallVector<RealPropertyLeaf> realPropertyLeaves;
+  llvm::DenseMap<unsigned, unsigned> realPropertyOffsets;
   bool hasArrayElementModes =
       llvm::any_of(planned, [](const Property &property) {
         return static_cast<bool>(property.elementModeReference);
@@ -2271,16 +2278,59 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
       return failure();
     property.currentValue = *current;
     FailureOr<Value> scalar = [&]() -> FailureOr<Value> {
-      if (isa<FloatType>(property.type)) {
+      if (getRandomRealElementType(property.type)) {
         property.originalScalar = *current;
-        auto rank = sim::SimRandomRealToRankOp::create(
-            builder, location, builder.getIntegerType(property.width),
-            builder.getI1Type(), *current);
-        return rank.getRank();
+        // Sampling coordinates are wider than stored IEEE payloads. Keep
+        // each leaf's original value so disabled elements, including NaNs
+        // and signed zero, never round-trip through a numeric rank.
+        std::function<Value(Value, unsigned)> encode =
+            [&](Value value, unsigned offset) -> Value {
+          Type type = value.getType();
+          unsigned width = *getRandomPropertyWidth(type);
+          Type integer = builder.getIntegerType(width);
+          if (auto floating = dyn_cast<FloatType>(type)) {
+            realPropertyOffsets[offset] = realPropertyLeaves.size();
+            realPropertyLeaves.push_back(
+                {static_cast<unsigned>(propertyOffsets.size() - 1),
+                 offset,
+                 width,
+                 floating,
+                 value,
+                 {}});
+            return sim::SimRandomRealToRankOp::create(
+                       builder, location, integer, builder.getI1Type(), value)
+                .getRank();
+          }
+          auto array = cast<sim::UnpackedArrayType>(type);
+          unsigned count = sim::getAggregateNumElements(array);
+          unsigned elementWidth =
+              *getRandomPropertyWidth(array.getElementType());
+          auto constant = [&](uint64_t bits) -> Value {
+            return arith::ConstantOp::create(
+                builder, location, integer,
+                builder.getIntegerAttr(integer, bits));
+          };
+          Value result = constant(0);
+          for (unsigned ordinal = 0; ordinal != count; ++ordinal) {
+            unsigned low = (count - ordinal - 1) * elementWidth;
+            Value element = sim::SimAggregateExtractOp::create(
+                builder, location, array.getElementType(), value,
+                builder.getI64IntegerAttr(ordinal));
+            Value bits = encode(element, offset + low);
+            if (elementWidth != width)
+              bits = arith::ExtUIOp::create(builder, location, integer, bits);
+            if (low)
+              bits =
+                  arith::ShLIOp::create(builder, location, bits, constant(low));
+            result = arith::OrIOp::create(builder, location, result, bits);
+          }
+          return result;
+        };
+        return encode(*current, currentOffset);
       }
       return toRandomScalar(*current, location);
     }();
-    if (succeeded(scalar) && !isa<FloatType>(property.type))
+    if (succeeded(scalar) && !getRandomRealElementType(property.type))
       property.originalScalar = *scalar;
     FailureOr<Value> extended =
         succeeded(scalar) ? convert(*scalar, assignmentType, property.isSigned,
@@ -2757,6 +2807,16 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
   Value fixedAssignment = arith::AndIOp::create(
       builder, location, currentAssignment,
       arith::XOrIOp::create(builder, location, mutableMask, mask));
+  for (RealPropertyLeaf &leaf : realPropertyLeaves) {
+    // Element modes and alias propagation have already formed the complete
+    // mutable mask. A real leaf is enabled as one whole numeric coordinate.
+    Value selected = arith::AndIOp::create(
+        builder, location, propertyMutableMasks[leaf.property],
+        constantAssignment(APInt::getBitsSet(assignmentWidth, leaf.offset,
+                                             leaf.offset + leaf.width)));
+    leaf.enabled = arith::CmpIOp::create(
+        builder, location, arith::CmpIPredicate::ne, selected, zeroAssignment);
+  }
 
   bool hasSoftConstraint = false;
   for (auto [index, child] : llvm::enumerate(children)) {
@@ -3389,13 +3449,43 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
       if (property.width != assignmentWidth)
         bits = arith::TruncIOp::create(builder, location, integerType, bits);
       FailureOr<Value> converted = [&]() -> FailureOr<Value> {
-        if (isa<FloatType>(property.type)) {
-          Value value = sim::SimRandomRealFromRankOp::create(
-              builder, location, property.type, bits);
-          return arith::SelectOp::create(builder, location,
-                                         propertyEnabled[candidates.size()],
-                                         value, property.currentValue)
-              .getResult();
+        if (getRandomRealElementType(property.type)) {
+          std::function<Value(Type, Value, unsigned)> decode =
+              [&](Type type, Value rank, unsigned offset) -> Value {
+            if (isa<FloatType>(type)) {
+              const RealPropertyLeaf &leaf =
+                  realPropertyLeaves[realPropertyOffsets.lookup(offset)];
+              Value value = sim::SimRandomRealFromRankOp::create(
+                  builder, location, type, rank);
+              return arith::SelectOp::create(builder, location, leaf.enabled,
+                                             value, leaf.current);
+            }
+            auto array = cast<sim::UnpackedArrayType>(type);
+            unsigned count = sim::getAggregateNumElements(array);
+            unsigned width = *getRandomPropertyWidth(type);
+            unsigned elementWidth =
+                *getRandomPropertyWidth(array.getElementType());
+            SmallVector<Value> elements;
+            for (unsigned ordinal = 0; ordinal != count; ++ordinal) {
+              unsigned low = (count - ordinal - 1) * elementWidth;
+              Value element = rank;
+              if (low)
+                element = arith::ShRUIOp::create(
+                    builder, location, element,
+                    arith::ConstantOp::create(
+                        builder, location, rank.getType(),
+                        builder.getIntegerAttr(rank.getType(), low)));
+              if (width != elementWidth)
+                element = arith::TruncIOp::create(
+                    builder, location, builder.getIntegerType(elementWidth),
+                    element);
+              elements.push_back(
+                  decode(array.getElementType(), element, offset + low));
+            }
+            return sim::SimAggregateConstructOp::create(builder, location, type,
+                                                        elements);
+          };
+          return decode(property.type, bits, offset);
         }
         return isa<sim::UnpackedArrayType>(property.type)
                    ? convertFixedBitstreamTarget(bits, property.type, location)
@@ -3449,10 +3539,6 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
   SmallVector<Value> programCaptures;
   llvm::DenseMap<Operation *, uint32_t> programExpressionCaptures;
   llvm::DenseMap<unsigned, std::pair<uint32_t, uint32_t>> realPropertyCaptures;
-  llvm::DenseMap<uint32_t, unsigned> realPropertyOffsets;
-  for (auto [index, property] : llvm::enumerate(planned))
-    if (isa<FloatType>(property.type))
-      realPropertyOffsets[propertyOffsets[index]] = index;
   bool hasRealProgram = hasRealProperties;
   auto instruction = [&](uint8_t opcode, unsigned width, bool isSigned = false,
                          uint32_t operand = 0, uint64_t immediate = 0) {
@@ -3481,6 +3567,13 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         width = getIntegralRandomWidth(*type);
     }
     if (!width || *width == 0) {
+      if (succeeded(type) && isa<sim::UnpackedArrayType>(*type) &&
+          getRandomRealElementType(*type)) {
+        emitError(getSemanticLocation(expression))
+            << "whole real array constraint values require elementwise IEEE "
+               "lowering";
+        return failure();
+      }
       emitError(getSemanticLocation(expression))
           << "random constraint values must have fixed integral bitstreams "
              "or IEEE real types";
@@ -5096,20 +5189,22 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     bool floating =
         succeeded(normalizedType) && isa<FloatType>(*normalizedType);
     auto emitRealProperty = [&](unsigned index) -> LogicalResult {
-      if (index >= planned.size() || !isa<FloatType>(planned[index].type))
+      if (index >= realPropertyLeaves.size())
+        return failure();
+      RealPropertyLeaf leaf = realPropertyLeaves[index];
+      if (*width != leaf.type.getWidth())
         return failure();
       auto found = realPropertyCaptures.find(index);
       if (found == realPropertyCaptures.end()) {
-        unsigned precision = cast<FloatType>(planned[index].type).getWidth();
+        unsigned precision = leaf.type.getWidth();
         Value payload = arith::BitcastOp::create(
-            builder, location, builder.getIntegerType(precision),
-            planned[index].currentValue);
+            builder, location, builder.getIntegerType(precision), leaf.current);
         if (precision != 64)
           payload = arith::ExtUIOp::create(builder, location, i64, payload);
         uint32_t capture = static_cast<uint32_t>(programCaptures.size());
         programCaptures.push_back(payload);
-        programCaptures.push_back(arith::ExtUIOp::create(
-            builder, location, i64, propertyEnabled[index]));
+        programCaptures.push_back(
+            arith::ExtUIOp::create(builder, location, i64, leaf.enabled));
         found =
             realPropertyCaptures.insert({index, {capture, capture + 1}}).first;
       }
@@ -5117,8 +5212,8 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
       // retain their complete original IEEE payload, including NaN/infinity.
       instruction(TALOS_RT_RANDOM_PUSH_CAPTURE_V1, 1, false,
                   found->second.second);
-      instruction(TALOS_RT_RANDOM_PUSH_VARIABLE_V1, planned[index].width, false,
-                  propertyOffsets[index]);
+      instruction(TALOS_RT_RANDOM_PUSH_VARIABLE_V1, leaf.width, false,
+                  leaf.offset);
       instruction(*width == 32 ? TALOS_RT_RANDOM_REAL32_FROM_RANK_V1
                                : TALOS_RT_RANDOM_REAL64_FROM_RANK_V1,
                   *width);
@@ -5160,8 +5255,12 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         return failure();
       }
       unsigned index = static_cast<unsigned>(indexValue.getZExtValue());
-      if (floating)
-        return emitRealProperty(index);
+      if (floating) {
+        auto found = realPropertyOffsets.find(propertyOffsets[index]);
+        return found == realPropertyOffsets.end()
+                   ? failure()
+                   : emitRealProperty(found->second);
+      }
       instruction(TALOS_RT_RANDOM_PUSH_VARIABLE_V1, planned[index].width,
                   planned[index].isSigned, propertyOffsets[index]);
       return success();
@@ -6108,9 +6207,9 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         return WalkResult::skip();
       if (auto offset =
               sim::get<sim::metadata::RandomVariableBitOffset>(nested)) {
-        auto type = nested->getAttrOfType<TypeAttr>("semantic_type");
-        std::optional<uint64_t> width =
-            type ? getSemanticBitstreamWidth(type.getValue()) : std::nullopt;
+        auto type = getNormalizedSemanticType(nested);
+        auto width =
+            succeeded(type) ? getRandomPropertyWidth(*type) : std::nullopt;
         if (width) {
           references.push_back({offset.getValue().getZExtValue(), *width, {}});
           return WalkResult::skip();
@@ -6155,9 +6254,9 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     else {
       if (auto offset =
               sim::get<sim::metadata::RandomVariableBitOffset>(source)) {
-        auto type = source->getAttrOfType<TypeAttr>("semantic_type");
+        auto type = getNormalizedSemanticType(source);
         auto width =
-            type ? getSemanticBitstreamWidth(type.getValue()) : std::nullopt;
+            succeeded(type) ? getRandomPropertyWidth(*type) : std::nullopt;
         if (width) {
           inputs |= APInt::getLowBitsSet(assignmentWidth, *width)
                         .shl(offset.getValue().getZExtValue());
@@ -8103,16 +8202,16 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
       edge.origin =
           conditionalOrderGroups[conditionalOrderIds.lookup(key)].origin;
     }
-  for (auto [index, property] : llvm::enumerate(planned)) {
-    if (!isa<FloatType>(property.type))
-      continue;
-    instruction(TALOS_RT_RANDOM_PUSH_VARIABLE_V1, property.width, false,
-                propertyOffsets[index]);
+  for (const RealPropertyLeaf &leaf : realPropertyLeaves) {
+    instruction(TALOS_RT_RANDOM_PUSH_VARIABLE_V1, leaf.width, false,
+                leaf.offset);
     instruction(TALOS_RT_RANDOM_REAL_RANK_VALID_V1, 1);
     instruction(TALOS_RT_RANDOM_END_HARD_V1, 1, false,
                 TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1);
-    if (failed(recordPriorityInputs(propertyMasks[index],
-                                    APInt::getZero(assignmentWidth))))
+    if (failed(
+            recordPriorityInputs(APInt::getBitsSet(assignmentWidth, leaf.offset,
+                                                   leaf.offset + leaf.width),
+                                 APInt::getZero(assignmentWidth))))
       return failure();
     emittedHard = true;
   }

@@ -29,12 +29,16 @@ std::optional<unsigned> getIntegralRandomWidth(mlir::Type type);
 /// ranks; their expression types and stored values retain IEEE precision.
 std::optional<unsigned> getRandomPropertyWidth(mlir::Type type);
 
+/// The IEEE scalar leaf of a real property or fixed unpacked real array.
+mlir::FloatType getRandomRealElementType(mlir::Type type);
+
 struct FixedRandomArrayLayout {
   unsigned elementWidth;
   unsigned elementCount;
 };
 
-/// The mode inventory follows integral leaves in logical bit-stream order.
+/// The mode inventory follows scalar leaves in logical bit-stream order.
+/// Real leaves use their numeric-coordinate width.
 std::optional<FixedRandomArrayLayout>
 getFixedRandomArrayLayout(mlir::Type type);
 
