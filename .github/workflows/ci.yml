@@ -43,7 +43,8 @@ jobs:
   # Only project-owned TableGen outputs are needed to start the wasm build.
   generate-wasm-inputs:
     name: Generate wasm inputs
-    runs-on: ubuntu-latest
+    # Use the same host toolchain baseline as the native x86_64 build.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -280,6 +281,7 @@ jobs:
             build/CMakeFiles/CMakeConfigureLog.yaml
             build/test/lit-results.json
             build/test/lit-trace.json
+            build/test/**/Output/*.lto.timing
             build/.ninja_log
           include-hidden-files: true
           if-no-files-found: ignore
