@@ -1,6 +1,5 @@
 // CLAUSE: Startup routines may register the six early callback reasons, and access begins at cbEndOfCompile
-// XFAIL: *
-// cbUnresolvedSystf, cbError and cbPLIError are not implemented, and a startup table registering one crashes in talos_rt_v1_vpi_end_compile.
+// SINCE: 0.2.0
 // RUN: %clang -shared -fPIC %S/Inputs/36.10.2/probe.c -I%resource_dir/include -o %t.vpi.so
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top --vpi=full -O3 --execution-tier=%tier %s %t.vpi.so -o %t.exe
 // RUN: %t.exe

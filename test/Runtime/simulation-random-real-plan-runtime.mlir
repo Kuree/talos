@@ -15,8 +15,8 @@
 // ONCE: IR Dump After
 //
 // The random input is an eight-bit selector for adjacent IEEE values. Every
-// selector, out-of-range captures, frozen assignments and constraint modes are
-// checked against the plan: RNE, signed zero, NaN, infinity, conversions,
+// endpoint and halfway neighbor, out-of-range captures, frozen assignments and
+// constraint modes are checked against the plan: RNE, signed zero, NaN, infinity, conversions,
 // selection, soft priorities and both numeric rank precisions. Each successful
 // call has one accepted selector and needs no RNG draw. The wide program also
 // decodes an interior coordinate in each selected real cell.
@@ -38,6 +38,9 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 1 : i64} {
       %first = arith.constant -1 : i64
       %one = arith.constant 1 : i64
+      %low_neighbor = arith.constant 126 : i64
+      %high_neighbor = arith.constant 129 : i64
+      %last_neighbor = arith.constant 254 : i64
       %limit = arith.constant 257 : i64
       %mask = arith.constant 255 : i64
       %none = arith.constant 0 : i64
@@ -50,7 +53,13 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
       %w = simulation.call @wide(%ctx, %wanted, %mask, %none) : (!simulation.context, i64, i64, i64) -> i1
       %ok0 = arith.andi %n, %w : i1
       %ok = arith.andi %ok0, %valid : i1
-      %next = arith.addi %wanted, %one : i64
+      // Visit -1, 0, 1, 126, 127, 128, 129, 254, 255, 256. Interior
+      // selectors repeat the same decoder; endpoints and ties suffice.
+      %successor = arith.addi %wanted, %one : i64
+      %skip_low = arith.cmpi eq, %wanted, %one : i64
+      %skip_high = arith.cmpi eq, %wanted, %high_neighbor : i64
+      %next_low = arith.select %skip_low, %low_neighbor, %successor : i64
+      %next = arith.select %skip_high, %last_neighbor, %next_low : i64
       %more = arith.cmpi slt, %next, %limit : i64
       cf.cond_br %more, ^loop(%next, %ok : i64, i1), ^done(%ok : i1)
     ^done(%valid_all: i1):

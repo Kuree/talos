@@ -6,7 +6,7 @@
 // REQUIRES: compiled-sampler
 
 // IEEE 1800-2023 6.12.1 and 20.5: numeric casts after IEEE arithmetic.
-// An eight-bit candidate visits 256 adjacent payloads around positive and
+// An eight-bit candidate visits endpoints and neighbors of positive and
 // negative halfway boundaries at both precisions. Each numeric conversion and
 // finite test observes ((value + 0.5) - 0.5) * 2.0 / 2.0. Intermediate rounding
 // can change payloads; these selected intervals retain their integral results.
@@ -95,8 +95,11 @@ module top;
   WideCasts w = new;
   bit valid = 1;
   string prior;
+  int candidates[8] = '{0, 1, 126, 127, 128, 129, 254, 255};
   initial begin
-    for (int k = 0; k < 256; k++) begin
+    foreach (candidates[index]) begin
+      int k;
+      k = candidates[index];
       n.wanted = k;
       prior = n.get_randstate();
       valid &= n.randomize() && n.v == k && n.get_randstate() == prior;

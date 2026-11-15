@@ -16,8 +16,8 @@ extern uint64_t __talos_aot_model_ingress_v1[];
 extern uint32_t *__talos_periodic_termination_v1;
 int word0(talos_rt_context *,
           bool *) asm(TALOS_TEST_SYMBOL("__talos_eval_dispatch_v1.word_0"));
-int word8(talos_rt_context *,
-          bool *) asm(TALOS_TEST_SYMBOL("__talos_eval_dispatch_v1.word_8"));
+int word2(talos_rt_context *,
+          bool *) asm(TALOS_TEST_SYMBOL("__talos_eval_dispatch_v1.word_2"));
 int __talos_eval_dispatch_v1(void *, talos_rt_context *);
 #ifdef ORDERED_NBA
 extern talos::runtime::EvalNBAQueue __talos_eval_ordered_nba_queue_v1;
@@ -30,9 +30,9 @@ int main() {
   assert(talos_rt_v1_context_create(&context) == TALOS_RT_OK);
   auto *ingress = __talos_aot_model_ingress_v1;
 #ifdef ORDERED_NBA
-  const talos::runtime::DirtyReadySetLayout layout(517);
+  const talos::runtime::DirtyReadySetLayout layout(133);
 #else
-  const talos::runtime::DirtyReadySetLayout layout(514);
+  const talos::runtime::DirtyReadySetLayout layout(130);
 #endif
   talos::runtime::DirtyReadySetView ready(ingress, layout);
   const uint64_t dirty = layout.offsets[1];
@@ -64,10 +64,10 @@ int main() {
 #else
   // Both real owners in the partial last word run in one call.
   reset();
-  ready.set(512);
-  ready.set(513);
-  assert(word8(context, &fallback) == TALOS_RT_OK);
-  assert(!ready.test(512) && !ready.test(513));
+  ready.set(128);
+  ready.set(129);
+  assert(word2(context, &fallback) == TALOS_RT_OK);
+  assert(!ready.test(128) && !ready.test(129));
 
   // A word runs its ranked group and every pending direct owner in rank
   // order, and consumes each one. Dirty bits are left to the coordinator.
@@ -106,11 +106,11 @@ int main() {
   reset();
   __talos_periodic_termination_v1 = &stopping;
   ingress[dirty] |= 2;
+  ready.set(128);
   ready.set(129);
-  ready.set(130);
   assert(__talos_eval_dispatch_v1(nullptr, context) ==
          TALOS_RT_TIER_UNAVAILABLE);
-  assert(!ready.test(129) && ready.test(130));
+  assert(!ready.test(128) && ready.test(129));
   assert(ingress[dirty] == 4);
   __talos_periodic_termination_v1 = nullptr;
   std::puts("word sweep selection and handoffs passed");

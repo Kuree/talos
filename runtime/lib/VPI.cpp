@@ -1523,6 +1523,19 @@ void refreshTimeCallbackDeadline(VPIState *state) {
 #endif
 }
 
+// Every callback returns through this fence, including on hosts without
+// POSIX signal callbacks (WebAssembly and Windows).
+void runPendingClientReturn(VPIState *state) noexcept;
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((always_inline))
+#elif defined(_MSC_VER)
+__forceinline
+#endif
+inline void runPendingReset(VPIState *state) noexcept {
+  if (state->pendingClientReturn)
+    runPendingClientReturn(state);
+}
+
 #if TALOS_RT_VPI_SIGNALS
 /// Installs the handler for the first cbSignal callback on a signal.
 bool watchSignal(VPIState *state, int signal) {
@@ -1588,17 +1601,6 @@ void unwatchSignal(VPIState *state, int signal) {
     signalOwner.store(nullptr);
   }
   refreshCallbackIngress(state);
-}
-
-void runPendingClientReturn(VPIState *state) noexcept;
-#if defined(__GNUC__) || defined(__clang__)
-__attribute__((always_inline))
-#elif defined(_MSC_VER)
-__forceinline
-#endif
-inline void runPendingReset(VPIState *state) noexcept {
-  if (state->pendingClientReturn)
-    runPendingClientReturn(state);
 }
 
 /// Delivers the cbSignal callbacks of the signals that arrived (38.36.3), in

@@ -1,0 +1,8 @@
+// REQUIRES: native-elf
+// RUN: %target_clang -fPIC -shared -nostdlib %S/Inputs/vpi_info.c -I%resource_dir/include -I%obj_root/include -o %t.so
+// RUN: %talos -O1 -flto --vpi=full %S/vpi-info.sv %t.so -o %t.lto
+// RUN: %t.lto | FileCheck %s
+
+// Exercise version metadata through the full LTO link at its least expensive
+// optimized level. Driver/lto-options.test checks optimization flag selection.
+// CHECK: VPI simulator info matches VERSION: talos

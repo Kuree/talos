@@ -172,6 +172,7 @@ native_members = [
     "EventSnapshot.o",
     "DPIOpenArray.o",
     "DPIAggregate.o",
+    "StaticSpecializationGuard.o",
 ]
 lto_members = [
     pathlib.Path(member).with_suffix(".bc").name for member in native_members

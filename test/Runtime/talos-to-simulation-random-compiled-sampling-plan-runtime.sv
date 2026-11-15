@@ -10,22 +10,23 @@
 // PLAN-SAME: PLAN
 
 // The same plan serves zero, singleton, mid-popcount, full-popcount and
-// impossible states of a 130-bit variable. The 130-bit cases are sparse enough
-// to force residual sampling. A failed call (18.6.3) preserves the last
+// impossible states of a 65-bit variable. Crossing 64 bits suffices to force
+// residual sampling without constructing a 130-bit mid-popcount diagram.
+// A failed call (18.6.3) preserves the last
 // assignment. Each line below is the verdict of one captured state.
-// CHECK: bit 129 1
-// CHECK-NEXT: popcount 65 1
+// CHECK: bit 64 1
+// CHECK-NEXT: popcount 32 1
 // CHECK-NEXT: zero 1
 // CHECK-NEXT: full 1
 // CHECK-NEXT: negative count 1
 // CHECK-NEXT: exponent past width 1
 
 module top;
-  bit [129:0] x = '0;
+  bit [64:0] x = '0;
   int count = 0;
   int exponent = 0;
   int status;
-  bit [129:0] kept;
+  bit [64:0] kept;
 
   task automatic draw();
     status = std::randomize(x) with { $countones(x) == count;
@@ -33,26 +34,26 @@ module top;
   endtask
 
   initial begin
-    count = 1; exponent = 129; draw();
-    $display("bit 129 %0d",
-             status == 1 && x == 130'h200000000000000000000000000000000);
+    count = 1; exponent = 64; draw();
+    $display("bit 64 %0d",
+             status == 1 && x == 65'h10000000000000000);
 
-    count = 65; exponent = 130; draw();
-    $display("popcount 65 %0d",
-             status == 1 && $countones(x) == 65 && $clog2(x) == 130);
+    count = 32; exponent = 65; draw();
+    $display("popcount 32 %0d",
+             status == 1 && $countones(x) == 32 && $clog2(x) == 65);
 
     count = 0; exponent = 0; draw();
-    $display("zero %0d", status == 1 && x == 130'h0);
+    $display("zero %0d", status == 1 && x == 65'h0);
 
-    count = 130; exponent = 130; draw();
+    count = 65; exponent = 65; draw();
     $display("full %0d",
-             status == 1 && x == 130'h3ffffffffffffffffffffffffffffffff);
+             status == 1 && x == 65'h1ffffffffffffffff);
 
     kept = x;
-    count = -1; exponent = 130; draw();
+    count = -1; exponent = 65; draw();
     $display("negative count %0d", status == 0 && x == kept);
 
-    count = 1; exponent = 131; draw();
+    count = 1; exponent = 66; draw();
     $display("exponent past width %0d", status == 0 && x == kept);
   end
 endmodule

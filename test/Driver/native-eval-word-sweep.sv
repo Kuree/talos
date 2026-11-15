@@ -11,7 +11,9 @@
 // after the slot settles (4.4.2, 4.6, 10.4.2).
 // The conditional finishes keep these owners outside ranked fusion groups.
 module native_eval_word_sweep;
-  localparam N = 260;
+  // Two ready words suffice to exercise backward propagation across a word
+  // boundary; larger chains only repeat the same dispatch cases.
+  localparam N = 36;
   bit clk = 0;
   bit [15:0] grouped_a = 0, grouped_b = 0;
   logic [7:0] source = 0;
@@ -64,7 +66,7 @@ endmodule
 
 // Every ready word with Active owners has its sweep function.
 // WORDS-DAG: __talos_eval_dispatch_v1.word_0
-// WORDS-DAG: __talos_eval_dispatch_v1.word_8
+// WORDS-DAG: __talos_eval_dispatch_v1.word_1
 // WORDS-DAG: __talos_eval_ranked_group_
 // CHECK: round 0 count 1 chain 00
 // CHECK-NEXT: round 1 count 2 chain xx

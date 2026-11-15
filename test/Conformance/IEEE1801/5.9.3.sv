@@ -1,7 +1,6 @@
 // CLAUSE: Result
 // REQUIRES: upf
-// XFAIL: *
-// UPF execution failed: unsupported UPF option '-exclude_elements' in create_power_domain; the option is not implemented.
+// SINCE: 0.2.0
 // Pins: the result drops an element that is both listed and excluded and keeps the rest of the list (IEEE 1801-2018 5.9.3).
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top --upf %S/Inputs/5.9.3/design.upf -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe

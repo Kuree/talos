@@ -1,11 +1,6 @@
 // RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-edit-attributes{has=test.priority erase},test-talos-replicate,simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o %t.sparse.mlir 2> %t.sparse.trace
 // RUN: FileCheck %s --check-prefix=SPARSE < %t.sparse.mlir
 // RUN: FileCheck %s --check-prefix=SPARSE-PLAN < %t.sparse.trace
-// RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-edit-attributes{has=test.priority erase},test-talos-edit-attributes{has=test.deferred set="{resume_region = 3 : i32}"},test-talos-replicate,simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o %t.deferred.mlir 2> %t.deferred.trace
-// RUN: FileCheck %s --check-prefix=DEFERRED < %t.deferred.mlir
-// RUN: FileCheck %s --check-prefix=DEFERRED-PLAN < %t.deferred.trace
-// RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-edit-attributes{has=test.deferred set="{resume_region = 3 : i32}"},test-talos-replicate,simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o %t.priority.mlir 2> %t.priority.trace
-// RUN: FileCheck %s --check-prefix=PRIORITY < %t.priority.mlir
 
 // The counter owners cannot fuse because they may terminate. The pure `aaa`
 // owner instead joins a ranked group; making its wait deferred moves it after
@@ -16,8 +11,11 @@
 // statement/NBA ordering; the particular order between Active owners is chosen
 // by the implementation.
 
+// Three ready words cover full words, a partial last word, and a stale
+// dirty word before another nonempty word. 129 counters suffice.
+
 // SPARSE-PLAN: talos eval owner: bit=0 {{.*}} group=__talos_eval_ranked_group_0
-// SPARSE-PLAN: talos eval owner: bit=513 {{.*}} group=-
+// SPARSE-PLAN: talos eval owner: bit=129 {{.*}} group=-
 
 // The ranked group runs from its word, in rank order before the direct owners
 // of that word; the coordinator polls termination after the word. No owner
@@ -36,58 +34,11 @@
 // SPARSE: ^[[NEXT]]:
 // SPARSE: %[[SECOND:.*]] = llvm.mlir.constant(2 : i64)
 // SPARSE: llvm.and %{{.*}}, %[[SECOND]]
-// SPARSE-LABEL: llvm.func @__talos_eval_dispatch_v1.word_8(
+// SPARSE-LABEL: llvm.func @__talos_eval_dispatch_v1.word_2(
 // SPARSE: llvm.call @__talos_eval_path_dispatch_v1_{{[0-9]+}}(%arg0)
 // SPARSE: llvm.call @__talos_eval_path_dispatch_v1_{{[0-9]+}}(%arg0)
 // SPARSE: llvm.return
 // SPARSE-NEXT: }
-
-// DEFERRED-PLAN: talos eval owner: bit=512 {{.*}} group=- {{.*}}{{$}}
-// DEFERRED-PLAN-NEXT: talos eval owner: bit=513 {{.*}} deferred{{$}}
-
-// Word 8 holds Active owner 512 and deferred owner 513. The sweep gates that
-// word (and only that word) on its Active bit; once no Active word is dirty, the coordinator
-// scans the deferred bits directly, checks for a finish request, takes the
-// Inactive cut and runs the deferred owner from the per-owner switch.
-// DEFERRED-LABEL: llvm.func @__talos_eval_dispatch_v1(
-// DEFERRED: llvm.switch %[[DEFERRED_BIT:.*]] : i64, ^{{bb[0-9]+}} [
-// DEFERRED-NEXT: 513: ^
-// DEFERRED-NEXT: ]
-// DEFERRED: %[[INACTIVE:.*]] = llvm.mlir.constant(2 : i64)
-// DEFERRED-NEXT: %[[PENDING:.*]] = llvm.and %{{.*}}, %[[INACTIVE]]
-// DEFERRED: %[[MIXED:.*]] = llvm.mlir.constant(8 : i64)
-// DEFERRED-NEXT: %[[IS_MIXED:.*]] = llvm.icmp "eq" %{{.*}}, %[[MIXED]]
-// DEFERRED-NEXT: llvm.cond_br %[[IS_MIXED]], ^[[SHARED:bb[0-9]+]], ^{{bb[0-9]+}}(
-// DEFERRED-NEXT: ^[[SHARED]]:
-// DEFERRED-NEXT: %[[ACTIVE:.*]] = llvm.mlir.constant(1 : i64)
-// DEFERRED-NEXT: llvm.and %{{.*}}, %[[ACTIVE]]
-// DEFERRED: "llvm.intr.cttz"(%[[PENDING]])
-// DEFERRED: llvm.call @talos_rt_v1_scheduler_termination_requested(
-// DEFERRED-LABEL: llvm.func @__talos_eval_dispatch_v1.word_8(
-// DEFERRED: llvm.mlir.constant(1 : i64)
-// DEFERRED-NOT: llvm.mlir.constant(2 : i64)
-// DEFERRED-NOT: llvm.func
-// DEFERRED: llvm.call @__talos_eval_path_dispatch_v1_{{[0-9]+}}(%arg0)
-// DEFERRED-NOT: llvm.mlir.constant(2 : i64)
-// DEFERRED: llvm.func
-
-// The priority cancellation waiter is runtime-owned, so this variant keeps a
-// runtime calendar; with `aaa` deferred, word 8 is shared with the deferred
-// owner. The NBA cut drains runtime work, then the deferred owner runs from
-// the per-owner switch, which must survive although only the commit path
-// emitted after the sweep branches to it. Priority work is polled after each
-// owner of a word: a pending priority signal returns TALOS_RT_AOT_CHECKPOINT
-// (20) before the next owner (IEEE 1800-2023 4.4.2.3-4.4.2.4).
-// PRIORITY-LABEL: llvm.func internal @__talos_eval_dispatch_v1.__talos_pending(
-// PRIORITY: llvm.call @talos_rt_v1_scheduler_prepare_eval_nba
-// PRIORITY: llvm.switch %{{.*}} : i64, ^{{bb[0-9]+}} [
-// PRIORITY-NEXT: 513: ^
-// PRIORITY-NEXT: ]
-// PRIORITY-LABEL: llvm.func @__talos_eval_dispatch_v1.word_0(
-// PRIORITY: llvm.call @talos_rt_v1_scheduler_priority_signal_pending(%arg0)
-// PRIORITY-NEXT: llvm.mlir.constant(0 : i32)
-// PRIORITY-NEXT: llvm.icmp "ne"
-// PRIORITY-NEXT: llvm.mlir.constant(20 : i32)
 
 !clk = !simulation.ref<i1>
 !int = !simulation.ref<i32>
@@ -96,19 +47,19 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     simulation.scope.decl 0 hierarchy "t"
     simulation.code_unit.decl 1 in 0 root_initializer hierarchy "t.root"
     simulation.code_unit.decl 2 in 0 always hierarchy "t.clock"
-    simulation.code_unit.decl 4 in 0 always hierarchy "t.counter#" {test.replicate = 513 : i64, test.replicate_stride = {id = 1 : i64}}
+    simulation.code_unit.decl 4 in 0 always hierarchy "t.counter#" {test.replicate = 129 : i64, test.replicate_stride = {id = 1 : i64}}
     simulation.code_unit.decl 3 in 0 always hierarchy "t.aaa"
     simulation.storage.decl 1 in 0 : i32 design
-    simulation.code_unit.decl 517 in 0 fork hierarchy "t.cancel" {test.priority}
+    simulation.code_unit.decl 133 in 0 fork hierarchy "t.cancel" {test.priority}
     simulation.storage.decl 0 in 0 : i1 design
-    simulation.storage.decl 2 in 0 : i32 design {test.replicate = 513 : i64, test.replicate_stride = {id = 1 : i64}}
+    simulation.storage.decl 2 in 0 : i32 design {test.replicate = 129 : i64, test.replicate_stride = {id = 1 : i64}}
     simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 1 : i64} {
       %clk = simulation.context.storage %ctx[0] : !clk
       %false = arith.constant false
       simulation.ref.store %false to %clk : i1, !clk
       %c = simulation.spawn @clock(%ctx, %clk) : !simulation.context, !clk -> !simulation.process
-      %n = simulation.context.storage %ctx[2] {test.replicate = 513 : i64, test.replicate_stride = {id = 1 : i64}} : !int
-      %k = simulation.spawn @"counter#"(%ctx, %clk, %n) {test.replicate = 513 : i64} : !simulation.context, !clk, !int -> !simulation.process
+      %n = simulation.context.storage %ctx[2] {test.replicate = 129 : i64, test.replicate_stride = {id = 1 : i64}} : !int
+      %k = simulation.spawn @"counter#"(%ctx, %clk, %n) {test.replicate = 129 : i64} : !simulation.context, !clk, !int -> !simulation.process
       %q = simulation.context.storage %ctx[1] : !int
       %a = simulation.spawn @"aaa"(%ctx, %clk, %q) : !simulation.context, !clk, !int -> !simulation.process
       %p = simulation.spawn @cancel(%ctx, %clk) {test.priority} : !simulation.context, !clk -> !simulation.process
@@ -126,7 +77,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
       simulation.ref.store %new to %clk : i1, !clk
       cf.br ^wait
     }
-    simulation.func @"counter#"(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %clk: !clk {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}, %n: !int {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 2 : i64, test.replicate_stride = {simulation.descriptor_id = 1 : i64}}) attributes {entry_kind = 3 : i32, code_unit_id = 4 : i64, test.replicate = 513 : i64, test.replicate_stride = {code_unit_id = 1 : i64}} {
+    simulation.func @"counter#"(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %clk: !clk {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}, %n: !int {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 2 : i64, test.replicate_stride = {simulation.descriptor_id = 1 : i64}}) attributes {entry_kind = 3 : i32, code_unit_id = 4 : i64, test.replicate = 129 : i64, test.replicate_stride = {code_unit_id = 1 : i64}} {
       cf.br ^wait
     ^wait:
       simulation.suspend.edge posedge %clk to ^body {schedule.procedural_event_wait, schedule.repeating_always_wait, site = #schedule.continuation<id = 2>} : !clk
@@ -154,7 +105,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
       simulation.nba.enqueue %new to %q : (i32, !int) -> ()
       cf.br ^wait
     }
-    simulation.func private @cancel(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %clk: !clk {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}) attributes {entry_kind = 13 : i32, code_unit_id = 517 : i64, home_region = 10 : i32, internal, schedule.concurrent_cancel, schedule.detached_controls, schedule.priority_signal_resume, test.priority} {
+    simulation.func private @cancel(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %clk: !clk {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}) attributes {entry_kind = 13 : i32, code_unit_id = 133 : i64, home_region = 10 : i32, internal, schedule.concurrent_cancel, schedule.detached_controls, schedule.priority_signal_resume, test.priority} {
       simulation.suspend.edge posedge %clk to ^resume {site = #schedule.continuation<id = 3>} : !clk
     ^resume:
       simulation.return

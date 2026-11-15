@@ -36,8 +36,8 @@
 module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", schedule.native_scheduler = 3 : i32} {
   simulation.design @ordered {
     simulation.scope.decl 0
-    simulation.storage.decl 5 in 0 : i32 design {test.replicate = 513 : i64, test.replicate_stride = {id = 1 : i64}}
-    simulation.code_unit.decl 8 in 0 always hierarchy "ordered.counter#" {test.replicate = 513 : i64, test.replicate_stride = {id = 1 : i64}}
+    simulation.storage.decl 5 in 0 : i32 design {test.replicate = 129 : i64, test.replicate_stride = {id = 1 : i64}}
+    simulation.code_unit.decl 8 in 0 always hierarchy "ordered.counter#" {test.replicate = 129 : i64, test.replicate_stride = {id = 1 : i64}}
     simulation.storage.decl 0 in 0 : !bit design
     simulation.storage.decl 1 in 0 : !bit design
     simulation.storage.decl 2 in 0 : !bit design
@@ -69,8 +69,8 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
       %d = simulation.spawn @reset(%ctx, %kick, %src) : !simulation.context, !ref, !ref -> !simulation.process
       %e = simulation.spawn @edge(%ctx, %data, %seen) : !simulation.context, !wref, !ref -> !simulation.process
       %f = simulation.spawn @check(%ctx, %data, %seen) : !simulation.context, !wref, !ref -> !simulation.process
-      %n = simulation.context.storage %ctx[5] {test.replicate = 513 : i64, test.replicate_stride = {id = 1 : i64}} : !int
-      %k = simulation.spawn @"counter#"(%ctx, %clk, %n) {test.replicate = 513 : i64} : !simulation.context, !ref, !int -> !simulation.process
+      %n = simulation.context.storage %ctx[5] {test.replicate = 129 : i64, test.replicate_stride = {id = 1 : i64}} : !int
+      %k = simulation.spawn @"counter#"(%ctx, %clk, %n) {test.replicate = 129 : i64} : !simulation.context, !ref, !int -> !simulation.process
       simulation.return
     }
     simulation.func @clock(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %clk: !ref {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}) attributes {entry_kind = 3 : i32, code_unit_id = 2 : i64} {
@@ -135,7 +135,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
       simulation.finish %ctx, %status
       simulation.return
     }
-    simulation.func @"counter#"(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %clk: !ref {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}, %n: !int {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 5 : i64, test.replicate_stride = {simulation.descriptor_id = 1 : i64}}) attributes {entry_kind = 3 : i32, code_unit_id = 8 : i64, test.replicate = 513 : i64, test.replicate_stride = {code_unit_id = 1 : i64}} {
+    simulation.func @"counter#"(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %clk: !ref {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}, %n: !int {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 5 : i64, test.replicate_stride = {simulation.descriptor_id = 1 : i64}}) attributes {entry_kind = 3 : i32, code_unit_id = 8 : i64, test.replicate = 129 : i64, test.replicate_stride = {code_unit_id = 1 : i64}} {
       cf.br ^wait
     ^wait:
       simulation.suspend.edge posedge %clk to ^body {schedule.procedural_event_wait, schedule.repeating_always_wait, site = #schedule.continuation<id = 2>} : !ref

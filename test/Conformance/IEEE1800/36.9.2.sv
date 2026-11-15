@@ -1,6 +1,6 @@
 // CLAUSE: Callbacks fire for a value change, a time and a simulator action
-// XFAIL: *
-// vpi_register_cb reports cbValueChange as not implemented (docs/vpi.md); cbAfterDelay and cbEndOfSimulation fire.
+// XFAIL: native
+// Value-change callbacks currently require certified bytecode writers.
 // RUN: %clang -shared -fPIC %S/Inputs/36.9.2/probe.c -I%resource_dir/include -o %t.vpi.so
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top --vpi=full -O3 --execution-tier=%tier %s %t.vpi.so -o %t.exe
 // RUN: %t.exe

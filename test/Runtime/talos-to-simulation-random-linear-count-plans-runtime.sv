@@ -11,11 +11,9 @@
 // return unnoticed.
 // PLAN: simulation.random.solve{{.*}}SAMP\01\00\00\00{{(\\[0-9A-Fa-f]{2}|[^"\\])}}\0{{[0-9A-Fa-f]}}\00\00\01\00\00\00A\00\00\00\03\00\00\00
 
-// Equality and inequality cover every count of the 65-bit input and the
-// signed targets -1 and 66 that no input satisfies, frozen inputs, a joint
-// random count (JointPlan), a three-bit target that truncates the sum
-// (TruncatedPlan), and a 130-bit target whose high bits must not alias a legal
-// count (WidePlan, 20.9 limits counts to 32 bits).
+// Equality and inequality cover zero, singleton, central and full counts,
+// their neighbors, the signed targets -1 and 66 that no input satisfies, and
+// frozen inputs. The companion test covers joint, truncated and wide targets.
 // RUNTIME: linear count plans valid 1
 
 class CountPlan;
@@ -28,34 +26,18 @@ class CountPlan;
   }
 endclass
 
-class JointPlan;
-  rand bit [7:0] value;
-  rand int count;
-  constraint relation { count == $countones(value); }
-endclass
-
-class TruncatedPlan;
-  rand bit [64:0] value;
-  bit [2:0] wanted;
-  constraint relation { 3'($countones(value)) == wanted; }
-endclass
-
-class WidePlan;
-  rand bit [12:0] value;
-  bit [129:0] wanted;
-  constraint relation { $countones(value) == wanted; }
-endclass
-
 module top;
   CountPlan c = new;
-  JointPlan j = new;
-  TruncatedPlan t = new;
-  WidePlan w = new;
   bit good = 1;
   bit [64:0] previous;
   int status;
+  int targets[11] = '{-1, 0, 1, 2, 31, 32, 33, 63, 64, 65, 66};
   initial begin
-    for (int k = -1; k <= 66; k++) begin
+    // Both sides of each cardinality boundary exercise the same relation
+    // without rebuilding an exact diagram for every interior count.
+    foreach (targets[index]) begin
+      int k;
+      k = targets[index];
       c.wanted = k;
       c.exclude = 0;
       previous = c.value;
@@ -75,19 +57,6 @@ module top;
     c.wanted = 65;
     good &= c.randomize() && c.value == '1;
     c.value.rand_mode(1);
-    for (int k = 0; k < 32; k++) begin
-      good &= j.randomize() && j.count == $countones(j.value);
-      t.wanted = k[2:0];
-      good &= t.randomize() && 3'($countones(t.value)) == t.wanted;
-      w.wanted = k % 14;
-      good &= w.randomize() && $countones(w.value) == w.wanted;
-    end
-    w.wanted = 130'h1 << 100;
-    good &= !w.randomize();
-    w.wanted = '1;
-    good &= !w.randomize();
-    w.wanted = 13;
-    good &= w.randomize() && w.value == '1;
     $display("linear count plans valid %0d", good);
     if (!good) $fatal(1, "linear count plan violation");
     $finish;
