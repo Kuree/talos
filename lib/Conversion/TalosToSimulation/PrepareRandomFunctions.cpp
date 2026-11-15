@@ -58,6 +58,26 @@ FloatType getRandomRealElementType(Type type) {
   return dyn_cast<FloatType>(type);
 }
 
+std::optional<RandomSelectionLayout>
+getRandomSelectionLayout(Operation *source) {
+  auto type = source->getAttrOfType<TypeAttr>("semantic_type");
+  if (!type)
+    return std::nullopt;
+  auto normalized = getNormalizedSemanticType(source);
+  if (succeeded(normalized))
+    if (auto array = dyn_cast<sim::UnpackedArrayType>(*normalized)) {
+      auto width = getRandomPropertyWidth(array.getElementType());
+      if (!width || !*width)
+        return std::nullopt;
+      return RandomSelectionLayout{array.getLeft(), array.getRight(), *width};
+    }
+  auto layout = getSemanticSelectionLayout(type.getValue());
+  if (!layout)
+    return std::nullopt;
+  return RandomSelectionLayout{layout->left, layout->right,
+                               layout->elementWidth};
+}
+
 std::optional<FixedRandomArrayLayout> getFixedRandomArrayLayout(Type type) {
   if (!isa<sim::UnpackedArrayType>(type))
     return std::nullopt;
@@ -235,15 +255,7 @@ getRandomConstraintPath(Operation *expression,
     }
     // A selection from a runtime-sized container has no fixed bit position;
     // its ordering path covers the whole variable.
-    auto layout = getSemanticSelectionLayout(sourceTypeAttr.getValue());
-    auto normalizedSource = getNormalizedSemanticType(children.front());
-    if (succeeded(normalizedSource))
-      if (auto array = dyn_cast<sim::UnpackedArrayType>(*normalizedSource)) {
-        auto elementWidth = getRandomPropertyWidth(array.getElementType());
-        if (elementWidth)
-          layout = SemanticSelectionLayout{array.getLeft(), array.getRight(),
-                                           *elementWidth};
-      }
+    auto layout = getRandomSelectionLayout(children.front());
     if (!layout) {
       (**base).precise = false;
       return base;
@@ -358,10 +370,9 @@ LogicalResult freezeRandomConstraintPriorityInputs(
     if (hasFunctionCalls &&
         isa<semantic::SVElementSelectExpressionOp>(expression)) {
       auto parts = getChildren(expression);
-      auto base = parts.size() == 2 ? getNormalizedSemanticType(parts.front())
-                                    : FailureOr<Type>(failure());
-      track |= succeeded(base) && isa<sim::UnpackedArrayType>(*base) &&
-               !getConstantSpelling(parts[1]);
+      auto layout = parts.size() == 2 ? getRandomSelectionLayout(parts.front())
+                                      : std::nullopt;
+      track |= layout && !getConstantSpelling(parts[1]);
     }
     if (sim::has<sim::metadata::RandomPriorityCondition>(expression) &&
         !track) {
@@ -743,6 +754,11 @@ LogicalResult freezeRandomConstraintPriorityInputs(
             invalid = true;
             return;
           }
+          // An invalid address denotes ERROR, not a reference to every bit
+          // of its base. The original expression retains that error for
+          // state-guard sifting during constraint creation.
+          if (sim::has<sim::metadata::RandomEvaluationError>(nested))
+            return;
           if (*path) {
             const RandomConstraintPath &valuePath = **path;
             auto selectedType = hasFunctionCalls && !valuePath.precise
@@ -750,7 +766,7 @@ LogicalResult freezeRandomConstraintPriorityInputs(
                                     : FailureOr<Type>(failure());
             if (hasFunctionCalls && !valuePath.precise &&
                 succeeded(selectedType) &&
-                getRandomRealElementType(*selectedType) &&
+                getRandomPropertyWidth(*selectedType) &&
                 !sim::has<sim::metadata::RandomEvaluationError>(nested)) {
               Operation *selection = nested;
               unsigned depth = 0;
@@ -763,7 +779,8 @@ LogicalResult freezeRandomConstraintPriorityInputs(
                     !getConstantSpelling(parts[1]))
                   break;
                 if (!isa<semantic::SVElementSelectExpressionOp,
-                         semantic::SVMemberAccessExpressionOp>(selection) ||
+                         semantic::SVMemberAccessExpressionOp,
+                         semantic::SVRangeSelectExpressionOp>(selection) ||
                     parts.empty()) {
                   selection = nullptr;
                   break;
@@ -773,11 +790,16 @@ LogicalResult freezeRandomConstraintPriorityInputs(
               }
               if (selection) {
                 auto parts = getChildren(selection);
-                auto base = getNormalizedSemanticType(parts.front());
-                auto array = succeeded(base)
-                                 ? dyn_cast<sim::UnpackedArrayType>(*base)
-                                 : sim::UnpackedArrayType{};
-                if (!array) {
+                auto layout = getRandomSelectionLayout(parts.front());
+                if (!layout) {
+                  invalid = true;
+                  return;
+                }
+                auto indexInputs = guardInputs(parts[1]);
+                if (failed(indexInputs) || !indexInputs->isZero()) {
+                  emitError(getSemanticLocation(parts[1]))
+                      << "constraint function selected paths require state "
+                         "index expressions";
                   invalid = true;
                   return;
                 }
@@ -787,8 +809,8 @@ LogicalResult freezeRandomConstraintPriorityInputs(
                         .getZExtValue();
                 uint64_t operations = 0;
                 nested->walk([&](Operation *) { ++operations; });
-                int64_t first = std::min(array.getLeft(), array.getRight());
-                int64_t last = std::max(array.getLeft(), array.getRight());
+                int64_t first = std::min(layout->left, layout->right);
+                int64_t last = std::max(layout->left, layout->right);
                 for (int64_t address = first;; ++address) {
                   if (operations > remainingPathOperations) {
                     emitError(getSemanticLocation(nested))

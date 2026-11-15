@@ -2983,16 +2983,14 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
           conditions.try_emplace(id.getValue().getZExtValue(), expression, 1);
         else if (isa<semantic::SVElementSelectExpressionOp>(expression) &&
                  parts.size() == 2) {
-          auto base = getNormalizedSemanticType(parts.front());
+          auto layout = getRandomSelectionLayout(parts.front());
           auto indexType = getNormalizedSemanticType(parts[1]);
-          if (succeeded(base) && isa<sim::UnpackedArrayType>(*base) &&
-              succeeded(indexType) && sim::getPackedWidth(*indexType)) {
+          if (layout && succeeded(indexType) &&
+              sim::getPackedWidth(*indexType)) {
             conditions.try_emplace(id.getValue().getZExtValue(), parts[1], 2);
-            auto array = cast<sim::UnpackedArrayType>(*base);
-            selectionBounds.try_emplace(
-                id.getValue().getZExtValue(),
-                std::min(array.getLeft(), array.getRight()),
-                std::max(array.getLeft(), array.getRight()));
+            selectionBounds.try_emplace(id.getValue().getZExtValue(),
+                                        std::min(layout->left, layout->right),
+                                        std::max(layout->left, layout->right));
           }
         }
       });
@@ -6552,12 +6550,14 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     object = cast ? cast.getObject() : Value{};
   }
   llvm::DenseMap<Operation *, Value> argumentInputMasks;
-  auto selectedRealStorage = [&](Operation *source) {
-    if (!isa<semantic::SVElementSelectExpressionOp>(source) ||
+  auto selectedStorage = [&](Operation *source) {
+    if (!isa<semantic::SVElementSelectExpressionOp,
+             semantic::SVMemberAccessExpressionOp,
+             semantic::SVRangeSelectExpressionOp>(source) ||
         !dependsOnCandidate(source))
       return false;
     auto type = getNormalizedSemanticType(source);
-    if (failed(type) || !getRandomRealElementType(*type))
+    if (failed(type) || !getRandomPropertyWidth(*type))
       return false;
     for (Operation *path = source;;) {
       if (sim::has<sim::metadata::RandomVariable>(path) ||
@@ -6565,11 +6565,158 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         return true;
       auto parts = getChildren(path);
       if (!isa<semantic::SVElementSelectExpressionOp,
-               semantic::SVMemberAccessExpressionOp>(path) ||
+               semantic::SVMemberAccessExpressionOp,
+               semantic::SVRangeSelectExpressionOp>(path) ||
           parts.empty())
         return false;
       path = parts.front();
     }
+  };
+  uint64_t remainingStorageMaskOperations = uint64_t{1} << 20;
+  auto selectedStorageInputs = [&](Operation *source) -> FailureOr<Value> {
+    SmallVector<Operation *> paths;
+    Operation *root = source;
+    while (!sim::has<sim::metadata::RandomVariable>(root) &&
+           !sim::has<sim::metadata::RandomVariableBitOffset>(root)) {
+      paths.push_back(root);
+      root = getChildren(root).front();
+    }
+    auto widthOf = [&](Operation *node) -> std::optional<unsigned> {
+      auto type = getNormalizedSemanticType(node);
+      return succeeded(type) ? getRandomPropertyWidth(*type) : std::nullopt;
+    };
+    auto rootWidth = widthOf(root), resultWidth = widthOf(source);
+    if (!rootWidth || !*rootWidth || !resultWidth || !*resultWidth)
+      return failure();
+    uint64_t rootOffset = 0;
+    if (auto offset = sim::get<sim::metadata::RandomVariableBitOffset>(root)) {
+      if (offset.getValue().isNegative() ||
+          offset.getValue().getActiveBits() > 32)
+        return failure();
+      rootOffset = offset.getValue().getZExtValue();
+    } else {
+      auto variable = sim::get<sim::metadata::RandomVariable>(root).getValue();
+      if (variable.isNegative() || variable.getActiveBits() > 32 ||
+          variable.getZExtValue() >= propertyOffsets.size())
+        return failure();
+      rootOffset = propertyOffsets[variable.getZExtValue()];
+    }
+    if (rootOffset > totalWidth || *rootWidth > totalWidth - rootOffset)
+      return failure();
+    struct SelectionStep {
+      SmallVector<std::pair<uint64_t, Value>> choices;
+    };
+    SmallVector<SelectionStep> steps;
+    for (Operation *path : llvm::reverse(paths)) {
+      auto parts = getChildren(path);
+      auto parentWidth = widthOf(parts.front()), childWidth = widthOf(path);
+      if (!parentWidth || !*parentWidth || !childWidth || !*childWidth ||
+          *childWidth > *parentWidth)
+        return failure();
+      SelectionStep step;
+      if (!isa<semantic::SVElementSelectExpressionOp>(path)) {
+        // Treat the immediate parent as a standalone variable to resolve a
+        // member or constant range's relative offset without cloning data.
+        uint64_t width = *parentWidth;
+        auto relative = getRandomConstraintPath(
+            path, {width}, [&](Operation *node) -> std::optional<unsigned> {
+              return node == parts.front() ? std::optional<unsigned>(0)
+                                           : std::nullopt;
+            });
+        if (failed(relative) || !*relative)
+          return failure();
+        if (sim::has<sim::metadata::RandomEvaluationError>(path)) {
+          steps.push_back(std::move(step));
+          continue;
+        }
+        if (!(**relative).precise || (**relative).width != *childWidth) {
+          emitError(getSemanticLocation(path))
+              << "constraint function selection mask requires a constant "
+                 "range or a state-selected element";
+          return failure();
+        }
+        step.choices.push_back({(**relative).offset, guardConstant(true)});
+      } else {
+        auto layout = getRandomSelectionLayout(parts.front());
+        if (parts.size() != 2 || !layout || layout->elementWidth != *childWidth)
+          return failure();
+        if (dependsOnCandidate(parts[1])) {
+          emitError(getSemanticLocation(parts[1]))
+              << "constraint function selected paths require state index "
+                 "expressions";
+          return failure();
+        }
+        auto index = safeConstraintValue(parts[1]);
+        auto address =
+            succeeded(index)
+                ? toArrayIndex(index->value, isSignedNode(parts[1]), location)
+                : FailureOr<Value>(failure());
+        if (failed(address))
+          return failure();
+        if (auto logic = dyn_cast<sim::LogicType>((*address).getType()))
+          address = sim::SimLogicToBitsOp::create(
+                        builder, location,
+                        builder.getIntegerType(logic.getWidth()), *address)
+                        .getResult();
+        auto type = cast<IntegerType>((*address).getType());
+        Value known = guardAnd(index->valid, index->errors);
+        int64_t first = std::min(layout->left, layout->right);
+        int64_t last = std::max(layout->left, layout->right);
+        for (int64_t selected = first;; ++selected) {
+          if (!remainingStorageMaskOperations) {
+            emitError(getSemanticLocation(path))
+                << "constraint function selection mask exceeds its "
+                   "expansion budget";
+            return failure();
+          }
+          --remainingStorageMaskOperations;
+          uint64_t ordinal = layout->left >= layout->right
+                                 ? uint64_t(selected) - uint64_t(layout->right)
+                                 : uint64_t(layout->right) - uint64_t(selected);
+          if (ordinal > *parentWidth / layout->elementWidth ||
+              ordinal * layout->elementWidth > *parentWidth - *childWidth)
+            return failure();
+          Value expected = arith::ConstantOp::create(
+              builder, location, type,
+              builder.getIntegerAttr(
+                  type, APInt(type.getWidth(), uint64_t(selected), true)));
+          Value equal = arith::CmpIOp::create(
+              builder, location, arith::CmpIPredicate::eq, *address, expected);
+          step.choices.push_back(
+              {ordinal * layout->elementWidth, guardAnd(known, equal)});
+          if (selected == last)
+            break;
+        }
+      }
+      steps.push_back(std::move(step));
+    }
+    // Each leaf is a constant contiguous region. Select those masks rather
+    // than shifting by an unchecked runtime address or decoding actual data.
+    std::function<FailureOr<Value>(unsigned, uint64_t)> build =
+        [&](unsigned depth, uint64_t offset) -> FailureOr<Value> {
+      if (!remainingStorageMaskOperations) {
+        emitError(getSemanticLocation(source))
+            << "constraint function selection mask exceeds its expansion "
+               "budget";
+        return failure();
+      }
+      --remainingStorageMaskOperations;
+      if (depth == steps.size()) {
+        if (offset > totalWidth || *resultWidth > totalWidth - offset)
+          return failure();
+        return constantAssignment(
+            APInt::getBitsSet(assignmentWidth, offset, offset + *resultWidth));
+      }
+      Value mask = constantAssignment64(0);
+      for (auto [relative, enabled] : steps[depth].choices) {
+        auto child = build(depth + 1, offset + relative);
+        if (failed(child))
+          return failure();
+        mask = unionGuardInputs(mask, selectGuardInputs(enabled, *child));
+      }
+      return mask;
+    };
+    return build(0, rootOffset);
   };
   std::function<FailureOr<Value>(Operation *)> liveArgumentInputs;
   liveArgumentInputs = [&](Operation *source) -> FailureOr<Value> {
@@ -6604,27 +6751,11 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     } else if (sim::has<sim::metadata::RandomVariable>(source) ||
                sim::has<sim::metadata::RandomVariableBitOffset>(source)) {
       mask = constantAssignment(sourceReferences(source));
-    } else if (selectedRealStorage(source)) {
-      // Shared IEEE path graphs expose every selected leaf's exact bits.
-      // Do not invoke arbitrary actual expressions merely to find a mask.
-      auto type = getNormalizedSemanticType(source);
-      auto real =
-          succeeded(type) ? getRandomRealElementType(*type) : FloatType{};
-      auto width =
-          succeeded(type) ? getRandomPropertyWidth(*type) : std::nullopt;
-      auto leafWidth = real ? getRandomPropertyWidth(real) : std::nullopt;
-      if (!width || !leafWidth || !*leafWidth || !*width ||
-          *width % *leafWidth != 0)
+    } else if (selectedStorage(source)) {
+      auto selected = selectedStorageInputs(source);
+      if (failed(selected))
         return failure();
-      for (unsigned ordinal = 0; ordinal != *width / *leafWidth; ++ordinal) {
-        auto element = arithmetic.realElement(source, ordinal);
-        auto value = succeeded(element)
-                         ? safeConstraintValue(*element)
-                         : FailureOr<SafeConstraintValue>(failure());
-        if (failed(value))
-          return failure();
-        mask = unionGuardInputs(mask, value->inputs);
-      }
+      mask = *selected;
     } else {
       if (auto call = dyn_cast<semantic::SVCallExpressionOp>(source);
           call && !call.getIsSystemCall()) {
@@ -7620,6 +7751,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     if (!preserveArithmeticSource &&
         !sim::has<sim::metadata::RandomNativeFunction>(expression) &&
         !isa<semantic::SVDistExpressionOp>(expression) &&
+        !isa<sim::UnpackedArrayType>(*resultType) &&
         arithmetic.needed(expression)) {
       auto planes = arithmetic.get(expression);
       if (failed(planes))

@@ -29,6 +29,17 @@ std::optional<unsigned> getIntegralRandomWidth(mlir::Type type);
 /// ranks; their expression types and stored values retain IEEE precision.
 std::optional<unsigned> getRandomPropertyWidth(mlir::Type type);
 
+struct RandomSelectionLayout {
+  int64_t left;
+  int64_t right;
+  unsigned elementWidth;
+};
+
+/// Fixed storage coordinates and one element's sampling width. Integral
+/// leaves use logical bits; IEEE leaves use numeric-coordinate bits.
+std::optional<RandomSelectionLayout>
+getRandomSelectionLayout(mlir::Operation *source);
+
 /// The IEEE scalar leaf of a real property or fixed unpacked real array.
 mlir::FloatType getRandomRealElementType(mlir::Type type);
 

@@ -23,6 +23,7 @@ struct RandomArithmetic::Impl {
   Candidate candidate;
   Binding binding;
   bool frozenVariables;
+  uint64_t remainingArrayPlaneElements = uint64_t{1} << 20;
   // Temporary expressions retain the target layout used by their original
   // module, including layouts of unpacked values beneath a packed selection.
   OwningOpRef<ModuleOp> expressions;
@@ -372,12 +373,23 @@ struct RandomArithmetic::Impl {
     bindOperands(node, {input});
     return node;
   }
+  bool integralArray(Operation *expression) {
+    auto type = expression->getAttrOfType<TypeAttr>("semantic_type");
+    if (!type ||
+        !isa<semantic::RangedUnpackedArrayType, semantic::UnpackedArrayType,
+             sim::UnpackedArrayType>(type.getValue()))
+      return false;
+    auto normalized = getNormalizedSemanticType(expression);
+    return succeeded(normalized) && isa<sim::UnpackedArrayType>(*normalized) &&
+           getIntegralRandomWidth(*normalized).has_value();
+  }
   bool needed(Operation *expression) {
     if (sim::has<sim::metadata::RandomArithmeticNode>(expression))
       return false;
     auto semanticType = expression->getAttrOfType<TypeAttr>("semantic_type");
     if (!semanticType || (!getSemanticPackedWidth(semanticType.getValue()) &&
-                          !isa<semantic::TimeType>(semanticType.getValue())))
+                          !isa<semantic::TimeType>(semanticType.getValue()) &&
+                          !integralArray(expression)))
       return false;
     if (sim::has<sim::metadata::RandomNativeFunction>(expression))
       return fourState(expression);
@@ -1271,6 +1283,198 @@ struct RandomArithmetic::Impl {
     return result;
   }
 
+  FailureOr<RandomArithmeticPlanes> integralArrayPlanes(Operation *expression,
+                                                        unsigned precision) {
+    auto capture = [&]() -> RandomArithmeticPlanes {
+      Operation *unknown =
+          fourState(expression)
+              ? projection(expression, precision, Plane::Unknown)
+              : nullptr;
+      return {mask(expression, projection(expression, precision, Plane::Value),
+                   unknown, precision),
+              unknown,
+              unknown ? projection(expression, precision, Plane::HighImpedance)
+                      : nullptr};
+    };
+    if (sim::has<sim::metadata::RandomNativeFunction>(expression))
+      return capture();
+    auto offset = binding(expression);
+    if (failed(offset))
+      return failure();
+    if (auto bound =
+            sim::get<sim::metadata::RandomVariableBitOffset>(expression)) {
+      if (bound.getValue().isNegative() ||
+          bound.getValue().getActiveBits() > 32)
+        return failure();
+      offset = std::optional<unsigned>(bound.getValue().getZExtValue());
+    }
+    if (*offset) {
+      // Bind the packed value plane directly to the solver coordinates. Its
+      // source remains an array so safe reads and frozen symbols use the
+      // original array layout, without an implicit array-to-integer cast.
+      Operation *reference = expression->clone();
+      sim::mark<sim::metadata::RandomArithmeticNode>(reference);
+      sim::set<sim::metadata::RandomVariableBitOffset>(
+          reference, builder.getI64IntegerAttr(**offset));
+      expressions->getBody()->push_back(reference);
+      nodes.push_back(reference);
+      Operation *value = projection(reference, precision, Plane::Value);
+      sim::set<sim::metadata::RandomVariableBitOffset>(
+          value, builder.getI64IntegerAttr(**offset));
+      Operation *unknown =
+          frozenVariables && fourState(expression)
+              ? projection(reference, precision, Plane::FrozenUnknown)
+              : nullptr;
+      return RandomArithmeticPlanes{
+          mask(expression, value, unknown, precision), unknown,
+          unknown ? projection(reference, precision, Plane::FrozenHighImpedance)
+                  : nullptr};
+    }
+    if (candidate(expression) &&
+        isa<semantic::SVElementSelectExpressionOp,
+            semantic::SVRangeSelectExpressionOp,
+            semantic::SVMemberAccessExpressionOp>(expression)) {
+      auto selected = fixedSelection(expression, precision);
+      if (failed(selected))
+        return failure();
+      if (*selected)
+        return **selected;
+    }
+    auto children = getChildren(expression);
+    auto extract = [&](Operation *plane, unsigned offset,
+                       unsigned count) -> Operation * {
+      if (!plane)
+        return nullptr;
+      if (offset)
+        plane = binary(expression, Binary::LogicalShiftRight, plane,
+                       literal(expression, APInt(*width(plane), offset)),
+                       *width(plane));
+      return cast(expression, plane, count);
+    };
+    auto append = [&](Operation *prefix, Operation *element,
+                      unsigned count) -> Operation * {
+      if (!prefix && !element)
+        return nullptr;
+      Operation *shifted =
+          prefix
+              ? binary(expression, Binary::LogicalShiftLeft, prefix,
+                       literal(expression, APInt(precision, count)), precision)
+              : nullptr;
+      // Concatenation zero-extends a field's bit pattern, including signed
+      // leaves.
+      if (element && sign(element))
+        element = cast(expression, element, count);
+      return bitOr(expression, shifted,
+                   element ? cast(expression, element, precision) : nullptr,
+                   precision);
+    };
+    auto conditional =
+        dyn_cast<semantic::SVConditionalExpressionOp>(expression);
+    if (conditional && conditional.getConditionCount() == 1 &&
+        children.size() == 3) {
+      auto condition = get(children[0]), yes = get(children[1]),
+           no = get(children[2]);
+      if (failed(condition) || failed(yes) || failed(no) ||
+          *width(yes->value) != precision || *width(no->value) != precision)
+        return failure();
+      auto selector = truth(expression, *condition);
+      auto selectPlane = [&](Operation *left, Operation *right) {
+        return left || right
+                   ? select(expression, selector.value,
+                            left ? left : zero(expression, precision),
+                            right ? right : zero(expression, precision),
+                            precision)
+                   : nullptr;
+      };
+      RandomArithmeticPlanes result{
+          selectPlane(yes->value, no->value),
+          selectPlane(yes->unknown, no->unknown),
+          selectPlane(yes->highImpedance, no->highImpedance)};
+      if (selector.unknown) {
+        auto normalized = getNormalizedSemanticType(expression);
+        auto array = llvm::cast<sim::UnpackedArrayType>(*normalized);
+        unsigned elementWidth = *getIntegralRandomWidth(array.getElementType());
+        uint64_t count = sim::getAggregateNumElements(array);
+        if (!elementWidth || count > remainingArrayPlaneElements) {
+          emitError(expression->getLoc())
+              << "integral array conditional exceeds its expansion budget";
+          return failure();
+        }
+        remainingArrayPlaneElements -= count;
+        RandomArithmeticPlanes merged{nullptr, nullptr, nullptr};
+        for (unsigned offset = precision; offset != 0;) {
+          offset -= elementWidth;
+          auto a = extract(yes->value, offset, elementWidth);
+          auto b = extract(no->value, offset, elementWidth);
+          Operation *unknown =
+              bitOr(expression, extract(yes->unknown, offset, elementWidth),
+                    extract(no->unknown, offset, elementWidth), elementWidth);
+          Operation *equal = binary(expression, Binary::Equality, a, b, 1);
+          if (unknown)
+            equal = bitAnd(
+                expression, equal,
+                notBool(expression, nonzero(expression, unknown, elementWidth)),
+                1);
+          // IEEE 11.4.11 merges aggregate arrays per immediate element. A
+          // mismatching logic vector becomes entirely X, rather than merging
+          // only its differing bits as a packed conditional would.
+          merged.value =
+              append(merged.value,
+                     select(expression, equal, a,
+                            zero(expression, elementWidth), elementWidth),
+                     elementWidth);
+          if (fourState(expression))
+            merged.unknown =
+                append(merged.unknown,
+                       unknownMask(expression, notBool(expression, equal),
+                                   elementWidth),
+                       elementWidth);
+        }
+        result.value = select(expression, selector.unknown, merged.value,
+                              result.value, precision);
+        if (merged.unknown || result.unknown)
+          result.unknown = select(
+              expression, selector.unknown,
+              merged.unknown ? merged.unknown : zero(expression, precision),
+              result.unknown ? result.unknown : zero(expression, precision),
+              precision);
+        if (result.highImpedance)
+          result.highImpedance =
+              select(expression, selector.unknown, zero(expression, precision),
+                     result.highImpedance, precision);
+      }
+      return result;
+    }
+    if (isa<semantic::SVConversionExpressionOp>(expression) &&
+        children.size() == 1) {
+      auto inputType = getNormalizedSemanticType(children.front());
+      if (failed(inputType))
+        return failure();
+      // Equivalent fixed-array conversions and equal-width bitstream casts
+      // preserve stream order, including casts that reshape the dimensions.
+      if (getIntegralRandomWidth(*inputType) == precision) {
+        auto planes = get(children.front());
+        if (failed(planes))
+          return failure();
+        if (!fourState(expression)) {
+          planes->unknown = nullptr;
+          planes->highImpedance = nullptr;
+        }
+        return *planes;
+      }
+    }
+    if (!candidate(expression))
+      return capture();
+    if (!needed(expression))
+      return RandomArithmeticPlanes{cast(expression, expression, precision),
+                                    nullptr};
+    emitError(expression->getLoc())
+        << "candidate-dependent integral array expression requires "
+           "elementwise lowering: "
+        << expression->getName();
+    return failure();
+  }
+
   FailureOr<RandomArithmeticPlanes> build(Operation *expression) {
     auto precisionResult = width(expression);
     if (failed(precisionResult))
@@ -1280,6 +1484,8 @@ struct RandomArithmetic::Impl {
     auto children = getChildren(expression);
     if (sim::has<sim::metadata::RandomEvaluationError>(expression))
       return RandomArithmeticPlanes{zero(expression, precision), nullptr};
+    if (integralArray(expression))
+      return integralArrayPlanes(expression, precision);
     if (auto spelling = getConstantSpelling(expression)) {
       auto bits = parseSVInteger(*spelling, precision, expression->getLoc());
       if (failed(bits) ||
@@ -1923,11 +2129,6 @@ FailureOr<Operation *> RandomArithmetic::realExpression(Operation *expression) {
 }
 FailureOr<Operation *> RandomArithmetic::known(Operation *expression) {
   return impl->known(expression);
-}
-
-FailureOr<Operation *> RandomArithmetic::realElement(Operation *expression,
-                                                     unsigned ordinal) {
-  return impl->realLeaf(expression, ordinal);
 }
 
 } // namespace talos::simlowering
