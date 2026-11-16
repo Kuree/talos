@@ -424,7 +424,10 @@ LogicalResult Encoder::planFunctions() {
   llvm::DenseMap<uint64_t, sim::SimFuncOp> stableIDs;
   bool collectSAIF =
       saif::has<saif::Output>(design->getParentOfType<ModuleOp>());
-  analysis::HandleDataflowAnalysis referenceHandles(design);
+  // Reference certification is SAIF-only; other designs skip its analyses.
+  std::optional<analysis::HandleDataflowAnalysis> referenceHandles;
+  if (collectSAIF)
+    referenceHandles.emplace(design);
   llvm::DenseMap<Operation *, bool> referenceEffects;
   for (auto [index, function] : llvm::enumerate(functions)) {
     FunctionPlan &plan = plans.emplace_back();
@@ -433,7 +436,7 @@ LogicalResult Encoder::planFunctions() {
     plan.stableID = getStableID(function);
     plan.saifReference =
         collectSAIF &&
-        isSAIFReference(function, referenceHandles, effects, referenceEffects);
+        isSAIFReference(function, *referenceHandles, effects, referenceEffects);
     if (plan.stableID == 0)
       return function.emitOpError("executable code-unit ID must be nonzero");
     auto [collision, inserted] = stableIDs.try_emplace(plan.stableID, function);

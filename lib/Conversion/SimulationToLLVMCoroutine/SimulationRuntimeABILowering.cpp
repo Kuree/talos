@@ -1,6 +1,7 @@
 //===- SimulationRuntimeABILowering.cpp - Native runtime declarations -===//
 
 #include "SimulationToLLVMCoroutinePrivate.h"
+#include "talos/Dialect/SAIF/SAIFDialect.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -12,10 +13,11 @@ namespace talos::detail {
 
 void declareNativeRuntimeABI(ModuleOp module) {
   MLIRContext *context = module.getContext();
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_saif_driver", LLVM::LLVMVoidType::get(context),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 64)});
+  if (saif::has<saif::Output>(module))
+    getOrDeclareLLVMFunction(
+        module, "talos_rt_v1_saif_driver", LLVM::LLVMVoidType::get(context),
+        {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
+         IntegerType::get(context, 64)});
   getOrDeclareLLVMFunction(
       module, "talos_rt_v1_strength_resolve", IntegerType::get(context, 16),
       {IntegerType::get(context, 16), IntegerType::get(context, 16)});
