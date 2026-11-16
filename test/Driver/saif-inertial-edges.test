@@ -1,0 +1,41 @@
+// RUN: %split-file %s %t
+// RUN: talos --vpi=off --saif=%t.saif -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 && FileCheck %s --input-file=%t.saif
+// RUN: talos --vpi=off --saif=%t.saif -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 && FileCheck %s --input-file=%t.saif
+// RUN: talos --vpi=off --saif=%t.saif -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc && %t.bc && FileCheck %s --input-file=%t.saif
+// RUN: talos-translate --import-saif %t.saif -o /dev/null
+// A complementary strength pair is one logical driver. Rejection contributes
+// two edges once, regardless of whether the pair uses a gate or path calendar.
+// CHECK-DAG: (gate_pair {{.*}}(TC 0) (IG 2) (IK 0.3333333333333333{{[0-9]}}))
+// CHECK-DAG: (path_pair {{.*}}(TC 0) (IG 2) (IK 0.3333333333333333{{[0-9]}}))
+// The causal input spacing is 1 ns and the leading fall delay is 3 ns;
+// unequal rise/fall delays do not change the pulse width used for IK.
+// CHECK-DAG: (asymmetric {{.*}}(TC 0) (IG 2) (IK 0.3333333333333333{{[0-9]}}))
+// A canceled X event is not a known 0/1 inertial pulse.
+// CHECK-DAG: (xout {{.*}}(TC 0))
+//--- design.sv
+module path_cell(input wire data, enable, output wire path_pair);
+  timeunit 1ns; timeprecision 1ns;
+  bufif1 (strong1, pull0) gate(path_pair, data, enable);
+  specify (data, enable *> path_pair) = 3; endspecify
+endmodule
+module x_cell(input wire data, output wire xout);
+  timeunit 1ns; timeprecision 1ns;
+  assign xout = data;
+  specify (data => xout) = 3; endspecify
+endmodule
+module top;
+  timeunit 1ns; timeprecision 1ns;
+  logic a = 0, c = 0, x = 0, enable = 1;
+  wire gate_pair, path_pair, asymmetric, xout;
+  bufif1 (strong1, pull0) #3 gate(gate_pair, a, enable);
+  path_cell u1(a, enable, path_pair);
+  x_cell u2(x, xout);
+  assign #(6, 3) asymmetric = !c;
+  initial begin
+    #5 a = 1; x = 'x;
+    #1 a = 0; x = 0;
+    #2 c = 1;
+    #1 c = 0;
+    #6 $finish;
+  end
+endmodule

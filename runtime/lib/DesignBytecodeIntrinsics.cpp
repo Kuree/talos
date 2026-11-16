@@ -4016,6 +4016,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
                            : context->schedulerTime + delay;
       if (context->saif) {
         update.saifCause = talos_rt_saif_capture_cause_unlocked(context);
+        update.saifInputTime = context->schedulerTime;
       }
       context->scheduledDesignNBAs.push_back(std::move(update));
     }

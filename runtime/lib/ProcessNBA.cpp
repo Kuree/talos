@@ -332,6 +332,7 @@ static talos_rt_status schedulerNBA(
     ScheduledNBA update;
     if (context->saif) {
       update.saifCause = talos_rt_saif_capture_cause_unlocked(context);
+      update.saifInputTime = context->schedulerTime;
     }
     update.valuePlane = valuePlane;
     update.unknownPlane = unknownPlane;
@@ -1184,11 +1185,15 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_inertial_driver(
     InertialDriverSite site{codeUnit, component};
     auto cancelPending = [&] {
       context->scheduledNBAs.erase(
-          std::remove_if(context->scheduledNBAs.begin(),
-                         context->scheduledNBAs.end(),
-                         [&](const ScheduledNBA &update) {
-                           return update.inertialSite == site;
-                         }),
+          std::remove_if(
+              context->scheduledNBAs.begin(), context->scheduledNBAs.end(),
+              [&](const ScheduledNBA &update) {
+                if (context->saif && update.inertialSite == site &&
+                    bitOffset != UINT64_MAX)
+                  talos_rt_saif_reject_pulse_unlocked(
+                      context, update, bitOffset, bitWidth, value, unknown);
+                return update.inertialSite == site;
+              }),
           context->scheduledNBAs.end());
       context->inertialDriverPending.erase(site);
     };
@@ -1313,6 +1318,7 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_inertial_driver(
       ScheduledNBA update;
       if (context->saif) {
         update.saifCause = talos_rt_saif_capture_cause_unlocked(context);
+        update.saifInputTime = context->schedulerTime;
       }
       update.valuePlane = valuePlane;
       update.unknownPlane = unknownPlane;
@@ -1531,6 +1537,14 @@ static talos_rt_status schedulerInertialPath(
           pending.scheduledSequence[index] == 0)
         return;
       uint64_t sequence = pending.scheduledSequence[index];
+      if (context->saif) {
+        auto leading = context->scheduledInertialPathNBAs.find(
+            {pending.scheduledDueTime[index], sequence});
+        if (leading != context->scheduledInertialPathNBAs.end())
+          talos_rt_saif_reject_pulse_unlocked(context, leading->second,
+                                              selectedHandle, bitWidth, value,
+                                              unknown);
+      }
       context->scheduledInertialPathNBAs.erase(
           {pending.scheduledDueTime[index], sequence});
       if (pending.pulseControlled) {
@@ -1642,6 +1656,7 @@ static talos_rt_status schedulerInertialPath(
       ScheduledNBA update;
       if (context->saif) {
         update.saifCause = talos_rt_saif_capture_cause_unlocked(context);
+        update.saifInputTime = context->schedulerTime;
       }
       update.valuePlane = valuePlane;
       update.unknownPlane = unknownPlane;
@@ -2002,6 +2017,15 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_inertial_driver_strength_pair(
       return TALOS_RT_INVALID_HANDLE;
     InertialDriverSite site{codeUnit, component};
     auto cancelPending = [&] {
+      if (context->saif)
+        for (size_t i = 0; i + 1 < context->scheduledNBAs.size(); ++i) {
+          const auto &lo = context->scheduledNBAs[i];
+          const auto &hi = context->scheduledNBAs[i + 1];
+          if (lo.inertialSite == site && hi.inertialSite == site)
+            talos_rt_saif_reject_pair_unlocked(
+                context, lo, hi, lowBitOffset, highBitOffset, bitWidth,
+                lowValue, lowUnknown, highValue, highUnknown);
+        }
       context->scheduledNBAs.erase(
           std::remove_if(context->scheduledNBAs.begin(),
                          context->scheduledNBAs.end(),
@@ -2147,6 +2171,7 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_inertial_driver_strength_pair(
       ScheduledNBA update;
       if (context->saif) {
         update.saifCause = talos_rt_saif_capture_cause_unlocked(context);
+        update.saifInputTime = context->schedulerTime;
       }
       update.valuePlane = valuePlane;
       update.unknownPlane = unknownPlane;
@@ -2297,6 +2322,17 @@ static talos_rt_status schedulerInertialPathStrengthPair(
       if (index >= pending.highSequence.size() ||
           pending.highSequence[index] == 0)
         return;
+      if (context->saif) {
+        auto lo = context->scheduledInertialPathNBAs.find(
+            {pending.scheduledDueTime[index], pending.lowSequence[index]});
+        auto hi = context->scheduledInertialPathNBAs.find(
+            {pending.scheduledDueTime[index], pending.highSequence[index]});
+        if (lo != context->scheduledInertialPathNBAs.end() &&
+            hi != context->scheduledInertialPathNBAs.end())
+          talos_rt_saif_reject_pair_unlocked(
+              context, lo->second, hi->second, lowBitOffset, highBitOffset,
+              bitWidth, lowValue, lowUnknown, highValue, highUnknown);
+      }
       context->scheduledInertialPathNBAs.erase(
           {pending.scheduledDueTime[index], pending.lowSequence[index]});
       context->scheduledInertialPathNBAs.erase(
@@ -2424,6 +2460,7 @@ static talos_rt_status schedulerInertialPathStrengthPair(
         ScheduledNBA update;
         if (context->saif) {
           update.saifCause = talos_rt_saif_capture_cause_unlocked(context);
+          update.saifInputTime = context->schedulerTime;
         }
         update.valuePlane = valuePlane;
         update.unknownPlane = unknownPlane;

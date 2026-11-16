@@ -34,7 +34,7 @@ def SAIFDialect : Dialect {
     corruption, isolation and retention outputs. Residence times T0/T1/TX/TZ
     are exact femtosecond integers; TC counts only 0-to-1 and 1-to-0 changes,
     including intermediate changes within one scheduler slot. TB observes
-    independent opposing drivers. IG, IK, TG require additional
+    independent opposing drivers. IG/IK observe rejected timed pulses. TG require additional
     driver or timing provenance and are not synthesized from resolved values.
     State/path counts retain the cell state before the causal input transition
     through scheduled output delivery.

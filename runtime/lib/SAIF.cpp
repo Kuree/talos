@@ -332,6 +332,10 @@ void writeInstance(FILE *file, const SAIFState &state, const Instance &node) {
             decimal(static_cast<unsigned __int128>(point.contentionTime) *
                     state.precision)
                 .c_str());
+      if (point.extra.ig)
+        std::fprintf(file, " (IG %s) (IK %.17Lg)",
+                     decimal(point.extra.ig).c_str(),
+                     point.extra.weightedIG / point.extra.ig);
       writeGroups(file, state, node, index, point.last);
       std::fputs(")\n", file);
     }

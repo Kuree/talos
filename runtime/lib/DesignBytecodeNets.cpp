@@ -725,6 +725,13 @@ bool scheduleNetBit(talos_rt_context *context, uint64_t root,
   bool currentValue = bit(context->stateValue, destination);
   bool currentUnknown = bit(context->stateUnknown, destination);
   if (currentValue == value && currentUnknown == unknown) {
+    if (context->saif) {
+      uint8_t v = value, u = unknown;
+      for (const auto &leading : context->scheduledNBAs)
+        if (leading.inertialNetBit == destination && !leading.cancelled)
+          talos_rt_saif_reject_pulse_unlocked(context, leading, destination, 1,
+                                              &v, &u);
+    }
     cancelNetBit(context, destination);
     return true;
   }
@@ -768,6 +775,7 @@ bool scheduleNetBit(talos_rt_context *context, uint64_t root,
   ScheduledNBA update;
   if (context->saif) {
     update.saifCause = talos_rt_saif_capture_cause_unlocked(context);
+    update.saifInputTime = context->schedulerTime;
   }
   update.sequence = context->nextSchedulerSequence++;
   update.dueTime = delay > UINT64_MAX - context->schedulerTime

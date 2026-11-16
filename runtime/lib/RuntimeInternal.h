@@ -950,6 +950,7 @@ enum class NBACommitGuard : uint8_t {
 
 struct ScheduledNBA {
   std::shared_ptr<const SAIFCause> saifCause;
+  uint64_t saifInputTime = 0;
   uint64_t sequence = 0;
   uint64_t dueTime = 0;
   uint64_t clockingOutput = UINT64_MAX;
@@ -1046,6 +1047,7 @@ struct ScheduledManagedNBA {
 
 struct ScheduledDesignNBA {
   std::shared_ptr<const SAIFCause> saifCause;
+  uint64_t saifInputTime = 0;
   uint64_t sequence = 0;
   uint64_t dueTime = 0;
   uint32_t execRegion = TALOS_RT_REGION_NBA;
@@ -2356,6 +2358,16 @@ struct FunctionalCoverageLoadedData;
 struct FunctionalCoverageDiagnosticIndex;
 
 void talos_rt_saif_event_issued_unlocked(talos_rt_context *, ScheduledNBA &);
+void talos_rt_saif_reject_pulse_unlocked(talos_rt_context *,
+                                         const ScheduledNBA &,
+                                         uint64_t destination, uint64_t width,
+                                         const uint8_t *value,
+                                         const uint8_t *unknown);
+void talos_rt_saif_reject_pair_unlocked(
+    talos_rt_context *, const ScheduledNBA &low, const ScheduledNBA &high,
+    uint64_t lowDestination, uint64_t highDestination, uint64_t width,
+    const uint8_t *lowValue, const uint8_t *lowUnknown,
+    const uint8_t *highValue, const uint8_t *highUnknown);
 std::shared_ptr<const SAIFCause>
 talos_rt_saif_current_cause_unlocked(talos_rt_context *);
 std::shared_ptr<const SAIFCause>
