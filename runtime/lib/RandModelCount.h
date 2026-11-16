@@ -705,25 +705,54 @@ private:
       return true;
     const auto &gates = circuit->getNodes();
     constexpr uint32_t absent = UINT32_MAX;
-    struct Fanout {
-      uint32_t parent, next;
-    };
-    std::vector<uint32_t> first(gates.size(), absent);
-    std::vector<Fanout> fanouts;
-    std::vector<bool> visited(gates.size(), false);
-    std::vector<uint32_t> pending{predicate / 2};
     auto exhausted = [&] {
       return (budget && --budget == 0) ||
              (circuitBudget && circuit->getNodes().size() > circuitBudget);
     };
-    while (!pending.empty()) {
-      if (exhausted())
-        return false;
-      uint32_t index = pending.back();
-      pending.pop_back();
-      if (visited[index])
+    // Each Shannon frame touches only its reachable cone. Per-gate scratch is
+    // indexed by gate and stamped per call: discovering a gate initializes its
+    // entries, so a frame never clears or scans arrays sized to the whole,
+    // growing circuit. A post-order walk lists every child before its parents
+    // for the rebuild below.
+    if (cone.stamp.size() < gates.size()) {
+      cone.stamp.resize(gates.size(), 0);
+      cone.expanded.resize(gates.size(), 0);
+      cone.first.resize(gates.size());
+      cone.known.resize(gates.size());
+      cone.rewritten.resize(gates.size());
+    }
+    if (++cone.epoch == 0) {
+      std::fill(cone.stamp.begin(), cone.stamp.end(), 0);
+      std::fill(cone.expanded.begin(), cone.expanded.end(), 0);
+      cone.epoch = 1;
+    }
+    cone.order.clear();
+    cone.fanouts.clear();
+    // The graph is immutable until every implication reaches a fixed point.
+    constexpr uint8_t unknown = 2;
+    auto discover = [&](uint32_t index) {
+      if (cone.stamp[index] == cone.epoch)
+        return;
+      cone.stamp[index] = cone.epoch;
+      cone.first[index] = absent;
+      cone.known[index] = index == 0 ? 0 : unknown;
+      cone.rewritten[index] = 0;
+    };
+    if (exhausted())
+      return false;
+    discover(predicate / 2);
+    cone.stack.assign(1, {predicate / 2, false});
+    while (!cone.stack.empty()) {
+      auto [index, finished] = cone.stack.back();
+      cone.stack.pop_back();
+      if (finished) {
+        cone.order.push_back(index);
         continue;
-      visited[index] = true;
+      }
+      if (cone.expanded[index] == cone.epoch)
+        continue;
+      cone.expanded[index] = cone.epoch;
+      cone.stack.push_back({index, true});
       const auto &gate = gates[index];
       if (index == 0)
         continue;
@@ -735,30 +764,33 @@ private:
       if (gate.opcode != random::PlanOpcode::And)
         return false;
       for (CircuitID child : {gate.a, gate.b}) {
-        uint32_t input = child / 2;
-        if (fanouts.size() >= absent)
+        if (exhausted())
           return false;
-        uint32_t link = fanouts.size();
-        fanouts.push_back({index, first[input]});
-        first[input] = link;
-        pending.push_back(input);
+        uint32_t input = child / 2;
+        if (cone.fanouts.size() >= absent)
+          return false;
+        discover(input);
+        uint32_t link = cone.fanouts.size();
+        cone.fanouts.push_back({index, cone.first[input]});
+        cone.first[input] = link;
+        if (cone.expanded[input] != cone.epoch)
+          cone.stack.push_back({input, false});
       }
     }
-    // The graph is immutable until every implication reaches a fixed point.
-    constexpr uint8_t unknown = 2;
-    std::vector<uint8_t> known(gates.size(), unknown);
-    known[0] = 0;
+    std::vector<uint32_t> &pending = cone.pending;
+    pending.clear();
     auto assign = [&](CircuitID id, bool desired) {
       uint32_t index = id / 2;
       uint8_t value = uint8_t(desired) ^ (id & 1);
-      if (known[index] != unknown)
-        return known[index] == value;
-      known[index] = value;
+      uint8_t &current = cone.known[index];
+      if (current != unknown)
+        return current == value;
+      current = value;
       pending.push_back(index);
       return true;
     };
     auto value = [&](CircuitID id) -> uint8_t {
-      uint8_t result = known[id / 2];
+      uint8_t result = cone.known[id / 2];
       return result == unknown ? unknown : result ^ (id & 1);
     };
     auto propagate = [&](uint32_t index) {
@@ -770,9 +802,10 @@ private:
         return false;
       if (a == 1 && b == 1 && !assign(index * 2, true))
         return false;
-      if (known[index] == 1)
+      uint8_t fact = cone.known[index];
+      if (fact == 1)
         return assign(gate.a, true) && assign(gate.b, true);
-      if (known[index] == 0)
+      if (fact == 0)
         return (a != 1 || assign(gate.b, false)) &&
                (b != 1 || assign(gate.a, false));
       return true;
@@ -781,8 +814,9 @@ private:
       remaining = 0;
       return true;
     }
-    std::vector<bool> selected(variableCount, false),
-        values(variableCount, false);
+    cone.selected.assign(variableCount, false);
+    cone.values.assign(variableCount, false);
+    std::vector<bool> &selected = cone.selected, &values = cone.values;
     while (!pending.empty()) {
       if (exhausted())
         return false;
@@ -792,7 +826,7 @@ private:
       if (gate.opcode == random::PlanOpcode::RandomBit) {
         if (gate.b >= variableCount)
           return false;
-        bool bit = known[index] != 0;
+        bool bit = cone.known[index] != 0;
         if (selected[gate.b] && values[gate.b] != bit) {
           remaining = 0;
           return true;
@@ -804,9 +838,9 @@ private:
         remaining = 0;
         return true;
       }
-      for (uint32_t link = first[index]; link != absent;
-           link = fanouts[link].next)
-        if (!propagate(fanouts[link].parent)) {
+      for (uint32_t link = cone.first[index]; link != absent;
+           link = cone.fanouts[link].next)
+        if (!propagate(cone.fanouts[link].parent)) {
           remaining = 0;
           return true;
         }
@@ -814,30 +848,33 @@ private:
     // Rebuild unknown gates under the internal facts. Keeping every frontier
     // obligation, rather than replacing the asserted root by true, preserves
     // its exact solutions. Only input facts may leave this circuit as literals.
-    size_t originalSize = known.size();
-    std::vector<CircuitID> rewritten(originalSize, 0), frontier;
-    auto term = [&](CircuitID id) { return rewritten[id / 2] ^ (id & 1); };
-    for (size_t index = 1; index != originalSize; ++index) {
-      if (!visited[index])
+    // New gates are appended past the cone and never enter its scratch.
+    std::vector<CircuitID> frontier;
+    auto term = [&](CircuitID id) {
+      return cone.rewritten[id / 2] ^ (id & 1);
+    };
+    for (uint32_t index : cone.order) {
+      if (index == 0)
         continue;
       if (exhausted())
         return false;
       auto gate = circuit->getNodes()[index];
-      if (known[index] != unknown) {
-        rewritten[index] = known[index];
-        if (known[index] == 0 && gate.opcode == random::PlanOpcode::And &&
+      uint8_t fact = cone.known[index];
+      CircuitID &rewritten = cone.rewritten[index];
+      if (fact != unknown) {
+        rewritten = fact;
+        if (fact == 0 && gate.opcode == random::PlanOpcode::And &&
             value(gate.a) == unknown && value(gate.b) == unknown)
           frontier.push_back(circuit->conjunction(term(gate.a), term(gate.b)) ^
                              1);
       } else if (gate.opcode == random::PlanOpcode::RandomBit)
-        rewritten[index] =
-            selected[gate.b] ? CircuitID(values[gate.b]) : index * 2;
+        rewritten = selected[gate.b] ? CircuitID(values[gate.b]) : index * 2;
       else if (gate.opcode == random::PlanOpcode::And) {
         CircuitID a = term(gate.a), b = term(gate.b);
-        rewritten[index] =
+        rewritten =
             a == gate.a && b == gate.b ? index * 2 : circuit->conjunction(a, b);
       } else
-        rewritten[index] = index * 2;
+        rewritten = index * 2;
     }
     remaining = 1;
     for (CircuitID condition : frontier) {
@@ -975,6 +1012,24 @@ private:
   std::vector<bool> fixed;
   random::FlatMap<Key, ID, Hash> unique, cache;
   random::FlatMap<random::BooleanCircuit::ID, ID> circuits;
+  // extractLiterals scratch, reused by every Shannon frame and indexed by
+  // gate; an entry is valid while the gate's stamp equals the epoch. A copied
+  // counter starts with empty scratch instead of copying circuit-sized arrays.
+  struct ConeScratch {
+    struct Fanout {
+      uint32_t parent, next;
+    };
+    std::vector<uint32_t> stamp, expanded, order, first, pending;
+    std::vector<std::pair<uint32_t, bool>> stack;
+    std::vector<bool> selected, values;
+    std::vector<Fanout> fanouts;
+    std::vector<uint8_t> known;
+    std::vector<random::BooleanCircuit::ID> rewritten;
+    uint32_t epoch = 0;
+    ConeScratch() = default;
+    ConeScratch(const ConeScratch &) {}
+    ConeScratch &operator=(const ConeScratch &) { return *this; }
+  } cone;
 };
 
 } // namespace talos::runtime
