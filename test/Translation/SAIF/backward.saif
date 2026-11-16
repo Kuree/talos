@@ -29,7 +29,8 @@
       (COND A|B^C*!D (T1 2) (T0 8)
        COND_DEFAULT (T1 8) (T0 2)))
     (INSTANCE sub (NET (q (T0 240))))
-    (VIRTUAL_INSTANCE "sequential" A_reg (PORT (Q (TC 122))))))
+    (VIRTUAL_INSTANCE "sequential" A_reg (PORT (Q (TC 122))))
+    (VIRTUAL_INSTANCE "" B_reg (PORT (Q (TC 0))))))
 
 // CHECK: saif.file
 // CHECK: saif.header version {text = "2.0"}
@@ -58,4 +59,6 @@
 // CHECK-SAME: opcode = and
 // CHECK-SAME: opcode = xor
 // CHECK-SAME: opcode = or
-// CHECK: is_virtual = true
+// CHECK: cell = "sequential", is_virtual = true
+// Syntax 22 requires the type string; I.2.5 permits it to be empty.
+// CHECK: cell = "", is_virtual = true

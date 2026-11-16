@@ -1,0 +1,32 @@
+// RUN: talos-translate --import-saif --split-input-file %s | FileCheck %s
+// IEEE 1801-2018 I.4.9 lists library cells in "the library SDPD info
+// constructs"; a library forward file holds any number of LIBRARY records.
+
+// CHECK-LABEL: saif.file
+// CHECK-NOT: saif.library
+(SAIFILE (SAIFVERSION "2.0" "lib") (DIRECTION "forward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION) (DIVIDER /))
+
+// -----
+
+// The I.4.8 example groups pins as (PORT (A ...) (B ...)); each group is the
+// same port declaration as Syntax 37's (PORT A ...).
+// CHECK-LABEL: saif.file
+// CHECK: saif.library "first"
+// CHECK: saif.port_directive {{.*}}"A"
+// CHECK: saif.port_directive {{.*}}"B"
+// CHECK: saif.port_directive {{.*}}"Y"
+// CHECK: saif.paths
+// CHECK: saif.library "second"
+// CHECK: saif.port_directive {{.*}}"Z"
+(SAIFILE (SAIFVERSION "2.0" "lib") (DIRECTION "forward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION) (DIVIDER /)
+  (LIBRARY "first"
+    (MODULE AND2
+      (PORT
+        (A (COND B RISE_FALL COND_DEFAULT))
+        (B (COND A RISE_FALL COND_DEFAULT))
+        (Y (COND A RISE_FALL (IOPATH B)
+            COND B RISE_FALL (IOPATH A)
+            COND_DEFAULT)))))
+  (LIBRARY "second" (MODULE BUF (PORT Z (IOPATH A)))))

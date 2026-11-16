@@ -461,6 +461,24 @@ private:
       attrs.set("name", name);
       return container<PortDirectiveOp>(at, attrs, depth);
     }
+    // IEEE 1801-2018 I.4.8: Syntax 37 reads (PORT port_name {port_directive}),
+    // while the clause's example groups pins as (PORT (A ...) (B ...)). Accept
+    // both in a library cell; each group is one port declaration.
+    if (port && token.kind == TokenKind::Left &&
+        isa_and_nonnull<CellOp>(builder.getInsertionBlock()->getParentOp())) {
+      while (token.kind == TokenKind::Left) {
+        Token start = token;
+        advance();
+        NamedAttrList attrs;
+        auto name = path();
+        if (!name)
+          return failure();
+        attrs.set("name", name);
+        if (failed(container<PortDirectiveOp>(start, attrs, depth + 1)))
+          return failure();
+      }
+      return expect(TokenKind::Right, "')' after PORT");
+    }
     Operation *op = port ? make<PortsOp>(at, {}, true).getOperation()
                          : make<NetsOp>(at, {}, true).getOperation();
     if (!op)

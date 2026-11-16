@@ -334,8 +334,8 @@ LogicalResult InstanceOp::verifyRegions() {
     }
   }
   if (getIsVirtual()) {
-    if (!getCellAttr() || getCellAttr().getValue().empty() ||
-        !hasSingleElement(getBody().front()) ||
+    // Syntax 22 requires the type string; I.2.5 permits it to be empty.
+    if (!getCellAttr() || !hasSingleElement(getBody().front()) ||
         !isa<PortsOp>(getBody().front().front()))
       return emitOpError(
           "VIRTUAL_INSTANCE requires a type and exactly one PORT record");
@@ -833,7 +833,6 @@ LogicalResult FileOp::verifyRegions() {
   unsigned next = 0;
   bool records = false;
   bool library = false;
-  unsigned libraryCount = 0;
   DenseSet<Attribute> instances;
   for (Operation &op : getBody().front()) {
     if (auto header = dyn_cast<HeaderOp>(op)) {
@@ -845,10 +844,8 @@ LogicalResult FileOp::verifyRegions() {
       ++next;
     } else {
       records = true;
-      if (isa<LibraryOp>(op)) {
+      if (isa<LibraryOp>(op))
         library = true;
-        ++libraryCount;
-      }
       if (auto instance = dyn_cast<InstanceOp>(op))
         if (!instances.insert(instance.getName()).second)
           return instance.emitOpError("duplicate root instance name");
@@ -868,10 +865,10 @@ LogicalResult FileOp::verifyRegions() {
           "library qualifier requires a forward file");
     library = true;
   }
+  // Annex I leaves lforward_saif_info undefined; I.4.9 lists the cell
+  // declarations in "the library SDPD info constructs", so any number of
+  // LIBRARY records may follow the header.
   Form form = backward ? Form::Backward : library ? Form::Library : Form::RTL;
-  if (form == Form::Library && libraryCount != 1)
-    return emitOpError(
-        "library forward file requires exactly one LIBRARY record");
   AttributeVerifier attributes;
   WalkResult result = getOperation()->walk([&](Operation *op) {
     for (NamedAttribute attr : op->getAttrs())
