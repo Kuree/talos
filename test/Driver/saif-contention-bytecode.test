@@ -1,0 +1,4 @@
+// RUN: %split-file %S/saif-contention.test %t
+// RUN: talos --vpi=off --saif=%t.saif -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.exe && %t.exe && FileCheck %S/saif-contention.test --input-file=%t.saif
+// The bytecode tier collects through its own net, NBA, and task paths.
+// Inputs and checks are shared with saif-contention.test.

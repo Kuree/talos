@@ -1,0 +1,4 @@
+// RUN: %split-file %S/saif-reference-order.test %t
+// RUN: talos --vpi=off --saif=%t.saif -O3 --mlir-verify-each %t/core.sv %t/reversed.sv -o %t.exe && %t.exe && FileCheck %S/saif-reference-order.test --input-file=%t.saif
+// The reversed stimulus of saif-reference-order.test yields the same TG
+// estimate; inputs and checks are shared with it.

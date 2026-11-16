@@ -1,4 +1,80 @@
+// RUN: talos-translate --import-saif --split-input-file --verify-diagnostics %s -o /dev/null
+// IEEE 1801-2018 Annex I lexical and grammar errors (I.2) reported by the
+// importer; the final split ends at end of input.
+
+// case
+// expected-error @+1 {{SAIF syntax: unknown record keyword 'saifversion'}}
+(SAIFILE (saifversion "2.0"))
+
+// -----
+
+// comment
+// expected-error @+1 {{SAIF syntax: unterminated block comment}}
+(SAIFILE /* unterminated
+
+// -----
+
+// condition-depth
+// expected-error @+1 {{SAIF syntax: condition nesting exceeds the SAIF resource limit}}
+(SAIFILE (LEAKAGE (COND !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!A)))
+
+// -----
+
+// condition-tokens
+// expected-error @+1 {{SAIF syntax: condition exceeds the SAIF token limit}}
 (SAIFILE (LEAKAGE (COND A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A|A)))
 
-// RUN: not talos-translate --import-saif %s 2>&1 | FileCheck %s
-// CHECK: SAIF syntax: condition exceeds the SAIF token limit
+// -----
+
+// escape
+// expected-error @+1 {{SAIF syntax: escape requires a non-whitespace character}}
+(SAIFILE (INSTANCE bad\ ))
+
+// -----
+
+// exponent
+// expected-error @+1 {{SAIF syntax: expected exponent digits}}
+(SAIFILE (DURATION 1e-))
+
+// -----
+
+// expression
+// expected-error @+1 {{SAIF syntax: expected an identifier}}
+(SAIFILE (LEAKAGE (COND A*|B (T0 0))))
+
+// -----
+
+// index
+// expected-error @+1 {{SAIF syntax: expected a decimal integer}}
+(SAIFILE (INSTANCE top[1.5]))
+
+// -----
+
+// negative
+// expected-error @+1 {{SAIF syntax: unexpected character}}
+(SAIFILE (DURATION -1))
+
+// -----
+
+// nesting
+// expected-error @+1 {{SAIF syntax: record nesting exceeds the SAIF resource limit}}
+(SAIFILE (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u (INSTANCE u )))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+
+// -----
+
+// string
+// expected-error @+1 {{SAIF syntax: unterminated single-line string}}
+(SAIFILE (DESIGN "two
+lines"))
+
+// -----
+
+// trailing
+// expected-error @+1 {{SAIF syntax: unexpected text after SAIFILE}}
+(SAIFILE) (SAIFILE)
+
+// -----
+
+// close
+(SAIFILE
+// expected-error @+1 {{SAIF syntax: expected ')' after record}}

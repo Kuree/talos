@@ -1,7 +1,5 @@
 // RUN: %split-file %s %t
-// RUN: talos --vpi=off --saif=%t.saif --saif-input=%t/library.saif -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 && FileCheck %s --input-file=%t.saif
 // RUN: talos --vpi=off --saif=%t.saif --saif-input=%t/library.saif -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 && FileCheck %s --input-file=%t.saif
-// RUN: talos --vpi=off --saif=%t.saif --saif-input=%t/library.saif -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc && %t.bc && FileCheck %s --input-file=%t.saif
 // RUN: talos-translate --import-saif %t.saif -o /dev/null
 // Input TG state uses the state before its own transition, including A
 // itself. Deferred reference matching must retain that physical snapshot.

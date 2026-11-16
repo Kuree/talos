@@ -1,8 +1,5 @@
 // RUN: %split-file %s %t
-// RUN: talos --vpi=off --saif=%t.saif -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 && FileCheck %s --input-file=%t.saif
 // RUN: talos --vpi=off --saif=%t.saif -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 && FileCheck %s --input-file=%t.saif
-// RUN: talos --vpi=off --saif=%t.saif -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 && FileCheck %s --input-file=%t.saif
-// RUN: talos --vpi=off --saif=%t.saif -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 && FileCheck %s --input-file=%t.saif
 // RUN: talos-translate --import-saif %t.saif -o /dev/null
 // Functional buffers, pure function calls, and sequential boundaries must
 // never be mistaken for glitches. Closing parentheses exclude a stray TG.

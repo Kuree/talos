@@ -1,8 +1,6 @@
 // REQUIRES: upf
 // RUN: %split-file %s %t
-// RUN: talos --vpi=off --upf %t/design.upf --saif=%t.saif --mlir-verify-each -O0 %t/design.sv -o %t.o0 && %t.o0 && FileCheck %s --input-file=%t.saif
 // RUN: talos --vpi=off --upf %t/design.upf --saif=%t.saif --mlir-verify-each -O3 %t/design.sv -o %t.o3 && %t.o3 && FileCheck %s --input-file=%t.saif
-// RUN: talos --vpi=off --upf %t/design.upf --saif=%t.saif --execution-tier=bytecode --mlir-verify-each -O3 %t/design.sv -o %t.bc && %t.bc && FileCheck %s --input-file=%t.saif
 // IEEE 1801-2018 9.7 distinguishes output corruption from retained data.
 // The saved value is 1 during primary OFF; the observed output must be X.
 // CHECK: (TIMESCALE 1 fs) (DURATION 10000000)

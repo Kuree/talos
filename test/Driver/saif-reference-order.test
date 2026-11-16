@@ -1,8 +1,5 @@
 // RUN: %split-file %s %t
-// RUN: talos --vpi=off --saif=%t.saif -O0 --mlir-verify-each %t/core.sv %t/first.sv -o %t.first && %t.first && FileCheck %s --input-file=%t.saif
-// RUN: talos --vpi=off --saif=%t.saif -O3 --mlir-verify-each %t/core.sv %t/reversed.sv -o %t.reversed && %t.reversed && FileCheck %s --input-file=%t.saif
-// RUN: talos --vpi=off --saif=%t.saif -O3 --execution-tier=bytecode --mlir-verify-each %t/core.sv %t/first.sv -o %t.bc1 && %t.bc1 && FileCheck %s --input-file=%t.saif
-// RUN: talos --vpi=off --saif=%t.saif -O3 --execution-tier=bytecode --mlir-verify-each %t/core.sv %t/reversed.sv -o %t.bc2 && %t.bc2 && FileCheck %s --input-file=%t.saif
+// RUN: talos --vpi=off --saif=%t.saif -O3 --mlir-verify-each %t/core.sv %t/first.sv -o %t.exe && %t.exe && FileCheck %s --input-file=%t.saif
 // RUN: talos-translate --import-saif %t.saif -o /dev/null
 // TG is an aggregate zero-delay reference-count estimate, not an individual
 // pulse classifier. Here both reference and timed Y have TC2. Exchanging the

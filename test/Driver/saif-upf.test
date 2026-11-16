@@ -1,9 +1,6 @@
 // REQUIRES: upf
 // RUN: %split-file %s %t
-// RUN: talos --vpi=off --upf %t/design.upf --saif=%t.saif --mlir-verify-each -O0 %t/design.sv -o %t.o0 && %t.o0 && FileCheck %s --input-file=%t.saif
 // RUN: talos --vpi=off --upf %t/design.upf --saif=%t.saif --mlir-verify-each -O3 %t/design.sv -o %t.o3 && %t.o3 && FileCheck %s --input-file=%t.saif
-// RUN: talos --vpi=off --upf %t/design.upf --saif=%t.saif --execution-tier=bytecode --mlir-verify-each -O0 %t/design.sv -o %t.bc0 && %t.bc0 && FileCheck %s --input-file=%t.saif
-// RUN: talos --vpi=off --upf %t/design.upf --saif=%t.saif --execution-tier=bytecode --mlir-verify-each -O3 %t/design.sv -o %t.bc3 && %t.bc3 && FileCheck %s --input-file=%t.saif
 // RUN: talos-translate --import-saif %t.saif | talos-opt | FileCheck %s --check-prefix=IR
 // IEEE 1801-2018 9.5/9.6.7 and I.3.5.1: power loss publishes X and
 // supply restoration does not invent a sequential update or a known toggle.

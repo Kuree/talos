@@ -1,4 +1,0 @@
-(SAIFILE (saifversion "2.0"))
-
-// RUN: not talos-translate --import-saif %s 2>&1 | FileCheck %s
-// CHECK: error: SAIF syntax: unknown record keyword 'saifversion'

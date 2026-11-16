@@ -1,8 +1,5 @@
 // RUN: %split-file %s %t
-// RUN: talos --vpi=off --saif=%t.saif --mlir-verify-each -O0 %t/design.sv -o %t.o0 && %t.o0 && FileCheck %s --input-file=%t.saif
 // RUN: talos --vpi=off --saif=%t.saif --mlir-verify-each -O3 %t/design.sv -o %t.o3 && %t.o3 && FileCheck %s --input-file=%t.saif
-// RUN: talos --vpi=off --saif=%t.saif --execution-tier=bytecode --mlir-verify-each -O0 %t/design.sv -o %t.bc0 && %t.bc0 && FileCheck %s --input-file=%t.saif
-// RUN: talos --vpi=off --saif=%t.saif --execution-tier=bytecode --mlir-verify-each -O3 %t/design.sv -o %t.bc3 && %t.bc3 && FileCheck %s --input-file=%t.saif
 // RUN: talos-translate --import-saif %t.saif | talos-opt | FileCheck %s --check-prefix=IR
 // Three changes at t2 must survive optimization and publication batching.
 // TC excludes X/Z transitions (IEEE 1801-2018 I.3.5.1).

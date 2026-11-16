@@ -1,0 +1,7 @@
+// REQUIRES: wasm-execution
+// RUN: %split-file %S/saif-library.test %t
+// RUN: talos --vpi=off --target=wasm32 --saif=%t.saif --saif-input=%t/library.saif -O3 -c %t/design.sv -o %t.o
+// RUN: %wasm_cxx %t.o %wasm_runtime -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1 -sEXIT_RUNTIME=1 -sENVIRONMENT=node -o %t.js && %node %t.js && FileCheck %S/saif-library.test --input-file=%t.saif
+// RUN: talos-translate --import-saif %t.saif -o /dev/null
+// Library cell plans carry target-sized pointers; inputs and checks are
+// shared with saif-library.test.

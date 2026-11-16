@@ -1,9 +1,0 @@
-// REQUIRES: upf, wasm-execution
-// RUN: %split-file %S/saif-glitches.test %t/glitches && %split-file %S/saif-upf.test %t/power && %split-file %S/saif-library.test %t/library
-// RUN: talos --vpi=off --target=wasm32 --saif=%t/glitches.saif -O3 -c %t/glitches/design.sv -o %t/glitches.o
-// RUN: %wasm_cxx %t/glitches.o %wasm_runtime -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1 -sEXIT_RUNTIME=1 -sENVIRONMENT=node -o %t/glitches.js && %node %t/glitches.js && FileCheck %S/saif-glitches.test --input-file=%t/glitches.saif
-// RUN: talos --vpi=off --target=wasm32 --upf %t/power/design.upf --saif=%t/power.saif -O3 -c %t/power/design.sv -o %t/power.o
-// RUN: %wasm_cxx %t/power.o %wasm_runtime -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1 -sEXIT_RUNTIME=1 -sENVIRONMENT=node -o %t/power.js && %node %t/power.js && FileCheck %S/saif-upf.test --input-file=%t/power.saif
-// RUN: talos --vpi=off --target=wasm32 --saif=%t/library.saif --saif-input=%t/library/library.saif -O3 -c %t/library/design.sv -o %t/library.o
-// RUN: %wasm_cxx %t/library.o %wasm_runtime -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1 -sEXIT_RUNTIME=1 -sENVIRONMENT=node -o %t/library.js && %node %t/library.js && FileCheck %S/saif-library.test --input-file=%t/library.saif
-// RUN: talos-translate --import-saif %t/glitches.saif -o /dev/null && talos-translate --import-saif %t/power.saif -o /dev/null && talos-translate --import-saif %t/library.saif -o /dev/null

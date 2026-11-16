@@ -1,0 +1,469 @@
+// RUN: talos-translate --import-saif --split-input-file --verify-diagnostics %s -o /dev/null
+// IEEE 1801-2018 Annex I structure and context rules (I.3-I.5) are dialect
+// verifier errors; each split is one rejected file.
+
+// backward-lib
+// expected-error @+1 {{'saif.header' op library qualifier requires a forward file}}
+(SAIFILE (SAIFVERSION "2.0" "lib") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+  (DIVIDER /) (TIMESCALE) (DURATION 100) )
+
+// -----
+
+// backward-mapping
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.mapping' op name mappings require an RTL forward file}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top (PORT (a b))))
+
+// -----
+
+// default-duplicate
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.when' op duplicate COND_DEFAULT edge restriction}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top (PORT (Y (COND A (TC 1) COND_DEFAULT (RISE) (TC 1) COND_DEFAULT (RISE) (TC 1))))))
+
+// -----
+
+// default-only
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.conditions' op requires at least one COND item}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top (PORT (Y (COND_DEFAULT (TC 1))))))
+
+// -----
+
+// default-order
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.when' op COND must precede COND_DEFAULT}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top (PORT (Y (COND A (TC 1) COND_DEFAULT (TC 1) COND B (TC 1))))))
+
+// -----
+
+// default-overlap
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.conditions' op two COND_DEFAULT items require distinct RISE and FALL restrictions}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top (PORT (Y (COND A (TC 1) COND_DEFAULT (TC 1) COND_DEFAULT (RISE) (TC 1))))))
+
+// -----
+
+// direction
+// expected-error @+1 {{'saif.header' op DIRECTION must be 'forward' or 'backward'}}
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "sideways")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+  (DIVIDER /) (TIMESCALE) (DURATION 100) )
+
+// -----
+
+// divider
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.header' op DIVIDER must be '.' or '/'}}
+  (DIVIDER bad) (TIMESCALE) (DURATION 100) )
+
+// -----
+
+// duplicate-escaped-name
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.signal' op duplicate signal name}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top (NET (abc) (a\b\c))))
+
+// -----
+
+// duplicate-header
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+// expected-error @+1 {{'saif.header' op headers must appear once in Annex I order before data}}
+  (DESIGN) (DATE) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+  (DIVIDER /) (TIMESCALE) (DURATION 100) )
+
+// -----
+
+// duplicate-index-blocks
+(SAIFILE
+  (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+  (DIVIDER) (TIMESCALE) (DURATION 100)
+// expected-error @+1 {{'saif.signal' op duplicate signal name}}
+  (INSTANCE top (NET (q[01] (TC 1))) (NET (q[1] (TC 2)))))
+
+// -----
+
+// duplicate-instance
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.instance' op duplicate root instance name}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top) (INSTANCE top))
+
+// -----
+
+// duplicate-metric
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.metric' op duplicate signal metric}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top (NET (q (TC 1) (TC 2)))))
+
+// -----
+
+// duplicate-net-blocks
+(SAIFILE
+  (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+  (DIVIDER) (TIMESCALE) (DURATION 100)
+// expected-error @+1 {{'saif.signal' op duplicate signal name}}
+  (INSTANCE top (NET (q (TC 1))) (NET (q (TC 2)))))
+
+// -----
+
+// duplicate-port-blocks
+(SAIFILE
+  (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+  (DIVIDER) (TIMESCALE) (DURATION 100)
+// expected-error @+1 {{'saif.signal' op duplicate signal name}}
+  (INSTANCE top (PORT (q (TC 1))) (PORT (\q (TC 2)))))
+
+// -----
+
+// empty-backward-net
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.nets' op backward PORT and NET records require at least one signal}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top (NET)))
+
+// -----
+
+// empty-leakage
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.leakage' op backward LEAKAGE requires timing attributes}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top (LEAKAGE)))
+
+// -----
+
+// forward-edge-in-backward
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.when' op edge restriction is incompatible with this SAIF usage}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top (PORT (Y (COND A RISE_FALL (TC 1))))))
+
+// -----
+
+// forward-metrics
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "forward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.metric' op activity attributes require a backward file}}
+  (DIVIDER /)  (INSTANCE top (PORT (q (TC 1)))))
+
+// -----
+
+// forward-timescale
+// expected-error @+1 {{'saif.file' op forward files forbid TIMESCALE and DURATION headers}}
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "forward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+  (DIVIDER /) (TIMESCALE) (DURATION 100) )
+
+// -----
+
+// header-order
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+// expected-error @+1 {{'saif.header' op headers must appear once in Annex I order before data}}
+  (DATE) (DESIGN) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+  (DIVIDER /) (TIMESCALE) (DURATION 100) )
+
+// -----
+
+// hierarchical-signal
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.signal' op backward signal name must be a simple identifier}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top (NET (a/b (TC 1)))))
+
+// -----
+
+// late-header
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.header' op headers must appear once in Annex I order before data}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top) (DATE))
+
+// -----
+
+// leakage-duplicate
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.metric' op duplicate leakage timing metric}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top (LEAKAGE (COND A (T1 1) (T1 2)))))
+
+// -----
+
+// leakage-edge
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.when' op edge restriction is incompatible with this SAIF usage}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top (LEAKAGE (COND A (RISE) (T1 1)))))
+
+// -----
+
+// leakage-toggle
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.metric' op LEAKAGE permits only backward T0/T1 attributes}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top (LEAKAGE (COND A (TC 1)))))
+
+// -----
+
+// library-backward-edge
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "forward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.when' op edge restriction is incompatible with this SAIF usage}}
+  (DIVIDER /)  (LIBRARY "L" (MODULE C (PORT Y (COND A (RISE))))))
+
+// -----
+
+// library-instance
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "forward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.instance' op instance kind is incompatible with this file}}
+  (DIVIDER /)  (LIBRARY "L") (INSTANCE top))
+
+// -----
+
+// library-misplaced-net
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "forward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.nets' op has an illegal parent}}
+  (DIVIDER /)  (LIBRARY "L" (MODULE C (NET))))
+
+// -----
+
+// library-module-name
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "forward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.cell' op MODULE requires a simple identifier}}
+  (DIVIDER /)  (LIBRARY "L" (MODULE a/b)))
+
+// -----
+
+// library-path-activity
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "forward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.metric' op activity attributes require a backward file}}
+  (DIVIDER /)  (LIBRARY "L" (MODULE C (PORT Y (IOPATH A (TC 1))))))
+
+// -----
+
+// metric-overflow
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.metric' op number must be finite in binary64}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top (NET (q (TC 1e9999)))))
+
+// -----
+
+// missing-duration
+// expected-error @+1 {{'saif.file' op backward files require TIMESCALE and DURATION headers}}
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+  (DIVIDER /) (TIMESCALE)  )
+
+// -----
+
+// missing-headers
+// expected-error @+1 {{'saif.file' op requires SAIFVERSION, DIRECTION, DESIGN, DATE, VENDOR, PROGRAM_NAME, PROGRAM_VERSION, and DIVIDER headers}}
+(SAIFILE)
+
+// -----
+
+// nested-data-order
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.nets' op instance data must precede nested instances}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top (INSTANCE u) (NET (q))))
+
+// -----
+
+// net-conditional
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.conditions' op NET permits only simple timing and toggle attributes}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top (NET (q (COND A (TC 1))))))
+
+// -----
+
+// net-virtual-mapping
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "forward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.mapping' op virtual instance type is permitted only on PORT mappings}}
+  (DIVIDER /)  (INSTANCE top (NET (a b "seq"))))
+
+// -----
+
+// normalized-indices
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.signal' op duplicate signal name}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top (NET (q[01]) (q[1]))))
+
+// -----
+
+// overflow
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.header' op number must be finite in binary64}}
+  (DIVIDER /) (TIMESCALE) (DURATION 1e9999) )
+
+// -----
+
+// path-default-order
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.related_pins' op IOPATH_DEFAULT must be last and occur at most once}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top (PORT (Y (IOPATH A (TC 1) IOPATH_DEFAULT (TC 1) IOPATH B (TC 1))))))
+
+// -----
+
+// path-default-pins
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.related_pins' op IOPATH requires pins and IOPATH_DEFAULT forbids pins}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top (PORT (Y (IOPATH A (TC 1) IOPATH_DEFAULT B (TC 1))))))
+
+// -----
+
+// path-duplicate-pin
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.related_pins' op IOPATH related-pin lists must be mutually exclusive}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top (PORT (Y (IOPATH A A (TC 1))))))
+
+// -----
+
+// path-missing-metric
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.related_pins' op backward IOPATH requires exactly one toggle metric}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top (PORT (Y (IOPATH A)))))
+
+// -----
+
+// path-missing-pins
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.related_pins' op IOPATH requires pins and IOPATH_DEFAULT forbids pins}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top (PORT (Y (IOPATH (TC 1))))))
+
+// -----
+
+// path-overlap
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.related_pins' op IOPATH related-pin lists must be mutually exclusive}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top (PORT (Y (IOPATH A B (TC 1) IOPATH B (TC 1))))))
+
+// -----
+
+// path-timing
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.related_pins' op backward IOPATH requires exactly one toggle metric}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top (PORT (Y (IOPATH A (T1 1))))))
+
+// -----
+
+// port-timing-condition
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.metric' op conditional port attributes must be toggle metrics}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top (PORT (Y (COND A (T1 1))))))
+
+// -----
+
+// port-toggle-arity
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.when' op backward toggle item requires exactly one metric or path group}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (INSTANCE top (PORT (Y (COND A (TC 1) (TG 1))))))
+
+// -----
+
+// qualifier
+// expected-error @+1 {{'saif.header' op SAIFVERSION qualifier must be 'lib' or 'LIB'}}
+(SAIFILE (SAIFVERSION "2.0" "rtl") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+  (DIVIDER /) (TIMESCALE) (DURATION 100) )
+
+// -----
+
+// root-metric
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.metric' op is not permitted in saif.file}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (TC 1))
+
+// -----
+
+// root-port
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.ports' op is not permitted in saif.file}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (PORT (q (TC 1))))
+
+// -----
+
+// rtl-leakage
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "forward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.leakage' op LEAKAGE is not permitted in RTL forward files}}
+  (DIVIDER /)  (INSTANCE top (LEAKAGE)))
+
+// -----
+
+// rtl-virtual
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "forward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.instance' op instance kind is incompatible with this file}}
+  (DIVIDER /)  (VIRTUAL_INSTANCE "seq" q (PORT (Q R))))
+
+// -----
+
+// scale-amount
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.header' op TIMESCALE amount must be the integer 1, 10, or 100}}
+  (DIVIDER /) (TIMESCALE 2 ns) (DURATION 100) )
+
+// -----
+
+// scale-unit
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.header' op TIMESCALE unit must be s, ms, us, ns, ps, or fs}}
+  (DIVIDER /) (TIMESCALE 1 minutes) (DURATION 100) )
+
+// -----
+
+// version
+// expected-error @+1 {{'saif.header' op SAIFVERSION must be '2.0'}}
+(SAIFILE (SAIFVERSION "1.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+  (DIVIDER /) (TIMESCALE) (DURATION 100) )
+
+// -----
+
+// virtual-contents
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.instance' op VIRTUAL_INSTANCE requires a type and exactly one PORT record}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (VIRTUAL_INSTANCE "seq" q (NET (Q))))
+
+// -----
+
+// virtual-type
+(SAIFILE (SAIFVERSION "2.0") (DIRECTION "backward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION)
+// expected-error @+1 {{'saif.instance' op VIRTUAL_INSTANCE requires a type and exactly one PORT record}}
+  (DIVIDER /) (TIMESCALE) (DURATION 100) (VIRTUAL_INSTANCE q (PORT (Q))))

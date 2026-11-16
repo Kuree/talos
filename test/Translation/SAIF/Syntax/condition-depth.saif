@@ -1,4 +1,0 @@
-(SAIFILE (LEAKAGE (COND !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!A)))
-
-// RUN: not talos-translate --import-saif %s 2>&1 | FileCheck %s
-// CHECK: SAIF syntax: condition nesting exceeds
