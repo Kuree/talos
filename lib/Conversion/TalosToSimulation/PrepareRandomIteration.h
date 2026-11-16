@@ -42,6 +42,32 @@ std::optional<llvm::APSInt> getRandomUpperBound(
     llvm::function_ref<std::optional<llvm::APSInt>(mlir::Operation *)>
         upperBound);
 
+/// The analogous lower bound, using the smallest values of compared operands.
+std::optional<llvm::APSInt> getRandomLowerBound(
+    mlir::Operation *constraint,
+    llvm::function_ref<bool(mlir::Operation *)> isBounded,
+    llvm::function_ref<std::optional<llvm::APSInt>(mlir::Operation *)>
+        lowerBound);
+
+struct RandomIntegralBounds {
+  llvm::APSInt lower;
+  llvm::APSInt upper;
+  /// X/Z payloads can escape the known-value interval when consumed by a
+  /// two-state conversion, including after arithmetic or conditional merges.
+  bool mayBeUnknown = false;
+};
+
+/// Conservatively bound a typed integral expression of at most 64 bits.
+/// Arithmetic uses widened mathematical intervals; possible wrapping or an
+/// unsupported operator falls back to the complete result-type interval.
+/// Unknown constants and division by a possibly zero operand are not bounded.
+std::optional<RandomIntegralBounds> evaluateRandomOperandBounds(
+    mlir::Operation *expression,
+    llvm::function_ref<std::optional<RandomIntegralBounds>(mlir::Operation *)>
+        namedValueBounds,
+    llvm::function_ref<std::optional<llvm::StringRef>(mlir::Operation *)>
+        referencedConstant);
+
 /// Most constraint instances one randomize plan expands from a static
 /// foreach, and most leading elements it solves for one random dynamic array
 /// or queue.

@@ -4,6 +4,8 @@
 Example:
   python3 benchmark/randomization/run.py --compiler build/tools/driver/talos \
     --output-dir build/random-bench --case independent --fields 32 64 128
+  python3 benchmark/randomization/run.py --compiler build/tools/driver/talos \
+    --output-dir build/payload-bench --case variable-payload --iterations 1000
 
 Keep JSON output from the base revision, then pass it as --baseline FILE to
 check identical seeded output and report runtime speedups. Build directories
@@ -40,6 +42,7 @@ def main():
             "relational", "independent", "popcount", "native-functions",
             "native-guards",
             "real-equality",
+            "variable-payload",
         ],
         default="relational",
     )

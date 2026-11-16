@@ -483,8 +483,24 @@ set_target_properties(TalosAnalysisOracleTests PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/runtime/unittests"
 )
 
+add_llvm_executable(TalosRandomBoundsTests EXCLUDE_FROM_ALL
+  Support/RandomBoundsTest.cpp
+)
+llvm_update_compile_flags(TalosRandomBoundsTests)
+target_include_directories(TalosRandomBoundsTests PRIVATE
+  "${PROJECT_SOURCE_DIR}/lib/Conversion/TalosToSimulation"
+)
+target_link_libraries(TalosRandomBoundsTests PRIVATE
+  TalosToSimulation
+  GTest::gtest_main
+)
+set_target_properties(TalosRandomBoundsTests PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/runtime/unittests"
+)
+
 set(TALOS_RUNTIME_UNIT_TARGETS
   TalosAnalysisOracleTests
+  TalosRandomBoundsTests
   TalosNativePartitionTests
   TalosGeneratedArithmeticRuntimeTests
   TalosGeneratedClassBitstreamBytecode

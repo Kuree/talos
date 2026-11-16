@@ -8047,24 +8047,23 @@ void TalosSimPreparePass::runOnOperation() {
     llvm::DenseSet<unsigned> diagnosedContainers;
     llvm::DenseSet<StringAttr> shadowedContainers;
     llvm::DenseMap<Operation *, RandomContainerShadow> containerShadows;
+    auto referencedConstant =
+        [&](Operation *value) -> std::optional<StringRef> {
+      auto reference = value->getAttrOfType<SymbolRefAttr>("referenced_symbol");
+      auto symbol = reference
+                        ? semanticSymbols.find(reference.getLeafReference())
+                        : semanticSymbols.end();
+      if (symbol == semanticSymbols.end() ||
+          !isa<semantic::SVParameterSymbolOp, semantic::SVEnumValueSymbolOp,
+               semantic::SVSpecparamSymbolOp>(symbol->second))
+        return std::nullopt;
+      auto constant =
+          symbol->second->getAttrOfType<StringAttr>("constant_value");
+      return constant ? std::optional<StringRef>(constant.getValue())
+                      : std::nullopt;
+    };
     auto evaluateConstant = [&](Operation *expression) {
-      return evaluateRandomConstantOperand(
-          expression, [&](Operation *value) -> std::optional<StringRef> {
-            auto reference =
-                value->getAttrOfType<SymbolRefAttr>("referenced_symbol");
-            auto symbol =
-                reference ? semanticSymbols.find(reference.getLeafReference())
-                          : semanticSymbols.end();
-            if (symbol == semanticSymbols.end() ||
-                !isa<semantic::SVParameterSymbolOp,
-                     semantic::SVEnumValueSymbolOp,
-                     semantic::SVSpecparamSymbolOp>(symbol->second))
-              return std::nullopt;
-            auto constant =
-                symbol->second->getAttrOfType<StringAttr>("constant_value");
-            return constant ? std::optional<StringRef>(constant.getValue())
-                            : std::nullopt;
-          });
+      return evaluateRandomConstantOperand(expression, referencedConstant);
     };
     for (unsigned sizeIndex = 0, sizeCount = properties.size();
          sizeIndex != sizeCount; ++sizeIndex) {
@@ -8145,30 +8144,30 @@ void TalosSimPreparePass::runOnOperation() {
       if (elementReferences.empty())
         continue;
       Location location = getSemanticLocation(elementReferences.front());
-      // The largest value of a constant operand, or of an integral variable:
-      // its type's largest value, refined by constant bounds that active
-      // constraints place on it.
-      auto upperBound = [&](Operation *operand) -> std::optional<APSInt> {
-        if (std::optional<APSInt> value = evaluateConstant(operand))
-          return value;
-        auto reference = dyn_cast<semantic::SVNamedValueExpressionOp>(
-            peelValuePreservingConversions(operand));
+      // Refine named integral leaves with always-active constant bounds, then
+      // propagate their intervals through typed header arithmetic. Every
+      // intermediate must preserve its mathematical interval; possible wrap
+      // uses the whole result type instead of an unsound small shadow.
+      auto variableBounds =
+          [&](Operation *reference) -> std::optional<RandomIntegralBounds> {
         auto variable =
-            reference
-                ? reference->getAttrOfType<SymbolRefAttr>("referenced_symbol")
-                : SymbolRefAttr{};
-        auto type = reference
-                        ? reference->getAttrOfType<TypeAttr>("semantic_type")
-                        : TypeAttr{};
+            reference->getAttrOfType<SymbolRefAttr>("referenced_symbol");
+        auto type = reference->getAttrOfType<TypeAttr>("semantic_type");
         std::optional<uint64_t> width =
             type ? getSemanticPackedWidth(type.getValue()) : std::nullopt;
         if (!variable || !width || *width == 0 || *width > 64)
           return std::nullopt;
-        APSInt bound(
-            isSignedSemanticType(type.getValue())
-                ? APInt::getSignedMaxValue(*width).sext(randomConstantWidth)
-                : APInt::getMaxValue(*width).zext(randomConstantWidth),
-            /*isUnsigned=*/false);
+        bool isSigned = isSignedSemanticType(type.getValue());
+        RandomIntegralBounds bounds{
+            APSInt(isSigned ? APInt::getSignedMinValue(*width).sext(
+                                  randomConstantWidth)
+                            : APInt(randomConstantWidth, 0),
+                   false),
+            APSInt(
+                isSigned
+                    ? APInt::getSignedMaxValue(*width).sext(randomConstantWidth)
+                    : APInt::getMaxValue(*width).zext(randomConstantWidth),
+                false)};
         auto isVariable = [&](Operation *candidate) {
           candidate = peelValuePreservingConversions(candidate);
           auto referenced =
@@ -8178,12 +8177,24 @@ void TalosSimPreparePass::runOnOperation() {
           return referenced &&
                  referenced.getLeafReference() == variable.getLeafReference();
         };
-        for (Operation *root : activeRoots)
-          if (std::optional<APSInt> rootBound =
+        for (Operation *root : activeRoots) {
+          if (auto upper =
                   getRandomUpperBound(root, isVariable, evaluateConstant);
-              rootBound && *rootBound < bound)
-            bound = *rootBound;
-        return bound;
+              upper && *upper < bounds.upper)
+            bounds.upper = *upper;
+          if (auto lower =
+                  getRandomLowerBound(root, isVariable, evaluateConstant);
+              lower && *lower > bounds.lower)
+            bounds.lower = *lower;
+        }
+        return bounds.lower <= bounds.upper
+                   ? std::optional<RandomIntegralBounds>(bounds)
+                   : std::nullopt;
+      };
+      auto upperBound = [&](Operation *operand) -> std::optional<APSInt> {
+        auto bounds = evaluateRandomOperandBounds(operand, variableBounds,
+                                                  referencedConstant);
+        return bounds ? std::optional<APSInt>(bounds->upper) : std::nullopt;
       };
       // size() is never negative, so it keeps its value through any
       // conversion at least as wide.

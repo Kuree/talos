@@ -10,6 +10,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSwitch.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -822,9 +823,10 @@ Operation *peelValuePreservingConversions(Operation *expression,
   return operand;
 }
 
-std::optional<APSInt> getRandomUpperBound(
-    Operation *constraint, function_ref<bool(Operation *)> isBounded,
-    function_ref<std::optional<APSInt>(Operation *)> upperBound) {
+static std::optional<APSInt>
+getRandomBound(Operation *constraint, function_ref<bool(Operation *)> isBounded,
+               function_ref<std::optional<APSInt>(Operation *)> operandBound,
+               bool upper) {
   auto lesser = [](std::optional<APSInt> lhs, std::optional<APSInt> rhs) {
     if (!lhs || !rhs)
       return lhs ? lhs : rhs;
@@ -834,6 +836,16 @@ std::optional<APSInt> getRandomUpperBound(
     if (!lhs || !rhs)
       return std::optional<APSInt>();
     return std::optional<APSInt>(*lhs < *rhs ? *rhs : *lhs);
+  };
+  auto intersect = [&](std::optional<APSInt> lhs, std::optional<APSInt> rhs) {
+    if (!lhs || !rhs)
+      return lhs ? lhs : rhs;
+    return upper ? lesser(lhs, rhs) : greater(lhs, rhs);
+  };
+  auto unite = [&](std::optional<APSInt> lhs, std::optional<APSInt> rhs) {
+    if (!lhs || !rhs)
+      return std::optional<APSInt>();
+    return upper ? greater(lhs, rhs) : lesser(lhs, rhs);
   };
   std::function<std::optional<APSInt>(Operation *)> expressionBound =
       [&](Operation *expression) -> std::optional<APSInt> {
@@ -848,13 +860,13 @@ std::optional<APSInt> getRandomUpperBound(
           SmallVector<Operation *> limits = getChildren(range);
           if (range.getRangeKind() == semantic::SVValueRangeKind::Simple &&
               limits.size() == 2)
-            value = upperBound(limits.back());
+            value = operandBound(limits[upper ? 1 : 0]);
         } else {
-          value = upperBound(item);
+          value = operandBound(item);
         }
         if (!value)
           return std::nullopt;
-        bound = bound ? greater(bound, value) : value;
+        bound = bound ? unite(bound, value) : value;
       }
       return bound;
     }
@@ -864,15 +876,15 @@ std::optional<APSInt> getRandomUpperBound(
     using Binary = semantic::SVBinaryOperator;
     Binary kind = binary.getOperatorKind();
     if (kind == Binary::LogicalAnd)
-      return lesser(expressionBound(operands[0]), expressionBound(operands[1]));
+      return intersect(expressionBound(operands[0]),
+                       expressionBound(operands[1]));
     if (kind == Binary::LogicalOr)
-      return greater(expressionBound(operands[0]),
-                     expressionBound(operands[1]));
+      return unite(expressionBound(operands[0]), expressionBound(operands[1]));
     // Orient the comparison as operand <op> bounded value.
     bool boundedFirst = isBounded(operands[0]);
     if (!boundedFirst && !isBounded(operands[1]))
       return std::nullopt;
-    std::optional<APSInt> value = upperBound(operands[boundedFirst ? 1 : 0]);
+    std::optional<APSInt> value = operandBound(operands[boundedFirst ? 1 : 0]);
     if (!value)
       return std::nullopt;
     if (!boundedFirst) {
@@ -880,16 +892,25 @@ std::optional<APSInt> getRandomUpperBound(
         kind = Binary::LessThanEqual;
       else if (kind == Binary::GreaterThan)
         kind = Binary::LessThan;
-      else if (kind == Binary::LessThanEqual || kind == Binary::LessThan)
-        return std::nullopt;
+      else if (kind == Binary::LessThanEqual)
+        kind = Binary::GreaterThanEqual;
+      else if (kind == Binary::LessThan)
+        kind = Binary::GreaterThan;
     }
     switch (kind) {
     case Binary::Equality:
     case Binary::CaseEquality:
-    case Binary::LessThanEqual:
       return value;
+    case Binary::LessThanEqual:
+      return upper ? value : std::nullopt;
+    case Binary::GreaterThanEqual:
+      return upper ? std::nullopt : value;
     case Binary::LessThan:
-      return APSInt(*value - 1, /*isUnsigned=*/false);
+      return upper ? std::optional<APSInt>(APSInt(*value - 1, false))
+                   : std::nullopt;
+    case Binary::GreaterThan:
+      return upper ? std::nullopt
+                   : std::optional<APSInt>(APSInt(*value + 1, false));
     default:
       return std::nullopt;
     }
@@ -904,18 +925,196 @@ std::optional<APSInt> getRandomUpperBound(
     if (isa<semantic::SVConstraintListOp>(nested)) {
       std::optional<APSInt> bound;
       for (Operation *child : children)
-        bound = lesser(bound, constraintBound(child));
+        bound = intersect(bound, constraintBound(child));
       return bound;
     }
     // Each branch of an if-else constraint bounds the operand when it
     // applies.
     if (isa<semantic::SVConditionalConstraintOp>(nested) &&
         children.size() == 3)
-      return greater(constraintBound(children[1]),
-                     constraintBound(children[2]));
+      return unite(constraintBound(children[1]), constraintBound(children[2]));
     return std::nullopt;
   };
   return constraintBound(constraint);
+}
+
+std::optional<APSInt> getRandomUpperBound(
+    Operation *constraint, function_ref<bool(Operation *)> isBounded,
+    function_ref<std::optional<APSInt>(Operation *)> upperBound) {
+  return getRandomBound(constraint, isBounded, upperBound, true);
+}
+
+std::optional<APSInt> getRandomLowerBound(
+    Operation *constraint, function_ref<bool(Operation *)> isBounded,
+    function_ref<std::optional<APSInt>(Operation *)> lowerBound) {
+  return getRandomBound(constraint, isBounded, lowerBound, false);
+}
+
+std::optional<RandomIntegralBounds> evaluateRandomOperandBounds(
+    Operation *expression,
+    function_ref<std::optional<RandomIntegralBounds>(Operation *)>
+        namedValueBounds,
+    function_ref<std::optional<StringRef>(Operation *)> referencedConstant) {
+  auto type = expression->getAttrOfType<TypeAttr>("semantic_type");
+  std::optional<uint64_t> width =
+      type ? getSemanticPackedWidth(type.getValue()) : std::nullopt;
+  if (!width || *width == 0 || *width > 64)
+    return std::nullopt;
+  bool isSigned = isSignedSemanticType(type.getValue());
+  bool fourState = isFourStateSemanticType(type.getValue());
+  RandomIntegralBounds full{
+      APSInt(isSigned
+                 ? APInt::getSignedMinValue(*width).sext(randomConstantWidth)
+                 : APInt(randomConstantWidth, 0),
+             false),
+      APSInt(isSigned
+                 ? APInt::getSignedMaxValue(*width).sext(randomConstantWidth)
+                 : APInt::getMaxValue(*width).zext(randomConstantWidth),
+             false),
+      fourState};
+  auto checked = [&](const APSInt &lower, const APSInt &upper,
+                     bool mayBeUnknown =
+                         false) -> std::optional<RandomIntegralBounds> {
+    if (lower > upper)
+      return std::nullopt;
+    if (lower < full.lower || upper > full.upper) {
+      RandomIntegralBounds result = full;
+      result.mayBeUnknown = mayBeUnknown;
+      return result;
+    }
+    return RandomIntegralBounds{lower, upper, mayBeUnknown};
+  };
+  if (getConstantSpelling(expression) || referencedConstant(expression)) {
+    auto constant =
+        evaluateRandomConstantOperand(expression, referencedConstant);
+    return constant ? checked(*constant, *constant) : std::nullopt;
+  }
+  if (isa<semantic::SVNamedValueExpressionOp>(expression)) {
+    auto bounds = namedValueBounds(expression);
+    return bounds ? checked(bounds->lower, bounds->upper,
+                            fourState || bounds->mayBeUnknown)
+                  : std::nullopt;
+  }
+  SmallVector<Operation *> operands = getChildren(expression);
+  auto evaluate = [&](Operation *operand) {
+    return evaluateRandomOperandBounds(operand, namedValueBounds,
+                                       referencedConstant);
+  };
+  if (isa<semantic::SVConversionExpressionOp>(expression) &&
+      operands.size() == 1) {
+    auto bounds = evaluate(operands.front());
+    if (!bounds)
+      return std::nullopt;
+    // Partial unknown payloads may become known numbers outside the interval
+    // after X/Z-to-zero conversion. Keep the complete destination domain.
+    if (!fourState && bounds->mayBeUnknown)
+      return full;
+    return checked(bounds->lower, bounds->upper, bounds->mayBeUnknown);
+  }
+  if (auto unary = dyn_cast<semantic::SVUnaryExpressionOp>(expression);
+      unary && operands.size() == 1) {
+    auto bounds = evaluate(operands.front());
+    if (!bounds)
+      return std::nullopt;
+    if (!fourState && bounds->mayBeUnknown)
+      return full;
+    if (unary.getOperatorKind() == semantic::SVUnaryOperator::Plus)
+      return checked(bounds->lower, bounds->upper, bounds->mayBeUnknown);
+    if (unary.getOperatorKind() == semantic::SVUnaryOperator::Minus)
+      return checked(-bounds->upper, -bounds->lower, bounds->mayBeUnknown);
+    return full;
+  }
+  if (auto conditional =
+          dyn_cast<semantic::SVConditionalExpressionOp>(expression);
+      conditional && conditional.getConditionCount() == 1 &&
+      operands.size() == 3) {
+    auto predicateType =
+        operands.front()->getAttrOfType<TypeAttr>("semantic_type");
+    // An ambiguous predicate merges bits rather than choosing one arm. A
+    // later two-state conversion clears the merged X/Z bits and can produce
+    // values outside the numeric union: a two-state vector cast of X ? 5 : 6
+    // yields 4.
+    if (!predicateType || isFourStateSemanticType(predicateType.getValue()))
+      return full;
+    auto lhs = evaluate(operands[1]), rhs = evaluate(operands[2]);
+    if (!lhs || !rhs)
+      return std::nullopt;
+    bool unknown = lhs->mayBeUnknown || rhs->mayBeUnknown;
+    return !fourState && unknown
+               ? std::optional<RandomIntegralBounds>(full)
+               : checked(std::min(lhs->lower, rhs->lower),
+                         std::max(lhs->upper, rhs->upper), unknown);
+  }
+  auto binary = dyn_cast<semantic::SVBinaryExpressionOp>(expression);
+  if (!binary || operands.size() != 2)
+    return full;
+  auto lhs = evaluate(operands[0]), rhs = evaluate(operands[1]);
+  if (!lhs || !rhs)
+    return std::nullopt;
+  bool unknown = lhs->mayBeUnknown || rhs->mayBeUnknown;
+  if (!fourState && unknown)
+    return full;
+  using Binary = semantic::SVBinaryOperator;
+  switch (binary.getOperatorKind()) {
+  case Binary::Add:
+    return checked(lhs->lower + rhs->lower, lhs->upper + rhs->upper, unknown);
+  case Binary::Subtract:
+    return checked(lhs->lower - rhs->upper, lhs->upper - rhs->lower, unknown);
+  case Binary::Multiply:
+  case Binary::Divide: {
+    bool divide = binary.getOperatorKind() == Binary::Divide;
+    if (divide && rhs->lower <= 0 && rhs->upper >= 0)
+      return std::nullopt;
+    SmallVector<APSInt, 4> extremes;
+    for (const APSInt &left : {lhs->lower, lhs->upper})
+      for (const APSInt &right : {rhs->lower, rhs->upper})
+        extremes.push_back(divide ? APSInt(left.sdiv(right), false)
+                                  : left * right);
+    auto limits = std::minmax_element(extremes.begin(), extremes.end());
+    return checked(*limits.first, *limits.second, unknown);
+  }
+  case Binary::Mod: {
+    if (rhs->lower <= 0 && rhs->upper >= 0)
+      return std::nullopt;
+    APSInt magnitude = std::max(APSInt(rhs->lower.abs(), false),
+                                APSInt(rhs->upper.abs(), false));
+    --magnitude;
+    APSInt zero(APInt(randomConstantWidth, 0), false);
+    return checked(
+        lhs->lower < 0 ? std::max(lhs->lower, APSInt(-magnitude, false)) : zero,
+        lhs->upper > 0 ? std::min(lhs->upper, magnitude) : zero, unknown);
+  }
+  case Binary::LogicalShiftLeft:
+  case Binary::ArithmeticShiftLeft:
+  case Binary::LogicalShiftRight:
+  case Binary::ArithmeticShiftRight: {
+    if (rhs->lower != rhs->upper || rhs->lower < 0)
+      return full;
+    if (rhs->upper >= *width)
+      return full;
+    unsigned shift = rhs->upper.getZExtValue();
+    if (binary.getOperatorKind() == Binary::LogicalShiftLeft ||
+        binary.getOperatorKind() == Binary::ArithmeticShiftLeft)
+      return checked(APSInt(lhs->lower.shl(shift), false),
+                     APSInt(lhs->upper.shl(shift), false), unknown);
+    if (binary.getOperatorKind() == Binary::LogicalShiftRight &&
+        lhs->lower.isNegative())
+      return full;
+    return checked(APSInt(lhs->lower.ashr(shift), false),
+                   APSInt(lhs->upper.ashr(shift), false), unknown);
+  }
+  case Binary::BinaryAnd: {
+    const RandomIntegralBounds *mask = rhs->lower == rhs->upper   ? &*rhs
+                                       : lhs->lower == lhs->upper ? &*lhs
+                                                                  : nullptr;
+    if (mask && !mask->upper.isNegative())
+      return checked(APSInt(APInt(randomConstantWidth, 0), false), mask->upper,
+                     unknown);
+    return full;
+  }
+  default:
+    return full;
+  }
 }
 
 LogicalResult guardRandomContainerElements(
