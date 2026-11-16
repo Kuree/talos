@@ -1,7 +1,7 @@
-// RUN: talos-opt %s --talos-sim-compile-random-plans | FileCheck %s --check-prefix=PLAN
-// RUN: talos-opt %s --talos-sim-compile-random-plans --talos-sim-compile-random-plans --mlir-print-ir-after=talos-sim-compile-random-plans --mlir-print-ir-after-change -o /dev/null 2>&1 | FileCheck %s --check-prefix=ONCE --implicit-check-not='IR Dump After'
-// RUN: talos-opt %s --talos-sim-compile-random-plans '--encode-talos-sim-to-bytecode=vpi=off' --test-talos-print-bytecode -o /dev/null 2>&1 | FileCheck %s --check-prefix=BYTECODE
-// RUN: talos-opt %s --talos-sim-compile-random-plans '--encode-talos-sim-to-bytecode=vpi=off' --convert-talos-sim-processes-to-llvm-coroutines | talos-translate --mlir-to-llvmir | %llvm_dist/bin/opt -passes='coro-early,cgscc(coro-split<reuse-storage>),coro-cleanup' | %llc -filetype=obj -relocation-model=pic -o %t.o
+// RUN: talos-opt %s --allow-unregistered-dialect --test-talos-encode-random-programs --talos-sim-compile-random-plans | FileCheck %s --check-prefix=PLAN
+// RUN: talos-opt %s --allow-unregistered-dialect --test-talos-encode-random-programs --talos-sim-compile-random-plans --talos-sim-compile-random-plans --mlir-print-ir-after=talos-sim-compile-random-plans --mlir-print-ir-after-change -o /dev/null 2>&1 | FileCheck %s --check-prefix=ONCE --implicit-check-not='IR Dump After'
+// RUN: talos-opt %s --allow-unregistered-dialect --test-talos-encode-random-programs --talos-sim-compile-random-plans '--encode-talos-sim-to-bytecode=vpi=off' --test-talos-print-bytecode -o /dev/null 2>&1 | FileCheck %s --check-prefix=BYTECODE
+// RUN: talos-opt %s --allow-unregistered-dialect --test-talos-encode-random-programs --talos-sim-compile-random-plans '--encode-talos-sim-to-bytecode=vpi=off' --convert-talos-sim-processes-to-llvm-coroutines | talos-translate --mlir-to-llvmir | %llvm_dist/bin/opt -passes='coro-early,cgscc(coro-split<reuse-storage>),coro-cleanup' | %llc -filetype=obj -relocation-model=pic -o %t.o
 // RUN: %target_cxx %t.o %runtime_link_flags -o %t.exe
 // RUN: %t.exe --seed=13 | FileCheck %s --check-prefix=RUNTIME
 // REQUIRES: compiled-sampler
@@ -129,7 +129,84 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
       %rt_ok = arith.cmpi eq, %rt_bits, %exp_bits : i32
       %rank_zero = arith.cmpi eq, %rhs_rank, %none : i279
       %ph_ok = arith.select %rhs_finite, %true, %rank_zero : i1
-      %r:3 = simulation.random.solve_wide %ctx, %start, %mask, %disabled, %one, %seed, %increment, %bits, %kind, %reverse {program = "ODR1\02\00 \00\17\01\00\00L\00\00\00\03\00\00\00 \04\00\00\06\00\00\00\00\00\00\00\01\00\00\00\17\01\00\00\00\00\00\00\00\00\00\00-\00\00\00\17\01\00\00\00\00\00\00\00\00\00\004\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00 \00\00\00\01\00\00\00\FF\FF\FF\FF\00\00\00\00.\00\00\00\17\01\00\00\00\00\00\00\00\00\00\001\00\00\00 \00\00\00\00\00\00\00\00\00\00\00-\00\00\00 \00\00\00\01\00\00\00\00\00\00\00\02\00\00\00 \00\00\00\00\00\00\00\00\00\00\00/\00\00\00 \00\00\00\00\00\00\00\00\00\00\00-\00\00\00 \00\00\00\02\00\00\00\00\00\00\00\15\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\02\00\00\00@\00\00\00\01\00\00\00\00\00\00\00\22\00\00\00@\00\00\00\00\00\00\00\00\00\00\00\15\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1B\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00.\00\00\00 \00\00\00\01\00\00\00\00\00\00\00.\00\00\00 \00\00\00\02\00\00\00\00\00\00\00\16\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\02\00\00\00@\00\00\00\01\00\00\00\00\00\00\00\22\00\00\00@\00\00\00\00\00\00\00\01\00\00\00\15\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1B\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1C\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\02\00\00\00@\00\00\00\02\00\00\00\00\00\00\00.\00\00\00 \00\00\00\02\00\00\00\00\00\00\00.\00\00\00 \00\00\00\01\00\00\00\00\00\00\00\19\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00.\00\00\00 \00\00\00\01\00\00\00\00\00\00\00.\00\00\00 \00\00\00\02\00\00\00\00\00\00\00\17\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1F\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\02\00\00\00@\00\00\00\01\00\00\00\00\00\00\00\22\00\00\00@\00\00\00\00\00\00\00\02\00\00\00\15\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1B\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1C\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\02\00\00\00@\00\00\00\02\00\00\00\00\00\00\00.\00\00\00 \00\00\00\02\00\00\00\00\00\00\00.\00\00\00 \00\00\00\01\00\00\00\00\00\00\00\1A\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00.\00\00\00 \00\00\00\01\00\00\00\00\00\00\00.\00\00\00 \00\00\00\02\00\00\00\00\00\00\00\18\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1F\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\02\00\00\00@\00\00\00\01\00\00\00\00\00\00\00\22\00\00\00@\00\00\00\00\00\00\00\03\00\00\00\15\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1B\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1C\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\02\00\00\00@\00\00\00\02\00\00\00\00\00\00\00.\00\00\00 \00\00\00\02\00\00\00\00\00\00\00.\00\00\00 \00\00\00\01\00\00\00\00\00\00\00\17\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00.\00\00\00 \00\00\00\01\00\00\00\00\00\00\00.\00\00\00 \00\00\00\02\00\00\00\00\00\00\00\19\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1F\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\02\00\00\00@\00\00\00\01\00\00\00\00\00\00\00\22\00\00\00@\00\00\00\00\00\00\00\04\00\00\00\15\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1B\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1C\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\02\00\00\00@\00\00\00\02\00\00\00\00\00\00\00.\00\00\00 \00\00\00\02\00\00\00\00\00\00\00.\00\00\00 \00\00\00\01\00\00\00\00\00\00\00\18\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00.\00\00\00 \00\00\00\01\00\00\00\00\00\00\00.\00\00\00 \00\00\00\02\00\00\00\00\00\00\00\1A\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1F\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\02\00\00\00@\00\00\00\01\00\00\00\00\00\00\00\22\00\00\00@\00\00\00\00\00\00\00\05\00\00\00\15\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1B\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1C\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00 \00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\01\00\00\00\00\00\00\00\02\00\00\00\00\00\00\00\03\00\00\00\00\00\00\00\04\00\00\00\00\00\00\00\05\00\00\00\00\00\00\00"} : (!simulation.context, i279, i279, i64, i64, i64, i64, i32, i64, i64) -> (i279, i1, i64)
+      %r:3 = "test.random.solve_wide"(%ctx, %start, %mask, %disabled, %one, %seed, %increment, %bits, %kind, %reverse) {program = [
+        "version 2 width 279 instructions 76 captures 3 literals 6 flags [EXACT_UNIFORM, HAS_REAL]",
+        "0: PUSH_VARIABLE width 279",
+        "1: STORE_VALUE width 279",
+        "2: REAL_RANK_VALID width 1",
+        "3: END_HARD width 1 operand 4294967295",
+        "4: LOAD_VALUE width 279",
+        "5: REAL32_FROM_RANK width 32",
+        "6: STORE_VALUE width 32 operand 1",
+        "7: PUSH_CAPTURE width 32",
+        "8: REAL32_BITS width 32",
+        "9: STORE_VALUE width 32 operand 2",
+        "10: EQ width 1",
+        "11: PUSH_CAPTURE width 64 operand 1",
+        "12: PUSH_LITERAL width 64 value 0",
+        "13: EQ width 1",
+        "14: LOGICAL_AND width 1",
+        "15: LOAD_VALUE width 32 operand 1",
+        "16: LOAD_VALUE width 32 operand 2",
+        "17: NE width 1",
+        "18: PUSH_CAPTURE width 64 operand 1",
+        "19: PUSH_LITERAL width 64 value 1",
+        "20: EQ width 1",
+        "21: LOGICAL_AND width 1",
+        "22: LOGICAL_OR width 1",
+        "23: PUSH_CAPTURE width 64 operand 2",
+        "24: LOAD_VALUE width 32 operand 2",
+        "25: LOAD_VALUE width 32 operand 1",
+        "26: LE width 1",
+        "27: LOAD_VALUE width 32 operand 1",
+        "28: LOAD_VALUE width 32 operand 2",
+        "29: GE width 1",
+        "30: SELECT width 1",
+        "31: PUSH_CAPTURE width 64 operand 1",
+        "32: PUSH_LITERAL width 64 value 2",
+        "33: EQ width 1",
+        "34: LOGICAL_AND width 1",
+        "35: LOGICAL_OR width 1",
+        "36: PUSH_CAPTURE width 64 operand 2",
+        "37: LOAD_VALUE width 32 operand 2",
+        "38: LOAD_VALUE width 32 operand 1",
+        "39: LT width 1",
+        "40: LOAD_VALUE width 32 operand 1",
+        "41: LOAD_VALUE width 32 operand 2",
+        "42: GT width 1",
+        "43: SELECT width 1",
+        "44: PUSH_CAPTURE width 64 operand 1",
+        "45: PUSH_LITERAL width 64 value 3",
+        "46: EQ width 1",
+        "47: LOGICAL_AND width 1",
+        "48: LOGICAL_OR width 1",
+        "49: PUSH_CAPTURE width 64 operand 2",
+        "50: LOAD_VALUE width 32 operand 2",
+        "51: LOAD_VALUE width 32 operand 1",
+        "52: GE width 1",
+        "53: LOAD_VALUE width 32 operand 1",
+        "54: LOAD_VALUE width 32 operand 2",
+        "55: LE width 1",
+        "56: SELECT width 1",
+        "57: PUSH_CAPTURE width 64 operand 1",
+        "58: PUSH_LITERAL width 64 value 4",
+        "59: EQ width 1",
+        "60: LOGICAL_AND width 1",
+        "61: LOGICAL_OR width 1",
+        "62: PUSH_CAPTURE width 64 operand 2",
+        "63: LOAD_VALUE width 32 operand 2",
+        "64: LOAD_VALUE width 32 operand 1",
+        "65: GT width 1",
+        "66: LOAD_VALUE width 32 operand 1",
+        "67: LOAD_VALUE width 32 operand 2",
+        "68: LT width 1",
+        "69: SELECT width 1",
+        "70: PUSH_CAPTURE width 64 operand 1",
+        "71: PUSH_LITERAL width 64 value 5",
+        "72: EQ width 1",
+        "73: LOGICAL_AND width 1",
+        "74: LOGICAL_OR width 1",
+        "75: END_HARD width 1"]} : (!simulation.context, i279, i279, i64, i64, i64, i64, i32, i64, i64) -> (i279, i1, i64)
       %safe = arith.select %r#1, %r#0, %start : i279
       %value = simulation.random.real_from_rank %safe : i279 -> f32
       %max_bits = arith.constant 2139095039 : i32
@@ -174,7 +251,84 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
       %rt_ok = arith.cmpi eq, %rt_bits, %exp_bits : i64
       %rank_zero = arith.cmpi eq, %rhs_rank, %none : i2100
       %ph_ok = arith.select %rhs_finite, %true, %rank_zero : i1
-      %r:3 = simulation.random.solve_wide %ctx, %start, %mask, %disabled, %one, %seed, %increment, %bits, %kind, %reverse {program = "ODR1\02\00 \004\08\00\00L\00\00\00\03\00\00\00 \04\00\00\06\00\00\00\00\00\00\00\01\00\00\004\08\00\00\00\00\00\00\00\00\00\00-\00\00\004\08\00\00\00\00\00\00\00\00\00\004\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00 \00\00\00\01\00\00\00\FF\FF\FF\FF\00\00\00\00.\00\00\004\08\00\00\00\00\00\00\00\00\00\002\00\00\00@\00\00\00\00\00\00\00\00\00\00\00-\00\00\00@\00\00\00\01\00\00\00\00\00\00\00\02\00\00\00@\00\00\00\00\00\00\00\00\00\00\000\00\00\00@\00\00\00\00\00\00\00\00\00\00\00-\00\00\00@\00\00\00\02\00\00\00\00\00\00\00\15\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\02\00\00\00@\00\00\00\01\00\00\00\00\00\00\00\22\00\00\00@\00\00\00\00\00\00\00\00\00\00\00\15\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1B\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00.\00\00\00@\00\00\00\01\00\00\00\00\00\00\00.\00\00\00@\00\00\00\02\00\00\00\00\00\00\00\16\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\02\00\00\00@\00\00\00\01\00\00\00\00\00\00\00\22\00\00\00@\00\00\00\00\00\00\00\01\00\00\00\15\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1B\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1C\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\02\00\00\00@\00\00\00\02\00\00\00\00\00\00\00.\00\00\00@\00\00\00\02\00\00\00\00\00\00\00.\00\00\00@\00\00\00\01\00\00\00\00\00\00\00\19\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00.\00\00\00@\00\00\00\01\00\00\00\00\00\00\00.\00\00\00@\00\00\00\02\00\00\00\00\00\00\00\17\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1F\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\02\00\00\00@\00\00\00\01\00\00\00\00\00\00\00\22\00\00\00@\00\00\00\00\00\00\00\02\00\00\00\15\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1B\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1C\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\02\00\00\00@\00\00\00\02\00\00\00\00\00\00\00.\00\00\00@\00\00\00\02\00\00\00\00\00\00\00.\00\00\00@\00\00\00\01\00\00\00\00\00\00\00\1A\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00.\00\00\00@\00\00\00\01\00\00\00\00\00\00\00.\00\00\00@\00\00\00\02\00\00\00\00\00\00\00\18\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1F\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\02\00\00\00@\00\00\00\01\00\00\00\00\00\00\00\22\00\00\00@\00\00\00\00\00\00\00\03\00\00\00\15\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1B\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1C\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\02\00\00\00@\00\00\00\02\00\00\00\00\00\00\00.\00\00\00@\00\00\00\02\00\00\00\00\00\00\00.\00\00\00@\00\00\00\01\00\00\00\00\00\00\00\17\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00.\00\00\00@\00\00\00\01\00\00\00\00\00\00\00.\00\00\00@\00\00\00\02\00\00\00\00\00\00\00\19\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1F\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\02\00\00\00@\00\00\00\01\00\00\00\00\00\00\00\22\00\00\00@\00\00\00\00\00\00\00\04\00\00\00\15\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1B\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1C\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\02\00\00\00@\00\00\00\02\00\00\00\00\00\00\00.\00\00\00@\00\00\00\02\00\00\00\00\00\00\00.\00\00\00@\00\00\00\01\00\00\00\00\00\00\00\18\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00.\00\00\00@\00\00\00\01\00\00\00\00\00\00\00.\00\00\00@\00\00\00\02\00\00\00\00\00\00\00\1A\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1F\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\02\00\00\00@\00\00\00\01\00\00\00\00\00\00\00\22\00\00\00@\00\00\00\00\00\00\00\05\00\00\00\15\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1B\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1C\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00 \00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\01\00\00\00\00\00\00\00\02\00\00\00\00\00\00\00\03\00\00\00\00\00\00\00\04\00\00\00\00\00\00\00\05\00\00\00\00\00\00\00"} : (!simulation.context, i2100, i2100, i64, i64, i64, i64, i64, i64, i64) -> (i2100, i1, i64)
+      %r:3 = "test.random.solve_wide"(%ctx, %start, %mask, %disabled, %one, %seed, %increment, %bits, %kind, %reverse) {program = [
+        "version 2 width 2100 instructions 76 captures 3 literals 6 flags [EXACT_UNIFORM, HAS_REAL]",
+        "0: PUSH_VARIABLE width 2100",
+        "1: STORE_VALUE width 2100",
+        "2: REAL_RANK_VALID width 1",
+        "3: END_HARD width 1 operand 4294967295",
+        "4: LOAD_VALUE width 2100",
+        "5: REAL64_FROM_RANK width 64",
+        "6: STORE_VALUE width 64 operand 1",
+        "7: PUSH_CAPTURE width 64",
+        "8: REAL64_BITS width 64",
+        "9: STORE_VALUE width 64 operand 2",
+        "10: EQ width 1",
+        "11: PUSH_CAPTURE width 64 operand 1",
+        "12: PUSH_LITERAL width 64 value 0",
+        "13: EQ width 1",
+        "14: LOGICAL_AND width 1",
+        "15: LOAD_VALUE width 64 operand 1",
+        "16: LOAD_VALUE width 64 operand 2",
+        "17: NE width 1",
+        "18: PUSH_CAPTURE width 64 operand 1",
+        "19: PUSH_LITERAL width 64 value 1",
+        "20: EQ width 1",
+        "21: LOGICAL_AND width 1",
+        "22: LOGICAL_OR width 1",
+        "23: PUSH_CAPTURE width 64 operand 2",
+        "24: LOAD_VALUE width 64 operand 2",
+        "25: LOAD_VALUE width 64 operand 1",
+        "26: LE width 1",
+        "27: LOAD_VALUE width 64 operand 1",
+        "28: LOAD_VALUE width 64 operand 2",
+        "29: GE width 1",
+        "30: SELECT width 1",
+        "31: PUSH_CAPTURE width 64 operand 1",
+        "32: PUSH_LITERAL width 64 value 2",
+        "33: EQ width 1",
+        "34: LOGICAL_AND width 1",
+        "35: LOGICAL_OR width 1",
+        "36: PUSH_CAPTURE width 64 operand 2",
+        "37: LOAD_VALUE width 64 operand 2",
+        "38: LOAD_VALUE width 64 operand 1",
+        "39: LT width 1",
+        "40: LOAD_VALUE width 64 operand 1",
+        "41: LOAD_VALUE width 64 operand 2",
+        "42: GT width 1",
+        "43: SELECT width 1",
+        "44: PUSH_CAPTURE width 64 operand 1",
+        "45: PUSH_LITERAL width 64 value 3",
+        "46: EQ width 1",
+        "47: LOGICAL_AND width 1",
+        "48: LOGICAL_OR width 1",
+        "49: PUSH_CAPTURE width 64 operand 2",
+        "50: LOAD_VALUE width 64 operand 2",
+        "51: LOAD_VALUE width 64 operand 1",
+        "52: GE width 1",
+        "53: LOAD_VALUE width 64 operand 1",
+        "54: LOAD_VALUE width 64 operand 2",
+        "55: LE width 1",
+        "56: SELECT width 1",
+        "57: PUSH_CAPTURE width 64 operand 1",
+        "58: PUSH_LITERAL width 64 value 4",
+        "59: EQ width 1",
+        "60: LOGICAL_AND width 1",
+        "61: LOGICAL_OR width 1",
+        "62: PUSH_CAPTURE width 64 operand 2",
+        "63: LOAD_VALUE width 64 operand 2",
+        "64: LOAD_VALUE width 64 operand 1",
+        "65: GT width 1",
+        "66: LOAD_VALUE width 64 operand 1",
+        "67: LOAD_VALUE width 64 operand 2",
+        "68: LT width 1",
+        "69: SELECT width 1",
+        "70: PUSH_CAPTURE width 64 operand 1",
+        "71: PUSH_LITERAL width 64 value 5",
+        "72: EQ width 1",
+        "73: LOGICAL_AND width 1",
+        "74: LOGICAL_OR width 1",
+        "75: END_HARD width 1"]} : (!simulation.context, i2100, i2100, i64, i64, i64, i64, i64, i64, i64) -> (i2100, i1, i64)
       %safe = arith.select %r#1, %r#0, %start : i2100
       %value = simulation.random.real_from_rank %safe : i2100 -> f64
       %max_bits = arith.constant 9218868437227405311 : i64
@@ -275,7 +429,24 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
       %true = arith.constant true
       cf.br ^loop(%zero, %zero, %seed, %true : i64, i64, i64, i1)
     ^loop(%iteration: i64, %left: i64, %state: i64, %valid: i1):
-      %r:3 = simulation.random.solve_wide %ctx, %start, %mask, %zero, %one, %state, %increment {program = "ODR1\02\00 \00\17\01\00\00\10\00\00\00\00\00\00\00 \04\00\00\02\00\00\00\00\00\00\00\01\00\00\00\17\01\00\00\00\00\00\00\00\00\00\00-\00\00\00\17\01\00\00\00\00\00\00\00\00\00\004\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00 \00\00\00\01\00\00\00\FF\FF\FF\FF\00\00\00\00.\00\00\00\17\01\00\00\00\00\00\00\00\00\00\001\00\00\00 \00\00\00\00\00\00\00\00\00\00\00-\00\00\00 \00\00\00\01\00\00\00\00\00\00\00\22\00\00\00 \00\00\00\00\00\00\00\00\00\00\00/\00\00\00 \00\00\00\00\00\00\00\00\00\00\00\18\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00.\00\00\00 \00\00\00\01\00\00\00\00\00\00\00\22\00\00\00 \00\00\00\00\00\00\00\01\00\00\00/\00\00\00 \00\00\00\00\00\00\00\00\00\00\00\1A\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1B\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00 \00\00\00\01\00\00\00\FF\FF\FF\FF\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00@\00\00\00\00"} : (!simulation.context, i279, i279, i64, i64, i64, i64) -> (i279, i1, i64)
+      %r:3 = "test.random.solve_wide"(%ctx, %start, %mask, %zero, %one, %state, %increment) {program = [
+        "version 2 width 279 instructions 16 captures 0 literals 2 flags [EXACT_UNIFORM, HAS_REAL]",
+        "0: PUSH_VARIABLE width 279",
+        "1: STORE_VALUE width 279",
+        "2: REAL_RANK_VALID width 1",
+        "3: END_HARD width 1 operand 4294967295",
+        "4: LOAD_VALUE width 279",
+        "5: REAL32_FROM_RANK width 32",
+        "6: STORE_VALUE width 32 operand 1",
+        "7: PUSH_LITERAL width 32 value 0",
+        "8: REAL32_BITS width 32",
+        "9: GT width 1",
+        "10: LOAD_VALUE width 32 operand 1",
+        "11: PUSH_LITERAL width 32 value 1073741824",
+        "12: REAL32_BITS width 32",
+        "13: LT width 1",
+        "14: LOGICAL_AND width 1",
+        "15: END_HARD width 1 operand 4294967295"]} : (!simulation.context, i279, i279, i64, i64, i64, i64) -> (i279, i1, i64)
       %value = simulation.random.real_from_rank %r#0 : i279 -> f32
       %positive = arith.cmpf ogt, %value, %z : f32
       %below = arith.cmpf olt, %value, %last : f32
@@ -311,7 +482,24 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
       %true = arith.constant true
       cf.br ^loop(%zero, %zero, %seed, %true : i64, i64, i64, i1)
     ^loop(%iteration: i64, %left: i64, %state: i64, %valid: i1):
-      %r:3 = simulation.random.solve_wide %ctx, %start, %mask, %zero, %one, %state, %increment {program = "ODR1\02\00 \004\08\00\00\10\00\00\00\00\00\00\00 \04\00\00\02\00\00\00\00\00\00\00\01\00\00\004\08\00\00\00\00\00\00\00\00\00\00-\00\00\004\08\00\00\00\00\00\00\00\00\00\004\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00 \00\00\00\01\00\00\00\FF\FF\FF\FF\00\00\00\00.\00\00\004\08\00\00\00\00\00\00\00\00\00\002\00\00\00@\00\00\00\00\00\00\00\00\00\00\00-\00\00\00@\00\00\00\01\00\00\00\00\00\00\00\22\00\00\00@\00\00\00\00\00\00\00\00\00\00\000\00\00\00@\00\00\00\00\00\00\00\00\00\00\00\18\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00.\00\00\00@\00\00\00\01\00\00\00\00\00\00\00\22\00\00\00@\00\00\00\00\00\00\00\01\00\00\000\00\00\00@\00\00\00\00\00\00\00\00\00\00\00\1A\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\1B\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00 \00\00\00\01\00\00\00\FF\FF\FF\FF\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00@"} : (!simulation.context, i2100, i2100, i64, i64, i64, i64) -> (i2100, i1, i64)
+      %r:3 = "test.random.solve_wide"(%ctx, %start, %mask, %zero, %one, %state, %increment) {program = [
+        "version 2 width 2100 instructions 16 captures 0 literals 2 flags [EXACT_UNIFORM, HAS_REAL]",
+        "0: PUSH_VARIABLE width 2100",
+        "1: STORE_VALUE width 2100",
+        "2: REAL_RANK_VALID width 1",
+        "3: END_HARD width 1 operand 4294967295",
+        "4: LOAD_VALUE width 2100",
+        "5: REAL64_FROM_RANK width 64",
+        "6: STORE_VALUE width 64 operand 1",
+        "7: PUSH_LITERAL width 64 value 0",
+        "8: REAL64_BITS width 64",
+        "9: GT width 1",
+        "10: LOAD_VALUE width 64 operand 1",
+        "11: PUSH_LITERAL width 64 value 4611686018427387904",
+        "12: REAL64_BITS width 64",
+        "13: LT width 1",
+        "14: LOGICAL_AND width 1",
+        "15: END_HARD width 1 operand 4294967295"]} : (!simulation.context, i2100, i2100, i64, i64, i64, i64) -> (i2100, i1, i64)
       %value = simulation.random.real_from_rank %r#0 : i2100 -> f64
       %positive = arith.cmpf ogt, %value, %z : f64
       %below = arith.cmpf olt, %value, %last : f64

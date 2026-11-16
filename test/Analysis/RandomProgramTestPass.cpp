@@ -1,9 +1,14 @@
-//===- RandomProgramTestPass.cpp - Print constrained-random programs ------===//
+//===- RandomProgramTestPass.cpp - Print and encode random programs -------===//
 //
 // Decode the residual program of each random solve and cyclic sample op and
-// print its header, instructions, distribution records and compiled sampler
-// plan one per line, so tests can check the encoded program without matching
-// escaped bytes.
+// print its header, instructions, solve edges, priority inputs, distribution
+// records and compiled sampler plan one per line, so tests can check the
+// encoded program without matching escaped bytes.
+//
+// The inverse pass encodes the same line format. Random op verifiers check the
+// program header when parsing, so a test writes the op in generic form under
+// the unregistered name `test.random.<op>` with a `program` array of lines; the
+// pass encodes them and replaces the op by `simulation.random.<op>`.
 //
 //===----------------------------------------------------------------------===//
 
@@ -16,6 +21,8 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 
+#include "llvm/ADT/APInt.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <map>
@@ -94,8 +101,29 @@ StringRef opcodeName(unsigned opcode) {
   return "UNKNOWN";
 }
 
-void printFlags(raw_ostream &os, uint32_t flags,
-                ArrayRef<std::pair<uint32_t, StringRef>> names) {
+std::optional<unsigned> opcodeValue(StringRef name) {
+  for (unsigned opcode = 0; opcode != 256; ++opcode)
+    if (opcodeName(opcode) == name)
+      return opcode;
+  return std::nullopt;
+}
+
+constexpr std::pair<uint32_t, StringLiteral> programFlagNames[] = {
+    {TALOS_RT_RANDOM_PROGRAM_HAS_SOFT, "HAS_SOFT"},
+    {TALOS_RT_RANDOM_PROGRAM_HAS_SOLVE_BEFORE, "HAS_SOLVE_BEFORE"},
+    {TALOS_RT_RANDOM_PROGRAM_HAS_DIST, "HAS_DIST"},
+    {TALOS_RT_RANDOM_PROGRAM_HAS_DOMAINS, "HAS_DOMAINS"},
+    {TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM, "EXACT_UNIFORM"},
+    {TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY, "HAS_FUNCTION_PRIORITY"},
+    {TALOS_RT_RANDOM_PROGRAM_EXACT_WEIGHTED, "EXACT_WEIGHTED"},
+    {TALOS_RT_RANDOM_PROGRAM_HAS_GUARD_INPUT_MASKS, "HAS_GUARD_INPUT_MASKS"},
+    {TALOS_RT_RANDOM_PROGRAM_HAS_SAMPLER_PLAN, "HAS_SAMPLER_PLAN"},
+    {TALOS_RT_RANDOM_PROGRAM_HAS_REAL, "HAS_REAL"},
+    {TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_EDGE_ORIGINS,
+     "HAS_FUNCTION_EDGE_ORIGINS"}};
+
+template <typename Names>
+void printFlags(raw_ostream &os, uint32_t flags, const Names &names) {
   os << "[";
   bool first = true;
   for (auto [bit, name] : names) {
@@ -121,6 +149,13 @@ public:
     for (unsigned index = 0; index != size; ++index)
       value |= uint64_t(uint8_t(bytes[offset + index])) << (index * 8);
     return value;
+  }
+  /// `words` little-endian u64 words as one hexadecimal integer.
+  std::string hex(size_t offset, uint64_t words) const {
+    SmallVector<uint64_t> raw;
+    for (uint64_t word = 0; word != words; ++word)
+      raw.push_back(read(offset + word * 8, 8));
+    return "0x" + llvm::toString(APInt(words * 64, raw), 16, false);
   }
 
 private:
@@ -208,18 +243,7 @@ LogicalResult printProgram(Operation *op, StringRef bytes, raw_ostream &os) {
   if (wide)
     os << " literals " << literals;
   os << " flags ";
-  printFlags(
-      os, flags,
-      {{TALOS_RT_RANDOM_PROGRAM_HAS_SOFT, "HAS_SOFT"},
-       {TALOS_RT_RANDOM_PROGRAM_HAS_SOLVE_BEFORE, "HAS_SOLVE_BEFORE"},
-       {TALOS_RT_RANDOM_PROGRAM_HAS_DIST, "HAS_DIST"},
-       {TALOS_RT_RANDOM_PROGRAM_HAS_DOMAINS, "HAS_DOMAINS"},
-       {TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM, "EXACT_UNIFORM"},
-       {TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY, "HAS_FUNCTION_PRIORITY"},
-       {TALOS_RT_RANDOM_PROGRAM_EXACT_WEIGHTED, "EXACT_WEIGHTED"},
-       {TALOS_RT_RANDOM_PROGRAM_HAS_GUARD_INPUT_MASKS, "HAS_GUARD_INPUT_MASKS"},
-       {TALOS_RT_RANDOM_PROGRAM_HAS_SAMPLER_PLAN, "HAS_SAMPLER_PLAN"},
-       {TALOS_RT_RANDOM_PROGRAM_HAS_REAL, "HAS_REAL"}});
+  printFlags(os, flags, programFlagNames);
   os << "\n";
   size_t offset = header;
   size_t pool = header + instructions * 16;
@@ -241,11 +265,18 @@ LogicalResult printProgram(Operation *op, StringRef bytes, raw_ostream &os) {
     if (operand)
       os << " operand " << operand;
     if (opcode == TALOS_RT_RANDOM_PUSH_LITERAL_V1) {
-      // A version 2 literal is a pool index; print its low word.
-      if (wide && auxiliary >= literals)
+      // A version 2 literal names its first pool word; wider literals occupy
+      // consecutive words and print in hexadecimal.
+      uint64_t literalWords = (instructionWidth + 63) / 64;
+      if (wide && (auxiliary > literals || literalWords > literals - auxiliary))
         return op->emitError("random program literal is out of range");
-      os << " value "
-         << (wide ? reader.read(pool + auxiliary * 8, 8) : auxiliary);
+      os << " value ";
+      if (!wide)
+        os << auxiliary;
+      else if (instructionWidth <= 64)
+        os << reader.read(pool + auxiliary * 8, 8);
+      else
+        os << reader.hex(pool + auxiliary * 8, literalWords);
     } else if (auxiliary) {
       os << " auxiliary " << auxiliary;
     }
@@ -256,17 +287,39 @@ LogicalResult printProgram(Operation *op, StringRef bytes, raw_ostream &os) {
   if (flags & TALOS_RT_RANDOM_PROGRAM_HAS_SOLVE_BEFORE) {
     if (!reader.fits(offset, 4))
       return op->emitError("random program solve edges are truncated");
-    offset +=
-        4 + reader.read(offset, 4) *
-                (wide ? words * 16 + TALOS_RT_RANDOM_SOLVE_EDGE_TAIL_SIZE_V2
-                      : TALOS_RT_RANDOM_SOLVE_EDGE_SIZE);
+    uint64_t edges = reader.read(offset, 4);
+    uint64_t maskWords = wide ? words : 1;
+    size_t recordSize =
+        wide ? words * 16 + TALOS_RT_RANDOM_SOLVE_EDGE_TAIL_SIZE_V2
+             : TALOS_RT_RANDOM_SOLVE_EDGE_SIZE;
+    offset += 4;
+    if (!reader.fits(offset, edges * recordSize))
+      return op->emitError("random program solve edges are truncated");
+    for (uint64_t index = 0; index != edges; ++index, offset += recordSize) {
+      uint64_t block = reader.read(offset + maskWords * 16, 4);
+      os << "  edge before " << reader.hex(offset, maskWords) << " after "
+         << reader.hex(offset + maskWords * 8, maskWords) << " block ";
+      if (block == TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1)
+        os << "unmasked";
+      else
+        os << block;
+      os << " flags " << reader.read(offset + maskWords * 16 + 4, 4) << "\n";
+    }
   }
   if (flags & TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY) {
     if (!reader.fits(offset, 4))
       return op->emitError("random program priority inputs are truncated");
-    offset += 4 + reader.read(offset, 4) *
-                      (TALOS_RT_RANDOM_PRIORITY_INPUT_RECORD_HEADER_SIZE +
-                       2 * words * 8);
+    uint64_t records = reader.read(offset, 4);
+    size_t recordSize =
+        TALOS_RT_RANDOM_PRIORITY_INPUT_RECORD_HEADER_SIZE + 2 * words * 8;
+    offset += 4;
+    if (!reader.fits(offset, records * recordSize))
+      return op->emitError("random program priority inputs are truncated");
+    for (uint64_t index = 0; index != records; ++index, offset += recordSize)
+      os << "  priority end " << reader.read(offset, 4) << " reserved "
+         << reader.read(offset + 4, 4) << " references "
+         << reader.hex(offset + 8, words) << " arguments "
+         << reader.hex(offset + 8 + words * 8, words) << "\n";
   }
   if (flags & TALOS_RT_RANDOM_PROGRAM_HAS_DIST) {
     if (!reader.fits(offset, TALOS_RT_RANDOM_DIST_HEADER_SIZE))
@@ -292,14 +345,15 @@ LogicalResult printProgram(Operation *op, StringRef bytes, raw_ostream &os) {
          << reader.read(offset + 40, 4) << " flags ";
       printFlags(
           os, reader.read(offset + 44, 4),
-          {{TALOS_RT_RANDOM_DIST_WEIGHT_SIGNED, "WEIGHT_SIGNED"},
-           {TALOS_RT_RANDOM_DIST_TARGET_SIGNED, "TARGET_SIGNED"},
-           {TALOS_RT_RANDOM_DIST_RAW_WEIGHT, "RAW_WEIGHT"},
-           {TALOS_RT_RANDOM_DIST_PER_RANGE, "PER_RANGE"},
-           {TALOS_RT_RANDOM_DIST_CAPTURED_INTERVAL, "CAPTURED_INTERVAL"},
-           {TALOS_RT_RANDOM_DIST_DEFAULT_COMPLEMENT, "DEFAULT_COMPLEMENT"},
-           {TALOS_RT_RANDOM_DIST_EXPRESSION_WEIGHT, "EXPRESSION_WEIGHT"},
-           {TALOS_RT_RANDOM_DIST_EXPRESSION_TARGET, "EXPRESSION_TARGET"}});
+          std::initializer_list<std::pair<uint32_t, StringRef>>{
+              {TALOS_RT_RANDOM_DIST_WEIGHT_SIGNED, "WEIGHT_SIGNED"},
+              {TALOS_RT_RANDOM_DIST_TARGET_SIGNED, "TARGET_SIGNED"},
+              {TALOS_RT_RANDOM_DIST_RAW_WEIGHT, "RAW_WEIGHT"},
+              {TALOS_RT_RANDOM_DIST_PER_RANGE, "PER_RANGE"},
+              {TALOS_RT_RANDOM_DIST_CAPTURED_INTERVAL, "CAPTURED_INTERVAL"},
+              {TALOS_RT_RANDOM_DIST_DEFAULT_COMPLEMENT, "DEFAULT_COMPLEMENT"},
+              {TALOS_RT_RANDOM_DIST_EXPRESSION_WEIGHT, "EXPRESSION_WEIGHT"},
+              {TALOS_RT_RANDOM_DIST_EXPRESSION_TARGET, "EXPRESSION_TARGET"}});
       os << "\n";
     }
   }
@@ -342,10 +396,363 @@ public:
   }
 };
 
+/// One `key value` line of the printed program format. The first token of an
+/// instruction, `edge` or `priority` line names the line; a header line starts
+/// with `version`. A leading `N:` instruction index is ignored.
+struct ProgramLine {
+  StringRef kind;
+  llvm::StringMap<StringRef> fields;
+};
+
+FailureOr<ProgramLine> splitLine(Operation *op, StringRef text) {
+  SmallVector<StringRef> tokens;
+  for (StringRef rest = text.trim(); !rest.empty(); rest = rest.ltrim()) {
+    size_t end =
+        rest.starts_with("[") ? rest.find(']') + 1 : rest.find_first_of(" \t");
+    if (end == 0)
+      return op->emitError("unterminated flag list in random program line '")
+             << text << "'";
+    tokens.push_back(rest.take_front(end));
+    rest = rest.drop_front(std::min(end, rest.size()));
+  }
+  if (!tokens.empty() && tokens.front().ends_with(":"))
+    tokens.erase(tokens.begin());
+  ProgramLine line;
+  size_t first = 0;
+  if (!tokens.empty() && tokens.front() != "version")
+    line.kind = tokens[first++];
+  else
+    line.kind = "version";
+  if (tokens.empty() || (tokens.size() - first) % 2)
+    return op->emitError("random program line '")
+           << text << "' is not a name followed by key/value pairs";
+  for (size_t index = first; index != tokens.size(); index += 2)
+    if (!line.fields.try_emplace(tokens[index], tokens[index + 1]).second)
+      return op->emitError("random program line '")
+             << text << "' repeats '" << tokens[index] << "'";
+  return line;
+}
+
+class RandomProgramEncoder {
+public:
+  RandomProgramEncoder(Operation *op) : op(op) {}
+
+  FailureOr<std::string> encode(ArrayAttr lines) {
+    SmallVector<ProgramLine> parsed;
+    for (Attribute attribute : lines) {
+      auto text = dyn_cast<StringAttr>(attribute);
+      if (!text)
+        return op->emitError("random program lines must be strings");
+      FailureOr<ProgramLine> line = splitLine(op, text.getValue());
+      if (failed(line))
+        return failure();
+      parsed.push_back(std::move(*line));
+    }
+    if (parsed.empty() || parsed.front().kind != "version")
+      return op->emitError("random program must start with a version line");
+    ProgramLine &header = parsed.front();
+    uint64_t version, width, captures;
+    uint32_t flags;
+    if (failed(integer(header, "version", version)) ||
+        failed(integer(header, "width", width)) ||
+        failed(integer(header, "captures", captures)) ||
+        failed(flagList(header, flags)))
+      return failure();
+    if (version != TALOS_RT_RANDOM_PROGRAM_VERSION_V1 &&
+        version != TALOS_RT_RANDOM_PROGRAM_VERSION_V2)
+      return op->emitError("unsupported random program version ") << version;
+    wide = version == TALOS_RT_RANDOM_PROGRAM_VERSION_V2;
+    words = std::max<uint64_t>(1, (width + 63) / 64);
+    if (flags & (TALOS_RT_RANDOM_PROGRAM_HAS_DIST |
+                 TALOS_RT_RANDOM_PROGRAM_HAS_DOMAINS |
+                 TALOS_RT_RANDOM_PROGRAM_HAS_SAMPLER_PLAN))
+      return op->emitError("the test encoder writes no dist, domain or "
+                           "sampler plan sections");
+
+    std::string instructions, edges, priorities;
+    SmallVector<uint64_t> pool;
+    uint64_t instructionCount = 0, edgeCount = 0, priorityCount = 0;
+    for (const ProgramLine &line : ArrayRef(parsed).drop_front()) {
+      if (line.kind == "edge") {
+        if (!(flags & TALOS_RT_RANDOM_PROGRAM_HAS_SOLVE_BEFORE))
+          return op->emitError("solve edges require HAS_SOLVE_BEFORE");
+        if (failed(edge(line, edges)))
+          return failure();
+        ++edgeCount;
+      } else if (line.kind == "priority") {
+        if (!(flags & TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY))
+          return op->emitError("priority inputs require HAS_FUNCTION_PRIORITY");
+        if (failed(priority(line, priorities)))
+          return failure();
+        ++priorityCount;
+      } else {
+        if (edgeCount || priorityCount)
+          return op->emitError("instruction '")
+                 << line.kind << "' follows edge or priority lines";
+        if (failed(instruction(line, instructions, pool)))
+          return failure();
+        ++instructionCount;
+      }
+    }
+    // The printer's counts are optional, but must agree when present.
+    for (auto [key, actual] :
+         {std::pair<StringRef, uint64_t>{"instructions", instructionCount},
+          {"literals", pool.size()}}) {
+      uint64_t stated;
+      if (header.fields.count(key) &&
+          (failed(integer(header, key, stated)) || stated != actual))
+        return op->emitError("random program header states ")
+               << key << " " << header.fields.lookup(key) << " but has "
+               << actual;
+    }
+
+    std::string bytes;
+    put(bytes, TALOS_RT_RANDOM_PROGRAM_MAGIC, 4);
+    put(bytes, version, 2);
+    put(bytes,
+        wide ? TALOS_RT_RANDOM_PROGRAM_HEADER_SIZE_V2
+             : TALOS_RT_RANDOM_PROGRAM_HEADER_SIZE,
+        2);
+    put(bytes, width, 4);
+    put(bytes, instructionCount, 4);
+    put(bytes, captures, 4);
+    put(bytes, flags, 4);
+    if (wide) {
+      put(bytes, pool.size(), 4);
+      put(bytes, 0, 4);
+    }
+    bytes += instructions;
+    for (uint64_t word : pool)
+      put(bytes, word, 8);
+    if (flags & TALOS_RT_RANDOM_PROGRAM_HAS_SOLVE_BEFORE) {
+      put(bytes, edgeCount, 4);
+      bytes += edges;
+    }
+    if (flags & TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY) {
+      put(bytes, priorityCount, 4);
+      bytes += priorities;
+    }
+    return bytes;
+  }
+
+private:
+  static void put(std::string &bytes, uint64_t value, unsigned size) {
+    for (unsigned index = 0; index != size; ++index)
+      bytes.push_back(static_cast<char>(value >> (index * 8)));
+  }
+  static void putWords(std::string &bytes, const APInt &value, uint64_t count) {
+    APInt extended = value.zextOrTrunc(count * 64);
+    for (uint64_t word = 0; word != count; ++word)
+      put(bytes, extended.extractBitsAsZExtValue(64, word * 64), 8);
+  }
+
+  LogicalResult value(const ProgramLine &line, StringRef key, APInt &result,
+                      unsigned bits, bool required = true) {
+    auto found = line.fields.find(key);
+    if (found == line.fields.end()) {
+      if (required)
+        return op->emitError("random program line '")
+               << line.kind << "' needs '" << key << "'";
+      result = APInt(bits, 0);
+      return success();
+    }
+    APInt parsed;
+    if (found->second.getAsInteger(0, parsed))
+      return op->emitError("random program field '")
+             << key << "' is not an integer: " << found->second;
+    if (parsed.getActiveBits() > bits)
+      return op->emitError("random program field '")
+             << key << "' does not fit " << bits << " bits";
+    result = parsed.zextOrTrunc(bits);
+    return success();
+  }
+  LogicalResult integer(const ProgramLine &line, StringRef key,
+                        uint64_t &result, bool required = true) {
+    APInt parsed;
+    if (failed(value(line, key, parsed, 64, required)))
+      return failure();
+    result = parsed.getZExtValue();
+    return success();
+  }
+  LogicalResult flagList(const ProgramLine &line, uint32_t &flags) {
+    StringRef list = line.fields.lookup("flags");
+    if (!list.consume_front("[") || !list.consume_back("]"))
+      return op->emitError("random program header needs 'flags [...]'");
+    flags = 0;
+    SmallVector<StringRef> names;
+    list.split(names, ',', -1, false);
+    for (StringRef name : names) {
+      name = name.trim();
+      auto known = llvm::find_if(programFlagNames, [&](const auto &entry) {
+        return entry.second == name;
+      });
+      uint32_t bit;
+      if (known != std::end(programFlagNames))
+        flags |= known->first;
+      else if (!name.getAsInteger(0, bit))
+        flags |= bit;
+      else
+        return op->emitError("unknown random program flag '") << name << "'";
+    }
+    return success();
+  }
+
+  LogicalResult instruction(const ProgramLine &line, std::string &bytes,
+                            SmallVectorImpl<uint64_t> &pool) {
+    std::optional<unsigned> opcode = opcodeValue(line.kind);
+    if (!opcode)
+      return op->emitError("unknown random program opcode '")
+             << line.kind << "'";
+    for (const auto &field : line.fields)
+      if (!llvm::is_contained(
+              {"width", "flags", "operand", "value", "auxiliary"},
+              field.getKey()))
+        return op->emitError("instruction '")
+               << line.kind << "' has unknown field '" << field.getKey() << "'";
+    uint64_t width, flags, operand, auxiliary;
+    if (failed(integer(line, "width", width)) ||
+        failed(integer(line, "flags", flags, false)) ||
+        failed(integer(line, "operand", operand, false)) ||
+        failed(integer(line, "auxiliary", auxiliary, false)))
+      return failure();
+    bool literal = *opcode == TALOS_RT_RANDOM_PUSH_LITERAL_V1;
+    if (literal != line.fields.count("value"))
+      return op->emitError("only PUSH_LITERAL has a 'value'");
+    if (literal && line.fields.count("auxiliary"))
+      return op->emitError("PUSH_LITERAL takes 'value', not 'auxiliary'");
+    if (width > (wide ? UINT32_MAX : UINT8_MAX) || flags > UINT8_MAX ||
+        operand > UINT32_MAX || (wide && auxiliary > UINT32_MAX))
+      return op->emitError("instruction '")
+             << line.kind << "' has a field too wide for its version";
+    if (literal) {
+      APInt data;
+      if (failed(value(line, "value", data, wide ? width : 64)))
+        return failure();
+      if (wide) {
+        auxiliary = pool.size();
+        uint64_t count = (width + 63) / 64;
+        APInt extended = data.zextOrTrunc(count * 64);
+        for (uint64_t word = 0; word != count; ++word)
+          pool.push_back(extended.extractBitsAsZExtValue(64, word * 64));
+      } else {
+        auxiliary = data.getZExtValue();
+      }
+    }
+    put(bytes, *opcode, 1);
+    if (wide) {
+      put(bytes, flags, 1);
+      put(bytes, 0, 2);
+      put(bytes, width, 4);
+      put(bytes, operand, 4);
+      put(bytes, auxiliary, 4);
+    } else {
+      put(bytes, width, 1);
+      put(bytes, flags, 1);
+      put(bytes, 0, 1);
+      put(bytes, operand, 4);
+      put(bytes, auxiliary, 8);
+    }
+    return success();
+  }
+
+  LogicalResult block(const ProgramLine &line, uint64_t &result) {
+    if (line.fields.lookup("block") == "unmasked") {
+      result = TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1;
+      return success();
+    }
+    return integer(line, "block", result);
+  }
+
+  LogicalResult edge(const ProgramLine &line, std::string &bytes) {
+    uint64_t maskWords = wide ? words : 1;
+    APInt before, after;
+    uint64_t constraintBlock, flags;
+    if (failed(value(line, "before", before, maskWords * 64)) ||
+        failed(value(line, "after", after, maskWords * 64)) ||
+        failed(block(line, constraintBlock)) ||
+        failed(integer(line, "flags", flags)) || flags > UINT32_MAX)
+      return failure();
+    putWords(bytes, before, maskWords);
+    putWords(bytes, after, maskWords);
+    put(bytes, constraintBlock, 4);
+    put(bytes, flags, 4);
+    return success();
+  }
+
+  LogicalResult priority(const ProgramLine &line, std::string &bytes) {
+    uint64_t end, reserved;
+    APInt references, arguments;
+    if (failed(integer(line, "end", end)) ||
+        failed(integer(line, "reserved", reserved)) ||
+        failed(value(line, "references", references, words * 64)) ||
+        failed(value(line, "arguments", arguments, words * 64)))
+      return failure();
+    put(bytes, end, 4);
+    put(bytes, reserved, 4);
+    putWords(bytes, references, words);
+    putWords(bytes, arguments, words);
+    return success();
+  }
+
+  Operation *op;
+  bool wide = false;
+  uint64_t words = 1;
+};
+
+class RandomProgramEncodeTestPass
+    : public PassWrapper<RandomProgramEncodeTestPass, OperationPass<ModuleOp>> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(RandomProgramEncodeTestPass)
+
+  StringRef getArgument() const final {
+    return "test-talos-encode-random-programs";
+  }
+  StringRef getDescription() const final {
+    return "Encode printed random program lines on test.random.* ops and "
+           "replace them by simulation.random.* ops";
+  }
+
+  void runOnOperation() override {
+    SmallVector<Operation *> sources;
+    getOperation().walk([&](Operation *op) {
+      if (op->getName().getStringRef().starts_with("test.random."))
+        sources.push_back(op);
+    });
+    for (Operation *source : sources) {
+      auto lines = source->getAttrOfType<ArrayAttr>("program");
+      if (!lines) {
+        source->emitError("needs a 'program' array of lines");
+        return signalPassFailure();
+      }
+      std::string name =
+          ("simulation." + source->getName().getStringRef().drop_front(
+                               StringRef("test.").size()))
+              .str();
+      if (!OperationName(name, &getContext()).isRegistered()) {
+        source->emitError("'") << name << "' is not a registered operation";
+        return signalPassFailure();
+      }
+      FailureOr<std::string> bytes = RandomProgramEncoder(source).encode(lines);
+      if (failed(bytes))
+        return signalPassFailure();
+      OperationState state(source->getLoc(), name);
+      state.addOperands(source->getOperands());
+      state.addTypes(source->getResultTypes());
+      state.addAttributes(source->getAttrs());
+      state.attributes.set("program", StringAttr::get(&getContext(), *bytes));
+      OpBuilder builder(source);
+      Operation *replacement = builder.create(state);
+      source->replaceAllUsesWith(replacement);
+      source->erase();
+    }
+  }
+};
+
 } // namespace
 
 namespace talos {
 void registerRandomProgramTestPass() {
   PassRegistration<RandomProgramTestPass>();
+  PassRegistration<RandomProgramEncodeTestPass>();
 }
 } // namespace talos

@@ -1,6 +1,6 @@
-// RUN: talos-opt %s --talos-sim-compile-random-plans | FileCheck %s --check-prefix=PLAN
-// RUN: talos-opt %s --talos-sim-compile-random-plans '--encode-talos-sim-to-bytecode=vpi=off' --test-talos-print-bytecode -o /dev/null 2>&1 | FileCheck %s --check-prefix=BYTECODE
-// RUN: talos-opt %s --talos-sim-compile-random-plans '--encode-talos-sim-to-bytecode=vpi=off' --convert-talos-sim-processes-to-llvm-coroutines | talos-translate --mlir-to-llvmir | %llvm_dist/bin/opt -passes='coro-early,cgscc(coro-split<reuse-storage>),coro-cleanup' | %llc -filetype=obj -relocation-model=pic -o %t.o
+// RUN: talos-opt %s --allow-unregistered-dialect --test-talos-encode-random-programs --talos-sim-compile-random-plans | FileCheck %s --check-prefix=PLAN
+// RUN: talos-opt %s --allow-unregistered-dialect --test-talos-encode-random-programs --talos-sim-compile-random-plans '--encode-talos-sim-to-bytecode=vpi=off' --test-talos-print-bytecode -o /dev/null 2>&1 | FileCheck %s --check-prefix=BYTECODE
+// RUN: talos-opt %s --allow-unregistered-dialect --test-talos-encode-random-programs --talos-sim-compile-random-plans '--encode-talos-sim-to-bytecode=vpi=off' --convert-talos-sim-processes-to-llvm-coroutines | talos-translate --mlir-to-llvmir | %llvm_dist/bin/opt -passes='coro-early,cgscc(coro-split<reuse-storage>),coro-cleanup' | %llc -filetype=obj -relocation-model=pic -o %t.o
 // RUN: %target_cxx %t.o %runtime_link_flags -o %t.exe
 // RUN: %t.exe --seed=13 --execution-tier=native | FileCheck %s --check-prefix=RUNTIME
 // RUN: %t.exe --seed=13 --execution-tier=bytecode | FileCheck %s --check-prefix=RUNTIME
@@ -76,12 +76,34 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
       %shift = arith.constant 130 : i131
       %false = arith.constant false
       %active:2 = simulation.random.state %ctx : (!simulation.context) -> (i64, i64)
-      %a:5 = simulation.random.function_stage %ctx, %start, %mutable, %zero64, %attempts, %seed, %increment, %zero130 {program = "\4F\44\52\31\02\00\20\00\83\00\00\00\07\00\00\00\01\00\00\00\62\00\00\00\00\00\00\00\00\00\00\00\01\00\00\00\82\00\00\00\00\00\00\00\00\00\00\00\02\00\00\00\82\00\00\00\00\00\00\00\00\00\00\00\15\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\20\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\01\00\00\00\82\00\00\00\00\00\00\00\00\00\00\00\0D\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\20\00\00\00\01\00\00\00\01\00\00\00\00\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\04\00\00\00\00\00\00\00\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\03\00\00\00\00\00\00\00\00\00\00\00\01\00\00\00\02\00\00\00\03\00\00\00\00\00\00\00\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\07\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\04\00\00\00\00\00\00\00\06\00\00\00\00\00\00\00\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\03\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00"} : (!simulation.context, i131, i131, i64, i64, i64, i64, i130) -> (i131, i1, i64, i131, i1)
+      %a:5 = "test.random.function_stage"(%ctx, %start, %mutable, %zero64, %attempts, %seed, %increment, %zero130) {program = [
+        "version 2 width 131 instructions 7 captures 1 literals 0 flags [HAS_SOLVE_BEFORE, EXACT_UNIFORM, HAS_FUNCTION_PRIORITY]",
+        "0: PUSH_VARIABLE width 130",
+        "1: PUSH_CAPTURE width 130",
+        "2: EQ width 1",
+        "3: END_HARD width 1",
+        "4: PUSH_VARIABLE width 130",
+        "5: LOGICAL_NOT width 1",
+        "6: END_HARD width 1 operand 1",
+        "edge before 0x400000000000000000000000000000000 after 0x3FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF block 0 flags 1",
+        "priority end 3 reserved 0 references 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF arguments 0x400000000000000000000000000000000",
+        "priority end 6 reserved 0 references 0x3FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF arguments 0x0"]} : (!simulation.context, i131, i131, i64, i64, i64, i64, i130) -> (i131, i1, i64, i131, i1)
       %arg_wide = arith.shrui %a#0, %shift : i131
       %arg = arith.trunci %arg_wide : i131 to i64
       %returned = simulation.call @loop_function(%ctx, %arg) : (!simulation.context, i64) -> i64
       %capture = arith.extui %returned : i64 to i130
-      %b:5 = simulation.random.function_stage %ctx, %a#0, %a#3, %zero64, %attempts, %a#2, %increment, %capture {program = "\4F\44\52\31\02\00\20\00\83\00\00\00\07\00\00\00\01\00\00\00\62\00\00\00\00\00\00\00\00\00\00\00\01\00\00\00\82\00\00\00\00\00\00\00\00\00\00\00\02\00\00\00\82\00\00\00\00\00\00\00\00\00\00\00\15\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\20\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\01\00\00\00\82\00\00\00\00\00\00\00\00\00\00\00\0D\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\20\00\00\00\01\00\00\00\01\00\00\00\00\00\00\00\01\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\04\00\00\00\00\00\00\00\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\03\00\00\00\00\00\00\00\00\00\00\00\01\00\00\00\02\00\00\00\03\00\00\00\00\00\00\00\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\07\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\04\00\00\00\00\00\00\00\06\00\00\00\00\00\00\00\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\03\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00"} : (!simulation.context, i131, i131, i64, i64, i64, i64, i130) -> (i131, i1, i64, i131, i1)
+      %b:5 = "test.random.function_stage"(%ctx, %a#0, %a#3, %zero64, %attempts, %a#2, %increment, %capture) {program = [
+        "version 2 width 131 instructions 7 captures 1 literals 0 flags [HAS_SOLVE_BEFORE, EXACT_UNIFORM, HAS_FUNCTION_PRIORITY]",
+        "0: PUSH_VARIABLE width 130",
+        "1: PUSH_CAPTURE width 130",
+        "2: EQ width 1",
+        "3: END_HARD width 1",
+        "4: PUSH_VARIABLE width 130",
+        "5: LOGICAL_NOT width 1",
+        "6: END_HARD width 1 operand 1",
+        "edge before 0x400000000000000000000000000000000 after 0x3FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF block 0 flags 1",
+        "priority end 3 reserved 0 references 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF arguments 0x400000000000000000000000000000000",
+        "priority end 6 reserved 0 references 0x3FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF arguments 0x0"]} : (!simulation.context, i131, i131, i64, i64, i64, i64, i130) -> (i131, i1, i64, i131, i1)
       %after:2 = simulation.random.state %ctx : (!simulation.context) -> (i64, i64)
       %lower_before = arith.andi %a#0, %lower : i131
       %lower_ok = arith.cmpi eq, %lower_before, %start : i131
