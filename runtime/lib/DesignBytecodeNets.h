@@ -7,6 +7,8 @@
 #include "SignalSemantics.h"
 
 #include <cstdint>
+#include <memory>
+struct SAIFCause;
 #include <vector>
 
 struct NetAliasCache;
@@ -59,6 +61,7 @@ struct NetPublication {
   bool oldUnknown;
   bool value;
   bool unknown;
+  std::shared_ptr<const SAIFCause> saifCause{};
 };
 
 NetAliasCache *getNetAliasCache(const Image &image, talos_rt_context *context);

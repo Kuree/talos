@@ -19,6 +19,8 @@ set(_talos_runtime_common_sources
   lib/Containers.cpp
   lib/Coverage.cpp
   lib/SAIF.cpp
+  lib/SAIFLibrary.cpp
+  lib/SAIFEvents.cpp
   lib/CoverageBlockEvents.cpp
   lib/CoverageDatabase.cpp
   lib/Process.cpp

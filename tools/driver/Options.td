@@ -93,7 +93,7 @@ def saif_EQ : Joined<["--"], "saif=">, Group<Compilation_Group>,
   HelpText<"Collect integral and fixed aggregate activity into backward SAIF">;
 def saif_input_EQ : Joined<["--"], "saif-input=">, Group<Compilation_Group>,
   MetaVarName<"<forward.saif>">,
-  HelpText<"Select and map activity with an RTL forward SAIF file">;
+  HelpText<"Configure activity mappings or library conditions with forward SAIF">;
 def upf_allow_hdl_expressions : Flag<["--"], "upf-allow-hdl-expressions">,
   Group<Compilation_Group>,
   HelpText<"Allow direct HDL references in switch expressions (extension to IEEE 1801 6.22)">;

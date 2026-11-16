@@ -1,0 +1,31 @@
+// RUN: %split-file %s %t
+// RUN: talos --vpi=off --saif=%t.saif --saif-input=%t/library.saif -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 && FileCheck %s --input-file=%t.saif
+// RUN: talos --vpi=off --saif=%t.saif --saif-input=%t/library.saif -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 && FileCheck %s --input-file=%t.saif
+// RUN: talos --vpi=off --saif=%t.saif --saif-input=%t/library.saif -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc && %t.bc && FileCheck %s --input-file=%t.saif
+// RUN: talos-translate --import-saif %t.saif -o /dev/null
+// B changes after the causal input A, while Y is pending. Y's state and
+// path conditions must come from the pre-A state, not the delivery-time state.
+// CHECK: (INSTANCE "gate" u
+// CHECK: (Y (T0 5000000) (T1 2000000) (TX 0) (TZ 3000000) (TC 1)
+// CHECK-SAME: COND (!B) (RISE) (IOPATH A (TC 1)
+// CHECK: (LEAKAGE (COND A (T1 5000000) (T0 5000000) COND_DEFAULT (T1 5000000) (T0 5000000)
+//--- design.sv
+module gate(input logic A,B, output wire Y);
+  timeunit 1ns; timeprecision 1ns;
+  assign #3 Y = A;
+endmodule
+module top;
+  timeunit 1ns; timeprecision 1ns;
+  logic A = 0, B = 0;
+  wire Y;
+  gate u(A,B,Y);
+  initial begin #5 A = 1; #1 B = 1; #4 $finish; end
+endmodule
+//--- library.saif
+(SAIFILE (SAIFVERSION "2.0" "lib") (DIRECTION "forward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION) (DIVIDER /)
+  (LIBRARY "L" (MODULE gate
+    (PORT A (COND !A RISE_FALL COND_DEFAULT RISE_FALL))
+    (PORT Y (COND !B RISE_FALL (IOPATH A IOPATH_DEFAULT)
+             COND_DEFAULT RISE_FALL (IOPATH A IOPATH_DEFAULT)))
+    (LEAKAGE (COND A COND_DEFAULT)))))

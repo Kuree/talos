@@ -636,6 +636,10 @@ bool publishNetBits(talos_rt_context *context, const NetAliasCache &cache,
     for (size_t index = groupBegin; index != groupEnd; ++index) {
       const RoutedPublication &route = routed[index];
       const NetPublication &publication = publications[route.publicationIndex];
+      SAIFExecutionScope activity(
+          context, publication.saifCause
+                       ? publication.saifCause
+                       : talos_rt_saif_current_cause_unlocked(context));
       if (!appendSignalEvent(context, route.signalHandle, publication.oldValue,
                              publication.oldUnknown, publication.value,
                              publication.unknown, false))
@@ -762,6 +766,9 @@ bool scheduleNetBit(talos_rt_context *context, uint64_t root,
   else
     delay = std::min({delays[0], delays[1], delays[2]});
   ScheduledNBA update;
+  if (context->saif) {
+    update.saifCause = talos_rt_saif_capture_cause_unlocked(context);
+  }
   update.sequence = context->nextSchedulerSequence++;
   update.dueTime = delay > UINT64_MAX - context->schedulerTime
                        ? UINT64_MAX
@@ -790,6 +797,8 @@ bool scheduleNetBit(talos_rt_context *context, uint64_t root,
   update.inertialNetCancelGroup = cancelGroup;
   update.inertialNetInitialProjection = initialProjection;
   update.inertialNetChargeDecay = chargeDecay;
+  if (context->saif)
+    talos_rt_saif_event_issued_unlocked(context, update);
   context->scheduledNBAs.push_back(std::move(update));
   context->inertialNetPending.emplace(
       destination, InertialNetPending{value, unknown, chargeDecay});

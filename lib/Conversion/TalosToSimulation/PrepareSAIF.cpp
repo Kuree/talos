@@ -1,5 +1,6 @@
 //===- PrepareSAIF.cpp - Resolve Annex I RTL activity observations --------===//
 
+#include "PrepareSAIFLibrary.h"
 #include "talos/Analysis/NativeStorageLayout.h"
 #include "talos/Analysis/SimulationAnalysis.h"
 #include "talos/Conversion/TalosToSimulation.h"
@@ -8,6 +9,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringSet.h"
 
 using namespace mlir;
 
@@ -66,6 +68,8 @@ struct Candidate {
   int64_t right;
   bool ascending, indexed;
   uint32_t initial;
+  uint64_t scopeId;
+  bool output;
 };
 
 struct TalosSimPrepareSAIFPass
@@ -137,6 +141,8 @@ struct TalosSimPrepareSAIFPass
           defaults.try_emplace(canonical,
                                analysis::getDefaultStoragePlanes(rootType));
         }
+        bool output = !port || cast<sim::SimPortDeclOp>(op).getDirection() !=
+                                   sim::PortDirection::Input;
         std::function<void(Type, std::string, uint64_t, unsigned,
                            std::optional<int64_t>)>
             enumerate;
@@ -188,7 +194,8 @@ struct TalosSimPrepareSAIFPass
             }
             Candidate candidate{canonical,    id,      offset,  net,
                                 port,         name,    *width,  right,
-                                left < right, indexed, initial};
+                                left < right, indexed, initial, scopeId,
+                                output};
             auto [it, inserted] = names.try_emplace(name, candidates.size());
             if (inserted)
               candidates.push_back(candidate);
@@ -281,9 +288,11 @@ struct TalosSimPrepareSAIFPass
     }
 
     SmallVector<Attribute> bindings;
+    SmallVector<uint8_t> outputs;
+    DenseSet<std::tuple<PathAttr, IdentifierAttr, uint32_t>> mappedPoints;
     auto bind = [&](const Candidate &candidate, PathAttr target, bool port,
                     StringAttr virtualType, std::optional<uint64_t> selected,
-                    Operation *site) {
+                    Operation *site, bool fillMissing = false) {
       auto components = target.getComponents().getValue();
       if (components.size() < 2) {
         site->emitError("SAIF mapped signal needs a containing instance");
@@ -313,6 +322,10 @@ struct TalosSimPrepareSAIFPass
               IdentifierAttr::get(context, leaf.getName(),
                                   StringAttr::get(context, Twine(index).str()));
         }
+        auto key = std::make_tuple(instance, signal, uint32_t(port));
+        if (fillMissing && mappedPoints.contains(key))
+          continue;
+        mappedPoints.insert(key);
         uint32_t initial = candidate.initial;
         if (!candidate.net) {
           const auto &planes = defaults.find(candidate.canonical)->second;
@@ -329,32 +342,35 @@ struct TalosSimPrepareSAIFPass
         bindings.push_back(saif::BindingAttr::get(
             context, candidate.id, candidate.net, candidate.low + bit, instance,
             signal, port, initial, virtualType));
+        outputs.push_back(candidate.output);
       }
       sim::mark<sim::metadata::TransitionObservable>(candidate.canonical);
     };
 
     SmallVector<saif::FileOp> files(module.getOps<saif::FileOp>());
-    if (files.empty()) {
+    bool hasRTL = llvm::any_of(files, [](saif::FileOp file) {
+      return !file.getBody().front().getOps<saif::InstanceOp>().empty();
+    });
+    for (auto file : files)
+      for (auto header : file.getBody().front().getOps<saif::HeaderOp>())
+        if (header.getKind() == saif::HeaderKind::Direction &&
+            header.getText().value_or("") != "forward") {
+          header.emitError("SAIF collection input must be forward SAIF");
+          invalid = true;
+        }
+    if (!hasRTL) {
       for (const Candidate &candidate : candidates)
         bind(candidate, candidate.name, candidate.port, {}, {},
              candidate.canonical);
     } else {
       for (saif::FileOp file : files) {
-        bool libraryForm = false;
         for (auto header : file.getBody().front().getOps<saif::HeaderOp>())
           if (header.getKind() == saif::HeaderKind::Direction &&
               header.getText().value_or("") != "forward") {
             header.emitError("SAIF collection input must be RTL forward SAIF");
             invalid = true;
-          } else if (header.getKind() == saif::HeaderKind::Version &&
-                     header.getQualifierAttr())
-            libraryForm = true;
-        file.walk([&](saif::LibraryOp library) { libraryForm = true; });
-        if (libraryForm) {
-          file.emitError("library forward SAIF collection (SDPD/glitch "
-                         "directives) is not implemented");
-          invalid = true;
-        }
+          }
+
         std::function<void(saif::InstanceOp, PathAttr)> visit =
             [&](saif::InstanceOp instance, PathAttr parent) {
               PathAttr prefix = qualify(parent, instance.getName());
@@ -441,6 +457,30 @@ struct TalosSimPrepareSAIFPass
     }
     if (invalid)
       return signalPassFailure();
+    llvm::StringSet<> libraryTypes;
+    for (auto file : files)
+      file.walk([&](saif::CellOp cell) {
+        libraryTypes.insert(
+            cast<IdentifierAttr>(cell.getName().getComponents()[0])
+                .getName()
+                .getValue());
+      });
+    for (const Candidate &candidate : candidates) {
+      // Conditions can name every cell pin, including pins not selected by
+      // an RTL activity mapping. Bind these once in the original instance.
+      if (candidate.port && scopes.count(candidate.scopeId)) {
+        auto definition = scopes.lookup(candidate.scopeId).getDefinitionName();
+        if (definition && libraryTypes.contains(*definition))
+          bind(candidate, candidate.name, true, {}, {}, candidate.canonical,
+               true);
+      }
+      // Provenance must also survive intermediate, unselected source roots.
+      sim::mark<sim::metadata::TransitionObservable>(candidate.canonical);
+    }
+    auto cellPlan =
+        prepareSAIFLibrary(module, files, scopePaths, bindings, outputs);
+    if (failed(cellPlan))
+      return signalPassFailure();
     auto plan = ArrayAttr::get(context, bindings);
     // Validate the prepared plan even when inter-pass verification is off.
     // Name collisions and virtual-instance structure belong to the dialect.
@@ -451,6 +491,12 @@ struct TalosSimPrepareSAIFPass
                 StringAttr::get(context, saif::Bindings::getNameStr()), plan))))
       return signalPassFailure();
     saif::set<saif::Bindings>(module, plan);
+    saif::set<saif::Cells>(module, *cellPlan);
+    if (failed(dialect->verifyOperationAttribute(
+            module,
+            NamedAttribute(StringAttr::get(context, saif::Cells::getNameStr()),
+                           *cellPlan))))
+      return signalPassFailure();
     for (auto file : files)
       file.erase();
   }

@@ -229,6 +229,101 @@ static bool resourceLimitTests(MLIRContext &context, std::string &diagnostic) {
                "condition token boundary was not enforced");
 }
 
+static bool cellPlanTests(MLIRContext &context, std::string &diagnostic) {
+  using namespace talos::saif;
+  auto module =
+      OwningOpRef<ModuleOp>(ModuleOp::create(UnknownLoc::get(&context)));
+  auto a = IdentifierAttr::get(&context, StringAttr::get(&context, "A"),
+                               StringAttr{});
+  auto y = IdentifierAttr::get(&context, StringAttr::get(&context, "Y"),
+                               StringAttr{});
+  auto instance = PathAttr::get(&context, ArrayAttr::get(&context, {a}));
+  auto array = [&](ArrayRef<Attribute> items) {
+    return ArrayAttr::get(&context, items);
+  };
+  set<Output>(*module, StringAttr::get(&context, "out.saif"));
+  set<Bindings>(
+      *module,
+      array(
+          {BindingAttr::get(&context, 0, false, 0, instance, a, true, 0, {}),
+           BindingAttr::get(&context, 0, false, 1, instance, y, true, 0, {})}));
+  auto pins = array({PinBindingAttr::get(&context, a, 0, false),
+                     PinBindingAttr::get(&context, y, 1, true)});
+  auto condition = ConditionAttr::get(
+      &context,
+      array({ConditionTokenAttr::get(&context, ConditionOpcode::Pin, a)}));
+  auto paths = array({RelatedAttr::get(&context, array({a}), false)});
+  auto rule = RuleAttr::get(&context, condition, true, paths);
+  auto group = GroupAttr::get(&context, 1, false, true, array({rule}));
+  auto make = [&](ArrayAttr selectedPins, ArrayAttr groups) {
+    return CellBindingAttr::get(&context, instance,
+                                StringAttr::get(&context, "cell"), selectedPins,
+                                groups);
+  };
+  auto valid = make(pins, array({group}));
+  set<Cells>(*module, array({valid}));
+  if (!check(succeeded(verify(*module)), diagnostic))
+    return false;
+  auto rejects = [&](CellBindingAttr cell, StringRef expected) {
+    diagnostic.clear();
+    set<Cells>(*module, array({cell}));
+    return check(failed(verify(*module)),
+                 "cell verifier accepted illegal plan") &&
+           check(StringRef(diagnostic).contains(expected), diagnostic);
+  };
+  if (!rejects(make(array({PinBindingAttr::get(&context, a, 0, true),
+                           PinBindingAttr::get(&context, y, 1, true)}),
+                    array({group})),
+               "bound input pins") ||
+      !rejects(make(pins, array({GroupAttr::get(&context, 0, false, true,
+                                                array({rule}))})),
+               "require an output pin") ||
+      !rejects(
+          make(pins,
+               array({GroupAttr::get(
+                   &context, 1, false, true,
+                   array({RuleAttr::get(&context, {}, false, array({}))}))})),
+          "nondefault rule") ||
+      !rejects(
+          make(pins,
+               array({GroupAttr::get(
+                   &context, 1, false, false,
+                   array({RuleAttr::get(&context, {}, true, array({}))}))})),
+          "edge splitting requires conditions") ||
+      !rejects(make(pins, array({GroupAttr::get(
+                              &context, UINT64_MAX, true, false,
+                              array({RuleAttr::get(&context, {}, false,
+                                                   array({}))}))})),
+               "leakage groups require conditions") ||
+      !rejects(
+          make(pins,
+               array({GroupAttr::get(
+                   &context, 1, false, true,
+                   array({RuleAttr::get(&context, condition, false,
+                                        array({RelatedAttr::get(
+                                            &context, array({}), true)}))}))})),
+          "require a named related input"))
+    return false;
+#ifdef NDEBUG
+  if (!rejects(CellBindingAttr::get(&context, {}, {}, {}, {}),
+               "binding shape") ||
+      !rejects(
+          make(array({PinBindingAttr::get(&context, {}, 0, false)}), array({})),
+          "pin binding") ||
+      !rejects(
+          make(pins, array({GroupAttr::get(&context, 1, false, true, {})})),
+          "characterization group") ||
+      !rejects(
+          make(pins,
+               array({GroupAttr::get(
+                   &context, 1, false, true,
+                   array({RuleAttr::get(&context, condition, false, {})}))})),
+          "priority rule"))
+    return false;
+#endif
+  return true;
+}
+
 static int apiTests(MLIRContext &context) {
   std::string diagnostic;
   ScopedDiagnosticHandler handler(&context, [&](Diagnostic &error) {
@@ -247,6 +342,8 @@ static int apiTests(MLIRContext &context) {
           .str();
   auto module = talos::frontend::importSAIF("valid.saif", source, context);
   if (!check(succeeded(module), diagnostic))
+    return 1;
+  if (!cellPlanTests(context, diagnostic))
     return 1;
   if (!requiredStorageTests(context, diagnostic))
     return 1;

@@ -1,6 +1,7 @@
 //===- SAIFTest.cpp - Activity collection at canonical publication --------===//
 
 #include "../lib/RuntimeInternal.h"
+#include "../lib/SAIFInternal.h"
 #include "talos/Runtime/Runtime.h"
 #include "talos/Runtime/StableHandle.h"
 #include "gtest/gtest.h"
@@ -11,7 +12,6 @@ namespace {
 class SAIFTest : public testing::Test {
 protected:
   void SetUp() override {
-    talos_rt_execution_descriptor_v1 execution{};
     execution.version = TALOS_RT_VERSION;
     execution.state_bit_count = 128;
     ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
@@ -39,6 +39,7 @@ protected:
                                             &oldUnknown, &value, &unknown);
   }
   talos_rt_context *context = nullptr;
+  talos_rt_execution_descriptor_v1 execution{};
   uint64_t handle = 0;
   std::string output;
 };
@@ -191,5 +192,87 @@ TEST_F(SAIFTest, OutputIOFailureIsReported) {
       TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_saif_seal(context), TALOS_RT_OK);
   EXPECT_EQ(talos_rt_v1_saif_finish(context), TALOS_RT_IO_ERROR);
+}
+
+TEST_F(SAIFTest, EmptyVirtualCellTypeRemainsAQuotedString) {
+  ASSERT_EQ(talos_rt_v1_saif_configure(context, output.c_str(), 1),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_saif_bind(context, handle, "top\0v", 6, "A", 1, "", 0),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_saif_seal(context), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_saif_finish(context), TALOS_RT_OK);
+  EXPECT_NE(read().find("(VIRTUAL_INSTANCE \"\" v"), std::string::npos);
+}
+
+TEST_F(SAIFTest, CellPlanRejectsMalformedAndIllegalCharacterization) {
+  ASSERT_EQ(talos_rt_v1_saif_configure(context, output.c_str(), 1),
+            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_saif_bind(context, handle, "top", 4, "A", 1, nullptr, 0),
+      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_saif_bind(context,
+                                  talos_rt_stable_handle_offset(handle, 1),
+                                  "top", 4, "Y", 1, nullptr, 0),
+            TALOS_RT_OK);
+  // Two pins, one conditional output group, one !A rule with an A path.
+  std::vector<uint64_t> valid{1, 2, 1, 0, 0, 1, 1, 1, 2, 1,
+                              1, 2, 1, 0, 0, 1, 0, 0, 1, 0};
+  auto configure = [&](const std::vector<uint64_t> &plan) {
+    return talos_rt_v1_saif_cell(context, "top", 4, "cell", plan.data(),
+                                 plan.size());
+  };
+  for (size_t size = 0; size < valid.size(); ++size) {
+    auto truncated = valid;
+    truncated.resize(size);
+    EXPECT_EQ(configure(truncated), TALOS_RT_INVALID_ARGUMENT) << size;
+  }
+  for (auto mutation : {std::pair<size_t, uint64_t>{0, 2},
+                        {3, 2},
+                        {4, 1},
+                        {6, 0},
+                        {7, 0},
+                        {8, 0},
+                        {11, 4097},
+                        {13, 5},
+                        {14, 2},
+                        {19, 1}}) {
+    auto plan = valid;
+    plan[mutation.first] = mutation.second;
+    EXPECT_EQ(configure(plan), TALOS_RT_INVALID_ARGUMENT) << mutation.first;
+  }
+  EXPECT_EQ(configure({1, 2, 1, 0, 0, 1, 1, 1, 2, 1, 0, 0, 0}),
+            TALOS_RT_INVALID_ARGUMENT); // Only COND_DEFAULT.
+  EXPECT_EQ(configure({1, 2, 1, 0, 0, 1, 1, 1, 0, 1, 0, 0, 1, 1, 0}),
+            TALOS_RT_INVALID_ARGUMENT); // Only IOPATH_DEFAULT.
+  EXPECT_EQ(configure({1, 2, 1, 0, 0, 1, 1, UINT64_MAX, 1, 1, 0, 0, 0}),
+            TALOS_RT_INVALID_ARGUMENT); // Leakage without conditions.
+  ASSERT_EQ(configure(valid), TALOS_RT_OK);
+  EXPECT_EQ(configure(valid), TALOS_RT_INVALID_ARGUMENT);
+  ASSERT_EQ(talos_rt_v1_saif_seal(context), TALOS_RT_OK);
+  EXPECT_EQ(configure(valid), TALOS_RT_INVALID_ARGUMENT);
+}
+
+TEST_F(SAIFTest, CausalStateSurvivesDelayAndRetiresAtTheNextWaitOrTermination) {
+  ASSERT_EQ(talos_rt_v1_saif_configure(context, output.c_str(), 1),
+            TALOS_RT_OK);
+  for (uint64_t logical = 1; logical <= 1000; ++logical) {
+    context->saif->wakeups[logical] = std::make_shared<SAIFCause>();
+    talos_rt_fragment_action_v1 action{};
+    action.kind = TALOS_RT_FRAGMENT_SUSPEND;
+    action.suspend_kind = TALOS_RT_SUSPEND_DELAY;
+    {
+      SAIFExecutionScope activity(context, logical, &action);
+      EXPECT_EQ(context->saif->resumptions.size(), 1u);
+    }
+    EXPECT_EQ(context->saif->resumptions.size(), 1u);
+    action.kind =
+        logical % 2 ? TALOS_RT_FRAGMENT_TERMINATE : TALOS_RT_FRAGMENT_SUSPEND;
+    action.suspend_kind = TALOS_RT_SUSPEND_CHANGE;
+    {
+      SAIFExecutionScope activity(context, logical, &action);
+    }
+    EXPECT_TRUE(context->saif->resumptions.empty());
+    EXPECT_TRUE(context->saif->wakeups.empty());
+  }
 }
 } // namespace

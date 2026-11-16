@@ -640,7 +640,8 @@ LogicalResult SAIFDialect::verifyOperationAttribute(Operation *operation,
     return diagnostic;
   };
   StringRef name = attr.getName().strref();
-  if (name != Output::getNameStr() && name != Bindings::getNameStr())
+  if (name != Output::getNameStr() && name != Bindings::getNameStr() &&
+      name != Cells::getNameStr())
     return error() << "unknown SAIF attribute " << name;
   if (!isa<ModuleOp>(operation))
     return error() << "SAIF collection attributes belong on a module";
@@ -648,6 +649,122 @@ LogicalResult SAIFDialect::verifyOperationAttribute(Operation *operation,
     auto path = dyn_cast<StringAttr>(attr.getValue());
     if (!path || path.getValue().empty() || path.getValue().contains('\0'))
       return error() << "saif.output requires a nonempty file path";
+    return success();
+  }
+  if (name == Cells::getNameStr()) {
+    auto cells = dyn_cast<ArrayAttr>(attr.getValue());
+    auto observations = get<Bindings>(operation);
+    if (!cells || !observations || cells.size() > (1 << 20))
+      return error()
+             << "saif.cells requires a bounded cell plan and saif.bindings";
+    AttributeVerifier verifier;
+    DenseSet<PathAttr> instances;
+    uint64_t resources = 0;
+    for (Attribute value : cells) {
+      auto cell = dyn_cast<CellBindingAttr>(value);
+      if (!cell || !cell.getInstance() || !cell.getCell() || !cell.getPins() ||
+          !cell.getGroups())
+        return error() << "invalid SAIF cell binding shape";
+      if (cell.getCell().getValue().find_first_of("\"\n\r") != StringRef::npos)
+        return error() << "SAIF cell type must be a single-line literal string";
+      if (failed(verifier.verify(cell.getInstance(), operation)))
+        return failure();
+      if (!instances.insert(cell.getInstance()).second)
+        return error() << "duplicate SAIF cell instance";
+      DenseSet<IdentifierAttr> pins;
+      DenseSet<uint64_t> pinObservations;
+      DenseSet<IdentifierAttr> inputPins;
+      DenseSet<uint64_t> outputObservations;
+      for (Attribute pinValue : cell.getPins()) {
+        auto pin = dyn_cast<PinBindingAttr>(pinValue);
+        if (!pin || !pin.getName() ||
+            pin.getObservation() >= observations.size())
+          return error() << "invalid SAIF cell pin binding";
+        if (failed(verifier.verify(pin.getName(), operation)))
+          return failure();
+        auto observation =
+            dyn_cast<BindingAttr>(observations[pin.getObservation()]);
+        if (!observation || !observation.getPort() ||
+            observation.getInstance() != cell.getInstance() ||
+            observation.getSignal() != pin.getName() ||
+            !pins.insert(pin.getName()).second)
+          return error()
+                 << "SAIF cell pins must name distinct ports of that instance";
+        pinObservations.insert(pin.getObservation());
+        if (pin.getOutput())
+          outputObservations.insert(pin.getObservation());
+        else
+          inputPins.insert(pin.getName());
+      }
+      for (Attribute groupValue : cell.getGroups()) {
+        auto group = dyn_cast<GroupAttr>(groupValue);
+        if (!group || !group.getRules() || group.getRules().empty() ||
+            (group.getLeakage()
+                 ? group.getObservation() != UINT64_MAX
+                 : !pinObservations.contains(group.getObservation())) ||
+            (!group.getConditional() && group.getRules().size() != 1))
+          return error() << "invalid SAIF characterization group";
+        if (group.getLeakage() && !group.getConditional())
+          return error() << "SAIF leakage groups require conditions";
+        bool seenDefault = false;
+        bool hasCondition = false;
+        for (Attribute ruleValue : group.getRules()) {
+          auto rule = dyn_cast<RuleAttr>(ruleValue);
+          if (!rule || !rule.getPaths() || seenDefault ||
+              (group.getLeakage() &&
+               (rule.getSplitEdges() || !rule.getPaths().empty())) ||
+              (!group.getConditional() && rule.getCondition()))
+            return error() << "invalid SAIF priority rule";
+          if (rule.getSplitEdges() && !group.getConditional())
+            return error() << "SAIF edge splitting requires conditions";
+          if (!rule.getPaths().empty() &&
+              !outputObservations.contains(group.getObservation()))
+            return error() << "SAIF path groups require an output pin";
+          seenDefault = group.getConditional() && !rule.getCondition();
+          if (auto condition = rule.getCondition()) {
+            hasCondition = true;
+            if (failed(verifier.verify(condition, operation)))
+              return failure();
+            for (Attribute tokenValue : condition.getTokens()) {
+              auto token = cast<ConditionTokenAttr>(tokenValue);
+              if (token.getOpcode() == ConditionOpcode::Pin &&
+                  !pins.contains(token.getPin()))
+                return error() << "SAIF condition names an unbound cell pin";
+            }
+            resources += condition.getTokens().size();
+          }
+          DenseSet<IdentifierAttr> relatedPins;
+          bool pathDefault = false;
+          bool hasRelated = false;
+          for (Attribute relatedValue : rule.getPaths()) {
+            auto related = dyn_cast<RelatedAttr>(relatedValue);
+            if (!related || !related.getPins() || pathDefault ||
+                related.getIsDefault() != related.getPins().empty())
+              return error() << "invalid SAIF related pin list";
+            pathDefault = related.getIsDefault();
+            hasRelated |= !related.getIsDefault();
+            for (Attribute pinValue : related.getPins()) {
+              auto pin = dyn_cast<IdentifierAttr>(pinValue);
+              if (!pin || !inputPins.contains(pin) ||
+                  !relatedPins.insert(pin).second)
+                return error()
+                       << "SAIF related pins must be distinct bound input pins";
+            }
+            resources += related.getPins().size() + 1;
+          }
+          if (!rule.getPaths().empty() && !hasRelated)
+            return error() << "SAIF paths require a named related input";
+          resources += 1;
+        }
+        if (group.getConditional() && !hasCondition)
+          return error() << "SAIF conditions require a nondefault rule";
+        resources += 1;
+      }
+      resources += cell.getPins().size() + 1;
+      if (resources > (1 << 20))
+        return error()
+               << "SAIF characterization plan exceeds its resource limit";
+    }
     return success();
   }
   auto bindings = dyn_cast<ArrayAttr>(attr.getValue());

@@ -3978,6 +3978,8 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       update.dueTime = delay > UINT64_MAX - context->schedulerTime
                            ? UINT64_MAX
                            : context->schedulerTime + delay;
+      if (context->saif)
+        talos_rt_saif_event_issued_unlocked(context, update);
       context->scheduledNBAs.push_back(std::move(update));
       if (automatic)
         ++context->nativeAutomaticStates.find(objectID)->second.referenceCount;
@@ -4012,6 +4014,9 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       update.dueTime = delay > UINT64_MAX - context->schedulerTime
                            ? UINT64_MAX
                            : context->schedulerTime + delay;
+      if (context->saif) {
+        update.saifCause = talos_rt_saif_capture_cause_unlocked(context);
+      }
       context->scheduledDesignNBAs.push_back(std::move(update));
     }
     return TALOS_RT_OK;

@@ -902,6 +902,11 @@ bool recordClockOccurrenceUnlocked(
     if (!wasTriggered)
       context->designPollCandidates.insert(subscription.waiterToken);
   }
+  if (!wasTriggered && context->saif)
+    talos_rt_saif_wake_unlocked(
+        context,
+        subscription.waiterToken |
+            (native ? TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG : uint64_t{0}));
   if (!wasTriggered && ++context->schedulerSelectionGeneration == 0)
     context->schedulerSelectionGeneration = 1;
   return true;
@@ -1335,6 +1340,8 @@ publishSignalOccurrenceUnlocked(talos_rt_context *context, uint64_t stableID,
             const auto &entry = context->nativeScheduleFanoutEntries[index];
             const auto &kernel =
                 context->nativeSchedulePlan->clock_kernels[entry.kernel];
+            if (context->saif)
+              talos_rt_saif_wake_actor_unlocked(context, entry.actor_slot);
             talos::runtime::publishClockKernelReady(kernel, entry.merged_bit);
             context->nativeScheduleClockIngressPending = true;
             continue;
@@ -1345,6 +1352,13 @@ publishSignalOccurrenceUnlocked(talos_rt_context *context, uint64_t stableID,
           subscription->target == SignalSubscription::DesignDirectWait) {
         if (!subscription->latch || subscription->latch->triggered)
           continue;
+        if (context->saif)
+          talos_rt_saif_wake_unlocked(
+              context,
+              subscription->waiterToken |
+                  (subscription->target == SignalSubscription::NativeDirectWait
+                       ? TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG
+                       : uint64_t{0}));
         subscription->latch->triggered = true;
         bool staticallyPolledNative =
             fullyStaticAOT &&
@@ -1972,11 +1986,16 @@ static bool publishStaticAOTSignalTransitionUnlockedImpl(
         }
         talos_rt_native_clock_kernel kernel =
             context->nativeSchedulePlan->clock_kernels[entry->kernel];
+        if (context->saif)
+          talos_rt_saif_wake_actor_unlocked(context, entry->actor_slot);
         talos::runtime::publishClockKernelReady(kernel, entry->merged_bit);
         context->nativeScheduleClockIngressPending = true;
         continue;
       }
     }
+    if (context->saif && !scheduled.signalTriggered)
+      talos_rt_saif_wake_unlocked(context, TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG |
+                                               scheduled.token);
     scheduled.signalTriggered = true;
     uint32_t node = entry->compute_node;
     if (node >= context->nativeScheduleNodes.size() ||
@@ -3153,6 +3172,9 @@ extern "C" void talos_rt_v1_scheduler_static_transition(
       context->nativeScheduleClockIngressPending = true;
       continue;
     }
+    if (context->saif && !scheduled.signalTriggered)
+      talos_rt_saif_wake_unlocked(context, TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG |
+                                               scheduled.token);
     scheduled.signalTriggered = true;
     uint32_t node = entry->compute_node;
     if (node >= context->nativeScheduleNodes.size() ||
@@ -3232,6 +3254,9 @@ extern "C" void talos_rt_v1_scheduler_activate_static_nodes(
           (scheduled.suspendKind != TALOS_RT_SUSPEND_CHANGE &&
            scheduled.suspendKind != TALOS_RT_SUSPEND_EDGE))
         continue;
+      if (context->saif && !scheduled.signalTriggered)
+        talos_rt_saif_wake_unlocked(
+            context, TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | scheduled.token);
       scheduled.signalTriggered = true;
       context->nativeScheduleReadyNodes.set(node);
       context->nativePollCandidates.insert(scheduled.token);

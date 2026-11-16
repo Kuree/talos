@@ -23,8 +23,9 @@ def SAIFDialect : Dialect {
     The driver accepts `--saif=activity.saif` to collect source-authored
     integral signals, fixed packed/unpacked arrays, records and unions.
     `--saif-input=mapping.saif` optionally selects and renames points using
-    RTL forward mappings, including virtual instance PORT data. Backward and
-    library forward inputs cannot configure this initial collector.
+    RTL forward mappings, including virtual instance PORT data. Library forward
+    inputs select cell-type state/path conditions, edge splitting and leakage
+    conditions. Backward inputs describe results and cannot configure collection.
 
     `talos-sim-prepare-saif` resolves names before optimization and stores
     verified per-bit bindings on the module. Native lowering emits a constant
@@ -34,6 +35,8 @@ def SAIFDialect : Dialect {
     are exact femtosecond integers; TC counts only 0-to-1 and 1-to-0 changes,
     including intermediate changes within one scheduler slot. TB, IG, IK, TG require additional
     driver or timing provenance and are not synthesized from resolved values.
+    State/path counts retain the cell state before the causal input transition
+    through scheduled output delivery.
 
     Aggregate member names are flattened into a signal basename; the last
     nonnegative array/bit select remains a canonical SAIF index. Ambiguous
@@ -44,7 +47,8 @@ def SAIFDialect : Dialect {
   let hasOperationAttrVerify = 1;
   let discardableAttrs = (ins
     "::mlir::StringAttr":$output,
-    "::mlir::ArrayAttr":$bindings
+    "::mlir::ArrayAttr":$bindings,
+    "::mlir::ArrayAttr":$cells
   );
 }
 

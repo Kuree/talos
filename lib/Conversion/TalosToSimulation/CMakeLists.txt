@@ -32,6 +32,7 @@ add_mlir_library(TalosToSimulation
   MaterializeClockedSamples.cpp
   PrepareCoverage.cpp
   PrepareSAIF.cpp
+  PrepareSAIFLibrary.cpp
   PrepareCaptures.cpp
   PrepareLocals.cpp
   PrepareExpressions.cpp

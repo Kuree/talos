@@ -5637,6 +5637,12 @@ talos_rt_status talos_rt_v1_saif_bind(talos_rt_context *context,
                                       const char *virtual_type,
                                       uint32_t initial);
 talos_rt_status talos_rt_v1_saif_seal(talos_rt_context *context);
+// Versioned, bounded characterization words. All pin references are indices
+// into the preceding observation inventory; pointers remain target-sized.
+talos_rt_status
+talos_rt_v1_saif_cell(talos_rt_context *context, const char *instance,
+                      uint64_t instance_bytes, const char *cell_type,
+                      const uint64_t *plan, uint64_t plan_words);
 talos_rt_status talos_rt_v1_saif_finish(talos_rt_context *context);
 
 talos_rt_status talos_rt_v1_coverage_snapshot(talos_rt_context *context,

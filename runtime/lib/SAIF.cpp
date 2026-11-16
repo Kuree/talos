@@ -2,29 +2,14 @@
 
 #include "ProcessPacking.h"
 #include "ProcessShared.h"
-#include "RuntimeInternal.h"
+#include "ProcessSignals.h"
+#include "SAIFInternal.h"
 
 using namespace talos::process;
 
-namespace {
-struct Observation {
-  std::string signal;
-  uint64_t last = 0;
-  uint64_t time[4] = {};
-  uint64_t toggles = 0;
-  uint32_t current = 0;
-};
-struct Instance {
-  std::string name, virtualType;
-  bool isVirtual = false;
-  std::map<std::string, std::unique_ptr<Instance>> children;
-  std::vector<size_t> ports, nets;
-};
-struct Watch {
-  uint64_t bit;
-  size_t observation;
-};
+using namespace talos::saifruntime;
 
+namespace talos::saifruntime {
 constexpr size_t maxDecodedNameBytes = 16384;
 constexpr size_t maxTokenBytes = 3 * maxDecodedNameBytes + 2;
 constexpr size_t maxInstanceBytes = 128 * (maxTokenBytes + 1);
@@ -83,17 +68,26 @@ std::string quoted(std::string_view value) {
   // Annex I strings are literal, single-line strings, not C string escapes.
   return "\"" + std::string(value) + "\"";
 }
-} // namespace
-
-struct SAIFState {
-  std::string output;
-  uint64_t precision = 1;
-  bool sealed = false;
-  bool finished = false;
-  Instance root;
-  std::vector<Observation> observations;
-  std::unordered_map<uint32_t, std::vector<Watch>> watches;
-};
+Instance *findInstance(SAIFState &state, const char *data, uint64_t size) {
+  if (!data || !size || size > maxInstanceBytes || data[size - 1])
+    return nullptr;
+  Instance *node = &state.root;
+  unsigned depth = 0;
+  for (uint64_t begin = 0; begin < size;) {
+    std::string_view name(data + begin);
+    if (++depth > 128 || !validToken(name))
+      return nullptr;
+    auto &child = node->children[std::string(name)];
+    if (!child) {
+      child = std::make_unique<Instance>();
+      child->name = name;
+    }
+    node = child.get();
+    begin += name.size() + 1;
+  }
+  return node;
+}
+} // namespace talos::saifruntime
 
 extern "C" talos_rt_status talos_rt_v1_saif_configure(talos_rt_context *context,
                                                       const char *output,
@@ -142,20 +136,9 @@ talos_rt_v1_saif_bind(talos_rt_context *context, uint64_t handle,
     const NativeStaticState *native = findNativeStaticState(context, id);
     if (!native || uint64_t(offset) >= native->bitWidth)
       return TALOS_RT_INVALID_HANDLE;
-    Instance *node = &state->root;
-    size_t depth = 0;
-    for (uint64_t begin = 0; begin < instanceBytes;) {
-      std::string_view component(instance + begin);
-      if (++depth > 128 || !validToken(component))
-        return TALOS_RT_INVALID_ARGUMENT;
-      auto &child = node->children[std::string(component)];
-      if (!child) {
-        child = std::make_unique<Instance>();
-        child->name = component;
-      }
-      node = child.get();
-      begin += component.size() + 1;
-    }
+    Instance *node = findInstance(*state, instance, instanceBytes);
+    if (!node)
+      return TALOS_RT_INVALID_ARGUMENT;
     if (virtualType) {
       if (node->isVirtual && node->virtualType != virtualType)
         return TALOS_RT_INVALID_ARGUMENT;
@@ -230,10 +213,18 @@ void talos_rt_saif_record_transition_unlocked(talos_rt_context *context,
       width > UINT64_MAX - uint64_t(offset))
     return;
   auto found = state->watches.find(id);
-  if (found == state->watches.end())
+  if (found == state->watches.end()) {
+    state->publicationCause = talos_rt_saif_current_cause_unlocked(context);
     return;
+  }
   const NativeStaticState *native =
       newValue ? nullptr : findNativeStaticState(context, id);
+  struct Change {
+    size_t index;
+    uint32_t value;
+  };
+  std::vector<Change> changes;
+  std::vector<size_t> changedPoints;
   const auto &watches = found->second;
   auto it = std::lower_bound(
       watches.begin(), watches.end(), uint64_t(offset),
@@ -253,21 +244,28 @@ void talos_rt_saif_record_transition_unlocked(talos_rt_context *context,
       value = (context->stateValue[bit / 64] >> (bit % 64)) & 1;
       unknown = (context->stateUnknown[bit / 64] >> (bit % 64)) & 1;
     }
-    uint32_t current = unknown ? (value ? 3 : 2) : (value ? 1 : 0);
-    Observation &point = state->observations[it->observation];
-    if (current == point.current)
-      continue;
+    uint32_t current = unsigned(value) | (unsigned(unknown) << 1);
+    if (current != state->observations[it->observation].current) {
+      changes.push_back({it->observation, current});
+      changedPoints.push_back(it->observation);
+    }
+  }
+  auto outputCause = talos_rt_saif_current_cause_unlocked(context);
+  auto inputCause = preparePublication(context, changedPoints);
+  for (auto change : changes) {
+    auto &point = state->observations[change.index];
     uint64_t now = context->schedulerTime;
-    if (now < point.last ||
-        (current < 2 && point.current < 2 && point.toggles == UINT64_MAX)) {
+    if (now < point.last || (change.value < 2 && point.current < 2 &&
+                             point.toggles == UINT64_MAX)) {
       context->schedulerStatus = TALOS_RT_OUT_OF_RESOURCES;
       return;
     }
     point.time[point.current] += now - point.last;
-    // I.3.5.1: X/Z transitions do not contribute to TC.
-    point.toggles += current < 2 && point.current < 2;
+    point.toggles += change.value < 2 && point.current < 2;
+    recordCellEdge(*state, change.index, point.current, change.value, 0,
+                   outputCause, 0, inputCause);
     point.last = now;
-    point.current = current;
+    point.current = change.value;
   }
 }
 
@@ -275,7 +273,9 @@ namespace {
 void writeInstance(FILE *file, const SAIFState &state, const Instance &node) {
   std::fprintf(file, "(%s %s%s\n",
                node.isVirtual ? "VIRTUAL_INSTANCE" : "INSTANCE",
-               node.isVirtual ? (quoted(node.virtualType) + " ").c_str() : "",
+               node.isVirtual || !node.virtualType.empty()
+                   ? (quoted(node.virtualType) + " ").c_str()
+                   : "",
                node.name.c_str());
   auto writePoints = [&](const char *kind, const std::vector<size_t> &points) {
     if (points.empty())
@@ -283,7 +283,7 @@ void writeInstance(FILE *file, const SAIFState &state, const Instance &node) {
     std::fprintf(file, "(%s\n", kind);
     for (size_t index : points) {
       const Observation &point = state.observations[index];
-      std::fprintf(file, "(%s (T0 %s) (T1 %s) (TX %s) (TZ %s) (TC %s))\n",
+      std::fprintf(file, "(%s (T0 %s) (T1 %s) (TX %s) (TZ %s) (TC %s)",
                    point.signal.c_str(),
                    decimal(static_cast<unsigned __int128>(point.time[0]) *
                            state.precision)
@@ -298,11 +298,14 @@ void writeInstance(FILE *file, const SAIFState &state, const Instance &node) {
                            state.precision)
                        .c_str(),
                    decimal(point.toggles).c_str());
+      writeGroups(file, state, node, index, point.last);
+      std::fputs(")\n", file);
     }
     std::fputs(")\n", file);
   };
   writePoints("PORT", node.ports);
   writePoints("NET", node.nets);
+  writeGroups(file, state, node, UINT64_MAX, state.duration);
   for (const auto &child : node.children)
     writeInstance(file, state, *child.second);
   std::fputs(")\n", file);
@@ -323,6 +326,11 @@ extern "C" talos_rt_status talos_rt_v1_saif_finish(talos_rt_context *context) {
       point.time[point.current] += context->schedulerTime - point.last;
       point.last = context->schedulerTime;
     }
+    for (auto &cell : state->cells)
+      flushCell(*state, cell, context->schedulerTime);
+    state->duration = context->schedulerTime;
+    state->publicationCause.reset();
+    state->wakeups.clear();
     state->finished = true;
     std::unique_ptr<FILE, decltype(&std::fclose)> file(
         std::fopen(state->output.c_str(), "w"), &std::fclose);

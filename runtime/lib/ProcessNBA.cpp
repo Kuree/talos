@@ -330,6 +330,9 @@ static talos_rt_status schedulerNBA(
   }
   TALOS_RT_TRY {
     ScheduledNBA update;
+    if (context->saif) {
+      update.saifCause = talos_rt_saif_capture_cause_unlocked(context);
+    }
     update.valuePlane = valuePlane;
     update.unknownPlane = unknownPlane;
     update.planeBitCount = planeBitCount;
@@ -632,6 +635,8 @@ static talos_rt_status schedulerNBA(
     update.dueTime = delay > UINT64_MAX - context->schedulerTime
                          ? UINT64_MAX
                          : context->schedulerTime + delay;
+    if (context->saif)
+      talos_rt_saif_event_issued_unlocked(context, update);
     context->scheduledNBAs.push_back(std::move(update));
     if (automatic)
       ++context->nativeAutomaticStates.find(automaticID)->second.referenceCount;
@@ -1306,6 +1311,9 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_inertial_driver(
           context->nextSchedulerSequence == UINT64_MAX)
         return false;
       ScheduledNBA update;
+      if (context->saif) {
+        update.saifCause = talos_rt_saif_capture_cause_unlocked(context);
+      }
       update.valuePlane = valuePlane;
       update.unknownPlane = unknownPlane;
       update.planeBitCount = planeBitCount;
@@ -1343,6 +1351,8 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_inertial_driver(
         if (unknownPlane && sourceBit(targetUnknown, first + bit))
           setByteBit(update.unknown.data(), bit, true);
       }
+      if (context->saif)
+        talos_rt_saif_event_issued_unlocked(context, update);
       context->scheduledNBAs.push_back(std::move(update));
       return true;
     };
@@ -1630,6 +1640,9 @@ static talos_rt_status schedulerInertialPath(
           context->nextSchedulerSequence == UINT64_MAX)
         return false;
       ScheduledNBA update;
+      if (context->saif) {
+        update.saifCause = talos_rt_saif_capture_cause_unlocked(context);
+      }
       update.valuePlane = valuePlane;
       update.unknownPlane = unknownPlane;
       update.planeBitCount = planeBitCount;
@@ -1656,6 +1669,8 @@ static talos_rt_status schedulerInertialPath(
       update.inlineValue = targetValue ? 1 : 0;
       update.inlineUnknown = targetUnknown ? 1 : 0;
       auto key = std::make_pair(update.dueTime, update.sequence);
+      if (context->saif)
+        talos_rt_saif_event_issued_unlocked(context, update);
       if (!context->scheduledInertialPathNBAs.emplace(key, std::move(update))
                .second)
         return false;
@@ -2130,6 +2145,9 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_inertial_driver_strength_pair(
     auto enqueue = [&](const Selection &selection, uint64_t bit, bool value,
                        bool unknown, uint64_t delay, bool final) {
       ScheduledNBA update;
+      if (context->saif) {
+        update.saifCause = talos_rt_saif_capture_cause_unlocked(context);
+      }
       update.valuePlane = valuePlane;
       update.unknownPlane = unknownPlane;
       update.planeBitCount = planeBitCount;
@@ -2148,6 +2166,8 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_inertial_driver_strength_pair(
       update.inlinePacked = true;
       update.inlineValue = value;
       update.inlineUnknown = unknown;
+      if (context->saif)
+        talos_rt_saif_event_issued_unlocked(context, update);
       context->scheduledNBAs.push_back(std::move(update));
     };
     for (uint64_t bit = 0; bit != low->width; ++bit) {
@@ -2402,6 +2422,9 @@ static talos_rt_status schedulerInertialPathStrengthPair(
       auto enqueue = [&](const Selection &selection, bool value, bool unknown,
                          bool final) -> std::optional<uint64_t> {
         ScheduledNBA update;
+        if (context->saif) {
+          update.saifCause = talos_rt_saif_capture_cause_unlocked(context);
+        }
         update.valuePlane = valuePlane;
         update.unknownPlane = unknownPlane;
         update.planeBitCount = planeBitCount;
@@ -2425,6 +2448,8 @@ static talos_rt_status schedulerInertialPathStrengthPair(
         update.inlinePacked = true;
         update.inlineValue = value ? 1 : 0;
         update.inlineUnknown = unknown ? 1 : 0;
+        if (context->saif)
+          talos_rt_saif_event_issued_unlocked(context, update);
         uint64_t sequence = update.sequence;
         if (!context->scheduledInertialPathNBAs
                  .emplace(std::make_pair(due, sequence), std::move(update))

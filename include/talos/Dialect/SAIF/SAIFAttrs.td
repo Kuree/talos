@@ -66,6 +66,31 @@ def SAIFBindingAttr : SAIFAttr<"Binding", "binding"> {
   let genVerifyDecl = 1;
 }
 
+def SAIFPinBindingAttr : SAIFAttr<"PinBinding", "pin_binding"> {
+  let parameters = (ins SAIFIdentifierAttr:$name, "uint64_t":$observation,
+      "bool":$output);
+  let assemblyFormat = "`<` struct(params) `>`";
+}
+def SAIFRelatedAttr : SAIFAttr<"Related", "related"> {
+  let parameters = (ins "::mlir::ArrayAttr":$pins, "bool":$isDefault);
+  let assemblyFormat = "`<` struct(params) `>`";
+}
+def SAIFRuleAttr : SAIFAttr<"Rule", "rule"> {
+  let parameters = (ins OptionalParameter<"::talos::saif::ConditionAttr">:$condition,
+      "bool":$splitEdges, "::mlir::ArrayAttr":$paths);
+  let assemblyFormat = "`<` struct(params) `>`";
+}
+def SAIFGroupAttr : SAIFAttr<"Group", "group"> {
+  let parameters = (ins "uint64_t":$observation, "bool":$leakage,
+      "bool":$conditional, "::mlir::ArrayAttr":$rules);
+  let assemblyFormat = "`<` struct(params) `>`";
+}
+def SAIFCellBindingAttr : SAIFAttr<"CellBinding", "cell_binding"> {
+  let parameters = (ins SAIFPathAttr:$instance, "::mlir::StringAttr":$cell,
+      "::mlir::ArrayAttr":$pins, "::mlir::ArrayAttr":$groups);
+  let assemblyFormat = "`<` struct(params) `>`";
+}
+
 def SAIFTimeScaleAttr : SAIFAttr<"TimeScale", "timescale"> {
   let parameters = (ins SAIFNumberAttr:$amount, "::mlir::StringAttr":$unit);
   let assemblyFormat = "`<` struct(params) `>`";

@@ -7280,6 +7280,7 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
                                             0};
     talos_rt_fragment_action_v1 action{};
     std::unique_ptr<PendingDesignActivation> pendingActivation;
+    SAIFExecutionScope activity(context, task.id, &action);
     talos_rt_status status = executeDesignBytecode(
         entry, context, task.frame.data(), task.frame.size(),
         task.scratchOffset, task.scratchSize, task.continuation, 0, &action,

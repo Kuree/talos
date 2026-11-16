@@ -11,6 +11,7 @@
 namespace talos::saif {
 using Output = SAIFDialect::OutputAttrHelper;
 using Bindings = SAIFDialect::BindingsAttrHelper;
+using Cells = SAIFDialect::CellsAttrHelper;
 using discardable::get;
 using discardable::has;
 using discardable::remove;

@@ -1788,6 +1788,8 @@ talos_rt_v1_process_instance_execute(talos_rt_process_instance_v1 *instance,
     if (collected != TALOS_RT_OK)
       return collected;
   }
+  SAIFExecutionScope activity(
+      context, context ? context->activeLogicalProcessToken : 0, outAction);
   ManagedExecutionScope managedExecution(context);
   if (managedExecution.getStatus() != TALOS_RT_OK)
     return managedExecution.getStatus();
@@ -3090,6 +3092,9 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_direct_fragment_enter(
   context->activeWaitOrderFailed = false;
   talos_rt_flush_deferred_immediate_reports_unlocked(
       context, context->activeLogicalProcessToken);
+  if (context->saif)
+    talos_rt_saif_direct_enter_unlocked(context,
+                                        context->activeLogicalProcessToken);
   *outInstance = actor;
   return TALOS_RT_OK;
 }
@@ -3113,6 +3118,8 @@ talos_rt_v1_scheduler_direct_fragment_leave(talos_rt_context *context,
   // Do not clear signalTriggered here: the direct body can update a signal in
   // its own event expression before suspending on the same wait again. Such a
   // publication is the next activation, not the one consumed on entry.
+  if (context->saif)
+    talos_rt_saif_direct_leave_unlocked(context);
   context->nativeScheduleDirectActorSlot = UINT32_MAX;
   context->activeNativeProcess = nullptr;
   context->activeHomeRegion = UINT32_MAX;
@@ -5849,6 +5856,7 @@ talos_rt_status runScheduler(talos_rt_context *context,
             delayedNetPublications;
         uint64_t delayedNetGroup = UINT64_MAX;
         uint64_t delayedNetDueTime = UINT64_MAX;
+        std::shared_ptr<const SAIFCause> delayedNetCause;
         uint64_t powerPublication = UINT64_MAX;
         bool publicationFlushed = false;
         const bool snapshotPublications =
@@ -5868,6 +5876,7 @@ talos_rt_status runScheduler(talos_rt_context *context,
           return status == TALOS_RT_OK;
         };
         auto flushDelayedNetPublications = [&] {
+          SAIFExecutionScope activity(context, delayedNetCause);
           if (powerPublication != UINT64_MAX) {
             context->schedulerStatus = TALOS_RT_INVALID_DESIGN;
             return false;
@@ -5912,14 +5921,17 @@ talos_rt_status runScheduler(talos_rt_context *context,
           if (netBit == UINT64_MAX)
             return flushDelayedNetPublications();
           if (delayedNetGroup != UINT64_MAX &&
-              (delayedNetGroup != group || delayedNetDueTime != dueTime) &&
+              (delayedNetGroup != group || delayedNetDueTime != dueTime ||
+               delayedNetCause != update.saifCause) &&
               !flushDelayedNetPublications())
             return false;
           delayedNetGroup = group;
           delayedNetDueTime = dueTime;
+          delayedNetCause = update.saifCause;
           return true;
         };
         auto applyNative = [&](ScheduledNBA &update) {
+          SAIFExecutionScope activity(context, update.saifCause);
           bool powerSnapshot = update.powerGuardHalf() &&
                                snapshotPublications && context->exactEvents &&
                                context->exactEvents->snapshotFlush;
@@ -6596,6 +6608,7 @@ talos_rt_status runScheduler(talos_rt_context *context,
                  ((plane[bit / 64] >> (bit % 64)) & 1) != 0;
         };
         auto applyDesign = [&](const ScheduledDesignNBA &update) {
+          SAIFExecutionScope activity(context, update.saifCause);
           if (update.handleKind != TALOS_RT_DESCRIPTOR_STORAGE)
             return false;
           bool publicationChanged = false;

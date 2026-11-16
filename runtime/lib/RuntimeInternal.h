@@ -162,6 +162,8 @@ inline bool talos_rt_decode_scan_raw(const char *input, uint64_t inputSize,
   return true;
 }
 
+struct SAIFCause;
+
 struct SignalWaitLatch {
   bool triggered = false;
   bool affected = false;
@@ -947,6 +949,7 @@ enum class NBACommitGuard : uint8_t {
 };
 
 struct ScheduledNBA {
+  std::shared_ptr<const SAIFCause> saifCause;
   uint64_t sequence = 0;
   uint64_t dueTime = 0;
   uint64_t clockingOutput = UINT64_MAX;
@@ -1042,6 +1045,7 @@ struct ScheduledManagedNBA {
 };
 
 struct ScheduledDesignNBA {
+  std::shared_ptr<const SAIFCause> saifCause;
   uint64_t sequence = 0;
   uint64_t dueTime = 0;
   uint32_t execRegion = TALOS_RT_REGION_NBA;
@@ -2351,7 +2355,34 @@ struct FunctionalCoverageConfigurationSchemas;
 struct FunctionalCoverageLoadedData;
 struct FunctionalCoverageDiagnosticIndex;
 
+void talos_rt_saif_event_issued_unlocked(talos_rt_context *, ScheduledNBA &);
+std::shared_ptr<const SAIFCause>
+talos_rt_saif_current_cause_unlocked(talos_rt_context *);
+std::shared_ptr<const SAIFCause>
+talos_rt_saif_capture_cause_unlocked(talos_rt_context *);
+void talos_rt_saif_wake_unlocked(talos_rt_context *, uint64_t logical);
+void talos_rt_saif_wake_actor_unlocked(talos_rt_context *, uint32_t slot);
+void talos_rt_saif_direct_enter_unlocked(talos_rt_context *, uint64_t logical);
+void talos_rt_saif_direct_leave_unlocked(talos_rt_context *);
+void talos_rt_saif_complete_unlocked(talos_rt_context *, uint64_t logical);
+class SAIFExecutionScope {
+public:
+  SAIFExecutionScope(talos_rt_context *, uint64_t logical,
+                     const talos_rt_fragment_action_v1 *result = nullptr);
+  SAIFExecutionScope(talos_rt_context *,
+                     std::shared_ptr<const SAIFCause> cause);
+  ~SAIFExecutionScope();
+  SAIFExecutionScope(const SAIFExecutionScope &) = delete;
+
+private:
+  talos_rt_context *previousContext = nullptr;
+  std::shared_ptr<const SAIFCause> previousCause;
+  uint64_t previousLogical = 0;
+  bool enabled = false;
+  const talos_rt_fragment_action_v1 *result = nullptr;
+};
 struct SAIFState;
+struct SAIFCause;
 
 void talos_rt_saif_record_transition_unlocked(
     talos_rt_context *context, uint64_t stableID, uint64_t bitWidth,
@@ -4024,6 +4055,8 @@ void talos_rt_prune_finished_process_parents_unlocked(
 // already cleared the branch's parent mark.
 inline void talos_rt_record_terminated_parent_unlocked(
     talos_rt_context *context, uint64_t terminated, uint64_t parent) {
+  if (context->saif)
+    talos_rt_saif_complete_unlocked(context, terminated);
   auto &links = context->finishedProcessParents;
   if (links.size() >= context->finishedProcessParentsPruneSize) {
     talos_rt_prune_finished_process_parents_unlocked(context);
@@ -4042,6 +4075,8 @@ inline void talos_rt_record_terminated_parent_unlocked(
 inline void talos_rt_retire_process_parent_unlocked(talos_rt_context *context,
                                                     uint64_t finished,
                                                     uint64_t parent) {
+  if (context->saif)
+    talos_rt_saif_complete_unlocked(context, finished);
   if (context->logicalProcessParentsWithChildren.erase(finished))
     talos_rt_record_terminated_parent_unlocked(context, finished, parent);
 }

@@ -390,6 +390,8 @@ bool talos_rt_evaluate_design_observers_unlocked(talos_rt_context *context,
       if (occurrence) {
         if (ScheduledDesignTask *updated = findDesignTask(context, taskID);
             updated && !updated->terminated) {
+          if (context->saif)
+            talos_rt_saif_wake_unlocked(context, taskID);
           updated->signalTriggered = true;
           context->prioritySignalPending |= updated->prioritySignal;
           TALOS_RT_TRY { context->designPollCandidates.insert(taskID); }

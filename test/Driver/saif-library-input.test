@@ -1,6 +1,7 @@
 // RUN: %split-file %s %t
-// RUN: not talos --saif=%t.saif --saif-input=%t/library.saif -emit-sim %t/design.sv -o /dev/null 2>&1 | FileCheck %s
-// CHECK: library forward SAIF collection (SDPD/glitch directives) is not implemented
+// RUN: talos --saif=%t.saif --saif-input=%t/library.saif -emit-sim %t/design.sv -o %t.mlir
+// RUN: FileCheck %s --input-file=%t.mlir
+// CHECK: saif.cells = []
 //--- design.sv
 module top;
   initial #1 $finish;

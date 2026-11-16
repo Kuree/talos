@@ -417,6 +417,9 @@ bool evaluateNativeComputedWaiters(talos_rt_context *context,
       if (occurrence) {
         if (ScheduledProcess *updated = findScheduledProcess(context, token);
             updated && updated->instance) {
+          if (context->saif)
+            talos_rt_saif_wake_unlocked(
+                context, TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | token);
           updated->signalTriggered = true;
           if (postponed)
             updated->postponedWakeTime = context->schedulerTime;

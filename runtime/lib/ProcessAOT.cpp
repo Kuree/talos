@@ -1321,6 +1321,8 @@ talos_rt_status executeAOTNode(talos_rt_context *context, uint32_t actorSlot,
   }
 
   talos_rt_fragment_action_v1 action{};
+  SAIFExecutionScope activity(context, context->activeLogicalProcessToken,
+                              &action);
   talos_rt_status status = TALOS_RT_OK;
   auto ownsStaticSignalWait = [&](uint32_t continuation) {
     if (!canUseStaticAOTFanout(context))
