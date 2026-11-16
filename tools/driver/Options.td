@@ -90,7 +90,7 @@ def upf : JoinedOrSeparate<["--"], "upf">, Group<Compilation_Group>,
   HelpText<"Execute UPF power intent after elaborated Slang IR import">;
 def saif_EQ : Joined<["--"], "saif=">, Group<Compilation_Group>,
   MetaVarName<"<output.saif>">,
-  HelpText<"Collect committed scalar/vector activity into backward SAIF">;
+  HelpText<"Collect integral and fixed aggregate activity into backward SAIF">;
 def saif_input_EQ : Joined<["--"], "saif-input=">, Group<Compilation_Group>,
   MetaVarName<"<forward.saif>">,
   HelpText<"Select and map activity with an RTL forward SAIF file">;

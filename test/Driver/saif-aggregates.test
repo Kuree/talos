@@ -1,0 +1,31 @@
+// RUN: %split-file %s %t
+// RUN: talos --vpi=off --saif=%t.saif -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 && FileCheck %s --input-file=%t.saif
+// RUN: talos --vpi=off --saif=%t.saif -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 && FileCheck %s --input-file=%t.saif
+// RUN: talos --vpi=off --saif=%t.saif -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc && %t.bc && FileCheck %s --input-file=%t.saif
+// RUN: talos-translate --import-saif %t.saif -o /dev/null
+// CHECK-DAG: (record\.flag (T0 2000000) (T1 3000000) (TX 0) (TZ 0) (TC 1))
+// CHECK-DAG: (record\.data[1] (T0 2000000) (T1 3000000) (TX 0) (TZ 0) (TC 1))
+// CHECK-DAG: (array\[2\][0] (T0 2000000) (T1 3000000) (TX 0) (TZ 0) (TC 1))
+// CHECK-DAG: (negative\[\-2\] (T0 2000000) (T1 3000000) (TX 0) (TZ 0) (TC 1))
+// CHECK-DAG: (packed2\[0\][1] (T0 2000000) (T1 3000000) (TX 0) (TZ 0) (TC 1))
+// CHECK-DAG: (scalar[2] (T0 2000000) (T1 3000000) (TX 0) (TZ 0) (TC 1))
+// CHECK-DAG: (scalar\[2\] (T0 3000000) (T1 2000000) (TX 0) (TZ 0) (TC 1))
+//--- design.sv
+module top;
+  timeunit 1ns; timeprecision 1ns;
+  typedef struct { bit flag; logic [1:0] data; } record_t;
+  record_t record;
+  logic [1:0] array[1:2];
+  logic [-1:-2] negative = 0;
+  logic [1:0][2:1] packed2 = 0;
+  bit scalar[1:2];
+  bit \scalar[2] = 0;
+  initial begin
+    record.flag = 0; record.data = 0; array = '{default:0};
+    #2 record.flag = 1; record.data = 2; array[2] = 3;
+    negative[-2] = 1; packed2[0][1] = 1;
+    scalar[2] = 1;
+    #1 \scalar[2] = 1;
+    #2 $finish;
+  end
+endmodule

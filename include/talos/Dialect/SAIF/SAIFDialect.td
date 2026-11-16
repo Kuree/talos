@@ -21,7 +21,7 @@ def SAIFDialect : Dialect {
     Binding and collection lower into the existing simulation machinery.
 
     The driver accepts `--saif=activity.saif` to collect source-authored
-    scalar and one-dimensional nonnegative-index packed integral signals.
+    integral signals, fixed packed/unpacked arrays, records and unions.
     `--saif-input=mapping.saif` optionally selects and renames points using
     RTL forward mappings, including virtual instance PORT data. Backward and
     library forward inputs cannot configure this initial collector.
@@ -32,9 +32,12 @@ def SAIFDialect : Dialect {
     both native and bytecode execution. With UPF, these include published
     corruption, isolation and retention outputs. Residence times T0/T1/TX/TZ
     are exact femtosecond integers; TC counts only 0-to-1 and 1-to-0 changes,
-    including intermediate changes within one scheduler slot. TB, TG, IG, IK
-    and state/path-dependent activity require driver or timing provenance and
-    are not synthesized from resolved values.
+    including intermediate changes within one scheduler slot. TB, IG, IK, TG require additional
+    driver or timing provenance and are not synthesized from resolved values.
+
+    Aggregate member names are flattened into a signal basename; the last
+    nonnegative array/bit select remains a canonical SAIF index. Ambiguous
+    flattened names are diagnosed rather than silently dropping observations.
   }];
   let useDefaultAttributePrinterParser = 1;
   let usePropertiesForAttributes = 0;

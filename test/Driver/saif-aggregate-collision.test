@@ -1,0 +1,19 @@
+// RUN: %split-file %s %t
+// RUN: not talos --saif=%t.saif -emit-sim %t/design.sv -o /dev/null 2>&1 | FileCheck %s
+// RUN: not talos --saif=%t.saif -emit-sim %t/array.sv -o /dev/null 2>&1 | FileCheck %s
+// Distinct declarations with the same flattened SAIF spelling require an
+// explicit naming decision; silently losing an observation is invalid.
+// CHECK: SAIF flattened name collides with another declaration
+//--- design.sv
+module top;
+  typedef struct packed { bit flag; } record_t;
+  record_t record;
+  bit \record.flag ;
+  initial begin record.flag = 0; \record.flag = 1; #1 $finish; end
+endmodule
+//--- array.sv
+module top;
+  bit [1:0] array[1:2];
+  bit [1:0] \array[2] ;
+  initial begin array = '{default:0}; \array[2] = 1; #1 $finish; end
+endmodule

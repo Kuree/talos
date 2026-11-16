@@ -1,5 +1,6 @@
 //===- PrepareSAIF.cpp - Resolve Annex I RTL activity observations --------===//
 
+#include "talos/Analysis/NativeStorageLayout.h"
 #include "talos/Analysis/SimulationAnalysis.h"
 #include "talos/Conversion/TalosToSimulation.h"
 #include "talos/Dialect/SAIF/SAIFOps.h"
@@ -81,6 +82,7 @@ struct TalosSimPrepareSAIFPass
     }
     MLIRContext *context = &getContext();
     SmallVector<Candidate> candidates;
+    DenseMap<Operation *, analysis::DefaultStoragePlanes> defaults;
     DenseMap<PathAttr, size_t> names;
     DenseMap<uint64_t, sim::SimScopeDeclOp> scopes;
     DenseMap<uint64_t, PathAttr> scopePaths;
@@ -128,55 +130,133 @@ struct TalosSimPrepareSAIFPass
                      uint64_t id, uint64_t low, bool net, bool port, Type type,
                      StringRef debugName) {
         PathAttr scope = scopePath(scopeId);
-        auto width = sim::getPackedWidth(type);
-        // Annex I RTL points are integral scalar/vector objects. Aggregates
-        // and dynamic objects need an explicit future naming/flattening rule.
-        bool supported = isa<IntegerType, sim::LogicType>(type);
-        int64_t right = 0;
-        bool ascending = false;
-        bool indexed = width && *width > 1;
-        if (auto array = dyn_cast<sim::PackedArrayType>(type)) {
-          auto elementWidth = sim::getPackedWidth(array.getElementType());
-          supported = elementWidth && *elementWidth == 1 &&
-                      isa<IntegerType, sim::LogicType>(array.getElementType());
-          right = array.getRight();
-          ascending = array.getLeft() < right;
-          indexed = true;
-          supported &= array.getLeft() >= 0 && right >= 0;
-        }
-        if (!scope || debugName.empty() || !supported || !width || !*width)
+        if (!scope || debugName.empty())
           return;
-        SmallVector<Attribute> components(scope.getComponents().getValue());
-        // Declaration debug names are already decoded HDL identifiers.
-        // Brackets here are literal (e.g. escaped SV \\q[0] ), not a select.
-        components.push_back(IdentifierAttr::get(
-            context, StringAttr::get(context, debugName), StringAttr{}));
-        PathAttr name = path(context, components);
-        uint32_t initial = analysis::containsFourStateLogic(type) ? 2 : 0;
-        if (auto netDecl = dyn_cast<sim::SimNetDeclOp>(canonical)) {
-          switch (netDecl.getResolutionKind()) {
-          case sim::NetResolutionKind::Supply0:
-          case sim::NetResolutionKind::Tri0:
-            initial = 0;
-            break;
-          case sim::NetResolutionKind::Supply1:
-          case sim::NetResolutionKind::Tri1:
-            initial = 1;
-            break;
-          case sim::NetResolutionKind::TriReg:
-            break;
-          default:
-            initial = initial == 2 ? 3 : 0;
-            break;
-          }
+        if (!net && !defaults.count(canonical)) {
+          Type rootType = cast<sim::SimStorageDeclOp>(canonical).getType();
+          defaults.try_emplace(canonical,
+                               analysis::getDefaultStoragePlanes(rootType));
         }
-        Candidate candidate{canonical, id,    low,       net,     port,   name,
-                            *width,    right, ascending, indexed, initial};
-        auto [it, inserted] = names.try_emplace(name, candidates.size());
-        if (inserted)
-          candidates.push_back(candidate);
-        else if (port)
-          candidates[it->second] = candidate;
+        std::function<void(Type, std::string, uint64_t, unsigned,
+                           std::optional<int64_t>)>
+            enumerate;
+        enumerate = [&](Type leafType, std::string leafName, uint64_t offset,
+                        unsigned depth, std::optional<int64_t> leafIndex) {
+          if (depth > 128 || candidates.size() > (1 << 20)) {
+            op->emitError(
+                "SAIF aggregate inventory exceeds its resource limit");
+            invalid = true;
+            return;
+          }
+          auto width = sim::getPackedWidth(leafType);
+          bool scalar = isa<IntegerType, sim::LogicType>(leafType);
+          int64_t left = width ? int64_t(*width) - 1 : 0, right = 0;
+          bool indexed = width && *width > 1;
+          if (auto array = dyn_cast<sim::PackedArrayType>(leafType)) {
+            auto elementWidth = sim::getPackedWidth(array.getElementType());
+            scalar = elementWidth && *elementWidth == 1 &&
+                     isa<IntegerType, sim::LogicType>(array.getElementType());
+            left = array.getLeft();
+            right = array.getRight();
+            indexed = true;
+          }
+          if (scalar && width && *width && left >= 0 && right >= 0) {
+            SmallVector<Attribute> components(scope.getComponents().getValue());
+            components.push_back(IdentifierAttr::get(
+                context, StringAttr::get(context, leafName),
+                leafIndex ? StringAttr::get(context, Twine(*leafIndex).str())
+                          : StringAttr{}));
+            PathAttr name = path(context, components);
+            uint32_t initial =
+                analysis::containsFourStateLogic(leafType) ? 2 : 0;
+            if (auto declaration = dyn_cast<sim::SimNetDeclOp>(canonical)) {
+              switch (declaration.getResolutionKind()) {
+              case sim::NetResolutionKind::Supply0:
+              case sim::NetResolutionKind::Tri0:
+                initial = 0;
+                break;
+              case sim::NetResolutionKind::Supply1:
+              case sim::NetResolutionKind::Tri1:
+                initial = 1;
+                break;
+              case sim::NetResolutionKind::TriReg:
+                break;
+              default:
+                initial = initial == 2 ? 3 : 0;
+                break;
+              }
+            }
+            Candidate candidate{canonical,    id,      offset,  net,
+                                port,         name,    *width,  right,
+                                left < right, indexed, initial};
+            auto [it, inserted] = names.try_emplace(name, candidates.size());
+            if (inserted)
+              candidates.push_back(candidate);
+            else {
+              const auto &previous = candidates[it->second];
+              if (previous.canonical != canonical || previous.low != offset ||
+                  previous.width != *width || previous.net != net) {
+                op->emitError(
+                    "SAIF flattened name collides with another declaration: ")
+                    << name;
+                invalid = true;
+              } else if (port)
+                candidates[it->second] = candidate;
+            }
+            return;
+          }
+          if (!sim::isAggregateType(leafType))
+            return;
+          ArrayAttr fields;
+          if (auto record = dyn_cast<sim::PackedStructType>(leafType))
+            fields = record.getFields();
+          else if (auto record = dyn_cast<sim::UnpackedStructType>(leafType))
+            fields = record.getFields();
+          else if (auto record = dyn_cast<sim::PackedUnionType>(leafType))
+            fields = record.getFields();
+          else if (auto record = dyn_cast<sim::UnpackedUnionType>(leafType))
+            fields = record.getFields();
+          int64_t arrayLeft = 0, arrayRight = 0;
+          if (auto array = dyn_cast<sim::PackedArrayType>(leafType)) {
+            arrayLeft = array.getLeft();
+            arrayRight = array.getRight();
+          } else if (auto array = dyn_cast<sim::UnpackedArrayType>(leafType)) {
+            arrayLeft = array.getLeft();
+            arrayRight = array.getRight();
+          }
+          unsigned count = sim::getAggregateNumElements(leafType);
+          if (count > (1 << 20)) {
+            op->emitError("SAIF aggregate inventory exceeds 1048576 elements");
+            invalid = true;
+            return;
+          }
+          for (unsigned ordinal = 0; ordinal < count; ++ordinal) {
+            auto geometry =
+                sim::getAggregateProvenanceSubelement(leafType, ordinal);
+            if (!geometry || geometry->first > UINT64_MAX - offset)
+              continue;
+            std::string suffix;
+            auto elementType = sim::getAggregateElementType(leafType, ordinal);
+            int64_t elementIndex =
+                arrayLeft + (arrayLeft <= arrayRight ? int64_t(ordinal)
+                                                     : -int64_t(ordinal));
+            bool finalIndex = !fields && elementIndex >= 0 &&
+                              !sim::isAggregateType(elementType) &&
+                              sim::getPackedWidth(elementType) == 1;
+            if (fields)
+              suffix = "." + cast<sim::FieldAttr>(fields[ordinal])
+                                 .getName()
+                                 .getValue()
+                                 .str();
+            else if (!finalIndex)
+              suffix = "[" + Twine(elementIndex).str() + "]";
+            enumerate(elementType, leafName + suffix, offset + geometry->first,
+                      depth + 1,
+                      finalIndex ? std::optional<int64_t>(elementIndex)
+                                 : std::nullopt);
+          }
+        };
+        enumerate(type, debugName.str(), low, 0, std::nullopt);
       };
       for (auto storage : design.getOps<sim::SimStorageDeclOp>())
         if (storage.getLifetime() == sim::Lifetime::Design &&
@@ -233,9 +313,22 @@ struct TalosSimPrepareSAIFPass
               IdentifierAttr::get(context, leaf.getName(),
                                   StringAttr::get(context, Twine(index).str()));
         }
+        uint32_t initial = candidate.initial;
+        if (!candidate.net) {
+          const auto &planes = defaults.find(candidate.canonical)->second;
+          uint64_t position = candidate.low + bit;
+          if (position >= planes.value.getBitWidth()) {
+            site->emitError(
+                "SAIF aggregate bit exceeds its native storage layout");
+            invalid = true;
+            return;
+          }
+          initial = unsigned(planes.value[position]) |
+                    (unsigned(planes.unknown[position]) << 1);
+        }
         bindings.push_back(saif::BindingAttr::get(
             context, candidate.id, candidate.net, candidate.low + bit, instance,
-            signal, port, candidate.initial, virtualType));
+            signal, port, initial, virtualType));
       }
       sim::mark<sim::metadata::TransitionObservable>(candidate.canonical);
     };
@@ -265,10 +358,37 @@ struct TalosSimPrepareSAIFPass
         std::function<void(saif::InstanceOp, PathAttr)> visit =
             [&](saif::InstanceOp instance, PathAttr parent) {
               PathAttr prefix = qualify(parent, instance.getName());
+              auto findSource = [&](PathAttr source) {
+                auto found = names.find(source);
+                auto components = source.getComponents();
+                // HDL aggregate members are flattened into the SAIF signal
+                // basename. Preserve the final canonical array/bit select.
+                for (size_t first = 1;
+                     found == names.end() && first + 1 < components.size();
+                     ++first) {
+                  std::string basename;
+                  for (size_t i = first; i < components.size(); ++i) {
+                    auto item = cast<IdentifierAttr>(components[i]);
+                    if (i != first)
+                      basename += '.';
+                    basename += item.getName().getValue();
+                    if (i + 1 < components.size() && item.getIndex())
+                      basename += "[" + item.getIndex().getValue().str() + "]";
+                  }
+                  SmallVector<Attribute> flattened(components.begin(),
+                                                   components.begin() + first);
+                  flattened.push_back(IdentifierAttr::get(
+                      context, StringAttr::get(context, basename),
+                      cast<IdentifierAttr>(components[components.size() - 1])
+                          .getIndex()));
+                  found = names.find(path(context, flattened));
+                }
+                return found;
+              };
               auto map = [&](saif::MappingOp mapping) {
                 PathAttr source = qualify(prefix, mapping.getSourceName());
                 std::optional<uint64_t> selected;
-                auto found = names.find(source);
+                auto found = findSource(source);
                 if (found == names.end()) {
                   SmallVector<Attribute> components(
                       source.getComponents().getValue());
@@ -279,7 +399,7 @@ struct TalosSimPrepareSAIFPass
                         index <= INT64_MAX) {
                       components.back() = IdentifierAttr::get(
                           context, leaf.getName(), StringAttr{});
-                      found = names.find(path(context, components));
+                      found = findSource(path(context, components));
                       if (found != names.end()) {
                         const Candidate &candidate = candidates[found->second];
                         int64_t bit = candidate.ascending
