@@ -6455,11 +6455,17 @@ LogicalResult UnitLowering::lowerConcurrentAssertionImpl(
                  "observer"),
              failure();
 
-    std::string symbol =
-        (function.getSymName() + ".$concurrent_cancel." + Twine(node)).str();
-    std::string identity =
-        (function.getSymName() + ".$concurrent_disable." + Twine(node)).str();
-    uint64_t codeUnitID = stableCodeUnitID(identity);
+    // IEEE 1800-2023 16.12: the disable condition aborts every attempt live
+    // at any time between its Observed start and its end, inclusive; a
+    // Reactive disable in the attempt's final time step still revokes its
+    // queued report. Two detached actors watch each false-to-true transition:
+    //  - an Active canceller clears live attempts before the next Observed
+    //    evaluation, so an Active/NBA pulse cannot cancel attempts that only
+    //    start after it ended;
+    //  - a Reactive revoker advances the report epoch, but only for a
+    //    transition the canceller has not yet serviced, i.e. one after the
+    //    Observed region of this step. A pre-Observed pulse leaves the
+    //    reports of attempts started after it intact.
     uint64_t scopeID = 0;
     std::string parentHierarchy = function.getSymName().str();
     uint64_t parentID = function.getCodeUnitId().value_or(0);
@@ -6471,135 +6477,163 @@ LogicalResult UnitLowering::lowerConcurrentAssertionImpl(
       parentHierarchy = declaration.getHierarchicalName().str();
       break;
     }
-    std::string hierarchy =
-        (Twine(parentHierarchy) + ".$concurrent_disable." + Twine(node)).str();
-
     Value context = function.getBody().front().getArgument(0);
-    SmallVector<Value> captures{context};
-    llvm::append_range(captures, disableObserverBinding.getValues());
-    unsigned initialDisableIndex = captures.size();
-    captures.push_back(initialDisable);
-    unsigned stateStorageBegin = captures.size();
-    llvm::append_range(captures, stateStorages);
-    unsigned stateStorageEnd = captures.size();
-    unsigned disableEpochIndex = captures.size();
-    captures.push_back(disableEpoch);
+    auto makeActor =
+        [&](StringRef role, sim::EventRegion home, ArrayRef<Value> extra,
+            llvm::function_ref<void(OpBuilder &, Block &)> onTransition)
+        -> Value {
+      std::string symbol = (function.getSymName() + ".$concurrent_" + role +
+                            "." + Twine(node))
+                               .str();
+      std::string identity = (function.getSymName() + ".$concurrent_disable_" +
+                              role + "." + Twine(node))
+                                 .str();
+      uint64_t codeUnitID = stableCodeUnitID(identity);
+      std::string hierarchy = (Twine(parentHierarchy) + ".$concurrent_disable_" +
+                               role + "." + Twine(node))
+                                  .str();
+      SmallVector<Value> captures{context};
+      llvm::append_range(captures, disableObserverBinding.getValues());
+      unsigned initialDisableIndex = captures.size();
+      captures.push_back(initialDisable);
+      llvm::append_range(captures, extra);
 
-    SmallVector<Type> inputs;
-    SmallVector<DictionaryAttr> argumentAttrs;
-    for (auto [index, capture] : llvm::enumerate(captures)) {
-      inputs.push_back(capture.getType());
-      SmallVector<NamedAttribute> metadata;
-      if (auto argument = dyn_cast<BlockArgument>(capture);
-          argument && argument.getOwner() == &function.getBody().front()) {
-        if (DictionaryAttr source =
-                function.getArgAttrDict(argument.getArgNumber()))
-          llvm::append_range(metadata, source);
+      SmallVector<Type> inputs;
+      SmallVector<DictionaryAttr> argumentAttrs;
+      for (auto [index, capture] : llvm::enumerate(captures)) {
+        inputs.push_back(capture.getType());
+        SmallVector<NamedAttribute> metadata;
+        if (auto argument = dyn_cast<BlockArgument>(capture);
+            argument && argument.getOwner() == &function.getBody().front()) {
+          if (DictionaryAttr source =
+                  function.getArgAttrDict(argument.getArgNumber()))
+            llvm::append_range(metadata, source);
+        }
+        if (metadata.empty())
+          metadata.push_back(
+              sim::named<sim::metadata::CaptureKind>(sim::CaptureKindAttr::get(
+                  function.getContext(), index == 0
+                                             ? sim::CaptureKind::Context
+                                             : sim::CaptureKind::Formal)));
+        if (isa<sim::RefType>(capture.getType()) &&
+            !isStaticallyAllocatedOverrideTarget(capture))
+          metadata.push_back(
+              sim::named<sim::metadata::AutomaticReferenceCapture>(
+                  builder.getUnitAttr()));
+        argumentAttrs.push_back(builder.getDictionaryAttr(metadata));
       }
-      if (metadata.empty())
-        metadata.push_back(
-            sim::named<sim::metadata::CaptureKind>(sim::CaptureKindAttr::get(
-                function.getContext(), index == 0 ? sim::CaptureKind::Context
-                                                  : sim::CaptureKind::Formal)));
-      if (isa<sim::RefType>(capture.getType()) &&
-          !isStaticallyAllocatedOverrideTarget(capture))
-        metadata.push_back(sim::named<sim::metadata::AutomaticReferenceCapture>(
-            builder.getUnitAttr()));
-      argumentAttrs.push_back(builder.getDictionaryAttr(metadata));
-    }
 
-    OpBuilder outlineBuilder(function);
-    outlineBuilder.setInsertionPoint(function);
-    sim::SimCodeUnitDeclOp::create(
-        outlineBuilder, getSemanticLocation(disable), codeUnitID, scopeID,
-        sim::EntryKind::Fork, outlineBuilder.getStringAttr(hierarchy),
-        outlineBuilder.getStringAttr("concurrent assertion disable observer"),
-        outlineBuilder.getUnitAttr());
-    SmallVector<NamedAttribute> attributes{
-        sim::named<sim::metadata::Bindings>(outlineBuilder.getArrayAttr({})),
-        outlineBuilder.getNamedAttr(
-            "code_unit_id", outlineBuilder.getI64IntegerAttr(codeUnitID)),
-        outlineBuilder.getNamedAttr("internal", outlineBuilder.getUnitAttr()),
-        outlineBuilder.getNamedAttr(
-            "home_region",
-            sim::EventRegionAttr::get(function.getContext(),
-                                      sim::EventRegion::Reactive)),
-        outlineBuilder.getNamedAttr(
-            "domain", sim::ExecutionDomainAttr::get(
-                          function.getContext(), sim::ExecutionDomain::Design)),
-        sim::named<sim::metadata::HierarchicalName>(
-            outlineBuilder.getStringAttr(hierarchy)),
+      OpBuilder outlineBuilder(function);
+      outlineBuilder.setInsertionPoint(function);
+      sim::SimCodeUnitDeclOp::create(
+          outlineBuilder, getSemanticLocation(disable), codeUnitID, scopeID,
+          sim::EntryKind::Fork, outlineBuilder.getStringAttr(hierarchy),
+          outlineBuilder.getStringAttr("concurrent assertion disable observer"),
+          outlineBuilder.getUnitAttr());
+      SmallVector<NamedAttribute> attributes{
+          sim::named<sim::metadata::Bindings>(outlineBuilder.getArrayAttr({})),
+          outlineBuilder.getNamedAttr(
+              "code_unit_id", outlineBuilder.getI64IntegerAttr(codeUnitID)),
+          outlineBuilder.getNamedAttr("internal", outlineBuilder.getUnitAttr()),
+          outlineBuilder.getNamedAttr(
+              "home_region",
+              sim::EventRegionAttr::get(function.getContext(), home)),
+          outlineBuilder.getNamedAttr(
+              "domain",
+              sim::ExecutionDomainAttr::get(function.getContext(),
+                                            sim::ExecutionDomain::Design)),
+          sim::named<sim::metadata::HierarchicalName>(
+              outlineBuilder.getStringAttr(hierarchy)),
+      };
+      sim::SimFuncOp actor = sim::SimFuncOp::create(
+          outlineBuilder, getSemanticLocation(disable), symbol,
+          FunctionType::get(function.getContext(), inputs, TypeRange{}),
+          sim::EntryKind::Fork, attributes, argumentAttrs);
+      SymbolTable::setSymbolVisibility(actor,
+                                       SymbolTable::Visibility::Private);
+      ::talos::schedule::set<::talos::schedule::Field::ConcurrentCancel>(
+          actor, builder.getUnitAttr());
+      ::talos::schedule::set<::talos::schedule::Field::DetachedControls>(
+          actor, builder.getUnitAttr());
+      ::talos::schedule::set<::talos::schedule::Field::PrioritySignalResume>(
+          actor, builder.getUnitAttr());
+
+      Block &entry = actor.getBody().front();
+      Block *waitDisable = new Block;
+      Block *transition = new Block;
+      waitDisable->addArgument(builder.getI1Type(),
+                               getSemanticLocation(disable));
+      actor.getBody().push_back(waitDisable);
+      actor.getBody().push_back(transition);
+      OpBuilder entryBuilder = OpBuilder::atBlockEnd(&entry);
+      cf::BranchOp::create(entryBuilder, getSemanticLocation(disable),
+                           waitDisable,
+                           ValueRange{entry.getArgument(initialDisableIndex)});
+
+      OpBuilder waitBuilder = OpBuilder::atBlockEnd(waitDisable);
+      SmallVector<Value> reboundValues;
+      for (unsigned index = 1; index != initialDisableIndex; ++index)
+        reboundValues.push_back(entry.getArgument(index));
+      auto reboundObserver = sim::SimObserverBindOp::create(
+          waitBuilder, getSemanticLocation(disable),
+          disableObserverBinding.getResult().getType(),
+          disableObserverBinding.getEvaluatorAttr(), reboundValues,
+          disableObserverBinding.getCaptureCountAttr());
+      SmallVector<Value> observed{reboundObserver.getResult(),
+                                  waitDisable->getArgument(0)};
+      auto wait = sim::SimSuspendObserveOp::create(
+          waitBuilder, getSemanticLocation(disable), observed, 0,
+          ArrayRef<int32_t>{static_cast<int32_t>(sim::EdgeKind::Posedge)},
+          ArrayRef<int32_t>{-1}, schedule::ContinuationSiteAttr{},
+          sim::EventRegionAttr::get(function.getContext(), home), transition);
+      ::talos::schedule::set<
+          ::talos::schedule::Field::ConcurrentCancelLevelTrue>(
+          wait, builder.getUnitAttr());
+
+      OpBuilder transitionBuilder = OpBuilder::atBlockEnd(transition);
+      onTransition(transitionBuilder, entry);
+      Value currentTrue = arith::ConstantOp::create(
+          transitionBuilder, getSemanticLocation(disable), builder.getI1Type(),
+          builder.getBoolAttr(true));
+      cf::BranchOp::create(transitionBuilder, getSemanticLocation(disable),
+                           waitDisable, ValueRange{currentTrue});
+
+      SmallVector<Value> spawned(captures);
+      return sim::SimSpawnOp::create(builder, getSemanticLocation(disable),
+                                     actor.getSymNameAttr(), spawned,
+                                     ArrayAttr{}, ArrayAttr{})
+          .getResult();
     };
-    sim::SimFuncOp cancel = sim::SimFuncOp::create(
-        outlineBuilder, getSemanticLocation(disable), symbol,
-        FunctionType::get(function.getContext(), inputs, TypeRange{}),
-        sim::EntryKind::Fork, attributes, argumentAttrs);
-    SymbolTable::setSymbolVisibility(cancel, SymbolTable::Visibility::Private);
-    ::talos::schedule::set<::talos::schedule::Field::ConcurrentCancel>(
-        cancel, builder.getUnitAttr());
-    ::talos::schedule::set<::talos::schedule::Field::DetachedControls>(
-        cancel, builder.getUnitAttr());
-    ::talos::schedule::set<::talos::schedule::Field::PrioritySignalResume>(
-        cancel, builder.getUnitAttr());
-
-    Block &entry = cancel.getBody().front();
-    Block *waitDisable = new Block;
-    Block *cancelLiveAttempts = new Block;
-    waitDisable->addArgument(builder.getI1Type(), getSemanticLocation(disable));
-    cancel.getBody().push_back(waitDisable);
-    cancel.getBody().push_back(cancelLiveAttempts);
-    OpBuilder entryBuilder = OpBuilder::atBlockEnd(&entry);
-    cf::BranchOp::create(entryBuilder, getSemanticLocation(disable),
-                         waitDisable,
-                         ValueRange{entry.getArgument(initialDisableIndex)});
-
-    OpBuilder waitBuilder = OpBuilder::atBlockEnd(waitDisable);
-    SmallVector<Value> reboundValues;
-    for (unsigned index = 1; index != initialDisableIndex; ++index)
-      reboundValues.push_back(entry.getArgument(index));
-    auto reboundObserver = sim::SimObserverBindOp::create(
-        waitBuilder, getSemanticLocation(disable),
-        disableObserverBinding.getResult().getType(),
-        disableObserverBinding.getEvaluatorAttr(), reboundValues,
-        disableObserverBinding.getCaptureCountAttr());
-    SmallVector<Value> observed{reboundObserver.getResult(),
-                                waitDisable->getArgument(0)};
-    auto cancelWait = sim::SimSuspendObserveOp::create(
-        waitBuilder, getSemanticLocation(disable), observed, 0,
-        ArrayRef<int32_t>{static_cast<int32_t>(sim::EdgeKind::Posedge)},
-        ArrayRef<int32_t>{-1}, schedule::ContinuationSiteAttr{},
-        sim::EventRegionAttr::get(function.getContext(),
-                                  sim::EventRegion::Reactive),
-        cancelLiveAttempts);
-    ::talos::schedule::set<::talos::schedule::Field::ConcurrentCancelLevelTrue>(
-        cancelWait, builder.getUnitAttr());
-
-    OpBuilder cancelBuilder = OpBuilder::atBlockEnd(cancelLiveAttempts);
-    Value cancelZero = arith::ConstantOp::create(
-        cancelBuilder, getSemanticLocation(disable), stateType,
-        cancelBuilder.getI64IntegerAttr(0));
-    for (unsigned index = stateStorageBegin; index != stateStorageEnd; ++index)
-      sim::SimRefStoreOp::create(cancelBuilder, getSemanticLocation(disable),
-                                 cancelZero, entry.getArgument(index));
-    Value epoch = sim::SimRefLoadOp::create(
-        cancelBuilder, getSemanticLocation(disable), stateType,
-        entry.getArgument(disableEpochIndex));
-    Value one = arith::ConstantOp::create(
-        cancelBuilder, getSemanticLocation(disable), stateType,
-        cancelBuilder.getI64IntegerAttr(1));
-    Value nextEpoch = arith::AddIOp::create(
-        cancelBuilder, getSemanticLocation(disable), epoch, one);
-    sim::SimRefStoreOp::create(cancelBuilder, getSemanticLocation(disable),
-                               nextEpoch, entry.getArgument(disableEpochIndex));
-    Value currentTrue = arith::ConstantOp::create(
-        cancelBuilder, getSemanticLocation(disable), builder.getI1Type(),
-        builder.getBoolAttr(true));
-    cf::BranchOp::create(cancelBuilder, getSemanticLocation(disable),
-                         waitDisable, ValueRange{currentTrue});
-
-    sim::SimSpawnOp::create(builder, getSemanticLocation(disable),
-                            cancel.getSymNameAttr(), captures, ArrayAttr{},
-                            ArrayAttr{});
+    unsigned extraBegin = 1 + disableObserverBinding.getValues().size() + 1;
+    Value canceller = makeActor(
+        "cancel", sim::EventRegion::Active, stateStorages,
+        [&](OpBuilder &cancelBuilder, Block &entry) {
+          Value cancelZero = arith::ConstantOp::create(
+              cancelBuilder, getSemanticLocation(disable), stateType,
+              cancelBuilder.getI64IntegerAttr(0));
+          for (unsigned index = 0; index != stateStorages.size(); ++index)
+            sim::SimRefStoreOp::create(cancelBuilder,
+                                       getSemanticLocation(disable),
+                                       cancelZero,
+                                       entry.getArgument(extraBegin + index));
+        });
+    makeActor(
+        "revoke", sim::EventRegion::Reactive,
+        ArrayRef<Value>{disableEpoch, canceller},
+        [&](OpBuilder &revokeBuilder, Block &entry) {
+          Location at = getSemanticLocation(disable);
+          Value epochReference = entry.getArgument(extraBegin);
+          Value pending = sim::SimProcessEventPendingOp::create(
+              revokeBuilder, at, entry.getArgument(extraBegin + 1));
+          Value epoch = sim::SimRefLoadOp::create(revokeBuilder, at, stateType,
+                                                  epochReference);
+          Value step = arith::ExtUIOp::create(revokeBuilder, at, stateType,
+                                              pending);
+          sim::SimRefStoreOp::create(
+              revokeBuilder, at,
+              arith::AddIOp::create(revokeBuilder, at, epoch, step),
+              epochReference);
+        });
     return success();
   };
 

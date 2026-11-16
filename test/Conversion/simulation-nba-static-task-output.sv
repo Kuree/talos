@@ -1,6 +1,4 @@
-// RUN: talos -emit-slang %s -o %t.slang
-// RUN: talos-opt %t.slang --test-talos-native-backend='scheduler=eval sim-opt-level=3 closed-executable=true' -o %t.mlir
-// RUN: FileCheck %s --implicit-check-not='llvm.call @talos_rt_v1_scheduler_nba(' < %t.mlir
+// RUN: talos -emit-slang %s | talos-opt --test-talos-native-backend='scheduler=eval sim-opt-level=3 closed-executable=true' | FileCheck %s --implicit-check-not='llvm.call @talos_rt_v1_scheduler_nba('
 
 // IEEE 1800-2023 4.9.4, 13.3.2, 13.5: a static output formal persists
 // between calls. The first return copies its initial X; the NBA updates the
@@ -14,9 +12,7 @@
 // CHECK-DAG: %[[BIT:.*]] = llvm.mlir.constant(1 : i64)
 // CHECK: %[[STAGED_UNKNOWN:.*]] = llvm.zext %[[UNKNOWN]] : i8 to i64
 // CHECK-NEXT: %[[STAGED_VALUE:.*]] = llvm.zext %[[VALUE]] : i8 to i64
-// CHECK: %[[FORMAL:.*]] = llvm.getelementptr %{{.*}}[1]
-// CHECK: llvm.cond_br %{{.*}}, ^[[STAGE:bb[0-9]+]], ^[[COPYOUT:bb[0-9]+]]
-// CHECK: ^[[STAGE]]:
+// CHECK-NEXT: %[[FORMAL:.*]] = llvm.getelementptr %{{.*}}[1]
 // CHECK: %[[VALUE_BITS:.*]] = llvm.and %[[STAGED_VALUE]], %[[MASK]] : i64
 // CHECK: %[[MERGED_VALUE:.*]] = llvm.or %{{.*}}, %[[VALUE_BITS]] : i64
 // CHECK-NEXT: llvm.store %[[MERGED_VALUE]], %[[ACC]]
@@ -27,9 +23,7 @@
 // CHECK: %[[OLD_DIRTY:.*]] = llvm.load %[[DIRTY]]
 // CHECK-NEXT: %[[NEW_DIRTY:.*]] = llvm.or %[[OLD_DIRTY]], %[[BIT]] : i64
 // CHECK-NEXT: llvm.store %[[NEW_DIRTY]], %[[DIRTY]]
-// CHECK: llvm.br ^[[COPYOUT]]
-// CHECK: ^[[COPYOUT]]:
-// CHECK-NEXT: llvm.load %[[FORMAL]]
+// CHECK: llvm.load %[[FORMAL]]
 
 `timescale 1ns/1ps
 module top;

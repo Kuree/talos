@@ -106,7 +106,15 @@ bool isPrioritySignalResumeActor(SimFuncOp function) {
                    schedule::has<schedule::Field::ConcurrentAbort>(function);
   if (has<metadata::PowerMonitor>(function))
     return !assertion && function.getHomeRegion() == EventRegion::Active;
-  return assertion && function.getHomeRegion() == EventRegion::Reactive;
+  // Disable bookkeeping is asynchronous: an NBA pulse must cancel existing
+  // attempts before a new Observed attempt starts (IEEE 1800-2023 16.12).
+  // Reactive remains accepted for older explicit helper IR; generated cancel
+  // actors use Active. Assertion action callbacks are a separate role.
+  bool activeCancel =
+      schedule::has<schedule::Field::ConcurrentCancel>(function) &&
+      function.getHomeRegion() == EventRegion::Active;
+  return assertion &&
+         (activeCancel || function.getHomeRegion() == EventRegion::Reactive);
 }
 
 bool isStartupEntryKind(EntryKind kind) {

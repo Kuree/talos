@@ -39,9 +39,15 @@
 // CHECK-COUNT-2: simulation.spawn @unit_0.fork.11.0.0
 // CHECK-NOT: simulation.spawn @unit_0.fork
 // Nonoverlap first stores a bit-0 obligation, then independently advances the
-// two ranged exact traces. The asynchronous disable actor clears both exact
-// trace states, and the clock path checks the unsampled level before sampling.
+// two ranged exact traces. IEEE 1800-2023 16.12: the Active disable canceller
+// clears both exact trace states before Observed (it has no epoch argument),
+// the Reactive revoker revokes queued reports only for a transition the
+// canceller has not serviced, and the clock path checks the unsampled level
+// before sampling.
 // CHECK-LABEL: simulation.func private @unit_1.$concurrent_cancel.34(
+// CHECK-SAME: %arg5: !simulation.ref<i64>
+// CHECK-SAME: ) attributes
+// CHECK-SAME: home_region = 2 : i32
 // CHECK-SAME: schedule.concurrent_cancel
 // CHECK-SAME: schedule.detached_controls
 // CHECK-SAME: schedule.priority_signal_resume
@@ -49,6 +55,17 @@
 // CHECK-NEXT: simulation.ref.store [[CANCEL_ZERO0]] to %arg4
 // CHECK: [[CANCEL_ZERO1:%.*]] = arith.constant {{.*}} 0 : i64
 // CHECK-NEXT: simulation.ref.store [[CANCEL_ZERO1]] to %arg5
+// CHECK-NOT: simulation.ref.store
+// CHECK-NOT: arith.addi
+// CHECK-LABEL: simulation.func private @unit_1.$concurrent_revoke.
+// CHECK-SAME: %arg4: !simulation.ref<i64>
+// CHECK-SAME: %arg5: !simulation.process
+// CHECK-SAME: home_region = 10 : i32
+// CHECK: [[U1_PENDING:%.*]] = simulation.process.event_pending %arg5
+// CHECK: [[U1_REVOKE_EPOCH:%.*]] = simulation.ref.load %arg4
+// CHECK: [[U1_BIT:%.*]] = arith.extui [[U1_PENDING]] : i1 to i64
+// CHECK: [[U1_REVOKE_NEXT:%.*]] = arith.addi [[U1_REVOKE_EPOCH]], [[U1_BIT]]
+// CHECK: simulation.ref.store [[U1_REVOKE_NEXT]] to %arg4
 // CHECK-LABEL: simulation.func private @unit_1.$concurrent_eos_report.34.weak(
 // CHECK-SAME: simulation.concurrent_eos_report
 // CHECK: simulation.ref.load %arg1
@@ -75,7 +92,8 @@
 // CHECK-SAME: simulation.strong_weak_monitor
 // CHECK-COUNT-3: simulation.ref.alloc
 // CHECK-NOT: simulation.ref.alloc
-// CHECK: simulation.spawn @unit_1.$concurrent_cancel.34
+// CHECK: [[U1_CANCEL:%.*]] = simulation.spawn @unit_1.$concurrent_cancel.34
+// CHECK: simulation.spawn @unit_1.$concurrent_revoke.34{{.*}}[[U1_CANCEL]]
 // CHECK: simulation.spawn @unit_1.$concurrent_eos.34.weak
 // CHECK: simulation.suspend.edge posedge
 // CHECK-SAME: resume_region = 8 : i32
@@ -105,14 +123,16 @@
 // CHECK: simulation.ref.store [[NEXT1]] to [[NEXT1_REF:%[0-9]+]]
 // CHECK: cf.br {{.*}}({{%[0-9]+}}, [[NEXT0_REF]], [[NEXT1_REF]] : {{.*}}) {{.*}}simulation.branching_consequent_backedge
 // A same-endpoint branching antecedent owns matched history and two independent
-// nonoverlapped consequent channels. Its disable actor clears all three state
-// words, advances the epoch, and its weak-EOS pass reloads that epoch so a
-// queued callback becomes stale after cancellation.
+// nonoverlapped consequent channels. IEEE 1800-2023 16.12: its Active disable
+// canceller clears all three state words before Observed; its Reactive revoker
+// advances the epoch only for a transition the canceller has not serviced, and
+// the weak-EOS pass reloads that epoch so a queued callback becomes stale.
 // CHECK-LABEL: simulation.func private @unit_2.$concurrent_cancel.51(
 // CHECK-SAME: %arg4: !simulation.ref<i64>
 // CHECK-SAME: %arg5: !simulation.ref<i64>
 // CHECK-SAME: %arg6: !simulation.ref<i64>
-// CHECK-SAME: %arg7: !simulation.ref<i64>
+// CHECK-SAME: ) attributes
+// CHECK-SAME: home_region = 2 : i32
 // CHECK-SAME: schedule.concurrent_cancel
 // CHECK: [[ANT_ZERO0:%.*]] = arith.constant {{.*}} 0 : i64
 // CHECK-NEXT: simulation.ref.store [[ANT_ZERO0]] to %arg4
@@ -121,9 +141,17 @@
 // CHECK: [[ANT_ZERO2:%.*]] = arith.constant {{.*}} 0 : i64
 // CHECK-NEXT: simulation.ref.store [[ANT_ZERO2]] to %arg6
 // CHECK-NOT: simulation.ref.store {{.*}} to %arg{{[4-6]}}
-// CHECK: [[ANT_EPOCH:%.*]] = simulation.ref.load %arg7
-// CHECK: [[ANT_NEXT_EPOCH:%.*]] = arith.addi [[ANT_EPOCH]],
-// CHECK: simulation.ref.store [[ANT_NEXT_EPOCH]] to %arg7
+// CHECK-NOT: simulation.ref.store
+// CHECK-NOT: arith.addi
+// CHECK-LABEL: simulation.func private @unit_2.$concurrent_revoke.
+// CHECK-SAME: %arg4: !simulation.ref<i64>
+// CHECK-SAME: %arg5: !simulation.process
+// CHECK-SAME: home_region = 10 : i32
+// CHECK: [[ANT_PENDING:%.*]] = simulation.process.event_pending %arg5
+// CHECK: [[ANT_REVOKE_EPOCH:%.*]] = simulation.ref.load %arg4
+// CHECK: [[ANT_BIT:%.*]] = arith.extui [[ANT_PENDING]] : i1 to i64
+// CHECK: [[ANT_REVOKE_NEXT:%.*]] = arith.addi [[ANT_REVOKE_EPOCH]], [[ANT_BIT]]
+// CHECK: simulation.ref.store [[ANT_REVOKE_NEXT]] to %arg4
 // CHECK-LABEL: simulation.func private @unit_2.$concurrent_eos_branch_report.51.pass(
 // CHECK-SAME: %arg3: !simulation.ref<i64>
 // CHECK-SAME: %arg4: i64
@@ -153,36 +181,67 @@
 // CHECK-SAME: simulation.branching_antecedent_monitor
 // CHECK-COUNT-4: simulation.ref.alloc
 // CHECK-NOT: simulation.ref.alloc
-// CHECK: simulation.spawn @unit_2.$concurrent_cancel.51
+// CHECK: [[ANT_CANCEL:%.*]] = simulation.spawn @unit_2.$concurrent_cancel.51
+// CHECK: simulation.spawn @unit_2.$concurrent_revoke.51{{.*}}[[ANT_CANCEL]]
 // CHECK: simulation.spawn @unit_2.$concurrent_eos_branch.51
 // CHECK: simulation.suspend.edge posedge
 // CHECK: simulation.ref.load %arg5
 // CHECK: cf.cond_br
 // CHECK: cf.br {{.*}}simulation.branching_antecedent_backedge
 // A ranged plain sequence uses the same cancellation contract and clears both
-// alternative state words before the monitor can start a disabled attempt.
+// alternative state words in Active before the monitor can start a disabled
+// attempt (IEEE 1800-2023 16.12).
 // CHECK-LABEL: simulation.func private @unit_3.$concurrent_cancel.70(
+// CHECK-SAME: %arg5: !simulation.ref<i64>
+// CHECK-SAME: ) attributes
+// CHECK-SAME: home_region = 2 : i32
 // CHECK-SAME: schedule.concurrent_cancel
 // CHECK: [[SEQ_ZERO0:%.*]] = arith.constant {{.*}} 0 : i64
 // CHECK-NEXT: simulation.ref.store [[SEQ_ZERO0]] to %arg4
 // CHECK: [[SEQ_ZERO1:%.*]] = arith.constant {{.*}} 0 : i64
 // CHECK-NEXT: simulation.ref.store [[SEQ_ZERO1]] to %arg5
+// CHECK-NOT: simulation.ref.store
+// CHECK-NOT: arith.addi
+// CHECK-LABEL: simulation.func private @unit_3.$concurrent_revoke.
+// CHECK-SAME: %arg4: !simulation.ref<i64>
+// CHECK-SAME: %arg5: !simulation.process
+// CHECK-SAME: home_region = 10 : i32
+// CHECK: [[SEQ_PENDING:%.*]] = simulation.process.event_pending %arg5
+// CHECK: [[SEQ_REVOKE_EPOCH:%.*]] = simulation.ref.load %arg4
+// CHECK: [[SEQ_BIT:%.*]] = arith.extui [[SEQ_PENDING]] : i1 to i64
+// CHECK: [[SEQ_REVOKE_NEXT:%.*]] = arith.addi [[SEQ_REVOKE_EPOCH]], [[SEQ_BIT]]
+// CHECK: simulation.ref.store [[SEQ_REVOKE_NEXT]] to %arg4
 // CHECK-LABEL: simulation.func private @unit_3(
 // CHECK-SAME: simulation.branching_sequence_alternatives = 2 : i64
 // CHECK-SAME: simulation.branching_sequence_monitor
 // CHECK: simulation.suspend.edge posedge
 // CHECK: simulation.ref.load %arg4
 // CHECK: cf.cond_br
-// The all-one-age form has no alternative state captures. The cancellation
-// actor still advances its epoch, and the monitor level-gates both predicates.
+// The all-one-age form has no alternative state captures. Its Active
+// canceller has no state to clear and no epoch, the Reactive revoker still
+// advances the epoch (IEEE 1800-2023 16.12), and the monitor level-gates both
+// predicates.
 // CHECK-LABEL: simulation.func private @unit_4.$concurrent_cancel.83(
-// CHECK-SAME: %arg4: !simulation.ref<i64>
+// CHECK-SAME: %arg3: i1
+// CHECK-SAME: ) attributes
+// CHECK-SAME: home_region = 2 : i32
 // CHECK-SAME: schedule.concurrent_cancel
-// CHECK-NOT: simulation.ref.store {{.*}} to %arg{{[0-3]}}
-// CHECK: simulation.ref.store {{.*}} to %arg4
+// CHECK-NOT: simulation.ref.store
+// CHECK-NOT: arith.addi
+// CHECK-LABEL: simulation.func private @unit_4.$concurrent_revoke.
+// CHECK-SAME: %arg4: !simulation.ref<i64>
+// CHECK-SAME: %arg5: !simulation.process
+// CHECK-SAME: home_region = 10 : i32
+// CHECK: [[ALL_PENDING:%.*]] = simulation.process.event_pending %arg5
+// CHECK: [[ALL_REVOKE_EPOCH:%.*]] = simulation.ref.load %arg4
+// CHECK: [[ALL_BIT:%.*]] = arith.extui [[ALL_PENDING]] : i1 to i64
+// CHECK: [[ALL_REVOKE_NEXT:%.*]] = arith.addi [[ALL_REVOKE_EPOCH]], [[ALL_BIT]]
+// CHECK: simulation.ref.store [[ALL_REVOKE_NEXT]] to %arg4
 // CHECK-LABEL: simulation.func private @unit_4(
 // CHECK-SAME: simulation.branching_sequence_alternatives = 2 : i64
 // CHECK-SAME: simulation.branching_sequence_monitor
+// CHECK: [[ALL_CANCEL:%.*]] = simulation.spawn @unit_4.$concurrent_cancel.83
+// CHECK: simulation.spawn @unit_4.$concurrent_revoke.83{{.*}}[[ALL_CANCEL]]
 // CHECK: simulation.suspend.edge posedge
 // CHECK: simulation.ref.load %arg4
 // CHECK: cf.cond_br

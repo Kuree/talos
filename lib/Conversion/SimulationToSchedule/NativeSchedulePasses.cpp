@@ -482,12 +482,32 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
     }
     bool hasObserver = false;
     bool hasInactiveDelay = false;
+    unsigned explainedObservers = 0, explainedDelays = 0;
     metadataDesign.walk([&](sim::SimFuncOp function) {
-      hasObserver |= function.getEntryKind() == sim::EntryKind::Observer;
+      if (function.getEntryKind() == sim::EntryKind::Observer) {
+        hasObserver = true;
+        if (detailedTiming && explainedObservers++ < 3)
+          llvm::errs() << "talos eval runtime-calendar observer: actor="
+                       << function.getSymName()
+                       << " source=" << function.getLoc() << '\n';
+      }
     });
     metadataDesign.walk([&](sim::SimSuspendDelayOp delay) {
       auto constant = delay.getDelay().getDefiningOp<sim::SimTimeConstantOp>();
-      hasInactiveDelay |= !constant || constant.getValue() == 0;
+      if (!constant || constant.getValue() == 0) {
+        hasInactiveDelay = true;
+        bool activeHandoff =
+            constant && delay.getResumeRegion() == sim::EventRegion::Active &&
+            (schedule::has<schedule::Field::ActivePreemptionAfter>(delay) ||
+             schedule::has<schedule::Field::ActivePreemptionRuns>(delay));
+        if (detailedTiming && explainedDelays++ < 3)
+          llvm::errs() << "talos eval runtime-calendar delay: actor="
+                       << delay->getParentOfType<sim::SimFuncOp>().getSymName()
+                       << " kind="
+                       << (activeHandoff ? "active-handoff"
+                                         : (constant ? "zero" : "nonconstant"))
+                       << " source=" << delay.getLoc() << '\n';
+      }
     });
     runtime::ExecutionFlags flags = runtime::getExecutionFlags(module);
     const bool hasDPIExports = runtime::bitEnumContainsAny(
@@ -1277,7 +1297,9 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
           llvm::errs() << "partial eval disabled: fanout owner without a "
                           "direct body actor="
                        << entry.actor_slot
-                       << " continuation=" << entry.continuation << '\n';
+                       << " continuation=" << entry.continuation
+                       << " function=" << actor.getSymName()
+                       << " source=" << actor.getLoc() << '\n';
         break;
       }
       auto bytecode = aotBytecodeContinuations.find(actor.getOperation());

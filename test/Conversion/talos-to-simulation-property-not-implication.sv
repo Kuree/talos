@@ -123,14 +123,27 @@
 // CHECK: simulation.spawn @unit_5.$concurrent_eos_count.110.delay_strong
 // CHECK: simulation.spawn @unit_5.fork.110.0.0
 // CHECK-NOT: simulation.spawn @unit_5.fork
-// Disable clears the nonoverlap handoff and pending-consequent bits and bumps
-// the epoch. Both live and EOS callbacks reload that epoch, so already queued
-// inverted reports become stale instead of escaping cancellation.
+// IEEE 1800-2023 16.12: the Active canceller clears the nonoverlap handoff and
+// pending-consequent bits before Observed; the Reactive revoker bumps the epoch
+// only for a transition the canceller has not serviced. Both live and EOS
+// callbacks reload that epoch, so already queued inverted reports become stale
+// instead of escaping cancellation.
 // CHECK-LABEL: simulation.func private @unit_6.$concurrent_cancel.129(
+// CHECK-SAME: %arg4: !simulation.ref<i64>
+// CHECK-SAME: ) attributes
+// CHECK-SAME: home_region = 2 : i32
 // CHECK: simulation.ref.store {{.*}} to %arg4
-// CHECK: simulation.ref.load %arg5
-// CHECK: arith.addi
-// CHECK: simulation.ref.store {{.*}} to %arg5
+// CHECK-NOT: simulation.ref.store
+// CHECK-NOT: arith.addi
+// CHECK-LABEL: simulation.func private @unit_6.$concurrent_revoke.129(
+// CHECK-SAME: %arg4: !simulation.ref<i64>
+// CHECK-SAME: %arg5: !simulation.process
+// CHECK-SAME: home_region = 10 : i32
+// CHECK: [[PENDING:%.*]] = simulation.process.event_pending %arg5
+// CHECK: [[REVOKE_EPOCH:%.*]] = simulation.ref.load %arg4
+// CHECK: [[BIT:%.*]] = arith.extui [[PENDING]] : i1 to i64
+// CHECK: [[NEXT_EPOCH:%.*]] = arith.addi [[REVOKE_EPOCH]], [[BIT]]
+// CHECK: simulation.ref.store [[NEXT_EPOCH]] to %arg4
 // CHECK-LABEL: simulation.func private @unit_6.$concurrent_eos_report.129.strong(
 // CHECK: simulation.ref.load %arg1
 // CHECK: arith.cmpi eq, {{.*}}, %arg2
@@ -148,7 +161,8 @@
 // CHECK-SAME: simulation.temporal_property_negation
 // CHECK-COUNT-2: simulation.ref.alloc
 // CHECK-NOT: simulation.ref.alloc
-// CHECK: simulation.spawn @unit_6.$concurrent_cancel.129
+// CHECK: [[CANCEL:%.*]] = simulation.spawn @unit_6.$concurrent_cancel.129
+// CHECK: simulation.spawn @unit_6.$concurrent_revoke.129{{.*}}[[CANCEL]]
 // CHECK: simulation.spawn @unit_6.$concurrent_eos.129.strong
 // CHECK: simulation.ref.load
 // CHECK: simulation.spawn @unit_6.fork.129.0.0

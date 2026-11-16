@@ -1054,13 +1054,17 @@ LogicalResult SimSuspendObserveOp::verify() {
         !::talos::schedule::has<::talos::schedule::Field::PrioritySignalResume>(
             function) ||
         function.getEntryKind() != EntryKind::Fork ||
-        function.getHomeRegion() != EventRegion::Reactive)
+        (function.getHomeRegion() != EventRegion::Reactive &&
+         !(concurrentCancel &&
+           function.getHomeRegion() == EventRegion::Active)))
       return emitOpError() << "concurrent "
                            << (concurrentCancel ? "cancel" : "abort")
                            << " level-true suspension requires an internal "
                               "detached priority concurrent-"
                            << (concurrentCancel ? "cancel" : "abort")
-                           << " fork in the reactive region";
+                           << (concurrentCancel
+                                   ? " fork in the active or reactive region"
+                                   : " fork in the reactive region");
     if (getPrimaries().size() != 1 || !getConditions().empty() ||
         getConditionIndices().front() != -1 ||
         getEdges().front() != static_cast<int32_t>(EdgeKind::Posedge))

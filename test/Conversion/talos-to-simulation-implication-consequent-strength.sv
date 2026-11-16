@@ -116,15 +116,27 @@
 // CHECK-NOT: simulation.assert.sampled_read
 // CHECK: simulation.spawn @unit_4.fork.{{[0-9]+}}.0.0
 // CHECK-NOT: simulation.spawn @unit_4.fork
-// Disable clears the two repetition cells, bounded prefix, and nonoverlap
-// handoff, then advances the report epoch. The weak EOS coordinator observes
-// those four cells plus the epoch and emits cover hits for surviving tokens.
+// IEEE 1800-2023 16.12: the Active canceller clears the two repetition cells,
+// bounded prefix, and nonoverlap handoff before Observed; the Reactive revoker
+// advances the report epoch only for a transition the canceller has not
+// serviced. The weak EOS coordinator observes those four cells plus the epoch
+// and emits cover hits for surviving tokens.
 // CHECK-LABEL: simulation.func private @unit_5.$concurrent_cancel.
+// CHECK-SAME: %arg7: !simulation.ref<i64>
+// CHECK-SAME: ) attributes
+// CHECK-SAME: home_region = 2 : i32
 // CHECK-COUNT-4: simulation.ref.store {{.*}} to %arg{{[4-7]}}
-// CHECK-NOT: simulation.ref.store {{.*}} to %arg{{[4-7]}}
-// CHECK: [[U5_EPOCH:%.*]] = simulation.ref.load %arg8
-// CHECK: [[U5_NEXT_EPOCH:%.*]] = arith.addi [[U5_EPOCH]],
-// CHECK: simulation.ref.store [[U5_NEXT_EPOCH]] to %arg8
+// CHECK-NOT: simulation.ref.store
+// CHECK-NOT: arith.addi
+// CHECK-LABEL: simulation.func private @unit_5.$concurrent_revoke.
+// CHECK-SAME: %arg4: !simulation.ref<i64>
+// CHECK-SAME: %arg5: !simulation.process
+// CHECK-SAME: home_region = 10 : i32
+// CHECK: [[U5_PENDING:%.*]] = simulation.process.event_pending %arg5
+// CHECK: [[U5_EPOCH:%.*]] = simulation.ref.load %arg4
+// CHECK: [[U5_BIT:%.*]] = arith.extui [[U5_PENDING]] : i1 to i64
+// CHECK: [[U5_NEXT_EPOCH:%.*]] = arith.addi [[U5_EPOCH]], [[U5_BIT]]
+// CHECK: simulation.ref.store [[U5_NEXT_EPOCH]] to %arg4
 // CHECK-LABEL: simulation.func private @unit_5.$concurrent_eos_count.{{[0-9]+}}.repetition_weak
 // CHECK-COUNT-5: simulation.ref.load
 // CHECK-NOT: simulation.ref.load
@@ -137,7 +149,8 @@
 // CHECK-COUNT-4: simulation.ref.alloc %{{.*}} : i64 -> !simulation.ref<i64>
 // CHECK-NOT: simulation.ref.alloc %{{.*}} : i64 -> !simulation.ref<i64>
 // CHECK: [[U5_HANDOFF:%.*]] = simulation.ref.alloc %{{.*}} {simulation.persistent_implication_handoff}
-// CHECK: simulation.spawn @unit_5.$concurrent_cancel.{{.*}}[[U5_HANDOFF]]
+// CHECK: [[U5_CANCEL:%.*]] = simulation.spawn @unit_5.$concurrent_cancel.{{.*}}[[U5_HANDOFF]]
+// CHECK: simulation.spawn @unit_5.$concurrent_revoke.{{.*}}[[U5_CANCEL]]
 // CHECK: simulation.spawn @unit_5.$concurrent_eos_count.{{.*}}[[U5_HANDOFF]]
 // CHECK-COUNT-4: simulation.assert.sampled_read
 // CHECK-NOT: simulation.assert.sampled_read

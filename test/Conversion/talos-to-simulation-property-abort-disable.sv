@@ -4,7 +4,7 @@
 // RUN: talos-opt %t.talos.mlir '--lower-talos-to-sim=opt-level=3' '--encode-talos-sim-to-bytecode=vpi=off' -o /dev/null
 
 // An asynchronous accept_on over bounded state.  Both report actions compare
-// their captured epoch before executing.
+// their captured epoch before executing (IEEE 1800-2023 16.12).
 // CHECK-LABEL: simulation.func private @unit_0.fork.18.0.0(
 // CHECK: %[[U0_PASS_EPOCH:[0-9]+]] = simulation.ref.load %arg2
 // CHECK: %[[U0_PASS_VALID:[0-9]+]] = arith.cmpi eq, %[[U0_PASS_EPOCH]], %arg3
@@ -13,13 +13,25 @@
 // CHECK: %[[U0_FAIL_EPOCH:[0-9]+]] = simulation.ref.load %arg2
 // CHECK: %[[U0_FAIL_VALID:[0-9]+]] = arith.cmpi eq, %[[U0_FAIL_EPOCH]], %arg3
 // CHECK: cf.cond_br %[[U0_FAIL_VALID]],
-// The asynchronous disable observer clears the complete bounded state and
-// advances the epoch before returning to its priority wait.
+// IEEE 1800-2023 16.12: the Active disable canceller clears the complete
+// bounded state before Observed and has no epoch; the Reactive revoker advances
+// the epoch only for a transition the canceller has not serviced.
 // CHECK-LABEL: simulation.func private @unit_0.$concurrent_cancel.18(
+// CHECK-SAME: %arg4: !simulation.ref<i64>
+// CHECK-SAME: ) attributes
+// CHECK-SAME: home_region = 2 : i32
 // CHECK: simulation.ref.store {{.*}} to %arg4
-// CHECK: %[[U0_OLD_EPOCH:[0-9]+]] = simulation.ref.load %arg5
-// CHECK: %[[U0_NEW_EPOCH:[0-9]+]] = arith.addi %[[U0_OLD_EPOCH]],
-// CHECK: simulation.ref.store %[[U0_NEW_EPOCH]] to %arg5
+// CHECK-NOT: simulation.ref.store
+// CHECK-NOT: arith.addi
+// CHECK-LABEL: simulation.func private @unit_0.$concurrent_revoke.18(
+// CHECK-SAME: %arg4: !simulation.ref<i64>
+// CHECK-SAME: %arg5: !simulation.process
+// CHECK-SAME: home_region = 10 : i32
+// CHECK: %[[U0_PENDING:[0-9]+]] = simulation.process.event_pending %arg5
+// CHECK: %[[U0_OLD_EPOCH:[0-9]+]] = simulation.ref.load %arg4
+// CHECK: %[[U0_BIT:[0-9]+]] = arith.extui %[[U0_PENDING]] : i1 to i64
+// CHECK: %[[U0_NEW_EPOCH:[0-9]+]] = arith.addi %[[U0_OLD_EPOCH]], %[[U0_BIT]]
+// CHECK: simulation.ref.store %[[U0_NEW_EPOCH]] to %arg4
 // Each asynchronous abort completion reloads the current disable epoch and
 // passes that value to the queued report.  There is one site for each live age.
 // CHECK-LABEL: simulation.func private @unit_0.$concurrent_abort.18(
@@ -35,7 +47,8 @@
 // CHECK-LABEL: simulation.func private @unit_0(
 // CHECK-SAME: simulation.asynchronous_property_abort
 // CHECK-SAME: simulation.property_abort_action = "accept"
-// CHECK: simulation.spawn @unit_0.$concurrent_cancel.18
+// CHECK: [[U0_CANCEL:%.*]] = simulation.spawn @unit_0.$concurrent_cancel.18
+// CHECK: simulation.spawn @unit_0.$concurrent_revoke.18{{.*}}[[U0_CANCEL]]
 // CHECK: simulation.context.event
 // CHECK: simulation.spawn @unit_0.$concurrent_abort.18
 // CHECK: %[[U0_RESET:[0-9]+]] = simulation.ref.load %arg4
@@ -48,10 +61,21 @@
 // action with an expected epoch only after the disable branch was false.
 // CHECK-NOT: @unit_1.$concurrent_abort
 // CHECK-LABEL: simulation.func private @unit_1.$concurrent_cancel.38(
+// CHECK-SAME: %arg4: !simulation.ref<i64>
+// CHECK-SAME: ) attributes
+// CHECK-SAME: home_region = 2 : i32
 // CHECK: simulation.ref.store {{.*}} to %arg4
-// CHECK: %[[U1_OLD_EPOCH:[0-9]+]] = simulation.ref.load %arg5
-// CHECK: %[[U1_NEW_EPOCH:[0-9]+]] = arith.addi %[[U1_OLD_EPOCH]],
-// CHECK: simulation.ref.store %[[U1_NEW_EPOCH]] to %arg5
+// CHECK-NOT: simulation.ref.store
+// CHECK-NOT: arith.addi
+// CHECK-LABEL: simulation.func private @unit_1.$concurrent_revoke.38(
+// CHECK-SAME: %arg4: !simulation.ref<i64>
+// CHECK-SAME: %arg5: !simulation.process
+// CHECK-SAME: home_region = 10 : i32
+// CHECK: %[[U1_PENDING:[0-9]+]] = simulation.process.event_pending %arg5
+// CHECK: %[[U1_OLD_EPOCH:[0-9]+]] = simulation.ref.load %arg4
+// CHECK: %[[U1_BIT:[0-9]+]] = arith.extui %[[U1_PENDING]] : i1 to i64
+// CHECK: %[[U1_NEW_EPOCH:[0-9]+]] = arith.addi %[[U1_OLD_EPOCH]], %[[U1_BIT]]
+// CHECK: simulation.ref.store %[[U1_NEW_EPOCH]] to %arg4
 // CHECK-NOT: @unit_1.$concurrent_abort
 // CHECK-LABEL: simulation.func private @unit_1(
 // CHECK-SAME: simulation.property_abort_action = "reject"
@@ -64,15 +88,27 @@
 // CHECK-NEXT: %[[U1_KILL:[0-9]+]] = simulation.assert.sampled_read %arg0 from %arg5
 // CHECK: ^bb5:
 // CHECK: simulation.spawn @unit_1.fork.38.1.1(%arg0, %arg6, {{%[0-9]+}}, {{%[0-9]+}})
-// The persistent-delay monitor owns warm-up and eligible cells.  Disable clears
-// both and advances one epoch.  The shared counted abort dispatcher also clears
-// both, but reloads that epoch once for every dynamically counted fail report.
+// The persistent-delay monitor owns warm-up and eligible cells.  The Active
+// canceller clears both; the Reactive revoker advances one epoch.  The shared
+// counted abort dispatcher also clears both, but reloads that epoch once for
+// every dynamically counted fail report.
 // CHECK-LABEL: simulation.func private @unit_2.$concurrent_cancel.58(
+// CHECK-SAME: %arg5: !simulation.ref<i64>
+// CHECK-SAME: ) attributes
+// CHECK-SAME: home_region = 2 : i32
 // CHECK: simulation.ref.store {{.*}} to %arg4
 // CHECK: simulation.ref.store {{.*}} to %arg5
-// CHECK: %[[U2_OLD_EPOCH:[0-9]+]] = simulation.ref.load %arg6
-// CHECK: %[[U2_NEW_EPOCH:[0-9]+]] = arith.addi %[[U2_OLD_EPOCH]],
-// CHECK: simulation.ref.store %[[U2_NEW_EPOCH]] to %arg6
+// CHECK-NOT: simulation.ref.store
+// CHECK-NOT: arith.addi
+// CHECK-LABEL: simulation.func private @unit_2.$concurrent_revoke.58(
+// CHECK-SAME: %arg4: !simulation.ref<i64>
+// CHECK-SAME: %arg5: !simulation.process
+// CHECK-SAME: home_region = 10 : i32
+// CHECK: %[[U2_PENDING:[0-9]+]] = simulation.process.event_pending %arg5
+// CHECK: %[[U2_OLD_EPOCH:[0-9]+]] = simulation.ref.load %arg4
+// CHECK: %[[U2_BIT:[0-9]+]] = arith.extui %[[U2_PENDING]] : i1 to i64
+// CHECK: %[[U2_NEW_EPOCH:[0-9]+]] = arith.addi %[[U2_OLD_EPOCH]], %[[U2_BIT]]
+// CHECK: simulation.ref.store %[[U2_NEW_EPOCH]] to %arg4
 // CHECK-LABEL: simulation.func private @unit_2.$concurrent_abort_count.58.reject(
 // CHECK: %[[U2_WARM:[0-9]+]] = simulation.ref.load %arg1
 // CHECK: simulation.ref.store {{.*}} to %arg1
@@ -99,10 +135,21 @@
 // inside the abort and then inverted, so its clocked abort route selects fail.
 // CHECK-NOT: @unit_3.$concurrent_abort
 // CHECK-LABEL: simulation.func private @unit_3.$concurrent_cancel.78(
+// CHECK-SAME: %arg4: !simulation.ref<i64>
+// CHECK-SAME: ) attributes
+// CHECK-SAME: home_region = 2 : i32
 // CHECK: simulation.ref.store {{.*}} to %arg4
-// CHECK: %[[U3_OLD_EPOCH:[0-9]+]] = simulation.ref.load %arg5
-// CHECK: %[[U3_NEW_EPOCH:[0-9]+]] = arith.addi %[[U3_OLD_EPOCH]],
-// CHECK: simulation.ref.store %[[U3_NEW_EPOCH]] to %arg5
+// CHECK-NOT: simulation.ref.store
+// CHECK-NOT: arith.addi
+// CHECK-LABEL: simulation.func private @unit_3.$concurrent_revoke.78(
+// CHECK-SAME: %arg4: !simulation.ref<i64>
+// CHECK-SAME: %arg5: !simulation.process
+// CHECK-SAME: home_region = 10 : i32
+// CHECK: %[[U3_PENDING:[0-9]+]] = simulation.process.event_pending %arg5
+// CHECK: %[[U3_OLD_EPOCH:[0-9]+]] = simulation.ref.load %arg4
+// CHECK: %[[U3_BIT:[0-9]+]] = arith.extui %[[U3_PENDING]] : i1 to i64
+// CHECK: %[[U3_NEW_EPOCH:[0-9]+]] = arith.addi %[[U3_OLD_EPOCH]], %[[U3_BIT]]
+// CHECK: simulation.ref.store %[[U3_NEW_EPOCH]] to %arg4
 // CHECK-NOT: @unit_3.$concurrent_abort
 // CHECK-LABEL: simulation.func private @unit_3(
 // CHECK-SAME: simulation.property_abort_action = "accept"

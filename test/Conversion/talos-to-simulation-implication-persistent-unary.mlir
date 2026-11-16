@@ -277,15 +277,27 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
 // CHECK-COUNT-1: simulation.spawn @unit_3.fork.{{[0-9]+}}.0.0
 // CHECK-NOT: simulation.spawn @unit_3.fork
 
-// Disable clears the eligible and handoff cells and advances the callback
-// epoch. Exact-symbol sharing also evaluates the repeated `a` only once in
-// the sampled clock block.
+// IEEE 1800-2023 16.12: the Active canceller clears the eligible and handoff
+// cells before Observed; the Reactive revoker advances the callback epoch only
+// for a transition the canceller has not serviced. Exact-symbol sharing also
+// evaluates the repeated `a` only once in the sampled clock block.
 // CHECK-LABEL: simulation.func private @unit_4.$concurrent_cancel.
+// CHECK-SAME: %arg5: !simulation.ref<i64>
+// CHECK-SAME: ) attributes
+// CHECK-SAME: home_region = 2 : i32
 // CHECK: simulation.ref.store {{.*}} to %arg4
 // CHECK: simulation.ref.store {{.*}} to %arg5
-// CHECK: [[EPOCH:%.*]] = simulation.ref.load %arg6
-// CHECK: [[NEXT_EPOCH:%.*]] = arith.addi [[EPOCH]],
-// CHECK: simulation.ref.store [[NEXT_EPOCH]] to %arg6
+// CHECK-NOT: simulation.ref.store
+// CHECK-NOT: arith.addi
+// CHECK-LABEL: simulation.func private @unit_4.$concurrent_revoke.
+// CHECK-SAME: %arg4: !simulation.ref<i64>
+// CHECK-SAME: %arg5: !simulation.process
+// CHECK-SAME: home_region = 10 : i32
+// CHECK: [[PENDING:%.*]] = simulation.process.event_pending %arg5
+// CHECK: [[EPOCH:%.*]] = simulation.ref.load %arg4
+// CHECK: [[BIT:%.*]] = arith.extui [[PENDING]] : i1 to i64
+// CHECK: [[NEXT_EPOCH:%.*]] = arith.addi [[EPOCH]], [[BIT]]
+// CHECK: simulation.ref.store [[NEXT_EPOCH]] to %arg4
 // CHECK-LABEL: simulation.func private @unit_4.$concurrent_eos_count.
 // CHECK-COUNT-3: simulation.ref.load
 // CHECK-NOT: simulation.ref.load
@@ -295,7 +307,8 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
 // CHECK: simulation.ref.alloc
 // CHECK-NOT: simulation.ref.alloc %{{.*}} : i64 -> !simulation.ref<i64>
 // CHECK: [[DISABLE_HANDOFF:%.*]] = simulation.ref.alloc %{{.*}} {simulation.persistent_implication_handoff}
-// CHECK: simulation.spawn @unit_4.$concurrent_cancel.{{.*}}({{.*}}[[DISABLE_HANDOFF]]
+// CHECK: [[CANCEL:%.*]] = simulation.spawn @unit_4.$concurrent_cancel.{{.*}}({{.*}}[[DISABLE_HANDOFF]]
+// CHECK: simulation.spawn @unit_4.$concurrent_revoke.{{.*}}[[CANCEL]]
 // CHECK: simulation.spawn @unit_4.$concurrent_eos_count.{{.*}}({{.*}}[[DISABLE_HANDOFF]]
 // CHECK-COUNT-1: simulation.assert.sampled_read
 // CHECK-NOT: simulation.assert.sampled_read

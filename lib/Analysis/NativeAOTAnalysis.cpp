@@ -430,7 +430,8 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
             ::talos::schedule::has<
                 ::talos::schedule::Field::PrioritySignalResume>(function) &&
             function.getEntryKind() == sim::EntryKind::Fork &&
-            function.getHomeRegion() == sim::EventRegion::Reactive) ||
+            (function.getHomeRegion() == sim::EventRegion::Active ||
+             function.getHomeRegion() == sim::EventRegion::Reactive)) ||
            (::talos::schedule::has<::talos::schedule::Field::ConcurrentAbort>(
                 function) &&
             ::talos::schedule::has<::talos::schedule::Field::DetachedControls>(
@@ -675,6 +676,15 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
   }
 
   module.walk([&](sim::SimFuncOp function) {
+    // IEEE 1800-2023 16.12: disable iff observes unsampled state, including
+    // off-clock pulses. These detached compiler cancellation actors already
+    // have priority runtime subscriptions. Keep those subscriptions on the
+    // transition bridge instead of rejecting the independent static island.
+    // Ordinary conditional waiters still need their own admission proof.
+    if (isConcurrentColdActor(function) &&
+        sim::isPrioritySignalResumeActor(function) &&
+        schedule::has<schedule::Field::ConcurrentCancel>(function))
+      result.runtimeOwnedFanoutActors.insert(function.getOperation());
     if (isCovergroupClockingSamplerActor(function))
       result.runtimeOwnedFanoutActors.insert(function.getOperation());
     if (isRuntimeClockCoordinator(function)) {
@@ -1264,7 +1274,10 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
       rejectPlan("event snapshots require runtime publication boundaries");
     } else if (isa<sim::SimPowerNBAOp, sim::SimPowerNBAViewOp>(operation)) {
       rejectPlan("retention NBA guards require runtime commit ordering");
-    } else if (isa<sim::SimProcessEventPendingOp>(operation)) {
+    } else if (isa<sim::SimProcessEventPendingOp>(operation) &&
+               !isConcurrentColdActor(operation)) {
+      // A concurrent disable revoker queries its runtime-owned canceller
+      // from the same feature-local runtime island (IEEE 1800-2023 16.12).
       rejectPlan("pending signal events require runtime calendar ordering");
     } else if (isa<sim::SimSchedulerCohortOp>(operation)) {
       // IEEE 1801-2018 6.50/9.7 needs actual region boundaries. The closed
@@ -1898,9 +1911,14 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
       (result.fullyEligible ||
        ((result.periodicClockCandidate || largeClocklessIsland) &&
         llvm::all_of(result.runtimeOwnedFanoutActors,
-                     [](Operation *actor) {
-                       return cast<sim::SimFuncOp>(actor).getEntryKind() ==
-                              sim::EntryKind::Initial;
+                     [&](Operation *actor) {
+                       auto function = cast<sim::SimFuncOp>(actor);
+                       return function.getEntryKind() ==
+                                  sim::EntryKind::Initial ||
+                              (isConcurrentColdActor(function) &&
+                               sim::isPrioritySignalResumeActor(function) &&
+                               schedule::has<schedule::Field::ConcurrentCancel>(
+                                   function));
                      }) &&
         !hasRuntimePathPublication));
   return result;

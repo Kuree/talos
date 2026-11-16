@@ -105,13 +105,26 @@
 // CHECK: simulation.spawn @unit_7.$concurrent_eos_count.117.repetition_strong
 // CHECK: simulation.spawn @unit_7.fork.117.1.1
 // CHECK: simulation.spawn @unit_7.fork.117.0.0
-// Disable clears the aggregate count and advances the epoch. The negated EOS
-// callback reloads that epoch so a stale queued success cannot execute.
+// IEEE 1800-2023 16.12: the Active canceller clears the aggregate count before
+// Observed; the Reactive revoker advances the epoch only for a transition the
+// canceller has not serviced. The negated EOS callback reloads that epoch so a
+// stale queued success cannot execute.
 // CHECK-LABEL: simulation.func private @unit_8.$concurrent_cancel.
+// CHECK-SAME: %arg4: !simulation.ref<i64>
+// CHECK-SAME: ) attributes
+// CHECK-SAME: home_region = 2 : i32
 // CHECK: simulation.ref.store {{.*}} to %arg4
-// CHECK: simulation.ref.load %arg5
-// CHECK: arith.addi
-// CHECK: simulation.ref.store {{.*}} to %arg5
+// CHECK-NOT: simulation.ref.store
+// CHECK-NOT: arith.addi
+// CHECK-LABEL: simulation.func private @unit_8.$concurrent_revoke.
+// CHECK-SAME: %arg4: !simulation.ref<i64>
+// CHECK-SAME: %arg5: !simulation.process
+// CHECK-SAME: home_region = 10 : i32
+// CHECK: [[PENDING:%.*]] = simulation.process.event_pending %arg5
+// CHECK: [[REVOKE_EPOCH:%.*]] = simulation.ref.load %arg4
+// CHECK: [[BIT:%.*]] = arith.extui [[PENDING]] : i1 to i64
+// CHECK: [[NEXT_EPOCH:%.*]] = arith.addi [[REVOKE_EPOCH]], [[BIT]]
+// CHECK: simulation.ref.store [[NEXT_EPOCH]] to %arg4
 // CHECK-LABEL: simulation.func private @unit_8.$concurrent_eos_count.
 // CHECK: [[EPOCH:%.*]] = simulation.ref.load %arg2
 // CHECK: simulation.spawn @unit_8.fork.{{[0-9]+}}.0.0(%arg0, %arg2, [[EPOCH]])
@@ -120,7 +133,8 @@
 // CHECK-SAME: simulation.negated_operand_end_of_simulation_strength = "strong"
 // CHECK-SAME: simulation.persistent_unary_kind = "s_eventually"
 // CHECK-SAME: simulation.temporal_property_negation
-// CHECK: simulation.spawn @unit_8.$concurrent_cancel.
+// CHECK: [[CANCEL:%.*]] = simulation.spawn @unit_8.$concurrent_cancel.
+// CHECK: simulation.spawn @unit_8.$concurrent_revoke.{{.*}}[[CANCEL]]
 // CHECK: simulation.spawn @unit_8.$concurrent_eos_count.
 // An immature ranged-strong-eventuality attempt remains vacuous through not,
 // but its successful cover-property evaluation still executes the pass

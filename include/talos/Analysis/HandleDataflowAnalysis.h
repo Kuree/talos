@@ -9,7 +9,9 @@
 #include "talos/Dialect/Schedule/ScheduleEnums.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringMap.h"
 #include <cstdint>
 #include <optional>
 
@@ -17,6 +19,9 @@ namespace talos::sim {
 class SimDesignOp;
 class SimFuncOp;
 } // namespace talos::sim
+namespace talos::schedule {
+class ComputeEffectAttr;
+} // namespace talos::schedule
 namespace talos::analysis {
 
 /// Root/range projection of the reference lattice used by effect consumers.
@@ -145,5 +150,33 @@ private:
   std::shared_ptr<const IsolatedWireDriverTopology> drivers;
 };
 HandleFacts deriveHandleFacts(sim::SimFuncOp function);
+
+/// Resolve formal storage/net effects through all direct call and spawn
+/// bindings (IEEE 1800-2023 9.3.2, 13.5). Each emitted effect conservatively
+/// covers its actual's whole physical root. Private allocations emit no
+/// design root. Influence/observation callers must pass ignorePrivate=false:
+/// private storage can carry a dependency between functions even though it
+/// aliases no design root. False means some binding is unknown; emitted roots
+/// alone cannot certify completeness. The IR must remain unchanged while
+/// reused.
+class FormalEffectResolver {
+public:
+  FormalEffectResolver(sim::SimDesignOp design,
+                       const HandleDataflowAnalysis &provenanceAnalysis);
+  bool
+  resolve(mlir::StringAttr owner, schedule::ComputeEffectAttr effect,
+          llvm::function_ref<void(uint64_t, schedule::ComputeEffectAttr)> emit,
+          bool ignorePrivate = false);
+
+private:
+  void index();
+  mlir::Operation *design;
+  const HandleDataflowAnalysis &provenanceAnalysis;
+  bool indexed = false;
+  bool unsupportedCalls = false;
+  llvm::StringMap<mlir::Operation *> functions;
+  llvm::StringMap<llvm::SmallVector<mlir::Operation *>> callers;
+  llvm::DenseMap<mlir::Operation *, HandleFacts> provenance;
+};
 } // namespace talos::analysis
 #endif

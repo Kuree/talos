@@ -654,7 +654,6 @@ FailureOr<NativeStaticNBAPlan> buildNativeStaticNBAPlan(
   if (design && !sourceWriters)
     design.walk([&](sim::SimFuncOp function) {
       if (function.getEntryKind() == sim::EntryKind::Function ||
-          function.getEntryKind() == sim::EntryKind::Task ||
           function.getEntryKind() == sim::EntryKind::RootInitializer)
         return;
       auto summary = function.getEffectSummaryAttr();

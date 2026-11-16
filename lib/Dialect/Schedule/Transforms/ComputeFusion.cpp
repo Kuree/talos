@@ -451,118 +451,6 @@ bool isComputeBodyFusionEligibleImpl(
   return eligible;
 }
 
-/// Resolves a storage write through a subroutine formal to the physical
-/// roots its call sites pass. IEEE 1800-2023 13.5 copies `output` and `inout`
-/// values into the actuals when the subroutine returns, and 13.5.2 makes a
-/// `ref` formal an alias of its actual. Either way the actual is the storage
-/// written. The simulation IR passes all three as references, so a caller's
-/// own effect summary does not record the write; only the callee's
-/// formal-target effect does.
-class FormalWriteResolver {
-public:
-  FormalWriteResolver(
-      sim::SimDesignOp design,
-      const analysis::HandleDataflowAnalysis &provenanceAnalysis)
-      : design(design), provenanceAnalysis(provenanceAnalysis) {}
-
-  /// Calls `emit` with a descriptor-target copy of `effect` for every storage
-  /// root that `owner`'s formal can reach. Returns false when some call path
-  /// cannot be resolved, in which case the reported roots are incomplete.
-  bool resolve(
-      StringAttr owner, schedule::ComputeEffectAttr effect,
-      llvm::function_ref<void(uint64_t, schedule::ComputeEffectAttr)> emit) {
-    if (!indexed)
-      index();
-    if (unsupportedCalls)
-      return false;
-    bool complete = true;
-    using Formal = std::pair<StringAttr, unsigned>;
-    SmallVector<Formal> pending{
-        {owner, static_cast<unsigned>(effect.getFormal())}};
-    DenseSet<Formal> seen;
-    while (!pending.empty()) {
-      auto [name, index] = pending.pop_back_val();
-      if (!seen.insert({name, index}).second)
-        continue;
-      auto function = functions.lookup(name.getValue());
-      auto sites = callers.find(name.getValue());
-      if (!function || dpi::has<dpi::Export>(function) ||
-          sites == callers.end()) {
-        complete = false;
-        continue;
-      }
-      for (Operation *site : sites->second) {
-        ValueRange arguments = site->getOperands();
-        if (auto task = dyn_cast<sim::SimTaskCallOp>(site))
-          arguments = task.getArguments();
-        auto caller = site->getParentOfType<sim::SimFuncOp>();
-        if (!caller || index >= arguments.size()) {
-          complete = false;
-          continue;
-        }
-        auto [facts, inserted] = provenance.try_emplace(caller.getOperation());
-        if (inserted)
-          facts->second = provenanceAnalysis.derive(caller);
-        auto actual = facts->second.find(arguments[index]);
-        if (actual == facts->second.end()) {
-          complete = false;
-          continue;
-        }
-        const auto &target = actual->second;
-        if (target.resource == schedule::ComputeResourceKind::Local)
-          continue;
-        if (target.resource != schedule::ComputeResourceKind::Storage) {
-          complete = false;
-        } else if (target.descriptor) {
-          // Resolve physical roots, not combinations of call paths. Widen
-          // formal subranges within each root until an offset-sensitive call
-          // proof is available; unrelated roots stay independent.
-          emit(*target.descriptor,
-               schedule::ComputeEffectAttr::get(
-                   design.getContext(), effect.getEffect(), target.resource,
-                   schedule::ComputeTargetKind::Descriptor, *target.descriptor,
-                   0, 0, target.rootWidth, true, effect.getDeferred(),
-                   effect.getTrigger()));
-        } else if (target.formal) {
-          pending.push_back({caller.getSymNameAttr(), *target.formal});
-        } else {
-          complete = false;
-        }
-      }
-    }
-    return complete;
-  }
-
-private:
-  void index() {
-    indexed = true;
-    for (sim::SimFuncOp function :
-         design.getBody().front().getOps<sim::SimFuncOp>())
-      functions[function.getSymName()] = function;
-    design.walk([&](Operation *op) {
-      if (auto call = dyn_cast<sim::SimTaskCallOp>(op))
-        callers[call.getCallee()].push_back(op);
-      else if (auto call = dyn_cast<sim::SimCallOp>(op))
-        callers[call.getCallee()].push_back(op);
-      else if (auto spawn = dyn_cast<sim::SimSpawnOp>(op))
-        callers[spawn.getCallee()].push_back(op);
-      // Descriptor-dispatched call targets need their own complete binding
-      // inventory. A direct-call inventory cannot certify those mutations.
-      else if (isa<sim::SimClassVirtualTaskCallOp, sim::SimClassVirtualCallOp,
-                   sim::SimClassDirectCallOp>(op))
-        unsupportedCalls = true;
-    });
-  }
-
-  sim::SimDesignOp design;
-  const analysis::HandleDataflowAnalysis &provenanceAnalysis;
-  bool indexed = false;
-  bool unsupportedCalls = false;
-  llvm::StringMap<sim::SimFuncOp> functions;
-  llvm::StringMap<SmallVector<Operation *>> callers;
-  DenseMap<Operation *, analysis::HandleFacts> provenance;
-};
-
 } // namespace
 
 CombinationalFusionAnalysis::CombinationalFusionAnalysis(
@@ -589,14 +477,14 @@ CombinationalFusionAnalysis::CombinationalFusionAnalysis(
   });
   if (unsupported)
     return;
-  FormalWriteResolver formals(design, provenanceAnalysis);
+  analysis::FormalEffectResolver formals(design, provenanceAnalysis);
   auto resolveFormal = [&](StringAttr owner,
                            schedule::ComputeEffectAttr effect) {
     unsupported |= !formals.resolve(
         owner, effect,
         [&](uint64_t descriptor, schedule::ComputeEffectAttr write) {
           storageWriters[descriptor].push_back({owner, write});
-        });
+        }, /*ignorePrivate=*/true);
   };
   for (Attribute attr : graph.getNodes()) {
     auto fragment = dyn_cast<schedule::ComputeFragmentAttr>(attr);
@@ -1896,6 +1784,20 @@ Operation *singleSuspension(sim::SimFuncOp function) {
 std::optional<NBATransientObservers>
 computeNBATransientObservers(sim::SimDesignOp design, bool guardedVPI) {
   schedule::ComputeGraphAttr graph = design.getComputeGraphAttr();
+  unsigned diagnostics = 0;
+  auto explain = [&](StringRef reason, sim::SimFuncOp function = {},
+                     schedule::ComputeEffectAttr effect = {}) {
+    if (!native::has<native::DebugTiming>(
+            design->getParentOfType<ModuleOp>()) ||
+        diagnostics++ >= 8)
+      return;
+    llvm::errs() << "talos NBA observer proof: " << reason;
+    if (function)
+      llvm::errs() << " actor=" << function.getSymName();
+    if (effect)
+      llvm::errs() << " effect=" << effect;
+    llvm::errs() << '\n';
+  };
   // VPI value-change callbacks run at each update.
   if (!graph ||
       (!guardedVPI && graph.getVpi() != schedule::ComputeVPIMode::Off))
@@ -1914,13 +1816,13 @@ computeNBATransientObservers(sim::SimDesignOp design, bool guardedVPI) {
   // not the whole analysis.
   bool writersComplete = true;
   analysis::HandleDataflowAnalysis provenanceAnalysis(design);
-  FormalWriteResolver formals(design, provenanceAnalysis);
+  analysis::FormalEffectResolver formals(design, provenanceAnalysis);
   design.walk([&](sim::SimFuncOp function) {
     functions.push_back(function);
     ArrayAttr summary = function.getEffectSummaryAttr();
     if (!summary) {
       // A body without a summary may still wait on storage.
-      complete &=
+      bool noWait =
           function.isExternal() || !function
                                         .walk([](Operation *op) {
                                           return sim::isSuspensionOp(op)
@@ -1928,6 +1830,9 @@ computeNBATransientObservers(sim::SimDesignOp design, bool guardedVPI) {
                                                      : WalkResult::advance();
                                         })
                                         .wasInterrupted();
+      if (!noWait)
+        explain("missing suspension summary", function);
+      complete &= noWait;
       return;
     }
     for (auto effect : summary.getAsRange<schedule::ComputeEffectAttr>()) {
@@ -1935,20 +1840,27 @@ computeNBATransientObservers(sim::SimDesignOp design, bool guardedVPI) {
           effect.getEffect() != schedule::ComputeEffectKind::NBA)
         continue;
       // A write through an unresolved handle can reach any storage root.
-      if (effect.getResource() == schedule::ComputeResourceKind::Unknown)
+      if (effect.getResource() == schedule::ComputeResourceKind::Unknown) {
         writersComplete = false;
+        explain("unknown writer", function, effect);
+      }
       if (effect.getResource() == schedule::ComputeResourceKind::Storage) {
         if (effect.getTarget() == schedule::ComputeTargetKind::Formal) {
-          writersComplete &= formals.resolve(
+          bool resolved = formals.resolve(
               function.getSymNameAttr(), effect,
               [&](uint64_t descriptor, schedule::ComputeEffectAttr write) {
                 storageWriters[descriptor].push_back(
                     {function.getOperation(), write});
-              });
+              },
+              /*ignorePrivate=*/true);
+          if (!resolved)
+            explain("unresolved formal writer", function, effect);
+          writersComplete &= resolved;
           continue;
         }
         if (effect.getTarget() != schedule::ComputeTargetKind::Descriptor) {
           writersComplete = false;
+          explain("unresolved writer", function, effect);
           continue;
         }
         storageWriters[effect.getDescriptor()].push_back(
@@ -1956,21 +1868,24 @@ computeNBATransientObservers(sim::SimDesignOp design, bool guardedVPI) {
       }
     }
   });
-  complete &= !analysis::DPIEffectAnalysis(design).anyCallMayAccessDesign();
+  bool dpiAccess = analysis::DPIEffectAnalysis(design).anyCallMayAccessDesign();
+  if (dpiAccess)
+    explain("DPI may access design");
+  complete &= !dpiAccess;
   if (!complete)
     return std::nullopt;
 
   NBATransientObservers result;
   // IEEE 1800-2023 4.9.3, 4.9.4, 6.8: declaration initialization cannot
-  // intervene between an NBA capture and its commit. Called tasks/functions
-  // are already instantiated into each process summary. Preserve this source
-  // inventory before fusion introduces private references and loses precision.
+  // intervene between an NBA capture and its commit. Task-call scheduling
+  // does not instantiate the callee's effects into the caller summary, so
+  // inventory task bodies and resolve their reference actuals too (13.5).
+  // Preserve this before fusion introduces private references.
   llvm::DenseSet<uint64_t> immediateWriters;
   bool immediateComplete = true;
   for (sim::SimFuncOp function : functions) {
     if (function.getEntryKind() == sim::EntryKind::RootInitializer ||
-        function.getEntryKind() == sim::EntryKind::Function ||
-        function.getEntryKind() == sim::EntryKind::Task)
+        function.getEntryKind() == sim::EntryKind::Function)
       continue;
     auto summary = function.getEffectSummaryAttr();
     if (!summary) {
@@ -1984,11 +1899,17 @@ computeNBATransientObservers(sim::SimDesignOp design, bool guardedVPI) {
       if (effect.getResource() == schedule::ComputeResourceKind::Unknown)
         immediateComplete = false;
       else if (effect.getResource() == schedule::ComputeResourceKind::Storage) {
-        if (effect.getTarget() != schedule::ComputeTargetKind::Descriptor)
+        if (effect.getTarget() == schedule::ComputeTargetKind::Formal)
+          immediateComplete &= formals.resolve(
+              function.getSymNameAttr(), effect,
+              [&](uint64_t descriptor, schedule::ComputeEffectAttr) {
+                immediateWriters.insert(descriptor);
+              },
+              /*ignorePrivate=*/true);
+        else if (effect.getTarget() != schedule::ComputeTargetKind::Descriptor)
           immediateComplete = false;
-        else {
+        else
           immediateWriters.insert(effect.getDescriptor());
-        }
       }
     }
   }
@@ -2088,12 +2009,12 @@ computeNBATransientObservers(sim::SimDesignOp design, bool guardedVPI) {
   if (writersComplete)
     for (sim::SimFuncOp function : functions) {
       ArrayAttr summary = function.getEffectSummaryAttr();
-      if (!summary || llvm::none_of(summary.getAsRange<
-                                        schedule::ComputeEffectAttr>(),
-                                    [](schedule::ComputeEffectAttr effect) {
-                                      return effect.getEffect() ==
-                                             schedule::ComputeEffectKind::Watch;
-                                    }))
+      if (!summary ||
+          llvm::none_of(summary.getAsRange<schedule::ComputeEffectAttr>(),
+                        [](schedule::ComputeEffectAttr effect) {
+                          return effect.getEffect() ==
+                                 schedule::ComputeEffectKind::Watch;
+                        }))
         continue;
       Observer observer{function, {}};
       if (isIdempotentObserver(function, provenanceAnalysis, storageWriters,
@@ -2116,8 +2037,7 @@ computeNBATransientObservers(sim::SimDesignOp design, bool guardedVPI) {
       bool overlap = whole || range.width == UINT64_MAX ||
                      (range.low < write.low + write.width &&
                       write.low < range.low + range.width);
-      return !overlap ||
-             (range.watcher && idempotent.contains(range.watcher));
+      return !overlap || (range.watcher && idempotent.contains(range.watcher));
     });
   };
   SmallVector<const Observer *> pending;
@@ -2163,17 +2083,51 @@ computeNBATransientObservers(sim::SimDesignOp design, bool guardedVPI) {
         if (effect.getResource() == schedule::ComputeResourceKind::Storage &&
             effect.getTarget() == schedule::ComputeTargetKind::Descriptor)
           observable.insert(effect.getDescriptor());
-        else if (effect.getResource() == schedule::ComputeResourceKind::Net &&
-                 effect.getTarget() == schedule::ComputeTargetKind::Descriptor)
+        else if (effect.getResource() ==
+                     schedule::ComputeResourceKind::Storage &&
+                 effect.getTarget() == schedule::ComputeTargetKind::Formal) {
+          // Resolve design actuals before widening conditional reads. Private
+          // state can carry influence across a call, so it still needs its
+          // own dependency proof before an observer may ignore it.
+          if (!formals.resolve(
+                  function.getSymNameAttr(), effect,
+                  [&](uint64_t descriptor, schedule::ComputeEffectAttr) {
+                    observable.insert(descriptor);
+                  },
+                  /*ignorePrivate=*/false)) {
+            explain("unresolved conditional formal read", function, effect);
+            return std::nullopt;
+          }
+        } else if (effect.getResource() == schedule::ComputeResourceKind::Net &&
+                   effect.getTarget() ==
+                       schedule::ComputeTargetKind::Descriptor)
           result.netObservable.insert(effect.getDescriptor());
-        else if (effect.getResource() == schedule::ComputeResourceKind::Unknown ||
-                 effect.getTarget() != schedule::ComputeTargetKind::Descriptor)
+        else if (effect.getResource() ==
+                     schedule::ComputeResourceKind::Unknown ||
+                 effect.getTarget() !=
+                     schedule::ComputeTargetKind::Descriptor) {
+          explain("unresolved conditional read", function, effect);
           return std::nullopt;
+        }
       }
     SmallVector<schedule::ComputeEffectAttr> watches;
     for (auto effect : summary.getAsRange<schedule::ComputeEffectAttr>())
-      if (effect.getEffect() == schedule::ComputeEffectKind::Watch)
-        watches.push_back(effect);
+      if (effect.getEffect() == schedule::ComputeEffectKind::Watch) {
+        if (effect.getResource() == schedule::ComputeResourceKind::Storage &&
+            effect.getTarget() == schedule::ComputeTargetKind::Formal) {
+          if (!formals.resolve(
+                  function.getSymNameAttr(), effect,
+                  [&](uint64_t, schedule::ComputeEffectAttr watch) {
+                    watches.push_back(watch);
+                  },
+                  /*ignorePrivate=*/false)) {
+            explain("unresolved formal watch", function, effect);
+            return std::nullopt;
+          }
+        } else {
+          watches.push_back(effect);
+        }
+      }
     if (watches.empty() || idempotent.contains(function))
       continue;
     // A process that waits only for a change of whole references wakes when
@@ -2199,8 +2153,10 @@ computeNBATransientObservers(sim::SimDesignOp design, bool guardedVPI) {
     for (schedule::ComputeEffectAttr watch : watches) {
       // A watch through a subroutine formal or an unresolved handle can
       // reach any root.
-      if (watch.getTarget() != schedule::ComputeTargetKind::Descriptor)
+      if (watch.getTarget() != schedule::ComputeTargetKind::Descriptor) {
+        explain("unresolved watch", function, watch);
         return std::nullopt;
+      }
       bool changeWatch =
           changeWaitsOnly &&
           (watch.getTrigger() == schedule::ComputeTriggerKind::None ||

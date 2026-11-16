@@ -4,8 +4,9 @@
 // REQUIRES: z3
 
 // Temporal negation and disable iff compose with all four temporal pair words.
-// Disable clears matched history plus every pair and advances the report epoch;
-// negation turns each strong pending consequent failure into one cover hit.
+// IEEE 1800-2023 16.12: the Active canceller clears matched history plus every
+// pair before Observed; the Reactive revoker advances the report epoch only for
+// a transition the canceller has not serviced; negation turns each strong pending consequent failure into one cover hit.
 
 module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu"} {
   talos.sv.symbol.definition @s0.combined_temporal_not_disable attributes {definition_kind = 0 : i32, hierarchical_name = "combined_temporal_not_disable", name = "combined_temporal_not_disable", node_id = 0 : i64} {
@@ -104,13 +105,30 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
   }
 }
 
+// The Active canceller clears the five state cells and has no epoch argument.
 // CHECK-LABEL: simulation.func private @unit_0.$concurrent_cancel.
-// CHECK-SAME: %arg9: !simulation.ref<i64>
+// CHECK-SAME: %arg8: !simulation.ref<i64>
 // CHECK-SAME: ) attributes
+// CHECK-SAME: home_region = 2 : i32
 // CHECK-SAME: schedule.concurrent_cancel
+// CHECK-NOT: epoch
 // CHECK-COUNT-5: simulation.ref.store
-// CHECK: simulation.ref.load %arg9
-// CHECK: simulation.ref.store {{.*}} to %arg9
+// CHECK-NOT: simulation.ref.store
+// CHECK-NOT: simulation.ref.load
+// CHECK-NOT: arith.addi
+// CHECK: simulation.code_unit.decl
+// The Reactive revoker bumps the epoch only if the canceller event is pending.
+// CHECK-LABEL: simulation.func private @unit_0.$concurrent_revoke.
+// CHECK-SAME: %arg4: !simulation.ref<i64>
+// CHECK-SAME: %arg5: !simulation.process
+// CHECK-SAME: home_region = 10 : i32
+// CHECK: simulation.suspend.observe
+// CHECK-SAME: resume_region = 10 : i32
+// CHECK: [[PENDING:%.*]] = simulation.process.event_pending %arg5
+// CHECK: [[EPOCH:%.*]] = simulation.ref.load %arg4
+// CHECK: [[BIT:%.*]] = arith.extui [[PENDING]] : i1 to i64
+// CHECK: [[NEXT_EPOCH:%.*]] = arith.addi [[EPOCH]], [[BIT]]
+// CHECK: simulation.ref.store [[NEXT_EPOCH]] to %arg4
 // CHECK-NOT: simulation.ref.store
 
 // CHECK-LABEL: simulation.func private @unit_0.$concurrent_eos_branch.
@@ -129,7 +147,8 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
 // CHECK-SAME: simulation.temporal_property_negation
 // CHECK-COUNT-6: simulation.ref.alloc
 // CHECK-NOT: simulation.ref.alloc
-// CHECK: simulation.spawn @unit_0.$concurrent_cancel.
+// CHECK: [[CANCEL:%.*]] = simulation.spawn @unit_0.$concurrent_cancel.
+// CHECK: simulation.spawn @unit_0.$concurrent_revoke.{{.*}}[[CANCEL]]
 // CHECK: simulation.spawn @unit_0.$concurrent_eos_branch.
 // CHECK: simulation.suspend.edge posedge
 // CHECK-COUNT-5: simulation.ref.store

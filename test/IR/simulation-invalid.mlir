@@ -2280,7 +2280,7 @@ module {
       %ref = simulation.context.storage %ctx[0] : !simulation.ref<i1>
       %bound = simulation.observer.bind @evaluator values(%ref, %ref : !simulation.ref<i1>, !simulation.ref<i1>) captures 1 : !simulation.observer<i1>
       %false = arith.constant false
-      // expected-error @+1 {{concurrent cancel level-true suspension requires an internal detached priority concurrent-cancel fork in the reactive region}}
+      // expected-error @+1 {{concurrent cancel level-true suspension requires an internal detached priority concurrent-cancel fork in the active or reactive region}}
       simulation.suspend.observe %bound, %false conditions 0 edges [1] indices [-1] to ^resume {schedule.concurrent_cancel_level_true} : !simulation.observer<i1>, i1
     ^resume:
       simulation.return

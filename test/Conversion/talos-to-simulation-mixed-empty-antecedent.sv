@@ -89,19 +89,32 @@
 // CHECK-COUNT-2: simulation.spawn @unit_3.fork.83.0.0
 // CHECK-NOT: simulation.spawn @unit_3.fork.83.0.0
 // CHECK-NOT: @unit_3.$concurrent_eos
-// Disable owns the antecedent, both relative consequent channels, and the
-// epoch. It clears all three temporal cells and increments the epoch so queued
-// live/EOS reports are suppressed.
+// IEEE 1800-2023 16.12: the Active canceller owns the antecedent and both
+// relative consequent channels and clears all three temporal cells before
+// Observed. The Reactive revoker increments the epoch only for a transition
+// the canceller has not serviced, suppressing queued live/EOS reports.
 // CHECK-LABEL: simulation.func private @unit_4.$concurrent_cancel.
+// CHECK-SAME: %arg6: !simulation.ref<i64>
+// CHECK-SAME: ) attributes
+// CHECK-SAME: home_region = 2 : i32
 // CHECK-SAME: schedule.concurrent_cancel
 // CHECK-COUNT-3: simulation.ref.store {{%.*}} to %arg{{[4-6]}}
-// CHECK: simulation.ref.load %arg7
-// CHECK: arith.addi
-// CHECK: simulation.ref.store {{%.*}} to %arg7
+// CHECK-NOT: simulation.ref.store
+// CHECK-NOT: arith.addi
+// CHECK-LABEL: simulation.func private @unit_4.$concurrent_revoke.
+// CHECK-SAME: %arg4: !simulation.ref<i64>
+// CHECK-SAME: %arg5: !simulation.process
+// CHECK-SAME: home_region = 10 : i32
+// CHECK: [[PENDING:%.*]] = simulation.process.event_pending %arg5
+// CHECK: [[EPOCH:%.*]] = simulation.ref.load %arg4
+// CHECK: [[BIT:%.*]] = arith.extui [[PENDING]] : i1 to i64
+// CHECK: [[NEXT_EPOCH:%.*]] = arith.addi [[EPOCH]], [[BIT]]
+// CHECK: simulation.ref.store [[NEXT_EPOCH]] to %arg4
 // CHECK-LABEL: simulation.func private @unit_4(
 // CHECK-SAME: simulation.branching_antecedent_result_horizon = 3 : i64
 // CHECK-SAME: simulation.mixed_empty_antecedent_nonoverlap
-// CHECK: simulation.spawn @unit_4.$concurrent_cancel.
+// CHECK: [[CANCEL:%.*]] = simulation.spawn @unit_4.$concurrent_cancel.
+// CHECK: simulation.spawn @unit_4.$concurrent_revoke.{{.*}}[[CANCEL]]
 // CHECK: simulation.spawn @unit_4.$concurrent_eos_branch.
 
 `timescale 1ns / 1ns

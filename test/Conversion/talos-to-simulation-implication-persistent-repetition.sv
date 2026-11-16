@@ -103,14 +103,27 @@
 // CHECK-NOT: simulation.assert.sampled_read
 // CHECK: simulation.spawn @unit_3.fork.{{[0-9]+}}.0.0
 // CHECK-NOT: simulation.spawn @unit_3.fork
-// Disable clears four DFA counters, the bounded prefix bitset, and the
-// nonoverlap handoff, then advances the report epoch. EOS observes those six
-// cells plus the epoch used to invalidate stale callbacks.
+// IEEE 1800-2023 16.12: the Active canceller clears four DFA counters, the
+// bounded prefix bitset, and the nonoverlap handoff before Observed. The
+// Reactive revoker advances the report epoch only for a transition the
+// canceller has not serviced. EOS observes those six cells plus the epoch used
+// to invalidate stale callbacks.
 // CHECK-LABEL: simulation.func private @unit_4.$concurrent_cancel.
+// CHECK-SAME: %arg9: !simulation.ref<i64>
+// CHECK-SAME: ) attributes
+// CHECK-SAME: home_region = 2 : i32
 // CHECK-COUNT-6: simulation.ref.store {{.*}} to %arg{{[4-9]}}
-// CHECK: [[U4_EPOCH:%.*]] = simulation.ref.load %arg10
-// CHECK: [[U4_NEXT_EPOCH:%.*]] = arith.addi [[U4_EPOCH]],
-// CHECK: simulation.ref.store [[U4_NEXT_EPOCH]] to %arg10
+// CHECK-NOT: simulation.ref.store
+// CHECK-NOT: arith.addi
+// CHECK-LABEL: simulation.func private @unit_4.$concurrent_revoke.
+// CHECK-SAME: %arg4: !simulation.ref<i64>
+// CHECK-SAME: %arg5: !simulation.process
+// CHECK-SAME: home_region = 10 : i32
+// CHECK: [[U4_PENDING:%.*]] = simulation.process.event_pending %arg5
+// CHECK: [[U4_EPOCH:%.*]] = simulation.ref.load %arg4
+// CHECK: [[U4_BIT:%.*]] = arith.extui [[U4_PENDING]] : i1 to i64
+// CHECK: [[U4_NEXT_EPOCH:%.*]] = arith.addi [[U4_EPOCH]], [[U4_BIT]]
+// CHECK: simulation.ref.store [[U4_NEXT_EPOCH]] to %arg4
 // CHECK-LABEL: simulation.func private @unit_4.$concurrent_eos_count.
 // CHECK-COUNT-7: simulation.ref.load
 // CHECK-NOT: simulation.ref.load
@@ -122,7 +135,8 @@
 // CHECK-COUNT-6: simulation.ref.alloc %{{.*}} : i64 -> !simulation.ref<i64>
 // CHECK-NOT: simulation.ref.alloc %{{.*}} : i64 -> !simulation.ref<i64>
 // CHECK: [[U4_HANDOFF:%.*]] = simulation.ref.alloc %{{.*}} {simulation.persistent_implication_handoff}
-// CHECK: simulation.spawn @unit_4.$concurrent_cancel.{{.*}}[[U4_HANDOFF]]
+// CHECK: [[U4_CANCEL:%.*]] = simulation.spawn @unit_4.$concurrent_cancel.{{.*}}[[U4_HANDOFF]]
+// CHECK: simulation.spawn @unit_4.$concurrent_revoke.{{.*}}[[U4_CANCEL]]
 // CHECK: simulation.spawn @unit_4.$concurrent_eos_count.{{.*}}[[U4_HANDOFF]]
 // CHECK-COUNT-4: simulation.assert.sampled_read
 // CHECK-NOT: simulation.assert.sampled_read

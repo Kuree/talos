@@ -17,6 +17,7 @@ add_mlir_library(TalosSimulationAnalysis
   CombinationalDependencyAnalysis.cpp
   DemandedBitAnalysis.cpp
   HandleDataflowAnalysis.cpp
+  FormalEffectAnalysis.cpp
   LogicBitAnalysis.cpp
   LocalStorageAnalysis.cpp
   LocalUnknownAnalysis.cpp
