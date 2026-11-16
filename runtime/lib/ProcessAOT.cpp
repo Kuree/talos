@@ -193,8 +193,10 @@ bool staticNBARootNeedsTransitions(const talos_rt_context *context,
          talos_rt_coverage_tracks_static_state_unlocked(
              context,
              context->nativeScheduleNBARoots[rootIndex].static_state) ||
-         talos_rt_saif_tracks_static_state_unlocked(
-             context, context->nativeScheduleNBARoots[rootIndex].static_state);
+         (context->saif &&
+          talos_rt_saif_tracks_static_state_unlocked(
+              context,
+              context->nativeScheduleNBARoots[rootIndex].static_state));
 }
 
 bool nativeStaticRootDirty(const talos_rt_context *context,

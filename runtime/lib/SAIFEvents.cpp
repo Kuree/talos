@@ -13,6 +13,8 @@ struct Frame {
 };
 thread_local Frame active;
 thread_local std::vector<Frame> directFrames;
+// Outer frames saved by SAIFExecutionScope, innermost last.
+thread_local std::vector<Frame> scopeFrames;
 std::shared_ptr<const SAIFCause> fresh(talos_rt_context *) {
   return std::make_shared<SAIFCause>();
 }
@@ -40,12 +42,12 @@ void enter(talos_rt_context *context, uint64_t logical) {
   state.publicationCause = active.cause;
 }
 } // namespace
-std::shared_ptr<const SAIFCause>
+TALOS_RT_FEATURE_TEXT std::shared_ptr<const SAIFCause>
 talos_rt_saif_current_cause_unlocked(talos_rt_context *context) {
   return active.context == context ? active.cause
                                    : std::shared_ptr<const SAIFCause>{};
 }
-std::shared_ptr<const SAIFCause>
+TALOS_RT_FEATURE_TEXT std::shared_ptr<const SAIFCause>
 talos_rt_saif_capture_cause_unlocked(talos_rt_context *context) {
   auto cause = talos_rt_saif_current_cause_unlocked(context);
   if (cause)
@@ -54,22 +56,23 @@ talos_rt_saif_capture_cause_unlocked(talos_rt_context *context) {
     return context->saif->publicationCause;
   return fresh(context);
 }
-void talos_rt_saif_wake_unlocked(talos_rt_context *context, uint64_t logical) {
+TALOS_RT_FEATURE_TEXT void
+talos_rt_saif_wake_unlocked(talos_rt_context *context, uint64_t logical) {
   auto &state = *context->saif;
   state.wakeups.try_emplace(
       logical, state.publicationCause
                    ? state.publicationCause
                    : talos_rt_saif_capture_cause_unlocked(context));
 }
-void talos_rt_saif_complete_unlocked(talos_rt_context *context,
-                                     uint64_t logical) {
+TALOS_RT_FEATURE_TEXT void
+talos_rt_saif_complete_unlocked(talos_rt_context *context, uint64_t logical) {
   auto &state = *context->saif;
   state.wakeups.erase(logical);
   state.resumptions.erase(logical);
   state.referenceProcesses.erase(logical);
 }
-void talos_rt_saif_wake_actor_unlocked(talos_rt_context *context,
-                                       uint32_t slot) {
+TALOS_RT_FEATURE_TEXT void
+talos_rt_saif_wake_actor_unlocked(talos_rt_context *context, uint32_t slot) {
   if (slot >= context->nativeScheduleActorIndices.size())
     return;
   size_t index = context->nativeScheduleActorIndices[slot];
@@ -78,12 +81,14 @@ void talos_rt_saif_wake_actor_unlocked(talos_rt_context *context,
                                 TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG |
                                     context->scheduledProcesses[index].token);
 }
-void talos_rt_saif_direct_enter_unlocked(talos_rt_context *context,
-                                         uint64_t logical) {
+TALOS_RT_FEATURE_TEXT void
+talos_rt_saif_direct_enter_unlocked(talos_rt_context *context,
+                                    uint64_t logical) {
   directFrames.push_back(active);
   enter(context, logical);
 }
-void talos_rt_saif_direct_leave_unlocked(talos_rt_context *) {
+TALOS_RT_FEATURE_TEXT void
+talos_rt_saif_direct_leave_unlocked(talos_rt_context *) {
   if (!directFrames.empty()) {
     auto *context = active.context;
     if (context)
@@ -95,68 +100,61 @@ void talos_rt_saif_direct_leave_unlocked(talos_rt_context *) {
           active.context == context ? active.logical : 0;
   }
 }
-SAIFExecutionScope::SAIFExecutionScope(
-    talos_rt_context *context, uint64_t logical,
-    const talos_rt_fragment_action_v1 *result)
-    : result(result) {
-  if (!context || !context->saif)
-    return;
+TALOS_RT_FEATURE_TEXT void
+talos_rt_saif_enter_logical_unlocked(talos_rt_context *context,
+                                     uint64_t logical) {
   ContextMutexLock lock(context);
-  enabled = true;
-  previousContext = active.context;
-  previousCause = active.cause;
-  previousLogical = active.logical;
+  scopeFrames.push_back(active);
   enter(context, logical);
 }
-SAIFExecutionScope::SAIFExecutionScope(talos_rt_context *context,
-                                       std::shared_ptr<const SAIFCause> cause) {
-  if (!context || !context->saif)
-    return;
+TALOS_RT_FEATURE_TEXT void talos_rt_saif_enter_cause_unlocked(
+    talos_rt_context *context, const std::shared_ptr<const SAIFCause> &cause,
+    bool inheritCurrent) {
   ContextMutexLock lock(context);
   advanceReference(context);
-  enabled = true;
-  previousContext = active.context;
-  previousCause = active.cause;
-  previousLogical = active.logical;
-  active = {context, cause ? std::move(cause) : fresh(context), 0};
+  scopeFrames.push_back(active);
+  std::shared_ptr<const SAIFCause> selected =
+      cause            ? cause
+      : inheritCurrent ? talos_rt_saif_current_cause_unlocked(context)
+                       : nullptr;
+  active = {context, selected ? std::move(selected) : fresh(context), 0};
   context->saif->activeLogical = 0;
   context->saif->publicationCause = active.cause;
 }
-SAIFExecutionScope::~SAIFExecutionScope() {
-  if (enabled) {
-    auto *context = active.context;
-    ContextMutexLock lock(context);
-    if (result && active.logical) {
-      bool terminate = result->kind == TALOS_RT_FRAGMENT_TERMINATE;
-      if (terminate) {
-        uint64_t token = active.logical & ~TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG;
-        if (active.logical & TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG) {
-          auto process = context->scheduledProcessIndices.find(token);
-          if (process != context->scheduledProcessIndices.end()) {
-            const auto &owner = context->scheduledProcesses[process->second];
-            terminate = owner.callers.empty() &&
-                        (!owner.instance || owner.instance->lifecycle ==
-                                                TALOS_RT_PROCESS_TERMINATED);
-          }
-        } else {
-          auto task = context->scheduledDesignTaskIndices.find(token);
-          if (task != context->scheduledDesignTaskIndices.end())
-            terminate = context->scheduledDesignTasks[task->second].terminated;
+TALOS_RT_FEATURE_TEXT void
+talos_rt_saif_leave_unlocked(talos_rt_context *context,
+                             const talos_rt_fragment_action_v1 *result) {
+  ContextMutexLock lock(context);
+  if (result && active.logical) {
+    bool terminate = result->kind == TALOS_RT_FRAGMENT_TERMINATE;
+    if (terminate) {
+      uint64_t token = active.logical & ~TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG;
+      if (active.logical & TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG) {
+        auto process = context->scheduledProcessIndices.find(token);
+        if (process != context->scheduledProcessIndices.end()) {
+          const auto &owner = context->scheduledProcesses[process->second];
+          terminate = owner.callers.empty() &&
+                      (!owner.instance || owner.instance->lifecycle ==
+                                              TALOS_RT_PROCESS_TERMINATED);
         }
+      } else {
+        auto task = context->scheduledDesignTaskIndices.find(token);
+        if (task != context->scheduledDesignTaskIndices.end())
+          terminate = context->scheduledDesignTasks[task->second].terminated;
       }
-      bool newWait = result->kind == TALOS_RT_FRAGMENT_SUSPEND &&
-                     result->suspend_kind != TALOS_RT_SUSPEND_DELAY;
-      if (terminate || newWait)
-        context->saif->resumptions.erase(active.logical);
-      if (terminate)
-        context->saif->wakeups.erase(active.logical);
     }
-    active = {previousContext, std::move(previousCause), previousLogical};
-    context->saif->activeLogical =
-        active.context == context ? active.logical : 0;
-    context->saif->publicationCause =
-        active.context == context ? active.cause : nullptr;
+    bool newWait = result->kind == TALOS_RT_FRAGMENT_SUSPEND &&
+                   result->suspend_kind != TALOS_RT_SUSPEND_DELAY;
+    if (terminate || newWait)
+      context->saif->resumptions.erase(active.logical);
+    if (terminate)
+      context->saif->wakeups.erase(active.logical);
   }
+  active = std::move(scopeFrames.back());
+  scopeFrames.pop_back();
+  context->saif->activeLogical = active.context == context ? active.logical : 0;
+  context->saif->publicationCause =
+      active.context == context ? active.cause : nullptr;
 }
 
 namespace talos::saifruntime {
@@ -282,8 +280,9 @@ extern "C" void talos_rt_v1_saif_driver(talos_rt_context *context,
   TALOS_RT_CATCH_ALL { context->schedulerStatus = TALOS_RT_INVALID_ARGUMENT; }
 }
 
-void talos_rt_saif_event_issued_unlocked(talos_rt_context *context,
-                                         ScheduledNBA &event) {
+TALOS_RT_FEATURE_TEXT void
+talos_rt_saif_event_issued_unlocked(talos_rt_context *context,
+                                    ScheduledNBA &event) {
   if (!event.saifCause)
     event.saifCause = talos_rt_saif_capture_cause_unlocked(context);
   event.saifInputTime = context->schedulerTime;
@@ -360,11 +359,10 @@ void recordRejectedAt(talos_rt_context *context, uint64_t absolute, bool from,
   }
 }
 } // namespace
-void talos_rt_saif_reject_pulse_unlocked(talos_rt_context *context,
-                                         const ScheduledNBA &leading,
-                                         uint64_t destination, uint64_t width,
-                                         const uint8_t *value,
-                                         const uint8_t *unknown) {
+TALOS_RT_FEATURE_TEXT void talos_rt_saif_reject_pulse_unlocked(
+    talos_rt_context *context, const ScheduledNBA &leading,
+    uint64_t destination, uint64_t width, const uint8_t *value,
+    const uint8_t *unknown) {
   if (!leading.saifCause || leading.cancelled ||
       leading.inertialDriverInitialProjection ||
       leading.inertialNetInitialProjection || !value ||
@@ -405,7 +403,7 @@ void talos_rt_saif_reject_pulse_unlocked(talos_rt_context *context,
   }
 }
 
-void talos_rt_saif_reject_pair_unlocked(
+TALOS_RT_FEATURE_TEXT void talos_rt_saif_reject_pair_unlocked(
     talos_rt_context *context, const ScheduledNBA &low,
     const ScheduledNBA &high, uint64_t lowDestination, uint64_t highDestination,
     uint64_t width, const uint8_t *lowValue, const uint8_t *lowUnknown,

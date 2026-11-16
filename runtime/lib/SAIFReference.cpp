@@ -14,7 +14,10 @@ talos_rt_context *referenceContext(talos_rt_context *context) {
   auto &state = *context->saif;
   if (state.referenceContext)
     return state.referenceContext.get();
-  if (!context->execution || !context->designBytecodeImageValidated)
+  // The reference copies the sealed observation inventory and its sorted
+  // watches; an earlier snapshot would be incomplete.
+  if (!state.sealed || !context->execution ||
+      !context->designBytecodeImageValidated)
     return nullptr;
   talos_rt_context *reference = nullptr;
   auto status =
@@ -48,7 +51,7 @@ bool eligible(talos_rt_context *context, uint32_t function) {
 }
 } // namespace
 
-void talos_rt_saif_clone_process_unlocked(
+TALOS_RT_FEATURE_TEXT void talos_rt_saif_clone_process_unlocked(
     talos_rt_context *context, uint64_t logical,
     const talos_rt_process_spawn_plan_v1 &plan, const void *captures) {
   if (!context->saif || context->saifReferenceModel ||
@@ -83,8 +86,9 @@ void talos_rt_saif_clone_process_unlocked(
   reference->saif->referenceProcesses.insert(referenceLogical);
 }
 
-void talos_rt_saif_clone_task_unlocked(talos_rt_context *context,
-                                       const ScheduledDesignTask &source) {
+TALOS_RT_FEATURE_TEXT void
+talos_rt_saif_clone_task_unlocked(talos_rt_context *context,
+                                  const ScheduledDesignTask &source) {
   if (!context->saif || context->saifReferenceModel ||
       !eligible(context, source.function))
     return;

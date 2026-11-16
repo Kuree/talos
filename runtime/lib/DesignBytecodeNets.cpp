@@ -636,10 +636,8 @@ bool publishNetBits(talos_rt_context *context, const NetAliasCache &cache,
     for (size_t index = groupBegin; index != groupEnd; ++index) {
       const RoutedPublication &route = routed[index];
       const NetPublication &publication = publications[route.publicationIndex];
-      SAIFExecutionScope activity(
-          context, publication.saifCause
-                       ? publication.saifCause
-                       : talos_rt_saif_current_cause_unlocked(context));
+      SAIFExecutionScope activity(context, publication.saifCause,
+                                  SAIFExecutionScope::CurrentCause);
       if (!appendSignalEvent(context, route.signalHandle, publication.oldValue,
                              publication.oldUnknown, publication.value,
                              publication.unknown, false))

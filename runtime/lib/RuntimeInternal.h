@@ -2382,20 +2382,31 @@ void talos_rt_saif_clone_process_unlocked(
     const talos_rt_process_spawn_plan_v1 &, const void *captures);
 void talos_rt_saif_clone_task_unlocked(talos_rt_context *,
                                        const ScheduledDesignTask &);
+void talos_rt_saif_enter_logical_unlocked(talos_rt_context *, uint64_t logical);
+void talos_rt_saif_enter_cause_unlocked(
+    talos_rt_context *, const std::shared_ptr<const SAIFCause> &,
+    bool inheritCurrent);
+void talos_rt_saif_leave_unlocked(talos_rt_context *,
+                                  const talos_rt_fragment_action_v1 *result);
+/// The causal SAIF frame of one execution step. Without collection this is a
+/// single inline branch; the saved outer frame lives on a thread-local stack
+/// in SAIFEvents.cpp. Defined after talos_rt_context.
 class SAIFExecutionScope {
 public:
-  SAIFExecutionScope(talos_rt_context *, uint64_t logical,
-                     const talos_rt_fragment_action_v1 *result = nullptr);
-  SAIFExecutionScope(talos_rt_context *,
-                     std::shared_ptr<const SAIFCause> cause);
-  ~SAIFExecutionScope();
+  enum CauseFallback : bool { FreshCause = false, CurrentCause = true };
+  inline SAIFExecutionScope(
+      talos_rt_context *, uint64_t logical,
+      const talos_rt_fragment_action_v1 *result = nullptr);
+  /// A null cause starts a fresh one, or inherits the active cause.
+  inline SAIFExecutionScope(talos_rt_context *,
+                            const std::shared_ptr<const SAIFCause> &cause,
+                            CauseFallback fallback = FreshCause);
+  inline ~SAIFExecutionScope();
   SAIFExecutionScope(const SAIFExecutionScope &) = delete;
+  SAIFExecutionScope &operator=(const SAIFExecutionScope &) = delete;
 
 private:
-  talos_rt_context *previousContext = nullptr;
-  std::shared_ptr<const SAIFCause> previousCause;
-  uint64_t previousLogical = 0;
-  bool enabled = false;
+  talos_rt_context *context = nullptr;
   const talos_rt_fragment_action_v1 *result = nullptr;
 };
 struct SAIFState;
@@ -4068,6 +4079,29 @@ void talos_rt_resensitize_design_task_unlocked(talos_rt_context *context,
 /// Drops finished-process links from which no live process descends.
 void talos_rt_prune_finished_process_parents_unlocked(
     talos_rt_context *context);
+
+inline __attribute__((always_inline)) SAIFExecutionScope::SAIFExecutionScope(
+    talos_rt_context *context, uint64_t logical,
+    const talos_rt_fragment_action_v1 *result)
+    : result(result) {
+  if (context && context->saif) {
+    talos_rt_saif_enter_logical_unlocked(context, logical);
+    this->context = context;
+  }
+}
+inline __attribute__((always_inline)) SAIFExecutionScope::SAIFExecutionScope(
+    talos_rt_context *context, const std::shared_ptr<const SAIFCause> &cause,
+    CauseFallback fallback) {
+  if (context && context->saif) {
+    talos_rt_saif_enter_cause_unlocked(context, cause, fallback);
+    this->context = context;
+  }
+}
+inline
+    __attribute__((always_inline)) SAIFExecutionScope::~SAIFExecutionScope() {
+  if (context)
+    talos_rt_saif_leave_unlocked(context, result);
+}
 
 // A join_none branch may finish, or be killed by a disable that does not reach
 // its children, while processes spawned beneath it remain live. They stay its

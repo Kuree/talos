@@ -147,7 +147,9 @@ talos_rt_v1_saif_bind(talos_rt_context *context, uint64_t handle,
     }
     auto &points = port ? node->ports : node->nets;
     size_t index = state->observations.size();
-    state->observations.push_back({signal, 0, {}, 0, initial});
+    Observation &point = state->observations.emplace_back();
+    point.signal = signal;
+    point.current = initial;
     points.push_back(index);
     state->watches[id].push_back({uint64_t(offset), index});
     return TALOS_RT_OK;
@@ -193,17 +195,17 @@ extern "C" talos_rt_status talos_rt_v1_saif_seal(talos_rt_context *context) {
   }
 }
 
-bool talos_rt_saif_tracks_static_state_unlocked(const talos_rt_context *context,
-                                                uint32_t id) {
+TALOS_RT_FEATURE_TEXT bool
+talos_rt_saif_tracks_static_state_unlocked(const talos_rt_context *context,
+                                           uint32_t id) {
   return context && context->saif && context->saif->sealed &&
          context->saif->watches.count(id);
 }
 
-void talos_rt_saif_record_transition_unlocked(talos_rt_context *context,
-                                              uint64_t handle, uint64_t width,
-                                              const uint8_t *changed,
-                                              const uint8_t *newValue,
-                                              const uint8_t *newUnknown) {
+TALOS_RT_FEATURE_TEXT void talos_rt_saif_record_transition_unlocked(
+    talos_rt_context *context, uint64_t handle, uint64_t width,
+    const uint8_t *changed, const uint8_t *newValue,
+    const uint8_t *newUnknown) {
   auto *state = context->saif.get();
   if (!state || !state->sealed || state->finished || !changed || !width)
     return;
@@ -292,8 +294,9 @@ void talos_rt_saif_record_transition_unlocked(talos_rt_context *context,
   }
 }
 
-void talos_rt_saif_contention_unlocked(talos_rt_context *context,
-                                       uint64_t absoluteBit, bool contention) {
+TALOS_RT_FEATURE_TEXT void
+talos_rt_saif_contention_unlocked(talos_rt_context *context,
+                                  uint64_t absoluteBit, bool contention) {
   auto *state = context->saif.get();
   if (!state || !state->sealed || state->finished)
     return;
