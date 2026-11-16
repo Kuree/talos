@@ -11491,6 +11491,28 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
       }
       satisfied = guardAnd(satisfied, valid);
     }
+    // The solver program equates the fields of active aliases (18.5.8: one
+    // variable per object); the checker must accept exactly those candidates.
+    // Otherwise both slices of one object are written back and the later one
+    // publishes a value that no constraint, soft or hard, ever checked.
+    for (const AliasEquality &alias : aliasEqualities) {
+      Type fieldType = builder.getIntegerType(alias.width);
+      auto field = [&](uint32_t offset) -> Value {
+        Value bits = assignment;
+        if (offset != 0)
+          bits = arith::ShRUIOp::create(
+              builder, location, bits,
+              constantAssignment(APInt(assignmentWidth, offset)));
+        return bits.getType() == fieldType
+                   ? bits
+                   : arith::TruncIOp::create(builder, location, fieldType, bits)
+                         .getResult();
+      };
+      Value equal = arith::CmpIOp::create(
+          builder, location, arith::CmpIPredicate::eq, field(alias.leftOffset),
+          field(alias.rightOffset));
+      satisfied = guardAnd(satisfied, guardOr(guardNot(alias.active), equal));
+    }
     uint64_t domainPropertyOffset = 0;
     for (const Property &property : planned) {
       for (const PropertyDomain &domain : property.domains) {
