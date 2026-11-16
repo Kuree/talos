@@ -38,9 +38,11 @@ std::vector<uint8_t> pinState(const SAIFState &state, const Cell &cell) {
     result.push_back(state.observations[pin.observation].current);
   return result;
 }
-void count(Counts &counts, unsigned metric, long double weight) {
+void count(Counts &counts, unsigned metric, long double weight,
+           unsigned polarity) {
   if (metric == 0) {
     ++counts.tc;
+    ++counts.tcByEdge[polarity];
   } else if (metric == 1)
     ++counts.tg;
   else {
@@ -331,7 +333,7 @@ void recordCellEdge(SAIFState &state, size_t observation, uint32_t from,
           continue;
         unsigned edge = rule.splitEdges && !to ? 1 : 0;
         if (rule.paths.empty()) {
-          count(rule.counts[edge], metric, weight);
+          count(rule.counts[edge], metric, weight, to);
         } else
           for (auto &related : rule.paths) {
             bool matchesPath = related.isDefault;
@@ -341,7 +343,7 @@ void recordCellEdge(SAIFState &state, size_t observation, uint32_t from,
                     std::find(related.pins.begin(), related.pins.end(),
                               input) != related.pins.end();
             if (matchesPath) {
-              count(related.counts[edge], metric, weight);
+              count(related.counts[edge], metric, weight, to);
               break;
             }
           }

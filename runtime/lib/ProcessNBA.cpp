@@ -289,6 +289,8 @@ static talos_rt_status schedulerNBA(
     uint64_t delay, const uint8_t *value, const uint8_t *unknown,
     bool stringValue, uint64_t staticSite = UINT64_MAX, bool driver = false,
     uint64_t clockingOutput = UINT64_MAX, uint64_t sourceBitOffset = 0) {
+  if (context && context->saifReferenceModel)
+    delay = 0;
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   auto fail = [&](talos_rt_status status) {
@@ -1159,6 +1161,8 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_inertial_driver(
     uint64_t codeUnit, uint32_t component, uint32_t flags, uint64_t riseDelay,
     uint64_t fallDelay, uint64_t turnoffDelay, const uint8_t *value,
     const uint8_t *unknown) {
+  if (context && context->saifReferenceModel)
+    riseDelay = fallDelay = turnoffDelay = 0;
   if (!context || !context->execution || !valuePlane || bitWidth == 0 ||
       codeUnit == UINT64_MAX ||
       (flags & ~(TALOS_RT_INERTIAL_DRIVER_VECTOR_DELAY |
@@ -1481,6 +1485,13 @@ static talos_rt_status schedulerInertialPath(
     const uint8_t *activeMask, const uint8_t *riseMask, const uint8_t *fallMask,
     const uint8_t *turnoffMask, const uint8_t *pulseTransitionMasks,
     bool nonblocking) {
+  if (context && context->saifReferenceModel) {
+    riseDelay = fallDelay = turnoffDelay = 0;
+    if (pulseReject != UINT64_MAX)
+      pulseReject = 0;
+    if (pulseError != UINT64_MAX)
+      pulseError = 0;
+  }
   if (!context || !context->execution || !valuePlane || bitWidth == 0 ||
       codeUnit == UINT64_MAX || groupCount == 0 || group >= groupCount ||
       (flags & ~(TALOS_RT_INERTIAL_DRIVER_DEFER_RESOLUTION |
@@ -1937,6 +1948,13 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_inertial_path_driver_pulse(
     const uint8_t *value, const uint8_t *unknown, const uint8_t *activeMask,
     const uint8_t *riseMask, const uint8_t *fallMask,
     const uint8_t *turnoffMask, const uint8_t *pulseTransitionMasks) {
+  if (context && context->saifReferenceModel) {
+    riseDelay = fallDelay = turnoffDelay = 0;
+    if (pulseReject != UINT64_MAX)
+      pulseReject = 0;
+    if (pulseError != UINT64_MAX)
+      pulseError = 0;
+  }
   return schedulerInertialPath<false>(
       context, valuePlane, unknownPlane, planeBitCount, bitOffset, bitWidth,
       codeUnit, component, group, groupCount, flags, riseDelay, fallDelay,
@@ -2006,6 +2024,8 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_inertial_driver_strength_pair(
     const uint8_t *lowValue, const uint8_t *lowUnknown,
     const uint8_t *highValue, const uint8_t *highUnknown,
     const uint8_t *transitionValue, const uint8_t *transitionUnknown) {
+  if (context && context->saifReferenceModel)
+    riseDelay = fallDelay = turnoffDelay = 0;
   if (!context || !context->execution || !valuePlane || !unknownPlane ||
       bitWidth == 0 || codeUnit == UINT64_MAX)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -2017,7 +2037,7 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_inertial_driver_strength_pair(
       return TALOS_RT_INVALID_HANDLE;
     InertialDriverSite site{codeUnit, component};
     auto cancelPending = [&] {
-      if (context->saif)
+      if (context->saif && !context->saifReferenceModel)
         for (size_t i = 0; i + 1 < context->scheduledNBAs.size(); ++i) {
           const auto &lo = context->scheduledNBAs[i];
           const auto &hi = context->scheduledNBAs[i + 1];
@@ -2244,6 +2264,13 @@ static talos_rt_status schedulerInertialPathStrengthPair(
     const uint8_t *transitionValue, const uint8_t *transitionUnknown,
     const uint8_t *activeMask, const uint8_t *riseMask, const uint8_t *fallMask,
     const uint8_t *turnoffMask, const uint8_t *pulseTransitionMasks) {
+  if (context && context->saifReferenceModel) {
+    riseDelay = fallDelay = turnoffDelay = 0;
+    if (pulseReject != UINT64_MAX)
+      pulseReject = 0;
+    if (pulseError != UINT64_MAX)
+      pulseError = 0;
+  }
   if (!context || !context->execution || !valuePlane || !unknownPlane ||
       bitWidth == 0 || codeUnit == UINT64_MAX || groupCount == 0 ||
       group >= groupCount || !lowValue || !lowUnknown || !highValue ||
@@ -2322,7 +2349,7 @@ static talos_rt_status schedulerInertialPathStrengthPair(
       if (index >= pending.highSequence.size() ||
           pending.highSequence[index] == 0)
         return;
-      if (context->saif) {
+      if (context->saif && !context->saifReferenceModel) {
         auto lo = context->scheduledInertialPathNBAs.find(
             {pending.scheduledDueTime[index], pending.lowSequence[index]});
         auto hi = context->scheduledInertialPathNBAs.find(

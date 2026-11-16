@@ -532,8 +532,11 @@ enum {
 // canonical frame size shifted left by one. Bits 60-62 encode the executable
 // home region and the high bit records final-phase scheduling.
 #define TALOS_RT_DESIGN_FUNCTION_PROCESS UINT64_C(0x0000000000000001)
-#define TALOS_RT_DESIGN_FUNCTION_FRAME_SIZE_MASK UINT64_C(0x0ffffffffffffffe)
-#define TALOS_RT_DESIGN_FUNCTION_FRAME_SIZE_LIMIT UINT64_C(0x0800000000000000)
+#define TALOS_RT_DESIGN_FUNCTION_FRAME_SIZE_MASK UINT64_C(0x07fffffffffffffe)
+#define TALOS_RT_DESIGN_FUNCTION_FRAME_SIZE_LIMIT UINT64_C(0x0400000000000000)
+// The body is a pure combinational owner, safe to replay without propagation
+// delays in the separate SAIF functional reference context.
+#define TALOS_RT_DESIGN_FUNCTION_SAIF_REFERENCE UINT64_C(0x0800000000000000)
 #define TALOS_RT_DESIGN_FUNCTION_HOME_SHIFT 60u
 #define TALOS_RT_DESIGN_FUNCTION_HOME_MASK UINT64_C(0x7000000000000000)
 #define TALOS_RT_DESIGN_FUNCTION_HOME(region)                                  \

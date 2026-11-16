@@ -1,0 +1,23 @@
+// RUN: %split-file %s %t
+// RUN: talos --vpi=off --saif=%t.saif -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 && FileCheck %s --input-file=%t.saif
+// RUN: talos --vpi=off --saif=%t.saif -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 && FileCheck %s --input-file=%t.saif
+// RUN: talos --vpi=off --saif=%t.saif -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc && %t.bc && FileCheck %s --input-file=%t.saif
+// RUN: talos-translate --import-saif %t.saif -o /dev/null
+// Overlapping input transactions cannot be classified by physical parity:
+// the inverter rejects the short pulse, but the XOR passes two glitch edges.
+// CHECK-DAG: (overlap (T0 2000000) (T1 17000000) (TX 4000000) (TZ 1000000) (TC 2) (TG 2))
+// The same cause still owns the unrelated 100 ns event at $finish. Its
+// completed reconvergent excursion must already contribute both TG edges.
+// CHECK-DAG: (pending (T0 2000000) (T1 19000000) (TX 2000000) (TZ 1000000) (TC 2) (TG 2))
+//--- design.sv
+module top;
+  timeunit 1ns; timeprecision 1ns;
+  logic a = 0, b = 0;
+  wire inv_a, inv_b, overlap, pending, slow;
+  assign #4 inv_a = !a;
+  assign #1 overlap = a ^ inv_a;
+  assign #2 inv_b = !b;
+  assign #1 pending = b ^ inv_b;
+  assign #100 slow = b;
+  initial begin #5 b = 1; #5 a = 1; #2 a = 0; #12 $finish; end
+endmodule

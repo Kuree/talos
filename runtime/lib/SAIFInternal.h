@@ -7,6 +7,7 @@ namespace talos::saifruntime {
 struct Counts {
   uint64_t tc = 0, tg = 0, ig = 0;
   long double weightedIG = 0;
+  uint64_t tcByEdge[2] = {};
 };
 struct Observation {
   std::string signal;
@@ -18,6 +19,9 @@ struct Observation {
   bool contention = false;
   Counts extra;
   std::vector<std::pair<size_t, uint32_t>> cells;
+  uint8_t referenceLast = 0;
+  uint64_t physicalEdges[2] = {}, referenceEdges[2] = {};
+  bool referenceComparable = false;
 };
 struct Instance {
   std::string name, virtualType;
@@ -68,6 +72,7 @@ struct CellEvent {
 
 struct SAIFCause {
   std::shared_ptr<const std::vector<talos::saifruntime::CellEvent>> cells;
+  bool referenceOutput = false;
 };
 struct SAIFState {
   std::string output;
@@ -84,8 +89,14 @@ struct SAIFState {
   bool indexedDrivers = false;
   std::unordered_map<uint64_t, std::shared_ptr<const SAIFCause>> wakeups;
   std::unordered_map<uint64_t, std::shared_ptr<const SAIFCause>> resumptions;
+  std::unordered_set<uint64_t> referenceProcesses;
   std::shared_ptr<const SAIFCause> publicationCause;
   uint64_t activeLogical = 0;
+  std::shared_ptr<talos_rt_context> referenceContext;
+  uint64_t referenceTime = 0;
+  bool referenceStarted = false;
+  std::vector<size_t> referenceTouched;
+  std::vector<bool> referenceDirty;
 };
 
 namespace talos::saifruntime {
@@ -103,5 +114,13 @@ void recordCellEdge(SAIFState &state, size_t observation, uint32_t from,
                     const std::shared_ptr<const SAIFCause> &inputCause = {});
 void writeGroups(FILE *file, const SAIFState &state, const Instance &instance,
                  uint64_t observation, uint64_t duration);
+void recordReference(SAIFState &, size_t observation, uint8_t from, uint8_t to,
+                     const std::shared_ptr<const SAIFCause> &);
+void retireReferences(talos_rt_context *);
+void settleReference(talos_rt_context *);
+void advanceReference(talos_rt_context *);
+void referenceTransition(talos_rt_context *, uint64_t handle, uint64_t width,
+                         const uint8_t *changed, const uint8_t *value,
+                         const uint8_t *unknown);
 } // namespace talos::saifruntime
 #endif

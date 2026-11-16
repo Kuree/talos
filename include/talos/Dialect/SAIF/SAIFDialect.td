@@ -34,10 +34,16 @@ def SAIFDialect : Dialect {
     corruption, isolation and retention outputs. Residence times T0/T1/TX/TZ
     are exact femtosecond integers; TC counts only 0-to-1 and 1-to-0 changes,
     including intermediate changes within one scheduler slot. TB observes
-    independent opposing drivers. IG/IK observe rejected timed pulses. TG require additional
-    driver or timing provenance and are not synthesized from resolved values.
-    State/path counts retain the cell state before the causal input transition
-    through scheduled output delivery.
+    independent opposing drivers; IG/IK observe rejected timed pulses. TG
+    estimates excess TC over the complete observation window against a
+    separately settled zero-delay reference of certified combinational
+    processes. It does not identify individual analog glitch pulses.
+    State/path TG estimates are apportioned over measured pre-input TC
+    histograms, with consistent totals and rise/fall budgets. Sequential,
+    external and unsupported process outputs form reference boundaries;
+    user code with side effects is
+    executed by the primary simulation. State/path counts retain the cell state
+    before the causal input transition through scheduled output delivery.
 
     Aggregate member names are flattened into a signal basename; the last
     nonnegative array/bit select remains a canonical SAIF index. Ambiguous

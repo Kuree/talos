@@ -3169,6 +3169,10 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       if (status != TALOS_RT_OK)
         return status;
     }
+    if (context->saif)
+      talos_rt_saif_clone_task_unlocked(
+          context, context->scheduledDesignTasks
+                       [context->scheduledDesignTaskIndices.find(id)->second]);
     uint32_t destinationRegister = outputRegister(0);
     Layout destination = layoutAt(image, frame.function, destinationRegister);
     uint8_t *address = frame.data + destination.offset;

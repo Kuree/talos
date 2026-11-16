@@ -1,0 +1,28 @@
+// RUN: %split-file %s %t
+// RUN: talos --vpi=off --saif=%t.saif -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 && FileCheck %s --input-file=%t.saif
+// RUN: talos --vpi=off --saif=%t.saif -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 && FileCheck %s --input-file=%t.saif
+// RUN: talos --vpi=off --saif=%t.saif -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc && %t.bc && FileCheck %s --input-file=%t.saif
+// RUN: talos-translate --import-saif %t.saif -o /dev/null
+// A rejected 1 ns input pulse through a 3 ns inverter contributes two
+// inertial edges, K=1/3. The later meaningful 4 ns pulse is not a TG.
+// CHECK-DAG: (inertial (T0 4000000) (T1 12000000) (TX 0) (TZ 3000000) (TC 2) (IG 2) (IK 0.3333333333333333{{[0-9]}}))
+// Reconvergent skew produces two nonfunctional physical edges, sharing one
+// causal input transaction. Functional stable evaluation remains at one.
+// CHECK-DAG: (transport (T0 2000000) (T1 14000000) (TX 2000000) (TZ 1000000) (TC 2) (TG 2))
+//--- design.sv
+module top;
+  timeunit 1ns; timeprecision 1ns;
+  logic a = 0, b = 0;
+  wire inertial, delayed, transport;
+  assign #3 inertial = !a;
+  assign #2 delayed = !b;
+  assign #1 transport = b ^ delayed;
+  initial begin
+    #3 a = 1;
+    #1 a = 0;
+    #1 b = 1;
+    #3 a = 1;
+    #4 a = 0;
+    #7 $finish;
+  end
+endmodule

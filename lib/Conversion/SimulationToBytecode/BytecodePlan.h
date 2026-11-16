@@ -83,6 +83,7 @@ struct FunctionPlan {
   uint64_t scratchAlignment = 8;
   uint32_t twoStateLogicRegisters = 0;
   uint32_t initialScheduleRank = UINT32_MAX;
+  bool saifReference = false;
   llvm::DenseMap<mlir::Block *, uint32_t> blockScheduleRanks;
   struct ManagedRootShadow {
     mlir::Value value;

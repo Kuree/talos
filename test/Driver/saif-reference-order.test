@@ -1,0 +1,32 @@
+// RUN: %split-file %s %t
+// RUN: talos --vpi=off --saif=%t.saif -O0 --mlir-verify-each %t/core.sv %t/first.sv -o %t.first && %t.first && FileCheck %s --input-file=%t.saif
+// RUN: talos --vpi=off --saif=%t.saif -O3 --mlir-verify-each %t/core.sv %t/reversed.sv -o %t.reversed && %t.reversed && FileCheck %s --input-file=%t.saif
+// RUN: talos --vpi=off --saif=%t.saif -O3 --execution-tier=bytecode --mlir-verify-each %t/core.sv %t/first.sv -o %t.bc1 && %t.bc1 && FileCheck %s --input-file=%t.saif
+// RUN: talos --vpi=off --saif=%t.saif -O3 --execution-tier=bytecode --mlir-verify-each %t/core.sv %t/reversed.sv -o %t.bc2 && %t.bc2 && FileCheck %s --input-file=%t.saif
+// RUN: talos-translate --import-saif %t.saif -o /dev/null
+// TG is an aggregate zero-delay reference-count estimate, not an individual
+// pulse classifier. Here both reference and timed Y have TC2. Exchanging the
+// rejected A pulse and the B excursion must not change that estimate.
+// CHECK: (y (T0 2000000) (T1 23000000) (TX 4000000) (TZ 1000000) (TC 2))
+//--- core.sv
+module core;
+  timeunit 1ns; timeprecision 1ns;
+  logic a = 0, b = 0;
+  wire da, inv_b, hazard, y;
+  assign #4 da = a;
+  assign #2 inv_b = !b;
+  assign #1 hazard = b ^ inv_b;
+  assign #1 y = da ^ hazard;
+endmodule
+//--- first.sv
+module top;
+  timeunit 1ns; timeprecision 1ns;
+  core c();
+  initial begin #5 c.a = 1; #2 c.a = 0; #13 c.b = 1; #10 $finish; end
+endmodule
+//--- reversed.sv
+module top;
+  timeunit 1ns; timeprecision 1ns;
+  core c();
+  initial begin #5 c.b = 1; #15 c.a = 1; #2 c.a = 0; #8 $finish; end
+endmodule

@@ -407,7 +407,7 @@ stringifyActivationFailure(ActivationRegionAnalysis::FailureReason reason) {
 ActivationRegionAnalysis::ActivationRegionAnalysis(
     sim::SimFuncOp function, const HandleDataflowAnalysis &handles, Trace trace,
     ActivationMemoryAnalysis::DependencyMode mode,
-    ControlFlowPreparation control) {
+    ControlFlowPreparation control, Operation *symbols) {
   if (function.isExternal() || !function.getFunctionType().getResults().empty())
     return;
   unsigned waits = 0;
@@ -445,8 +445,9 @@ ActivationRegionAnalysis::ActivationRegionAnalysis(
   // Canonicalization can merge CFG blocks and change a reference phi's range.
   // Recompute memory facts on this revision; original access-site facts must
   // never be projected through a rewrite that may have merged accesses.
-  memory = ActivationMemoryAnalysis(initial.get(), handles, 65536, mode,
-                                    function->getParentOp());
+  memory =
+      ActivationMemoryAnalysis(initial.get(), handles, 65536, mode,
+                               symbols ? symbols : function->getParentOp());
   if (!memory.isValid()) {
     // Failure diagnostics retain the unsupported operation as well.
     view = std::move(initial);

@@ -772,6 +772,8 @@ bool scheduleNetBit(talos_rt_context *context, uint64_t root,
     delay = std::min(delays[0], delays[1]);
   else
     delay = std::min({delays[0], delays[1], delays[2]});
+  if (context->saifReferenceModel)
+    delay = 0;
   ScheduledNBA update;
   if (context->saif) {
     update.saifCause = talos_rt_saif_capture_cause_unlocked(context);

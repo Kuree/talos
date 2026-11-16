@@ -2139,6 +2139,8 @@ talos_rt_v1_process_spawn(talos_rt_context *context,
     talos_rt_v1_scheduler_fail(
         context, talos_rt_v1_scheduler_program_register(context, token,
                                                         plan->program_owner));
+  if (context->saif)
+    talos_rt_saif_clone_process_unlocked(context, token, *plan, captures);
   return token;
 }
 
@@ -4812,6 +4814,8 @@ talos_rt_status runScheduler(talos_rt_context *context,
   }
   for (;;) {
     bool deferredEvalIngress = false;
+    if (context->saifReferenceModel && !context->saifReferenceBudget--)
+      return context->schedulerStatus = TALOS_RT_OUT_OF_RESOURCES;
     {
       ContextMutexLock lock(context);
       if (context->destroyPending)

@@ -201,6 +201,8 @@ SmallVector<uint8_t> serializeBytecodeImage(
                   TALOS_RT_DESIGN_FUNCTION_PROCESS;
     if (plan.function.getEntryKind() == sim::EntryKind::Final)
       functionFlags |= TALOS_RT_DESIGN_FUNCTION_FINAL;
+    if (plan.saifReference)
+      functionFlags |= TALOS_RT_DESIGN_FUNCTION_SAIF_REFERENCE;
     if ((functionFlags & TALOS_RT_DESIGN_FUNCTION_PROCESS) != 0) {
       uint32_t homeRegion =
           getRuntimeEventRegion(plan.function.getHomeRegion());

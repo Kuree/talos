@@ -50,12 +50,15 @@ public:
   };
   /// Optional diagnostic views; the callback must not retain their IR.
   using Trace = llvm::function_ref<void(TracePhase, mlir::Operation *)>;
+  /// `symbols` supplies the original symbol table for a detached modeled
+  /// function; otherwise callees resolve in the function's parent.
   ActivationRegionAnalysis(
       sim::SimFuncOp function, const HandleDataflowAnalysis &handles,
       Trace trace = {},
       ActivationMemoryAnalysis::DependencyMode mode =
           ActivationMemoryAnalysis::DependencyMode::Accesses,
-      ControlFlowPreparation control = ControlFlowPreparation::Canonical);
+      ControlFlowPreparation control = ControlFlowPreparation::Canonical,
+      mlir::Operation *symbols = nullptr);
   bool isValid() const { return reason == FailureReason::None; }
   FailureReason getFailureReason() const { return reason; }
   llvm::ArrayRef<Node> getNodes() const { return nodes; }

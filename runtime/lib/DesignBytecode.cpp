@@ -4389,6 +4389,15 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
           return TALOS_RT_INVALID_BYTECODE;
         payload = value.value[0];
       }
+      if (context && context->saifReferenceModel &&
+          instruction.flags == TALOS_RT_SUSPEND_DELAY) {
+        if (!canonicalFrame || payload > canonicalFrameSize ||
+            sizeof(talos_rt_wait_record_v1) > canonicalFrameSize - payload)
+          return TALOS_RT_INVALID_FRAME;
+        auto *wait = reinterpret_cast<talos_rt_wait_record_v1 *>(
+            canonicalFrame + payload);
+        wait->payload = 0;
+      }
       *action = {TALOS_RT_FRAGMENT_SUSPEND,
                  static_cast<uint32_t>(instruction.flags),
                  continuationIdAt(image, frame.function, instruction.immediate),
@@ -5303,7 +5312,11 @@ static talos_rt_status executeDesignBytecode(
     Frame top{function, entry.function, scratch, 1};
     ExecutionState state;
     state.frames[top.id] = &top;
-    StepBudget budget{instructionLimit, 0};
+    StepBudget budget{context && context->saifReferenceModel &&
+                              !instructionLimit
+                          ? 1000000
+                          : instructionLimit,
+                      0};
     *outAction = {
         TALOS_RT_FRAGMENT_TERMINATE, TALOS_RT_SUSPEND_NONE, 0, 0, 0, 0};
     talos_rt_status status = executeFunction(
@@ -7283,8 +7296,8 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
     SAIFExecutionScope activity(context, task.id, &action);
     talos_rt_status status = executeDesignBytecode(
         entry, context, task.frame.data(), task.frame.size(),
-        task.scratchOffset, task.scratchSize, task.continuation, 0, &action,
-        &pendingActivation);
+        task.scratchOffset, task.scratchSize, task.continuation,
+        context->saifReferenceModel ? 1000000 : 0, &action, &pendingActivation);
     currentFrameReleased =
         status == TALOS_RT_OK && action.kind == TALOS_RT_FRAGMENT_TERMINATE;
     bool terminationRequested =

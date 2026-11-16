@@ -1,0 +1,22 @@
+// RUN: %split-file %s %t
+// RUN: talos --vpi=off --saif=%t.saif -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 && FileCheck %s --input-file=%t.saif
+// RUN: talos --vpi=off --saif=%t.saif -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 && FileCheck %s --input-file=%t.saif
+// RUN: talos --vpi=off --saif=%t.saif -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 && FileCheck %s --input-file=%t.saif
+// RUN: talos --vpi=off --saif=%t.saif -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 && FileCheck %s --input-file=%t.saif
+// RUN: talos-translate --import-saif %t.saif -o /dev/null
+// The reference OR rises because of A. A's physical pulse is rejected, and
+// B instead supplies the sole physical rising edge. Both are functional:
+// reference matching must cross causal input identities at the same signal.
+// CHECK-DAG: (da {{.*}}(TC 0) (IG 2) (IK 0.5))
+// CHECK-DAG: (y (T0 3000000) (T1 7000000) (TX 4000000) (TZ 1000000) (TC 1))
+//--- design.sv
+module top;
+  timeunit 1ns; timeprecision 1ns;
+  logic a = 0, b = 0;
+  wire da, db, y, slow;
+  assign #4 da = a;
+  assign #1 db = b;
+  assign #1 y = da | db;
+  assign #100 slow = a;
+  initial begin #5 a = 1; #1 b = 1; #1 a = 0; #8 $finish; end
+endmodule

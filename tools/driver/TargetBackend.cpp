@@ -30,6 +30,7 @@
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Conversion/SimulationToLLVMCoroutine.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
+#include "talos/Dialect/SAIF/SAIFDialect.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Dialect/Simulation/Transforms/Passes.h"
@@ -873,11 +874,12 @@ lowerToLLVM(ModuleOp module, TargetMachine &targetMachine, StringRef triple,
   // generated native planes even when no force/VPI feature otherwise needs
   // canonical state synchronization.
   requiresStateSync |= needsNetDriverTopology;
-  bool needsDesignEncoding = bytecode || bytecodeScope == "all" ||
-                             needsHybridBytecode || vpi != "off" ||
-                             hasLanguageOverride || needsWaveformMetadata ||
-                             hasDriverNBA || hasDelayedNet ||
-                             hasInertialDriver || needsNetDriverTopology;
+  bool needsSAIFReference = saif::has<saif::Output>(module);
+  bool needsDesignEncoding =
+      needsSAIFReference || bytecode || bytecodeScope == "all" ||
+      needsHybridBytecode || vpi != "off" || hasLanguageOverride ||
+      needsWaveformMetadata || hasDriverNBA || hasDelayedNet ||
+      hasInertialDriver || needsNetDriverTopology;
   bool needsStandaloneStatePlan =
       needsSampledStatePlan || hasClockOccurrenceCondition || hasEventSnapshots;
   requiresStateSync |= needsStandaloneStatePlan && !needsDesignEncoding;
@@ -915,7 +917,8 @@ lowerToLLVM(ModuleOp module, TargetMachine &targetMachine, StringRef triple,
     EncodeTalosSimToBytecodePassOptions options;
     options.vpi = vpi.str();
     options.requireBytecode = bytecode;
-    options.pruneNative = bytecodeScope == "required" && needsHybridBytecode;
+    options.pruneNative = !needsSAIFReference && bytecodeScope == "required" &&
+                          needsHybridBytecode;
     manager.addPass(createEncodeTalosSimToBytecodePass(options));
   } else if (needsStandaloneStatePlan) {
     SmallVector<talos::sim::SimDesignOp> designs;

@@ -8,7 +8,7 @@ set(TALOS_TARGET_RUNTIME_LTO_ARCHIVE
 set(TALOS_NATIVE_SUPPORT_DIR
   "${CMAKE_BINARY_DIR}/lib/talos/targets/${TALOS_TARGET_TRIPLE}")
 set(_talos_windows_runtime_sources
-  ABI Bytecode Containers Coverage CoverageBlockEvents CoverageDatabase SAIF SAIFLibrary SAIFEvents
+  ABI Bytecode Containers Coverage CoverageBlockEvents CoverageDatabase SAIF SAIFLibrary SAIFEvents SAIFReference
   DesignBytecode DesignBytecodeImage DesignBytecodeIntrinsics DesignBytecodeLogic
   DesignBytecodeNets DesignBytecodeObservers DesignBytecodeRoots DesignDatabase
   DPI FileIO Format ManagedHeap Plusargs Process ProcessAllocation ProcessAOT

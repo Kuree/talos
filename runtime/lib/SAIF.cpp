@@ -212,6 +212,7 @@ void talos_rt_saif_record_transition_unlocked(talos_rt_context *context,
   if (!decodeNativeStatic(handle, id, offset) || offset < 0 ||
       width > UINT64_MAX - uint64_t(offset))
     return;
+  referenceTransition(context, handle, width, changed, newValue, newUnknown);
   auto found = state->watches.find(id);
   if (found == state->watches.end()) {
     state->publicationCause = talos_rt_saif_current_cause_unlocked(context);
@@ -261,9 +262,31 @@ void talos_rt_saif_record_transition_unlocked(talos_rt_context *context,
       return;
     }
     point.time[point.current] += now - point.last;
-    point.toggles += change.value < 2 && point.current < 2;
-    recordCellEdge(*state, change.index, point.current, change.value, 0,
-                   outputCause, 0, inputCause);
+    if (context->saifReferenceModel) {
+      // Boundary inputs are functional stimuli even when they change more
+      // than once in a slot. Combinational outputs are sampled after settle.
+      if (!outputCause || !outputCause->referenceOutput) {
+        point.referenceLast = change.value;
+      }
+      if (!state->referenceDirty[change.index]) {
+        state->referenceTouched.push_back(change.index);
+        state->referenceDirty[change.index] = true;
+      }
+    } else {
+      point.toggles += change.value < 2 && point.current < 2;
+      if (change.value < 2 && point.current < 2 &&
+          (!outputCause || !outputCause->referenceOutput)) {
+        if (point.referenceEdges[change.value] == UINT64_MAX) {
+          context->schedulerStatus = TALOS_RT_OUT_OF_RESOURCES;
+          return;
+        }
+        ++point.referenceEdges[change.value];
+      }
+      recordCellEdge(*state, change.index, point.current, change.value, 0,
+                     outputCause, 0, inputCause);
+      recordReference(*state, change.index, point.current, change.value,
+                       outputCause);
+    }
     point.last = now;
     point.current = change.value;
   }
@@ -332,6 +355,8 @@ void writeInstance(FILE *file, const SAIFState &state, const Instance &node) {
             decimal(static_cast<unsigned __int128>(point.contentionTime) *
                     state.precision)
                 .c_str());
+      if (point.extra.tg)
+        std::fprintf(file, " (TG %s)", decimal(point.extra.tg).c_str());
       if (point.extra.ig)
         std::fprintf(file, " (IG %s) (IK %.17Lg)",
                      decimal(point.extra.ig).c_str(),
@@ -358,6 +383,9 @@ extern "C" talos_rt_status talos_rt_v1_saif_finish(talos_rt_context *context) {
     auto *state = context->saif.get();
     if (!state || !state->sealed || state->finished)
       return TALOS_RT_INVALID_ARGUMENT;
+    settleReference(context);
+    if (context->schedulerStatus != TALOS_RT_OK)
+      return context->schedulerStatus;
     for (auto &point : state->observations) {
       if (context->schedulerTime < point.last)
         return TALOS_RT_OUT_OF_RESOURCES;
@@ -372,6 +400,9 @@ extern "C" talos_rt_status talos_rt_v1_saif_finish(talos_rt_context *context) {
     state->duration = context->schedulerTime;
     state->publicationCause.reset();
     state->wakeups.clear();
+    retireReferences(context);
+    if (context->schedulerStatus != TALOS_RT_OK)
+      return context->schedulerStatus;
     state->finished = true;
     std::unique_ptr<FILE, decltype(&std::fclose)> file(
         std::fopen(state->output.c_str(), "w"), &std::fclose);

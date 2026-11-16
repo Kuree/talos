@@ -1,0 +1,28 @@
+// RUN: %split-file %s %t
+// RUN: talos --vpi=off --saif=%t.saif --saif-input=%t/library.saif -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 && FileCheck %s --input-file=%t.saif
+// RUN: talos --vpi=off --saif=%t.saif --saif-input=%t/library.saif -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 && FileCheck %s --input-file=%t.saif
+// RUN: talos --vpi=off --saif=%t.saif --saif-input=%t/library.saif -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc && %t.bc && FileCheck %s --input-file=%t.saif
+// RUN: talos-translate --import-saif %t.saif -o /dev/null
+// Input TG state uses the state before its own transition, including A
+// itself. Deferred reference matching must retain that physical snapshot.
+// CHECK: (A {{.*}}(TC 2) (TG 2)(COND A (RISE) (TC 0) COND A (FALL) (TC 1) COND_DEFAULT (RISE) (TC 1) COND_DEFAULT (FALL) (TC 0)
+// CHECK-SAME: (COND A (RISE) (TG 0) COND A (FALL) (TG 1) COND_DEFAULT (RISE) (TG 1) COND_DEFAULT (FALL) (TG 0)
+//--- design.sv
+module sink(input wire A, output wire Y);
+  timeunit 1ns; timeprecision 1ns;
+  assign Y = A;
+endmodule
+module top;
+  timeunit 1ns; timeprecision 1ns;
+  logic b = 0;
+  wire inv, transport, out;
+  assign #2 inv = !b;
+  assign #1 transport = b ^ inv;
+  sink u(transport, out);
+  initial begin #5 b = 1; #5 $finish; end
+endmodule
+//--- library.saif
+(SAIFILE (SAIFVERSION "2.0" "lib") (DIRECTION "forward")
+  (DESIGN) (DATE) (VENDOR) (PROGRAM_NAME) (PROGRAM_VERSION) (DIVIDER /)
+  (LIBRARY "L" (MODULE sink
+    (PORT A (COND A RISE_FALL COND_DEFAULT RISE_FALL)))))

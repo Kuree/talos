@@ -252,6 +252,68 @@ TEST_F(SAIFTest, CellPlanRejectsMalformedAndIllegalCharacterization) {
   EXPECT_EQ(configure(valid), TALOS_RT_INVALID_ARGUMENT);
 }
 
+TEST_F(SAIFTest, ReferenceFailureAtFinishIsReported) {
+  ASSERT_EQ(talos_rt_v1_saif_configure(context, output.c_str(), 1),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_saif_seal(context), TALOS_RT_OK);
+  talos_rt_context *reference = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&reference), TALOS_RT_OK);
+  context->saif->referenceContext = {reference, talos_rt_v1_context_destroy};
+  context->saif->referenceStarted = true;
+  reference->saifReferenceModel = true;
+  reference->schedulerStatus = TALOS_RT_OUT_OF_RESOURCES;
+  EXPECT_EQ(talos_rt_v1_saif_finish(context), TALOS_RT_OUT_OF_RESOURCES);
+}
+
+TEST_F(SAIFTest, MixedTGEstimateConservesStateAndPolarityBudgets) {
+  ASSERT_EQ(talos_rt_v1_saif_configure(context, output.c_str(), 1),
+            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_saif_bind(context, handle, "top", 4, "A", 1, nullptr, 0),
+      TALOS_RT_OK);
+  auto b = talos_rt_stable_handle_offset(handle, 1);
+  ASSERT_EQ(talos_rt_v1_saif_bind(context, b, "top", 4, "B", 1, nullptr, 0),
+            TALOS_RT_OK);
+  // A is output; split its activity into B and default state buckets.
+  const uint64_t plan[] = {1, 2, 1, 0, 1, 1, 0, 0, 2,
+                           2, 1, 1, 0, 0, 1, 1, 0, 0};
+  ASSERT_EQ(talos_rt_v1_saif_cell(context, "top", 4, "cell", plan,
+                                  sizeof(plan) / sizeof(plan[0])),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_saif_seal(context), TALOS_RT_OK);
+  transition(1, 0, 0, 1, 0);
+  transition(2, 1, 0, 0, 0);
+  context->schedulerTime = 3;
+  uint8_t zero = 0, one = 1;
+  talos_rt_v1_scheduler_signal_transition(context, b, 1, &zero, nullptr, &one,
+                                          nullptr);
+  ASSERT_EQ(context->schedulerStatus, TALOS_RT_OK);
+  transition(3, 0, 0, 1, 0);
+  transition(4, 1, 0, 0, 0);
+  transition(5, 0, 0, 1, 0);
+  // Supply an independently measured reference tally: two rising and one
+  // falling functional edge versus three rising and two falling physical edges.
+  auto &point = context->saif->observations[0];
+  point.referenceComparable = true;
+  point.referenceEdges[1] = 2;
+  point.referenceEdges[0] = 1;
+  context->schedulerTime = 6;
+  ASSERT_EQ(talos_rt_v1_saif_finish(context), TALOS_RT_OK);
+  EXPECT_EQ(point.toggles, 5u);
+  EXPECT_EQ(point.extra.tg, 2u);
+  auto &rules = context->saif->cells[0].groups[0].rules;
+  ASSERT_EQ(rules.size(), 2u);
+  EXPECT_EQ(rules[0].counts[0].tc, 2u);
+  EXPECT_EQ(rules[0].counts[1].tc, 1u);
+  EXPECT_EQ(rules[1].counts[0].tc, 1u);
+  EXPECT_EQ(rules[1].counts[1].tc, 1u);
+  EXPECT_EQ(rules[0].counts[0].tg + rules[1].counts[0].tg, 1u);
+  EXPECT_EQ(rules[0].counts[1].tg + rules[1].counts[1].tg, 1u);
+  for (const auto &rule : rules)
+    for (const auto &counts : rule.counts)
+      EXPECT_LE(counts.tg, counts.tc);
+}
+
 TEST_F(SAIFTest, CausalStateSurvivesDelayAndRetiresAtTheNextWaitOrTermination) {
   ASSERT_EQ(talos_rt_v1_saif_configure(context, output.c_str(), 1),
             TALOS_RT_OK);

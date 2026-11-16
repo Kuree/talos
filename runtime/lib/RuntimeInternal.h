@@ -2377,6 +2377,11 @@ void talos_rt_saif_wake_actor_unlocked(talos_rt_context *, uint32_t slot);
 void talos_rt_saif_direct_enter_unlocked(talos_rt_context *, uint64_t logical);
 void talos_rt_saif_direct_leave_unlocked(talos_rt_context *);
 void talos_rt_saif_complete_unlocked(talos_rt_context *, uint64_t logical);
+void talos_rt_saif_clone_process_unlocked(
+    talos_rt_context *, uint64_t logical,
+    const talos_rt_process_spawn_plan_v1 &, const void *captures);
+void talos_rt_saif_clone_task_unlocked(talos_rt_context *,
+                                       const ScheduledDesignTask &);
 class SAIFExecutionScope {
 public:
   SAIFExecutionScope(talos_rt_context *, uint64_t logical,
@@ -3159,6 +3164,10 @@ struct talos_rt_context {
   uint64_t nextManagedWatchToken = 1;
   std::unique_ptr<CoverageState> coverage;
   std::shared_ptr<SAIFState> saif;
+  // A separate canonical interpreter context used only for SAIF's settled,
+  // zero-delay functional reference. It never runs initial or sequential code.
+  bool saifReferenceModel = false;
+  uint64_t saifReferenceBudget = 0;
   std::vector<talos_rt_process_instance_v1 *> managedRootProcesses;
   ManagedHeap *managedHeap = nullptr;
   talos_rt_random_state_v1 random{};

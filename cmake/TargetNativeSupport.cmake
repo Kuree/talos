@@ -165,7 +165,7 @@ if(TALOS_RT_BYTECODE_VALIDATION_DIAGNOSTICS)
     -DTALOS_RT_BYTECODE_VALIDATION_DIAGNOSTICS=1)
 endif()
 set(_talos_target_runtime_common_sources
-    ABI Bytecode Containers Coverage CoverageBlockEvents CoverageDatabase SAIF SAIFLibrary SAIFEvents DesignBytecode DesignBytecodeImage
+    ABI Bytecode Containers Coverage CoverageBlockEvents CoverageDatabase SAIF SAIFLibrary SAIFEvents SAIFReference DesignBytecode DesignBytecodeImage
     DesignBytecodeIntrinsics DesignBytecodeLogic DesignBytecodeNets
     DesignBytecodeObservers DesignBytecodeRoots DesignDatabase DPI FileIO
     Format ManagedHeap Plusargs Process ProcessAllocation ProcessAOT

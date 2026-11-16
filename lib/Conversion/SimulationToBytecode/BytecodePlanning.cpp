@@ -3,13 +3,20 @@
 #include "BytecodeEncoder.h"
 #include "BytecodeRegisterPlanning.h"
 #include "BytecodeSerialization.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/SymbolTable.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Transforms/RegionUtils.h"
+#include "talos/Analysis/ActivationRegionAnalysis.h"
 #include "talos/Analysis/NativeAOTAnalysis.h"
 #include "talos/Analysis/SimulationEffectAnalysis.h"
 #include "talos/Analysis/SimulationScheduleAnalysis.h"
 #include "talos/Analysis/StaticSpecializationAnalysis.h"
 #include "talos/Dialect/Native/NativeDialect.h"
+#include "talos/Dialect/SAIF/SAIFDialect.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
 #include "talos/Runtime/Runtime.h"
@@ -53,6 +60,189 @@ FailureOr<Layout> Encoder::getValueLayout(Value value) const {
 }
 
 namespace {
+
+bool isReferenceType(Type type) {
+  if (isa<sim::ContextType, sim::TimeType>(type))
+    return true;
+  if (auto ref = dyn_cast<sim::RefType>(type))
+    type = ref.getElementType();
+  else if (auto net = dyn_cast<sim::NetType>(type))
+    type = net.getElementType();
+  else if (auto driver = dyn_cast<sim::DriverType>(type))
+    type = driver.getElementType();
+  return analysis::isPlainValueType(type);
+}
+
+bool hasReferenceEffects(sim::SimFuncOp function,
+                         const analysis::SimulationEffectAnalysis &effects,
+                         llvm::DenseSet<Operation *> &visiting,
+                         llvm::DenseMap<Operation *, bool> &cache) {
+  if (auto found = cache.find(function); found != cache.end())
+    return found->second;
+  if (!visiting.insert(function).second)
+    return false;
+  bool pure = llvm::all_of(function.getArgumentTypes(), isReferenceType);
+  function.getBody().walk([&](Operation *op) {
+    pure &= llvm::all_of(op->getResultTypes(), isReferenceType);
+    if (auto call = dyn_cast<sim::SimCallOp>(op)) {
+      auto callee = SymbolTable::lookupNearestSymbolFrom<sim::SimFuncOp>(
+          call, call.getCalleeAttr());
+      pure &= callee && !callee.isExternal() && effects.isReadOnly(callee) &&
+              hasReferenceEffects(callee, effects, visiting, cache);
+      return;
+    }
+    if (isMemoryEffectFree(op) ||
+        isa<cf::BranchOp, cf::CondBranchOp, cf::SwitchOp, sim::SimReturnOp,
+            sim::SimSuspendChangeOp, sim::SimSuspendAnyOp,
+            sim::SimSuspendDelayOp, sim::SimRefLoadOp, sim::SimNetReadOp,
+            sim::SimDriverReadOp, sim::SimRefAllocOp, sim::SimRefStoreOp,
+            sim::SimDriverDriveOp, sim::SimDriverDriveChangedOp,
+            sim::SimDriverDriveDelayedNetOp, sim::SimDriverDriveInertialOp,
+            sim::SimDriverDriveInertialPathOp,
+            sim::SimDriverDriveInertialStrengthPairOp,
+            sim::SimDriverDriveInertialPathStrengthPairOp,
+            sim::SimRefStoreInertialPathOp, sim::SimGCSafepointOp,
+            sim::SimTerminationRequestedOp>(op))
+      return;
+    pure = false;
+  });
+  visiting.erase(function);
+  cache[function] = pure;
+  return pure;
+}
+
+bool isSAIFReference(sim::SimFuncOp function,
+                     const analysis::HandleDataflowAnalysis &handles,
+                     const analysis::SimulationEffectAnalysis &effects,
+                     llvm::DenseMap<Operation *, bool> &cache) {
+  auto kind = function.getEntryKind();
+  bool continuous = kind == sim::EntryKind::Continuous ||
+                    kind == sim::EntryKind::PortInput ||
+                    kind == sim::EntryKind::PortOutput;
+  if (!continuous && kind != sim::EntryKind::AlwaysComb &&
+      kind != sim::EntryKind::Always)
+    return false;
+  llvm::DenseSet<Operation *> visiting;
+  if (!hasReferenceEffects(function, effects, visiting, cache))
+    return false;
+  OwningOpRef<sim::SimFuncOp> delayErased;
+  sim::SimFuncOp reference = function;
+  bool hasDelay = false;
+  bool hasTerminationPoll = false;
+  function.walk([&](sim::SimSuspendDelayOp) { hasDelay = true; });
+  function.walk(
+      [&](sim::SimTerminationRequestedOp) { hasTerminationPoll = true; });
+  if (hasDelay || hasTerminationPoll || kind == sim::EntryKind::Always) {
+    delayErased = cast<sim::SimFuncOp>(function->clone());
+    delayErased->walk([&](sim::SimSuspendDelayOp delay) {
+      OpBuilder builder(delay);
+      cf::BranchOp::create(builder, delay.getLoc(), delay.getContinuation(),
+                           delay.getContinuationOperands());
+      delay.erase();
+    });
+    // Certified callees cannot request termination; this compiler-inserted
+    // guard is false in the isolated reference context. Remove its dead exit
+    // before proving a complete combinational activation.
+    delayErased->walk([&](sim::SimTerminationRequestedOp poll) {
+      OpBuilder builder(poll);
+      Value clear = arith::ConstantIntOp::create(builder, poll.getLoc(), 0, 1);
+      poll.getResult().replaceAllUsesWith(clear);
+      poll.erase();
+    });
+    delayErased->walk([&](cf::CondBranchOp branch) {
+      auto constant =
+          branch.getCondition().getDefiningOp<arith::ConstantIntOp>();
+      if (!constant)
+        return;
+      OpBuilder builder(branch);
+      bool taken = constant.value() != 0;
+      cf::BranchOp::create(builder, branch.getLoc(),
+                           taken ? branch.getTrueDest() : branch.getFalseDest(),
+                           taken ? branch.getTrueDestOperands()
+                                 : branch.getFalseDestOperands());
+      branch.erase();
+    });
+    IRRewriter rewriter(function.getContext());
+    (void)eraseUnreachableBlocks(
+        rewriter, MutableArrayRef<Region>(&delayErased->getBody(), 1));
+    if (kind == sim::EntryKind::Always) {
+      SmallVector<Operation *> waits;
+      delayErased->walk([&](Operation *op) {
+        if (sim::isSuspensionOp(op))
+          waits.push_back(op);
+      });
+      if (waits.size() != 1 ||
+          !isa<sim::SimSuspendChangeOp, sim::SimSuspendAnyOp>(waits[0]) ||
+          waits[0]->getNumSuccessors() != 1 ||
+          !cast<BranchOpInterface>(waits[0]).getSuccessorOperands(0).empty())
+        return false;
+      // A plain always procedure first arms its sensitivity and executes its
+      // body only on a wake. Certify that resumed body; the replay still uses
+      // the original entry, preserving time-zero initialization and arming.
+      auto *entryBranch = delayErased->getBody().front().getTerminator();
+      OpBuilder builder(entryBranch);
+      cf::BranchOp::create(builder, entryBranch->getLoc(),
+                           waits[0]->getSuccessor(0));
+      entryBranch->erase();
+    }
+    reference = *delayErased;
+  }
+  analysis::ActivationRegionAnalysis activation(
+      reference, handles, {},
+      analysis::ActivationMemoryAnalysis::DependencyMode::Accesses,
+      analysis::ActivationRegionAnalysis::ControlFlowPreparation::Canonical,
+      function->getParentOp());
+  if (activation.isValid()) {
+    const auto &memory = activation.getMemory();
+    return memory.hasCompleteWrites() &&
+           analysis::intersect(memory.getLiveIns(), memory.getMayWrites())
+               .empty();
+  }
+  // The activation proof established equivalent finite initial/resumed CFGs,
+  // but its memory model intentionally does not admit delayed publications.
+  // Prove the separate reference semantics on a detached zero-delay view;
+  // leave the primary IR and the ordinary activation legality unchanged.
+  if (activation.getFailureReason() !=
+          analysis::ActivationRegionAnalysis::FailureReason::MemoryEffects ||
+      !activation.getActivationFunction())
+    return false;
+  OwningOpRef<sim::SimFuncOp> model(
+      cast<sim::SimFuncOp>(activation.getActivationFunction()->clone()));
+  model->walk([&](Operation *op) {
+    OpBuilder builder(op);
+    auto drive = [&](Value driver, Value value) {
+      sim::SimDriverDriveOp::create(builder, op->getLoc(), driver, value);
+    };
+    if (auto delayed = dyn_cast<sim::SimDriverDriveInertialOp>(op))
+      drive(delayed.getDriver(), delayed.getValue());
+    else if (auto delayed = dyn_cast<sim::SimDriverDriveInertialPathOp>(op))
+      drive(delayed.getDriver(), delayed.getValue());
+    else if (auto delayed = dyn_cast<sim::SimDriverDriveDelayedNetOp>(op))
+      drive(delayed.getDriver(), delayed.getValue());
+    else if (auto pair =
+                 dyn_cast<sim::SimDriverDriveInertialStrengthPairOp>(op)) {
+      drive(pair.getLowDriver(), pair.getLowValue());
+      drive(pair.getHighDriver(), pair.getHighValue());
+    } else if (auto pair =
+                   dyn_cast<sim::SimDriverDriveInertialPathStrengthPairOp>(
+                       op)) {
+      drive(pair.getLowDriver(), pair.getLowValue());
+      drive(pair.getHighDriver(), pair.getHighValue());
+    } else if (auto delayed = dyn_cast<sim::SimRefStoreInertialPathOp>(op))
+      sim::SimRefStoreOp::create(builder, op->getLoc(), delayed.getValue(),
+                                 delayed.getReference());
+    else
+      return;
+    op->erase();
+  });
+  analysis::ActivationMemoryAnalysis memory(
+      *model, handles, 65536,
+      analysis::ActivationMemoryAnalysis::DependencyMode::Accesses,
+      function->getParentOp());
+  return memory.isValid() && memory.hasCompleteWrites() &&
+         analysis::intersect(memory.getLiveIns(), memory.getMayWrites())
+             .empty();
+}
 
 // IEEE 1800-2023, Clauses 4.5 and 4.6: changing an execution tier must
 // preserve the process continuation and its scheduled effects.
@@ -232,11 +422,18 @@ LogicalResult Encoder::planFunctions() {
     return design.emitOpError("contains no executable functions");
   plans.reserve(functions.size());
   llvm::DenseMap<uint64_t, sim::SimFuncOp> stableIDs;
+  bool collectSAIF =
+      saif::has<saif::Output>(design->getParentOfType<ModuleOp>());
+  analysis::HandleDataflowAnalysis referenceHandles(design);
+  llvm::DenseMap<Operation *, bool> referenceEffects;
   for (auto [index, function] : llvm::enumerate(functions)) {
     FunctionPlan &plan = plans.emplace_back();
     plan.function = function;
     plan.index = static_cast<uint32_t>(index);
     plan.stableID = getStableID(function);
+    plan.saifReference =
+        collectSAIF &&
+        isSAIFReference(function, referenceHandles, effects, referenceEffects);
     if (plan.stableID == 0)
       return function.emitOpError("executable code-unit ID must be nonzero");
     auto [collision, inserted] = stableIDs.try_emplace(plan.stableID, function);

@@ -1,0 +1,31 @@
+// RUN: %split-file %s %t
+// RUN: talos --vpi=off --saif=%t.saif -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 && FileCheck %s --input-file=%t.saif
+// RUN: talos --vpi=off --saif=%t.saif -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 && FileCheck %s --input-file=%t.saif
+// RUN: talos --vpi=off --saif=%t.saif -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 && FileCheck %s --input-file=%t.saif
+// RUN: talos --vpi=off --saif=%t.saif -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 && FileCheck %s --input-file=%t.saif
+// RUN: talos-translate --import-saif %t.saif -o /dev/null
+// Functional buffers, pure function calls, and sequential boundaries must
+// never be mistaken for glitches. Closing parentheses exclude a stray TG.
+// CHECK-DAG: (buffered (T0 5000000) (T1 9000000) (TX 0) (TZ 1000000) (TC 1))
+// CHECK-DAG: (called (T0 7000000) (T1 5000000) (TX 0) (TZ 3000000) (TC 1))
+// CHECK-DAG: (q (T0 6000000) (T1 9000000) (TX 0) (TZ 0) (TC 1))
+// CHECK-DAG: (sequential (T0 6000000) (T1 8000000) (TX 0) (TZ 1000000) (TC 1))
+// Reference execution follows the pure callee through reconvergence too.
+// CHECK-DAG: (transport (T0 3000000) (T1 8000000) (TX 3000000) (TZ 1000000) (TC 2) (TG 2))
+// CHECK-DAG: (behavioral (T0 3000000) (T1 11000000) (TX 0) (TZ 1000000) (TC 2) (TG 2))
+//--- design.sv
+module top;
+  timeunit 1ns; timeprecision 1ns;
+  function automatic logic inv(input logic x); return !x; endfunction
+  logic a = 0, q = 0;
+  logic delayed = 1;
+  wire buffered, called, sequential, transport, behavioral;
+  assign #1 buffered = a;
+  assign #3 called = inv(a);
+  always @(posedge buffered) q <= !q;
+  assign #1 sequential = q;
+  assign #1 transport = a ^ called;
+  always @(a) begin #3 delayed = inv(a); end
+  assign #1 behavioral = a ^ delayed;
+  initial begin #5 a = 1; #10 $finish; end
+endmodule

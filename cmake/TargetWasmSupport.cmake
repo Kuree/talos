@@ -97,7 +97,7 @@ set(_talos_wasm_flags
   -I "${_talos_vpi_include_dir}")
 
 set(_talos_target_runtime_common_sources
-    ABI Bytecode Containers Coverage CoverageBlockEvents CoverageDatabase SAIF SAIFLibrary SAIFEvents DesignBytecode DesignBytecodeImage
+    ABI Bytecode Containers Coverage CoverageBlockEvents CoverageDatabase SAIF SAIFLibrary SAIFEvents SAIFReference DesignBytecode DesignBytecodeImage
     DesignBytecodeIntrinsics DesignBytecodeLogic DesignBytecodeNets
     DesignBytecodeObservers DesignBytecodeRoots DesignDatabase DPI FileIO
     Format ManagedHeap Plusargs Process ProcessAllocation ProcessAOT

@@ -18,6 +18,7 @@ std::shared_ptr<const SAIFCause> fresh(talos_rt_context *) {
 }
 void enter(talos_rt_context *context, uint64_t logical) {
   auto &state = *context->saif;
+  advanceReference(context);
   auto queued = state.wakeups.find(logical);
   auto resumed = state.resumptions.find(logical);
   auto cause = queued != state.wakeups.end() ? queued->second
@@ -28,6 +29,11 @@ void enter(talos_rt_context *context, uint64_t logical) {
   if (queued != state.wakeups.end()) {
     state.resumptions[logical] = cause;
     state.wakeups.erase(queued);
+  }
+  if (active.context != context || active.logical != logical) {
+    auto producer = std::make_shared<SAIFCause>(*cause);
+    producer->referenceOutput = state.referenceProcesses.count(logical) != 0;
+    cause = std::move(producer);
   }
   active = {context, std::move(cause), logical};
   state.activeLogical = logical;
@@ -60,6 +66,7 @@ void talos_rt_saif_complete_unlocked(talos_rt_context *context,
   auto &state = *context->saif;
   state.wakeups.erase(logical);
   state.resumptions.erase(logical);
+  state.referenceProcesses.erase(logical);
 }
 void talos_rt_saif_wake_actor_unlocked(talos_rt_context *context,
                                        uint32_t slot) {
@@ -106,6 +113,7 @@ SAIFExecutionScope::SAIFExecutionScope(talos_rt_context *context,
   if (!context || !context->saif)
     return;
   ContextMutexLock lock(context);
+  advanceReference(context);
   enabled = true;
   previousContext = active.context;
   previousCause = active.cause;
@@ -150,6 +158,77 @@ SAIFExecutionScope::~SAIFExecutionScope() {
         active.context == context ? active.cause : nullptr;
   }
 }
+
+namespace talos::saifruntime {
+void recordReference(SAIFState &state, size_t observation, uint8_t from,
+                     uint8_t to,
+                     const std::shared_ptr<const SAIFCause> &cause) {
+  if (from >= 2 || to >= 2 || from == to)
+    return;
+  auto &point = state.observations[observation];
+  ++point.physicalEdges[to];
+  if (!state.referenceContext)
+    return;
+  point.referenceComparable |= cause && cause->referenceOutput;
+}
+void retireReferences(talos_rt_context *context) {
+  auto &state = *context->saif;
+  // Annex I's reference-count method is an aggregate estimate. Finalize it
+  // over the whole observation window, so a reference pulse and a physical
+  // pulse cannot match differently merely because their input order changes.
+  for (auto &point : state.observations) {
+    if (!point.referenceComparable)
+      continue;
+    unsigned __int128 functional =
+        static_cast<unsigned __int128>(point.referenceEdges[0]) +
+        point.referenceEdges[1];
+    uint64_t total =
+        functional < point.toggles ? point.toggles - uint64_t(functional) : 0;
+    point.extra.tg = total;
+  }
+  // Apportion state/path estimates from measured pre-input TC distributions.
+  // Each group's complete coverage sums to the signal's TG budget. Missing
+  // default conditions retain partial coverage. Storage is bounded by the
+  // characterization plan, independent of edge history and input state space.
+  for (auto &cell : state.cells)
+    for (auto &group : cell.groups) {
+      if (group.leakage)
+        continue;
+      const auto &point = state.observations[group.observation];
+      uint64_t total = point.extra.tg;
+      if (!total)
+        continue;
+      uint64_t targets[2] = {};
+      targets[1] =
+          std::min(total, point.physicalEdges[1] > point.referenceEdges[1]
+                              ? point.physicalEdges[1] - point.referenceEdges[1]
+                              : 0);
+      targets[0] = total - targets[1];
+      uint64_t prefix[2] = {};
+      auto apportion = [&](Counts &counts) {
+        counts.tg = 0;
+        for (unsigned p = 0; p < 2; ++p) {
+          if (!point.physicalEdges[p])
+            continue;
+          uint64_t before = static_cast<unsigned __int128>(prefix[p]) *
+                            targets[p] / point.physicalEdges[p];
+          prefix[p] += counts.tcByEdge[p];
+          uint64_t after = static_cast<unsigned __int128>(prefix[p]) *
+                           targets[p] / point.physicalEdges[p];
+          counts.tg += after - before;
+        }
+      };
+      for (auto &rule : group.rules)
+        if (rule.paths.empty())
+          for (auto &counts : rule.counts)
+            apportion(counts);
+        else
+          for (auto &path : rule.paths)
+            for (auto &counts : path.counts)
+              apportion(counts);
+    }
+}
+} // namespace talos::saifruntime
 
 extern "C" void talos_rt_v1_saif_driver(talos_rt_context *context,
                                         uint64_t handle, uint64_t width) {
