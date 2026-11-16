@@ -1,0 +1,7 @@
+// REQUIRES: wasm-execution
+// RUN: %split-file %S/saif-aggregates.test %t/aggregates && %split-file %S/saif-functional.test %t/functional
+// RUN: talos --vpi=off --target=wasm32 --saif=%t/aggregates.saif -O3 -c %t/aggregates/design.sv -o %t/aggregates.o
+// RUN: %wasm_cxx %t/aggregates.o %wasm_runtime -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1 -sEXIT_RUNTIME=1 -sENVIRONMENT=node -o %t/aggregates.js && %node %t/aggregates.js && FileCheck %S/saif-aggregates.test --input-file=%t/aggregates.saif
+// RUN: talos --vpi=off --target=wasm32 --saif=%t/functional.saif -O3 -c %t/functional/design.sv -o %t/functional.o
+// RUN: %wasm_cxx %t/functional.o %wasm_runtime -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1 -sEXIT_RUNTIME=1 -sENVIRONMENT=node -o %t/functional.js && %node %t/functional.js && FileCheck %S/saif-functional.test --input-file=%t/functional.saif
+// RUN: talos-translate --import-saif %t/aggregates.saif -o /dev/null && talos-translate --import-saif %t/functional.saif -o /dev/null

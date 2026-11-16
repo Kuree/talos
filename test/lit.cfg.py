@@ -170,6 +170,13 @@ node = shutil.which("node") if sys.platform != "win32" else None
 if node:
     config.available_features.add("node")
     config.substitutions.append(("%node", node))
+wasm_test_cxx = os.environ.get("TALOS_WASM_TEST_CXX")
+wasm_test_runtime = os.environ.get("TALOS_WASM_TEST_RUNTIME")
+if (node and wasm_test_cxx and wasm_test_runtime
+        and os.path.isfile(wasm_test_cxx) and os.path.isfile(wasm_test_runtime)):
+    config.available_features.add("wasm-execution")
+    config.substitutions.append(("%wasm_cxx", wasm_test_cxx))
+    config.substitutions.append(("%wasm_runtime", wasm_test_runtime))
 lcov = shutil.which("lcov")
 if lcov:
     config.available_features.add("lcov")

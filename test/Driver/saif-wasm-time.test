@@ -1,0 +1,29 @@
+// REQUIRES: wasm-execution
+// RUN: %split-file %s %t
+// RUN: %wasm_cxx -std=c++17 -fno-exceptions -DTALOS_RT_IGNORE_EXCEPTIONS=1 -I%source_root/include -I%obj_root/include -I%source_root/runtime/include -I%source_root/runtime/lib %t/time.cpp %wasm_runtime -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1 -sEXIT_RUNTIME=1 -sENVIRONMENT=node -o %t/time.js
+// RUN: %node %t/time.js %t/time.saif && FileCheck %s --input-file=%t/time.saif
+// RUN: talos-translate --import-saif %t/time.saif -o /dev/null
+// The product is (2^64-1)^2: no native-width truncation or floating rounding.
+// CHECK: (DURATION 340282366920938463426481119284349108225)
+// CHECK: (q (T0 340282366920938463426481119284349108225) (T1 0) (TX 0) (TZ 0) (TC 0))
+//--- time.cpp
+#include "RuntimeInternal.h"
+
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  talos_rt_execution_descriptor_v1 execution{};
+  execution.version = TALOS_RT_VERSION;
+  execution.state_bit_count = 1;
+  talos_rt_context *context = nullptr;
+  if (talos_rt_v1_context_create_for_design(&execution, &context) != TALOS_RT_OK)
+    return 1;
+  auto handle = talos_rt_v1_native_state_static_handle(1);
+  bool good = talos_rt_v1_native_state_register_static(context, 1, 0, 1) == TALOS_RT_OK &&
+      talos_rt_v1_saif_configure(context, argv[1], UINT64_MAX) == TALOS_RT_OK &&
+      talos_rt_v1_saif_bind(context, handle, "top", 4, "q", 0, nullptr, 0) == TALOS_RT_OK &&
+      talos_rt_v1_saif_seal(context) == TALOS_RT_OK;
+  context->schedulerTime = UINT64_MAX;
+  good &= talos_rt_v1_saif_finish(context) == TALOS_RT_OK;
+  talos_rt_v1_context_destroy(context);
+  return good ? 0 : 1;
+}
