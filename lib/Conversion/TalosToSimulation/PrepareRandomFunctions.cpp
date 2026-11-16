@@ -3092,11 +3092,38 @@ LogicalResult expandRandomConstraintFunctions(
       }
 
       auto templates = std::make_unique<Block>();
-      for (Operation *argument : ArrayRef(children).take_back(argumentCount)) {
+      for (auto [formal, argument] : llvm::zip_equal(
+               formals, ArrayRef(children).take_back(argumentCount))) {
         FailureOr<Operation *> cloned = cloneConstraintExpression(
             argument, substitutions, functionBody, callStack);
         if (failed(cloned))
           return failure();
+        // IEEE 1800-2023 13.5.1: an input copies its actual into the formal.
+        // Equivalent packed types (6.22.2) need no frontend conversion, yet
+        // selects in the body index the formal's declared range: `w[0]` of a
+        // `bit [1:0] w` bound to `v[5:4]` reads v[4]. Retype the actual.
+        auto formalType = formal->getAttrOfType<TypeAttr>("semantic_type");
+        auto actualType = (*cloned)->getAttrOfType<TypeAttr>("semantic_type");
+        if (formalType && actualType && formalType != actualType &&
+            getSemanticPackedWidth(formalType.getValue()) &&
+            getSemanticPackedWidth(formalType.getValue()) ==
+                getSemanticPackedWidth(actualType.getValue())) {
+          OperationState state(
+              (*cloned)->getLoc(),
+              semantic::SVConversionExpressionOp::getOperationName());
+          state.addAttribute("semantic_type", formalType);
+          state.addAttribute("node_id", (*cloned)->getAttr("node_id"));
+          state.addAttribute("is_implicit", builder.getBoolAttr(true));
+          state.addRegion()->push_back(new Block());
+          state.regions.front()->front().push_back(*cloned);
+          Operation *conversion = Operation::create(state);
+          if (!budget.spend(conversion)) {
+            conversion->destroy();
+            budget.diagnose(getSemanticLocation(callExpression));
+            return failure();
+          }
+          cloned = conversion;
+        }
         templates->push_back(*cloned);
       }
       llvm::DenseMap<Operation *, Operation *> functionSubstitutions;
