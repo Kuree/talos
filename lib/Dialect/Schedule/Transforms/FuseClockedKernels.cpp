@@ -2509,7 +2509,8 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
     DenseMap<uint64_t, unsigned> rootIndex;
     for (auto [index, root] : llvm::enumerate(rootList))
       rootIndex[root] = index;
-    analysis::HandleFacts facts = provenance.derive(kernel);
+    analysis::HandleDataflowResult handleProofs = provenance.analyze(kernel);
+    const analysis::HandleFacts &facts = handleProofs.facts;
     llvm::BitVector unsupported(rootList.size());
     enum class EventKind { Enqueue, Read, OpaqueRead };
     struct Event {
@@ -2554,16 +2555,44 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
               dyn_cast<sim::RefType>(enqueue.getDestination().getType());
           auto view =
               enqueue.getDestination().getDefiningOp<sim::SimRefDynExtractOp>();
-          // An overhanging view is legal only as an NBA destination. Keep
-          // its captured update: a ref.store cannot represent this clipping
-          // contract, even when the root is otherwise private (11.5.1).
-          bool overhanging =
+          // An NBA view clips to its immediate input, which can be a struct
+          // member or an array lane inside a larger physical root. A direct
+          // store retains only the root's bounds. Preserve the captured NBA
+          // unless that loses no narrower boundary (IEEE 1800-2023 11.5.1).
+          bool needsClipping =
               view && *sim::getPackedWidth(
                           view.getResult().getType().getElementType()) >
                           *sim::getPackedWidth(
                               view.getInput().getType().getElementType());
+          if (view) {
+            auto parent = facts.find(view.getInput());
+            auto selected = facts.find(view.getResult());
+            auto exactAddress = [&](Value value) {
+              auto proof = handleProofs.certificates.find(value);
+              return proof != handleProofs.certificates.end() &&
+                     proof->second.constantAddress;
+            };
+            bool wholeRoot = parent != facts.end() &&
+                             !parent->second.dynamic &&
+                             parent->second.low == 0 &&
+                             parent->second.width == parent->second.rootWidth &&
+                             sim::getPackedWidth(
+                                 view.getInput().getType().getElementType()) ==
+                                 parent->second.rootWidth;
+            bool contained =
+                parent != facts.end() && selected != facts.end() &&
+                !parent->second.dynamic && !selected->second.dynamic &&
+                exactAddress(view.getInput()) && exactAddress(view.getResult()) &&
+                selected->second.low >= parent->second.low &&
+                selected->second.low - parent->second.low <=
+                    parent->second.width &&
+                selected->second.width <=
+                    parent->second.width -
+                        (selected->second.low - parent->second.low);
+            needsClipping |= !wholeRoot && !contained;
+          }
           if (nested || enqueue.getDelay() || enqueue.getClockingOutputAttr() ||
-              !reference || overhanging ||
+              !reference || needsClipping ||
               reference.getElementType() != enqueue.getValue().getType())
             unsupported.set(*index);
           else

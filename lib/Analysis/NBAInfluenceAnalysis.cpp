@@ -110,10 +110,36 @@ NBAInfluenceAnalysis::NBAInfluenceAnalysis(sim::SimDesignOp design,
     dependencies[rhs].push_back(lhs);
   });
   design.walk([&](sim::SimFuncOp function) {
+    // Task-call scheduling edges do not instantiate the task's effects in
+    // its caller summary. In particular, the implicit output copy-out reads
+    // a static formal after its NBA has been captured. That formal persists
+    // between calls (IEEE 1800-2023 13.3.2, 13.5), so its NBA is not unread.
+    // Keep this reader inventory separate from immediate influence edges;
+    // a write-only output actual does not make every root a possible reader.
+    if (function.getEntryKind() == sim::EntryKind::Task) {
+      if (ArrayAttr summary = function.getEffectSummaryAttr()) {
+        for (auto effect : summary.getAsRange<schedule::ComputeEffectAttr>()) {
+          if (effect.getEffect() != Effect::Read &&
+              effect.getEffect() != Effect::Watch)
+            continue;
+          if ((effect.getResource() == Resource::Storage ||
+               effect.getResource() == Resource::Net) &&
+              effect.getTarget() == schedule::ComputeTargetKind::Descriptor &&
+              known.contains({effect.getResource(), effect.getDescriptor()}))
+            readers.insert({effect.getResource(), effect.getDescriptor()});
+          else if (effect.getResource() == Resource::Unknown ||
+                   effect.getResource() == Resource::Storage ||
+                   effect.getResource() == Resource::Net)
+            readers = known;
+        }
+      } else {
+        readers = known;
+      }
+      return;
+    }
     // Called function effects are already instantiated in each caller summary.
     // Declaration initialization precedes process execution (LRM 6.8).
     if (function.getEntryKind() == sim::EntryKind::Function ||
-        function.getEntryKind() == sim::EntryKind::Task ||
         function.getEntryKind() == sim::EntryKind::RootInitializer)
       return;
     ArrayAttr summary = function.getEffectSummaryAttr();

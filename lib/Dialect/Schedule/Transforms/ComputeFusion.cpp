@@ -2141,6 +2141,35 @@ computeNBATransientObservers(sim::SimDesignOp design, bool guardedVPI) {
     ArrayAttr summary = function.getEffectSummaryAttr();
     if (!summary)
       continue;
+    // An iff guard observes its inputs when another root's event occurs,
+    // even if changes of the guard alone do not wake this process. Its reads
+    // therefore constrain cross-root NBA publication order just like the
+    // watched clock (IEEE 1800-2023 4.6(b), 9.4.2.3). A layout-ordered merge
+    // of the guard ahead of a queued clock would sample the wrong value.
+    bool conditionalWatch =
+        function
+            .walk([](Operation *operation) {
+              return isa<sim::SimSuspendEdgeIffOp, sim::SimSuspendClockSetOp,
+                         sim::SimSuspendLevelOp, sim::SimSuspendObserveOp>(
+                         operation)
+                         ? WalkResult::interrupt()
+                         : WalkResult::advance();
+            })
+            .wasInterrupted();
+    if (conditionalWatch)
+      for (auto effect : summary.getAsRange<schedule::ComputeEffectAttr>()) {
+        if (effect.getEffect() != schedule::ComputeEffectKind::Read)
+          continue;
+        if (effect.getResource() == schedule::ComputeResourceKind::Storage &&
+            effect.getTarget() == schedule::ComputeTargetKind::Descriptor)
+          observable.insert(effect.getDescriptor());
+        else if (effect.getResource() == schedule::ComputeResourceKind::Net &&
+                 effect.getTarget() == schedule::ComputeTargetKind::Descriptor)
+          result.netObservable.insert(effect.getDescriptor());
+        else if (effect.getResource() == schedule::ComputeResourceKind::Unknown ||
+                 effect.getTarget() != schedule::ComputeTargetKind::Descriptor)
+          return std::nullopt;
+      }
     SmallVector<schedule::ComputeEffectAttr> watches;
     for (auto effect : summary.getAsRange<schedule::ComputeEffectAttr>())
       if (effect.getEffect() == schedule::ComputeEffectKind::Watch)
