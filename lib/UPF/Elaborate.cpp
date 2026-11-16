@@ -372,8 +372,9 @@ struct Lowering {
   }
   void collectReferencedStorage() {
     SymbolTableCollection retentionSymbols;
+    // SAIF bindings name observed roots outside any function body.
     for (auto storage : design.getOps<sim::SimStorageDeclOp>())
-      if (sim::hasTransitionObservers(storage))
+      if (sim::has<sim::metadata::TransitionObservable>(storage))
         referencedStorage.insert(storage.getId());
     design.walk([&](sim::SimContextStorageOp ref) {
       referencedStorage.insert(ref.getId());

@@ -393,7 +393,9 @@ void TalosSimAliasPortConnectionsPass::runOnOperation() {
     std::optional<schedule::ComputeObservabilityKind> rObserved =
         r.getObservability();
     candidate.rejected |=
-        sim::hasTransitionObservers(x) || sim::hasTransitionObservers(r) ||
+        // SAIF bindings name observed roots by declaration ID.
+        sim::has<sim::metadata::TransitionObservable>(x) ||
+        sim::has<sim::metadata::TransitionObservable>(r) ||
         x.getLifetime() != sim::Lifetime::Design ||
         r.getLifetime() != sim::Lifetime::Design ||
         (xObserved &&
