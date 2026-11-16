@@ -151,6 +151,58 @@ SAIFExecutionScope::~SAIFExecutionScope() {
   }
 }
 
+extern "C" void talos_rt_v1_saif_driver(talos_rt_context *context,
+                                        uint64_t handle, uint64_t width) {
+  if (!context || !context->saif || !width)
+    return;
+  TALOS_RT_TRY {
+    ContextMutexLock lock(context);
+    uint32_t id;
+    int64_t offset;
+    if (!decodeNativeStatic(handle, id, offset) || offset < 0)
+      return;
+    const auto *native = findNativeStaticState(context, id);
+    if (!native || uint64_t(offset) >= native->bitWidth ||
+        width > native->bitWidth - offset)
+      return;
+    talos::designbytecode::Image image;
+    talos_rt_design_bytecode_entry_v1 entry{context->execution, 0, 0};
+    if (!talos::designbytecode::loadValidatedImage(entry, context, image, true))
+      return;
+    auto *cache = talos::designbytecode::getNetAliasCache(image, context);
+    if (!cache)
+      return;
+    auto &state = *context->saif;
+    if (!state.indexedDrivers) {
+      for (const auto &driver : cache->drivers)
+        state.driverRanges.push_back({driver.valueOffset,
+                                      driver.valueOffset + driver.width,
+                                      driver.targetOffset});
+      std::sort(state.driverRanges.begin(), state.driverRanges.end(),
+                [](auto a, auto b) { return a.begin < b.begin; });
+      state.indexedDrivers = true;
+    }
+    uint64_t begin = native->bitOffset + offset, end = begin + width;
+    auto it = std::lower_bound(
+        state.driverRanges.begin(), state.driverRanges.end(), begin,
+        [](const auto &range, uint64_t bit) { return range.end <= bit; });
+    std::unordered_set<uint64_t> roots;
+    for (; it != state.driverRanges.end() && it->begin < end; ++it)
+      for (uint64_t bit = std::max(begin, it->begin);
+           bit < std::min(end, it->end); ++bit) {
+        auto found = cache->rootByBit.find(it->target + bit - it->begin);
+        if (found != cache->rootByBit.end())
+          roots.insert(found->second);
+      }
+    for (uint64_t root : roots)
+      talos::designbytecode::collectSAIFContention(context, *cache, root);
+  }
+  TALOS_RT_CATCH(const std::bad_alloc &) {
+    context->schedulerStatus = TALOS_RT_OUT_OF_MEMORY;
+  }
+  TALOS_RT_CATCH_ALL { context->schedulerStatus = TALOS_RT_INVALID_ARGUMENT; }
+}
+
 void talos_rt_saif_event_issued_unlocked(talos_rt_context *context,
                                          ScheduledNBA &event) {
   if (!event.saifCause)

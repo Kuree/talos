@@ -5636,6 +5636,8 @@ talos_rt_status talos_rt_v1_saif_bind(talos_rt_context *context,
                                       const char *signal, uint32_t port,
                                       const char *virtual_type,
                                       uint32_t initial);
+void talos_rt_v1_saif_driver(talos_rt_context *context, uint64_t driver,
+                             uint64_t width);
 talos_rt_status talos_rt_v1_saif_seal(talos_rt_context *context);
 // Versioned, bounded characterization words. All pin references are indices
 // into the preceding observation inventory; pointers remain target-sized.

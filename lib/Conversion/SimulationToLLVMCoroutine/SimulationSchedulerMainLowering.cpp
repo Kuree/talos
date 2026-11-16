@@ -1034,6 +1034,8 @@ LogicalResult makeSchedulerMain(ModuleOp module,
     getOrDeclareLLVMFunction(
         module, "talos_rt_v1_saif_bind", i32,
         {pointer, i64, pointer, i64, pointer, i32, pointer, i32});
+    getOrDeclareLLVMFunction(module, "talos_rt_v1_saif_driver", voidType,
+                             {pointer, i64, i64});
     getOrDeclareLLVMFunction(module, "talos_rt_v1_saif_seal", i32, {pointer});
     getOrDeclareLLVMFunction(module, "talos_rt_v1_saif_finish", i32, {pointer});
   }

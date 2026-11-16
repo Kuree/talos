@@ -2383,6 +2383,8 @@ private:
 };
 struct SAIFState;
 struct SAIFCause;
+void talos_rt_saif_contention_unlocked(talos_rt_context *context,
+                                       uint64_t absoluteBit, bool contention);
 
 void talos_rt_saif_record_transition_unlocked(
     talos_rt_context *context, uint64_t stableID, uint64_t bitWidth,

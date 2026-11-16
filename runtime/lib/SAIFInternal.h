@@ -14,6 +14,8 @@ struct Observation {
   uint64_t time[4] = {};
   uint64_t toggles = 0;
   uint32_t current = 0;
+  uint64_t contentionLast = 0, contentionTime = 0;
+  bool contention = false;
   Counts extra;
   std::vector<std::pair<size_t, uint32_t>> cells;
 };
@@ -75,6 +77,11 @@ struct SAIFState {
   std::vector<talos::saifruntime::Observation> observations;
   std::unordered_map<uint32_t, std::vector<talos::saifruntime::Watch>> watches;
   std::vector<talos::saifruntime::Cell> cells;
+  struct DriveRange {
+    uint64_t begin, end, target;
+  };
+  std::vector<DriveRange> driverRanges;
+  bool indexedDrivers = false;
   std::unordered_map<uint64_t, std::shared_ptr<const SAIFCause>> wakeups;
   std::unordered_map<uint64_t, std::shared_ptr<const SAIFCause>> resumptions;
   std::shared_ptr<const SAIFCause> publicationCause;

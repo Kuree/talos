@@ -64,6 +64,9 @@ struct NetPublication {
   std::shared_ptr<const SAIFCause> saifCause{};
 };
 
+void collectSAIFContention(talos_rt_context *, const NetAliasCache &,
+                           uint64_t root);
+
 NetAliasCache *getNetAliasCache(const Image &image, talos_rt_context *context);
 bool isComplementaryDriverPair(const Image &image, talos_rt_context *context,
                                uint64_t lowOffset, uint64_t highOffset,

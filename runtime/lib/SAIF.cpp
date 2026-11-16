@@ -269,6 +269,34 @@ void talos_rt_saif_record_transition_unlocked(talos_rt_context *context,
   }
 }
 
+void talos_rt_saif_contention_unlocked(talos_rt_context *context,
+                                       uint64_t absoluteBit, bool contention) {
+  auto *state = context->saif.get();
+  if (!state || !state->sealed || state->finished)
+    return;
+  uint64_t handle =
+      talos_rt_canonical_state_handle_unlocked(context, absoluteBit, 1);
+  uint32_t id;
+  int64_t offset;
+  if (!decodeNativeStatic(handle, id, offset) || offset < 0)
+    return;
+  auto found = state->watches.find(id);
+  if (found == state->watches.end())
+    return;
+  auto it = std::lower_bound(
+      found->second.begin(), found->second.end(), uint64_t(offset),
+      [](const Watch &watch, uint64_t bit) { return watch.bit < bit; });
+  for (; it != found->second.end() && it->bit == uint64_t(offset); ++it) {
+    auto &point = state->observations[it->observation];
+    if (point.contention == contention)
+      continue;
+    if (point.contention)
+      point.contentionTime += context->schedulerTime - point.contentionLast;
+    point.contentionLast = context->schedulerTime;
+    point.contention = contention;
+  }
+}
+
 namespace {
 void writeInstance(FILE *file, const SAIFState &state, const Instance &node) {
   std::fprintf(file, "(%s %s%s\n",
@@ -298,6 +326,12 @@ void writeInstance(FILE *file, const SAIFState &state, const Instance &node) {
                            state.precision)
                        .c_str(),
                    decimal(point.toggles).c_str());
+      if (point.contentionTime)
+        std::fprintf(
+            file, " (TB %s)",
+            decimal(static_cast<unsigned __int128>(point.contentionTime) *
+                    state.precision)
+                .c_str());
       writeGroups(file, state, node, index, point.last);
       std::fputs(")\n", file);
     }
@@ -325,6 +359,9 @@ extern "C" talos_rt_status talos_rt_v1_saif_finish(talos_rt_context *context) {
         return TALOS_RT_OUT_OF_RESOURCES;
       point.time[point.current] += context->schedulerTime - point.last;
       point.last = context->schedulerTime;
+      if (point.contention)
+        point.contentionTime += context->schedulerTime - point.contentionLast;
+      point.contentionLast = context->schedulerTime;
     }
     for (auto &cell : state->cells)
       flushCell(*state, cell, context->schedulerTime);

@@ -4,6 +4,7 @@
 #include "talos/Analysis/ContributionMirrorAnalysis.h"
 #include "talos/Analysis/ParallelWalk.h"
 #include "talos/Dialect/Native/NativeDialect.h"
+#include "talos/Dialect/SAIF/SAIFDialect.h"
 #include "talos/Dialect/Schedule/ScheduleEnums.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
@@ -493,6 +494,20 @@ public:
     Value rawChanged = arith::OrIOp::create(
         rewriter, op.getLoc(), driveValueChanged, driveUnknownChanged);
     Value changed = boolean(false);
+    if (!mirror &&
+        saif::has<saif::Output>(op->template getParentOfType<ModuleOp>())) {
+      Type pointer = LLVM::LLVMPointerType::get(rewriter.getContext());
+      Value ctx = LLVM::LoadOp::create(
+          rewriter, op.getLoc(), pointer,
+          LLVM::AddressOfOp::create(rewriter, op.getLoc(), pointer,
+                                    "__talos_current_context"),
+          8);
+      LLVM::CallOp::create(
+          rewriter, op.getLoc(), TypeRange{}, "talos_rt_v1_saif_driver",
+          ValueRange{ctx, adaptor.getDriver().front(),
+                     llvmConstant(rewriter, op.getLoc(), rewriter.getI64Type(),
+                                  *sourceWidth)});
+    }
     // A conditional gate stores its complementary low-polarity bank before
     // its high-polarity bank. The first store deliberately stops here so the
     // second drive resolves and publishes one atomic logical transition.

@@ -899,6 +899,16 @@ static bool computeResolvedStrengths(const NetAliasCache &cache,
   uint8_t resolution = cache.resolutionByRoot.at(root);
   auto component = cache.passComponentByRoot.find(root);
   resolvedStrengths = strengthBit(0);
+  bool drivenZero = false, drivenOne = false;
+  auto noteDrive = [&](uint16_t strengths, bool definite = true) {
+    if (query || !context->saif || !definite)
+      return;
+    auto symbol = runtime::resolvedBit(strengths);
+    if (!symbol.unknown) {
+      drivenZero |= !symbol.value;
+      drivenOne |= symbol.value;
+    }
+  };
   auto accumulateRoot = [&](uint64_t sourceRoot, uint8_t resistiveEdges,
                             uint8_t possibleResistiveEdges) {
     if (possibleResistiveEdges == 5)
@@ -920,6 +930,7 @@ static bool computeResolvedStrengths(const NetAliasCache &cache,
       if (remote)
         strengths = propagateFromRemote(strengths, resistiveEdges,
                                         possibleResistiveEdges);
+      noteDrive(strengths, resistiveEdges != 5);
       resolvedStrengths =
           combineStrengthRanges(resolvedStrengths, strengths, resolution);
       return true;
@@ -929,6 +940,7 @@ static bool computeResolvedStrengths(const NetAliasCache &cache,
     if (remote)
       implicit =
           propagateFromRemote(implicit, resistiveEdges, possibleResistiveEdges);
+    noteDrive(implicit, resistiveEdges != 5);
     resolvedStrengths =
         combineStrengthRanges(resolvedStrengths, implicit, resolution);
     auto componentDrivers = cache.driverBits.find(sourceRoot);
@@ -943,6 +955,7 @@ static bool computeResolvedStrengths(const NetAliasCache &cache,
         if (remote)
           strengths = propagateFromRemote(strengths, resistiveEdges,
                                           possibleResistiveEdges);
+        noteDrive(strengths, resistiveEdges != 5);
         resolvedStrengths =
             combineStrengthRanges(resolvedStrengths, strengths, resolution);
       }
@@ -956,6 +969,7 @@ static bool computeResolvedStrengths(const NetAliasCache &cache,
         if (remote)
           strengths = propagateFromRemote(strengths, resistiveEdges,
                                           possibleResistiveEdges);
+        noteDrive(strengths, resistiveEdges != 5);
         resolvedStrengths =
             combineStrengthRanges(resolvedStrengths, strengths, resolution);
       }
@@ -982,7 +996,19 @@ static bool computeResolvedStrengths(const NetAliasCache &cache,
   } else if (!accumulateRoot(root, 0, 0)) {
     return false;
   }
+  if (!query && context->saif)
+    for (uint64_t member : members->second)
+      talos_rt_saif_contention_unlocked(context, member,
+                                        drivenZero && drivenOne);
   return true;
+}
+
+void collectSAIFContention(talos_rt_context *context,
+                           const NetAliasCache &cache, uint64_t root) {
+  uint16_t ignored;
+  if (!computeResolvedStrengths(cache, context, root, true, true, false,
+                                ignored))
+    context->schedulerStatus = TALOS_RT_INVALID_DESIGN;
 }
 
 static uint16_t normalizeStrengthRange(uint16_t strengths) {
