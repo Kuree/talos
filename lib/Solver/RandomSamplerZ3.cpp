@@ -805,6 +805,181 @@ public:
                      Z3_mk_ite(context, special, infinite, finite));
   }
 
+  /// IEEE order between two decoded properties of one format. Decoding keeps
+  /// the leading fraction+1 bits of a coordinate's magnitude and always drops
+  /// bit 0, so each value is a truncation T(m); coordinates -1, 0 and 1 are
+  /// the two zeros. Values of one sign compare one magnitude against the
+  /// other's truncation, and different signs are ordered by sign unless both
+  /// are zero. Each `x < T(y)` is an automaton over bits from the most
+  /// significant one (before y's leading one, k window bits consumed, window
+  /// done), and a negative magnitude bit is ~r[i] ^ (r[i-1:0] == 0). Every
+  /// node at bit i therefore refers only to bit i and lower bits, which keeps
+  /// the exact sampler's high-to-low expansion linear; two barrel-shifting
+  /// decoders and an IEEE comparator, or a prefix mask over all higher bits,
+  /// do not. The signed minimum coordinate decodes to negative infinity.
+  Z3_ast compareCoordinates(uint8_t opcode, Z3_ast lhs, Z3_ast rhs,
+                            unsigned width, unsigned precision) {
+    unsigned window = precision == 32 ? 24 : 53;
+    Z3_ast falseValue = Z3_mk_false(context), trueValue = Z3_mk_true(context);
+    struct Operand {
+      std::vector<Z3_ast> bits, lowerZero;
+      Z3_ast negative, zero, infinite;
+    };
+    auto operand = [&](Z3_ast rank) {
+      Operand result;
+      Z3_ast lowerZero = trueValue;
+      for (unsigned bit = 0; bit != width; ++bit) {
+        Z3_ast set = Z3_mk_eq(context, Z3_mk_extract(context, bit, bit, rank),
+                              constant(1, 1));
+        result.bits.push_back(set);
+        result.lowerZero.push_back(lowerZero);
+        lowerZero = conjunction(lowerZero, Z3_mk_not(context, set));
+      }
+      result.negative = result.bits.back();
+      result.zero = disjunction(
+          Z3_mk_eq(context, rank, Z3_mk_bvneg(context, constant(1, width))),
+          Z3_mk_eq(context, Z3_mk_bvlshr(context, rank, constant(1, width)),
+                   constant(0, width)));
+      result.infinite = Z3_mk_eq(
+          context, rank,
+          Z3_mk_bvshl(context, constant(1, width), constant(width - 1, width)));
+      return result;
+    };
+    // Fold constant conditions and equal arms: carry families and the low
+    // layers are mostly constant, and wide formats would otherwise exhaust
+    // the bounded rewriter.
+    auto select = [&](Z3_ast condition, Z3_ast yes, Z3_ast no) {
+      if (Z3_is_eq_ast(context, condition, trueValue) ||
+          Z3_is_eq_ast(context, yes, no))
+        return yes;
+      if (Z3_is_eq_ast(context, condition, falseValue))
+        return no;
+      return Z3_mk_ite(context, condition, yes, no);
+    };
+    // Both automata read magnitude bits x and y from the most significant
+    // bit. States: 0 before the leading one, k in [1, window) after k kept
+    // bits, `window` once the kept window ends. `lower` holds the next lower
+    // bit's states. x < T(y):
+    auto lessStep = [&](unsigned bit, unsigned state, Z3_ast x, Z3_ast y,
+                        const std::vector<Z3_ast> &lower) {
+      unsigned next = std::min(state + 1, window);
+      if (state == 0)
+        return select(y,
+                      bit == 0 ? falseValue : select(x, lower[next], trueValue),
+                      select(x, falseValue, lower[state]));
+      if (state != window)
+        return select(bit == 0 ? falseValue : y,
+                      select(x, lower[next], trueValue),
+                      select(x, falseValue, lower[next]));
+      return select(x, falseValue, lower[state]);
+    };
+    // T(x) == T(y): equal leading ones and kept windows; bit 0 never counts.
+    auto equalStep = [&](unsigned bit, unsigned state, Z3_ast x, Z3_ast y,
+                         const std::vector<Z3_ast> &lower) {
+      if (bit == 0 || state == window)
+        return lower[state];
+      unsigned next = std::min(state + 1, window);
+      Z3_ast same = state == 0 ? select(x, lower[next], lower[0]) : lower[next];
+      if (Z3_is_eq_ast(context, x, y))
+        return same;
+      Z3_ast differ = Z3_is_eq_ast(context, x, falseValue) ? y
+                      : Z3_is_eq_ast(context, y, falseValue)
+                          ? x
+                          : Z3_mk_xor(context, x, y);
+      return select(differ, falseValue, same);
+    };
+    auto run = [&](auto step, Z3_ast base, const std::vector<Z3_ast> &x,
+                   const std::vector<Z3_ast> &y) {
+      std::vector<Z3_ast> lower(window + 1, base), current(window + 1);
+      for (unsigned bit = 0; bit != width; ++bit) {
+        for (unsigned state = 0; state <= window; ++state)
+          current[state] = step(bit, state, x[bit], y[bit], lower);
+        lower.swap(current);
+      }
+      return lower.front();
+    };
+    // The same automata over two negative coordinates' magnitudes, without
+    // materializing their two's complement: magnitude bit i is ~r[i] unless
+    // r[i-1:0] is zero, in which case it is r[i] and all lower bits are zero.
+    // Each layer tests those two carry conditions first and continues in a
+    // family where that operand's remaining bits are known zero.
+    auto runNegated = [&](auto step, Z3_ast base, const Operand &xr,
+                          const Operand &yr) {
+      std::vector<Z3_ast> zero(window + 1), any(window + 1), xZero(window + 1),
+          yZero(window + 1);
+      std::vector<Z3_ast> lowerAny(window + 1, base),
+          lowerXZero(window + 1, base), lowerYZero(window + 1, base),
+          lowerZero(window + 1, base);
+      for (unsigned bit = 0; bit != width; ++bit) {
+        Z3_ast xFlipped = Z3_mk_not(context, xr.bits[bit]);
+        Z3_ast yFlipped = Z3_mk_not(context, yr.bits[bit]);
+        for (unsigned state = 0; state <= window; ++state) {
+          // Both magnitudes are zero from this bit down: a constant.
+          zero[state] = step(bit, state, falseValue, falseValue, lowerZero);
+          xZero[state] =
+              select(yr.lowerZero[bit],
+                     step(bit, state, falseValue, yr.bits[bit], lowerZero),
+                     step(bit, state, falseValue, yFlipped, lowerXZero));
+          yZero[state] =
+              select(xr.lowerZero[bit],
+                     step(bit, state, xr.bits[bit], falseValue, lowerZero),
+                     step(bit, state, xFlipped, falseValue, lowerYZero));
+          any[state] = select(
+              xr.lowerZero[bit],
+              select(yr.lowerZero[bit],
+                     step(bit, state, xr.bits[bit], yr.bits[bit], lowerZero),
+                     step(bit, state, xr.bits[bit], yFlipped, lowerXZero)),
+              select(yr.lowerZero[bit],
+                     step(bit, state, xFlipped, yr.bits[bit], lowerYZero),
+                     step(bit, state, xFlipped, yFlipped, lowerAny)));
+        }
+        lowerAny.swap(any);
+        lowerXZero.swap(xZero);
+        lowerYZero.swap(yZero);
+        lowerZero.swap(zero);
+      }
+      return lowerAny.front();
+    };
+    Operand a = operand(lhs), b = operand(rhs);
+    Z3_ast sameSign = Z3_mk_eq(context, a.negative, b.negative);
+    Z3_ast bothZero = conjunction(a.zero, b.zero);
+    // value(p) < value(q); -inf precedes every value except itself.
+    auto less = [&](const Operand &p, const Operand &q) {
+      Z3_ast finite = Z3_mk_ite(
+          context, sameSign,
+          Z3_mk_ite(context, p.negative, runNegated(lessStep, falseValue, q, p),
+                    run(lessStep, falseValue, p.bits, q.bits)),
+          conjunction(p.negative, Z3_mk_not(context, bothZero)));
+      return Z3_mk_ite(context, q.infinite, falseValue,
+                       disjunction(p.infinite, finite));
+    };
+    auto equal = [&]() {
+      Z3_ast finite = Z3_mk_ite(
+          context, sameSign,
+          Z3_mk_ite(context, a.negative, runNegated(equalStep, trueValue, a, b),
+                    run(equalStep, trueValue, a.bits, b.bits)),
+          bothZero);
+      return Z3_mk_ite(context, b.infinite, a.infinite,
+                       conjunction(Z3_mk_not(context, a.infinite), finite));
+    };
+    switch (opcode) {
+    case TALOS_RT_RANDOM_LT_V1:
+      return less(a, b);
+    case TALOS_RT_RANDOM_GT_V1:
+      return less(b, a);
+    case TALOS_RT_RANDOM_LE_V1:
+      return Z3_mk_not(context, less(b, a));
+    case TALOS_RT_RANDOM_GE_V1:
+      return Z3_mk_not(context, less(a, b));
+    case TALOS_RT_RANDOM_EQ_V1:
+      return equal();
+    case TALOS_RT_RANDOM_NE_V1:
+      return Z3_mk_not(context, equal());
+    default:
+      return nullptr;
+    }
+  }
+
   Bits realBinary(uint8_t opcode, Bits lhs, Bits rhs, unsigned width) {
     switch (opcode) {
     case TALOS_RT_RANDOM_LOGICAL_AND_V1:
@@ -820,6 +995,45 @@ public:
       return {nullptr, width};
     if (lhs.width == rhs.width && opcode >= TALOS_RT_RANDOM_EQ_V1 &&
         opcode <= TALOS_RT_RANDOM_LT_V1) {
+      if (lhs.coordinate && rhs.coordinate &&
+          Z3_is_eq_sort(context, Z3_get_sort(context, lhs.coordinate),
+                        Z3_get_sort(context, rhs.coordinate))) {
+        unsigned rankWidth =
+            Z3_get_bv_sort_size(context, Z3_get_sort(context, lhs.coordinate));
+        Z3_ast predicate = compareCoordinates(
+            opcode, lhs.coordinate, rhs.coordinate, rankWidth, lhs.width);
+        if (!predicate)
+          return {nullptr, width};
+        // A frozen arm is IEEE state: compare it through the existing
+        // coordinate-to-payload or IEEE paths on that guard only.
+        auto active = [](Bits input) {
+          input.coordinateGuard = input.coordinateState = nullptr;
+          return input;
+        };
+        auto frozen = [](Bits input) {
+          input.value = input.coordinateState;
+          input.coordinate = input.coordinateGuard = input.coordinateState =
+              nullptr;
+          return input;
+        };
+        auto compare = [&](Bits a, Bits b) -> Z3_ast {
+          Bits result = realBinary(opcode, a, b, width);
+          return result.value ? truth(result) : nullptr;
+        };
+        if (rhs.coordinateGuard) {
+          Z3_ast state = compare(active(lhs), frozen(rhs));
+          if (!state)
+            return {nullptr, width};
+          predicate = Z3_mk_ite(context, rhs.coordinateGuard, predicate, state);
+        }
+        if (lhs.coordinateGuard) {
+          Z3_ast state = compare(frozen(lhs), rhs);
+          if (!state)
+            return {nullptr, width};
+          predicate = Z3_mk_ite(context, lhs.coordinateGuard, predicate, state);
+        }
+        return boolean(predicate, width);
+      }
       if (lhs.coordinate && rhs.representation && !rhs.coordinate) {
         unsigned rankWidth =
             Z3_get_bv_sort_size(context, Z3_get_sort(context, lhs.coordinate));
