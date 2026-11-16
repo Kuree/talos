@@ -2818,14 +2818,29 @@ FailureOr<bool> makeNativeEvalPlan(
                     safeDestination),
                 mask);
           };
+          Value positionedValue = position(staged64);
+          Value positionedUnknown = position(stagedUnknown64);
+          if (twoState && stagedHasUnknown) {
+            // This runtime ABI capture is becoming generated scalar staging.
+            // Preserve the same X/Z handoff as direct packed lowering; a
+            // selected two-state body need not have a two-state payload
+            // (IEEE 1800-2023 4.9.4, 10.4.2).
+            Block *before = nbaBuilder.getInsertionBlock();
+            Block *continuation =
+                before->splitBlock(nbaBuilder.getInsertionPoint());
+            nbaBuilder.setInsertionPointToEnd(before);
+            emitGeneratedNBAUnknownHandoff(nbaBuilder, call.getLoc(),
+                                            root->second, positionedUnknown,
+                                            continuation);
+          }
           Value accumulator = LLVM::AddressOfOp::create(
               nbaBuilder, call.getLoc(), pointer,
               staticNBAPlan.generatedAccumulators[root->second]);
           if (root->second < staticNBAPlan.trackTransients.size() &&
               staticNBAPlan.trackTransients[root->second])
             emitGeneratedNBATransient(nbaBuilder, call.getLoc(), accumulator, 0,
-                                      mask, position(staged64),
-                                      position(stagedUnknown64));
+                                      mask, positionedValue,
+                                      positionedUnknown);
           auto mergeField = [&, &call = call](size_t fieldOffset,
                                               Value positioned) {
             Value address = nbaFieldGEP(nbaBuilder, call.getLoc(), accumulator,
@@ -2845,9 +2860,9 @@ FailureOr<bool> makeNativeEvalPlan(
                                   8);
           };
           mergeField(offsetof(talos_rt_generated_nba_accumulator_256, value),
-                     position(staged64));
+                     positionedValue);
           mergeField(offsetof(talos_rt_generated_nba_accumulator_256, unknown),
-                     position(stagedUnknown64));
+                     positionedUnknown);
           Value maskAddress = nbaFieldGEP(
               nbaBuilder, call.getLoc(), accumulator,
               offsetof(talos_rt_generated_nba_accumulator_256, write_mask));
@@ -6811,7 +6826,8 @@ FailureOr<bool> makeNativeEvalPlan(
       storeRoot(stateValue, offset, root.bit_width, newValue);
       if (!forcedTwoStateEval)
         storeRoot(stateUnknown, offset, root.bit_width, newUnknown);
-      if (fixedWriteMask == 0 && !fullRootStage) {
+      if (!staticNBAPlan.generatedCompactStages[rootIndex] ||
+          (fixedWriteMask == 0 && !fullRootStage)) {
         LLVM::StoreOp::create(
             builder, location, llvmConstant(builder, location, i64, 0),
             nbaFieldGEP(
@@ -7502,10 +7518,17 @@ FailureOr<bool> makeNativeEvalPlan(
       Value oldUnknown =
           loadRoot(schedule::StatePlane::Unknown,
                    staticNBAPlan.generatedOffsets[rootIndex], root.bit_width);
+      // The destination certificate survives this barrier and later writes
+      // can use a different mask. Prove the entire canonical root known
+      // when latching it; a per-update four-state check needs only its mask
+      // (IEEE 1800-2023 6.3.1, 10.4.2, 11.5.1).
+      Value knownMask = arith::SelectOp::create(
+          builder, location, knownEntry->getArgument(2), writeMask,
+          llvmConstant(builder, location, i64, scalarMask(root.bit_width)));
       Value relevantUnknown = arith::AndIOp::create(
           builder, location,
           arith::OrIOp::create(builder, location, stagedUnknown, oldUnknown),
-          writeMask);
+          knownMask);
       Value hasUnknown = arith::CmpIOp::create(
           builder, location, arith::CmpIPredicate::ne, relevantUnknown,
           llvmConstant(builder, location, i64, 0));
@@ -7916,6 +7939,7 @@ FailureOr<bool> makeNativeEvalPlan(
       module, "talos_rt_v1_scheduler_priority_signal_pending", i32, {pointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_queue_aot_checkpoint",
                            i32, {pointer, i32, i32, pointer});
+  materializeNativeNBAMetadataExport(module, staticNBAPlan, scalarRootsByWord);
   return true;
 }
 

@@ -58,6 +58,7 @@
 // NBAKNOWN-NEXT: llvm.return %[[NO]] : i1
 
 // A fixed-only design skips the NBA barrier when its bitmap is empty, then
+// exports compact capture metadata only after a four-state fallback, and
 // checks for dirty local route proofs at the coordinator boundary.
 // BARRIER-LABEL: llvm.func @__talos_eval_dispatch_v1(
 // BARRIER: llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1
@@ -68,6 +69,7 @@
 // BARRIER-NEXT: llvm.cond_br %[[EMPTY]], ^[[DONE:bb[0-9]+]](%[[OK]] : i32), ^[[COMMIT:bb[0-9]+]]
 // BARRIER-NEXT: ^[[COMMIT]]:
 // BARRIER: ^[[DONE]](%[[STATUS:.*]]: i32):
+// BARRIER-NEXT: llvm.call @__talos_eval_export_nba_metadata_on_return_v1() : () -> ()
 // BARRIER-NEXT: %[[BOUNDARY:.*]] = llvm.call @__talos_eval_route_promotion_boundary_v1(%[[STATUS]]) : (i32) -> i32
 // BARRIER-NEXT: llvm.br ^[[EXIT:bb[0-9]+]](%[[BOUNDARY]] : i32)
 // BARRIER: ^[[EXIT]](%[[RESULT:.*]]: i32):

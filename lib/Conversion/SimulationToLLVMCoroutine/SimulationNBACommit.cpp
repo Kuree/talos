@@ -14,6 +14,192 @@ using namespace mlir;
 
 namespace talos::detail {
 
+void materializeNativeNBAMetadataExport(
+    ModuleOp module, const NativeStaticNBAPlan &plan,
+    ArrayRef<SmallVector<uint32_t>> rootsByWord) {
+  if (schedule::has<schedule::Field::EvalRuntimeCalendar>(module))
+    return;
+  SmallVector<std::pair<uint32_t, SmallVector<uint32_t>>> words;
+  for (auto [word, roots] : llvm::enumerate(rootsByWord)) {
+    SmallVector<uint32_t> compact;
+    for (uint32_t root : roots)
+      if (plan.generatedCompactStages[root])
+        compact.push_back(root);
+    if (!compact.empty())
+      words.push_back({static_cast<uint32_t>(word), std::move(compact)});
+  }
+  if (words.empty())
+    return;
+  // IEEE 1800-2023 4.5 and 10.4.2: switching barrier executors must carry
+  // every captured NBA, including siblings of an exceptional four-state
+  // owner. Only the dirty index is authoritative for compact captures. Export
+  // its derived fields at the boundary, without applying or resampling data.
+  // The runtime reads those fields for pending work, barrier regions and
+  // handoffs, so stale exported validity must be cleared as well. Visit only
+  // words with a compact dirty bit or a previously exported root.
+  OpBuilder b(module.getContext());
+  auto loc = module.getLoc();
+  auto ptr = LLVM::LLVMPointerType::get(module.getContext());
+  auto i8 = b.getI8Type(), i32 = b.getI32Type(), i64 = b.getI64Type();
+  constexpr StringLiteral name = "__talos_eval_export_nba_metadata_v1";
+  constexpr StringLiteral exportedName = "__talos_eval_nba_exported_roots_v1";
+  constexpr StringLiteral liveName = "__talos_eval_nba_exported_live_v1";
+  b.setInsertionPointToStart(module.getBody());
+  LLVM::GlobalOp::create(b, loc, LLVM::LLVMArrayType::get(i64, words.size()),
+                         false, LLVM::Linkage::Internal, exportedName,
+                         b.getZeroAttr(RankedTensorType::get(
+                             {static_cast<int64_t>(words.size())}, i64)),
+                         8);
+  LLVM::GlobalOp::create(b, loc, i8, false, LLVM::Linkage::Internal, liveName,
+                         b.getI8IntegerAttr(0), 1);
+  b.setInsertionPointToEnd(module.getBody());
+  auto function = LLVM::LLVMFuncOp::create(
+      b, loc, name,
+      LLVM::LLVMFunctionType::get(LLVM::LLVMVoidType::get(module.getContext()),
+                                  {}, false));
+  function.setLinkage(LLVM::Linkage::Internal);
+  Block *current = function.addEntryBlock(b);
+  b.setInsertionPointToStart(current);
+  Value dirty =
+      LLVM::AddressOfOp::create(b, loc, ptr, "__talos_aot_nba_dirty_roots_v1");
+  Value summary = LLVM::AddressOfOp::create(b, loc, ptr,
+                                            "__talos_aot_nba_dirty_summary_v1");
+  Value exported = LLVM::AddressOfOp::create(b, loc, ptr, exportedName);
+  Value live = llvmConstant(b, loc, i64, 0);
+  for (auto [slot, entry] : llvm::enumerate(words)) {
+    auto &[word, roots] = entry;
+    uint64_t compactMask = 0;
+    for (uint32_t root : roots)
+      compactMask |= uint64_t{1} << (root % 64);
+    Value bits = arith::AndIOp::create(
+        b, loc,
+        LLVM::LoadOp::create(b, loc, i64,
+                             byteGEP(b, loc, dirty, uint64_t{word} * 8), 8),
+        llvmConstant(b, loc, i64, compactMask));
+    Value shadowAddress = byteGEP(b, loc, exported, uint64_t{slot} * 8);
+    Value previous = LLVM::LoadOp::create(b, loc, i64, shadowAddress, 8);
+    Block *visit = new Block, *next = new Block;
+    next->addArgument(i64, loc);
+    function.getBody().push_back(visit);
+    function.getBody().push_back(next);
+    cf::CondBranchOp::create(
+        b, loc,
+        arith::CmpIOp::create(b, loc, arith::CmpIPredicate::ne,
+                              arith::OrIOp::create(b, loc, bits, previous),
+                              llvmConstant(b, loc, i64, 0)),
+        visit, ValueRange{}, next, ValueRange{live});
+    b.setInsertionPointToStart(visit);
+    for (uint32_t root : roots) {
+      Value selected = arith::AndIOp::create(
+          b, loc, bits, llvmConstant(b, loc, i64, uint64_t{1} << (root % 64)));
+      Value present =
+          arith::CmpIOp::create(b, loc, arith::CmpIPredicate::ne, selected,
+                                llvmConstant(b, loc, i64, 0));
+      Value accumulator = LLVM::AddressOfOp::create(
+          b, loc, ptr, plan.generatedAccumulators[root]);
+      auto field = [&](uint64_t offset) {
+        return nbaFieldGEP(b, loc, accumulator, offset);
+      };
+      Value maskAddress =
+          field(offsetof(talos_rt_generated_nba_accumulator_256, write_mask));
+      Value mask =
+          plan.generatedFixedWriteMasks[root]
+              ? llvmConstant(b, loc, i64, plan.generatedFixedWriteMasks[root])
+              : LLVM::LoadOp::create(b, loc, i64, maskAddress, 8).getResult();
+      LLVM::StoreOp::create(
+          b, loc,
+          arith::SelectOp::create(b, loc, present, mask,
+                                  llvmConstant(b, loc, i64, 0)),
+          maskAddress, 8);
+      LLVM::StoreOp::create(
+          b, loc, arith::ExtUIOp::create(b, loc, i32, present),
+          field(offsetof(talos_rt_generated_nba_accumulator_256, valid)), 4);
+      LLVM::StoreOp::create(
+          b, loc, llvmConstant(b, loc, i32, plan.generatedCommitRegions[root]),
+          field(offsetof(talos_rt_generated_nba_accumulator_256, exec_region)),
+          4);
+      Value page = byteGEP(b, loc, summary, uint64_t{root / 4096} * 8);
+      Value old = LLVM::LoadOp::create(b, loc, i64, page, 8);
+      Value added = arith::SelectOp::create(
+          b, loc, present,
+          llvmConstant(b, loc, i64, uint64_t{1} << ((root / 64) % 64)),
+          llvmConstant(b, loc, i64, 0));
+      LLVM::StoreOp::create(b, loc, arith::OrIOp::create(b, loc, old, added),
+                            page, 8);
+    }
+    LLVM::StoreOp::create(b, loc, bits, shadowAddress, 8);
+    cf::BranchOp::create(b, loc, next,
+                         ValueRange{arith::OrIOp::create(b, loc, live, bits)});
+    b.setInsertionPointToStart(next);
+    live = next->getArgument(0);
+  }
+  LLVM::StoreOp::create(
+      b, loc,
+      arith::ExtUIOp::create(
+          b, loc, i8,
+          arith::CmpIOp::create(b, loc, arith::CmpIPredicate::ne, live,
+                                llvmConstant(b, loc, i64, 0))),
+      LLVM::AddressOfOp::create(b, loc, ptr, liveName), 1);
+  LLVM::ReturnOp::create(b, loc, ValueRange{});
+  // Export while eval still owns its captures: on return, or immediately
+  // before its exceptional canonical barrier. The runtime callback also
+  // drains runtime-owned accumulators, whose dirty bits do not prove a live
+  // generated capture. Exporting there would resurrect a consumed shadow.
+  //
+  // A coordinator that returns without yielding has committed its staging
+  // (talos_rt_native_schedule_plan.runtime_yield), so its return only needs
+  // to clear fields an earlier export left live. A yield keeps staging
+  // intact for the runtime to inspect and must export it.
+  constexpr StringLiteral guardedName =
+      "__talos_eval_export_nba_metadata_on_return_v1";
+  b.setInsertionPointToEnd(module.getBody());
+  auto guarded = LLVM::LLVMFuncOp::create(
+      b, loc, guardedName,
+      LLVM::LLVMFunctionType::get(LLVM::LLVMVoidType::get(module.getContext()),
+                                  {}, false));
+  guarded.setLinkage(LLVM::Linkage::Internal);
+  Block *guardEntry = guarded.addEntryBlock(b);
+  Block *exportBlock = new Block, *done = new Block;
+  guarded.getBody().push_back(exportBlock);
+  guarded.getBody().push_back(done);
+  b.setInsertionPointToStart(guardEntry);
+  Value needed = arith::CmpIOp::create(
+      b, loc, arith::CmpIPredicate::ne,
+      LLVM::LoadOp::create(b, loc, i8,
+                           LLVM::AddressOfOp::create(b, loc, ptr, liveName), 1),
+      llvmConstant(b, loc, i8, 0));
+  if (module.lookupSymbol(evalRuntimeYieldName)) {
+    Value word = LLVM::LoadOp::create(
+        b, loc, i32, LLVM::AddressOfOp::create(b, loc, ptr, evalRuntimeYieldName),
+        alignof(uint32_t));
+    for (uint32_t yielded :
+         {uint32_t{TALOS_RT_RUNTIME_YIELD_STAGED},
+          uint32_t{TALOS_RT_RUNTIME_YIELD_DEFERRED}})
+      needed = arith::OrIOp::create(
+          b, loc, needed,
+          arith::CmpIOp::create(b, loc, arith::CmpIPredicate::eq, word,
+                                llvmConstant(b, loc, i32, yielded)));
+  }
+  cf::CondBranchOp::create(b, loc, needed, exportBlock, ValueRange{}, done,
+                           ValueRange{});
+  b.setInsertionPointToStart(exportBlock);
+  LLVM::CallOp::create(b, loc, TypeRange{}, name, ValueRange{});
+  cf::BranchOp::create(b, loc, done);
+  b.setInsertionPointToStart(done);
+  LLVM::ReturnOp::create(b, loc, ValueRange{});
+  if (auto dispatch = module.lookupSymbol<LLVM::LLVMFuncOp>(evalDispatchName))
+    dispatch.walk([&](LLVM::ReturnOp ret) {
+      b.setInsertionPoint(ret);
+      LLVM::CallOp::create(b, loc, TypeRange{}, guardedName, ValueRange{});
+    });
+  module.walk([&](LLVM::CallOp call) {
+    if (call.getCallee() != "__talos_aot_runtime_nba_commit_v1")
+      return;
+    b.setInsertionPoint(call);
+    LLVM::CallOp::create(b, loc, TypeRange{}, name, ValueRange{});
+  });
+}
+
 void emitScalarNBACommitLoop(OpBuilder &b, ModuleOp module,
                              LLVM::LLVMFuncOp function, Block *exit,
                              Value region, const NativeStaticNBAPlan &plan,
@@ -108,7 +294,8 @@ void emitScalarNBACommitLoop(OpBuilder &b, ModuleOp module,
                                     : 72;
       regions[index] = plan.generatedCommitRegions[index];
       fixedMasks[index] = plan.generatedFixedWriteMasks[index];
-      clear[index] = !fixedMasks[index] && !plan.generatedFullRootStages[index];
+      clear[index] = !plan.generatedCompactStages[index] ||
+                     (!fixedMasks[index] && !plan.generatedFullRootStages[index]);
       transients[index] = plan.trackTransients[index] ? widths[index] : 0;
       starts[index] = watchMasks.size();
       for (const auto &entry : fanout) {

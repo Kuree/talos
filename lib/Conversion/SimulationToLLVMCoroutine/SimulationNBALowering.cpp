@@ -25,6 +25,45 @@
 using namespace mlir;
 
 namespace talos::detail {
+// A guarded two-state body can still produce X/Z at an individual capture
+// (for example, from a four-state temporary or an invalid read). Its NBA
+// barrier must preserve those captured bits even when the destination has a
+// cached knownness certificate (LRM 4.9.4, 10.4.2). Both fixed and dynamic
+// generated stages must carry this handoff; a dynamic stage passes only the
+// unknown bits that actually overlap its destination.
+void emitGeneratedNBAUnknownHandoff(OpBuilder &r, Location loc, uint32_t root,
+                                    Value unknown, Block *continuation) {
+  auto i64 = r.getI64Type();
+  auto pointer = LLVM::LLVMPointerType::get(r.getContext());
+  Block *head = r.getInsertionBlock();
+  Block *staged =
+      r.createBlock(head->getParent(), continuation->getIterator());
+  r.setInsertionPointToEnd(head);
+  Value hasUnknown = arith::CmpIOp::create(
+      r, loc, arith::CmpIPredicate::ne, unknown,
+      llvmConstant(r, loc, unknown.getType(), 0));
+  cf::CondBranchOp::create(r, loc, hasUnknown, staged, ValueRange{},
+                           continuation, ValueRange{});
+  r.setInsertionPointToEnd(staged);
+  LLVM::StoreOp::create(
+      r, loc, llvmConstant(r, loc, r.getI8Type(), 1),
+      LLVM::AddressOfOp::create(r, loc, pointer, evalStepFourStateFallbackName),
+      1);
+  Value roots = byteGEP(
+      r, loc,
+      LLVM::AddressOfOp::create(r, loc, pointer, evalStepFourStateNBARootsName),
+      uint64_t{root / 64} * sizeof(uint64_t));
+  Value marked = LLVM::LoadOp::create(r, loc, i64, roots, 8);
+  LLVM::StoreOp::create(
+      r, loc,
+      arith::OrIOp::create(
+          r, loc, marked,
+          llvmConstant(r, loc, i64, uint64_t{1} << (root % 64))),
+      roots, 8);
+  cf::BranchOp::create(r, loc, continuation);
+  r.setInsertionPointToStart(continuation);
+}
+
 namespace {
 // LRM 4.3 permits an unobservable immediate update to disappear, but 4.9.4
 // still evaluates its RHS and target. Those are independent SSA producers;
@@ -43,6 +82,19 @@ bool canDropUnreadNBA(sim::SimNBAEnqueueOp op,
   return root != plan->siteRoots.end() &&
          root->second < plan->unreadRoots.size() &&
          plan->unreadRoots[root->second];
+}
+
+static void markGeneratedNBAUnknown(ConversionPatternRewriter &r,
+                                     sim::SimNBAEnqueueOp op, uint32_t root,
+                                     Value unknown) {
+  sim::SimFuncOp function = op->getParentOfType<sim::SimFuncOp>();
+  if (!function ||
+      !schedule::has<schedule::Field::EvalInductiveTwoState>(function))
+    return;
+  Block *head = r.getInsertionBlock();
+  Block *continuation = r.splitBlock(head, r.getInsertionPoint());
+  r.setInsertionPointToEnd(head);
+  emitGeneratedNBAUnknownHandoff(r, op.getLoc(), root, unknown, continuation);
 }
 
 struct PowerNBAArguments {
@@ -901,10 +953,9 @@ public:
          isa<LLVM::LLVMPointerType>(adaptor.getValue().front().getType()));
     bool directGeneratedStage =
         staticallyStaged && rootIndex != UINT32_MAX &&
-        !generatedAccumulator.empty() && rootWidth <= 64 &&
-        *sourceWidth <= 64 && viewOffset && *viewOffset <= rootWidth &&
-        *baseWidth <= rootWidth - *viewOffset && commitRegion != UINT32_MAX &&
-        scalarValue && exactDestinationValidity;
+        !generatedAccumulator.empty() && rootWidth <= 64 && viewOffset &&
+        *viewOffset <= rootWidth && *baseWidth <= rootWidth - *viewOffset &&
+        commitRegion != UINT32_MAX && scalarValue && exactDestinationValidity;
 
     auto widen = [&](Value value) {
       if (isa<LLVM::LLVMPointerType>(value.getType()))
@@ -912,7 +963,7 @@ public:
             rewriter, location,
             IntegerType::get(rewriter.getContext(), *sourceWidth), value, 1);
       auto type = cast<IntegerType>(value.getType());
-      return type.getWidth() == 64
+      return type.getWidth() >= 64
                  ? value
                  : LLVM::ZExtOp::create(rewriter, location, i64, value)
                        .getResult();
@@ -974,25 +1025,38 @@ public:
       Value mask =
           arith::ShLIOp::create(rewriter, location, lowMask, safeDestination);
       Value sourceValue = widen(adaptor.getValue().front());
-      Value sourceUnknown = llvmConstant(rewriter, location, i64, 0);
+      Value sourceUnknown =
+          llvmConstant(rewriter, location, sourceValue.getType(), 0);
       if (adaptor.getValue().size() == 2)
         sourceUnknown = widen(adaptor.getValue()[1]);
       auto position = [&](Value source) {
-        return arith::AndIOp::create(
-            rewriter, location,
-            arith::ShLIOp::create(
-                rewriter, location,
-                arith::ShRUIOp::create(rewriter, location, source, safeSource),
-                safeDestination),
-            mask);
+        // A scalar root may capture a wider part-select. Clip in the source
+        // type before truncating: a negative index can select payload bits
+        // above bit 63 (IEEE 1800-2023 11.5.1, 4.9.4).
+        Value shift = safeSource;
+        if (source.getType() != i64)
+          shift =
+              LLVM::ZExtOp::create(rewriter, location, source.getType(), shift);
+        Value selected =
+            arith::ShRUIOp::create(rewriter, location, source, shift);
+        if (selected.getType() != i64)
+          selected = LLVM::TruncOp::create(rewriter, location, i64, selected);
+        return arith::AndIOp::create(rewriter, location,
+                                     arith::ShLIOp::create(rewriter, location,
+                                                           selected,
+                                                           safeDestination),
+                                     mask);
       };
+      Value positionedValue = position(sourceValue);
+      Value positionedUnknown = position(sourceUnknown);
+      if (adaptor.getValue().size() == 2)
+        markGeneratedNBAUnknown(rewriter, op, rootIndex, positionedUnknown);
       Value accumulator = LLVM::AddressOfOp::create(rewriter, location, pointer,
                                                     generatedAccumulator);
       if (rootIndex < staticPlan->trackTransients.size() &&
           staticPlan->trackTransients[rootIndex])
         emitGeneratedNBATransient(rewriter, location, accumulator, 0, mask,
-                                  position(sourceValue),
-                                  position(sourceUnknown));
+                                  positionedValue, positionedUnknown);
       auto mergeField = [&](size_t fieldOffset, Value positioned) {
         Value address =
             nbaFieldGEP(rewriter, location, accumulator, fieldOffset);
@@ -1009,9 +1073,9 @@ public:
         LLVM::StoreOp::create(rewriter, location, merged, address, 8);
       };
       mergeField(offsetof(talos_rt_generated_nba_accumulator_256, value),
-                 position(sourceValue));
+                 positionedValue);
       mergeField(offsetof(talos_rt_generated_nba_accumulator_256, unknown),
-                 position(sourceUnknown));
+                 positionedUnknown);
       Value maskAddress = nbaFieldGEP(
           rewriter, location, accumulator,
           offsetof(talos_rt_generated_nba_accumulator_256, write_mask));
@@ -1278,6 +1342,12 @@ public:
         site && staticPlan
             ? staticPlan->siteRoots.find(site.getId())
             : llvm::DenseMap<uint64_t, uint32_t>::const_iterator{};
+    // The dirty index represents validity only for a certified generated
+    // capture. Unproved roots retain the canonical fields and page index.
+    compactEvalMetadata &=
+        staticPlan && staticRoot != staticPlan->siteRoots.end() &&
+        staticRoot->second < staticPlan->generatedCompactStages.size() &&
+        staticPlan->generatedCompactStages[staticRoot->second];
     std::optional<uint64_t> destinationValue =
         resolveCFGConstantInteger(adaptor.getDestination().front());
     talos_rt_stable_handle_v1 decoded{};
@@ -1343,43 +1413,8 @@ public:
       // stages unknown bits, send its step to the four-state commit and mark
       // the root so it is not committed as fast two-state data.
       if (!inductiveTwoStateAccess && !generatedAccumulator.empty() &&
-          adaptor.getValue().size() == 2 && function &&
-          ::talos::schedule::has<
-              ::talos::schedule::Field::EvalInductiveTwoState>(function)) {
-        Block *head = rewriter.getInsertionBlock();
-        Block *continuation =
-            rewriter.splitBlock(head, rewriter.getInsertionPoint());
-        Block *staged = rewriter.createBlock(head->getParent(),
-                                             continuation->getIterator());
-        rewriter.setInsertionPointToEnd(head);
-        Value hasUnknown = arith::CmpIOp::create(
-            rewriter, location, arith::CmpIPredicate::ne, unknown,
-            llvmConstant(rewriter, location, i64, 0));
-        cf::CondBranchOp::create(rewriter, location, hasUnknown, staged,
-                                 ValueRange{}, continuation, ValueRange{});
-        rewriter.setInsertionPointToEnd(staged);
-        LLVM::StoreOp::create(
-            rewriter, location,
-            llvmConstant(rewriter, location, rewriter.getI8Type(), 1),
-            LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                      evalStepFourStateFallbackName),
-            1);
-        Value roots =
-            byteGEP(rewriter, location,
-                    LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                              evalStepFourStateNBARootsName),
-                    uint64_t{staticRoot->second / 64} * sizeof(uint64_t));
-        Value marked = LLVM::LoadOp::create(rewriter, location, i64, roots, 8);
-        LLVM::StoreOp::create(
-            rewriter, location,
-            arith::OrIOp::create(
-                rewriter, location, marked,
-                llvmConstant(rewriter, location, i64,
-                             uint64_t{1} << (staticRoot->second % 64))),
-            roots, 8);
-        cf::BranchOp::create(rewriter, location, continuation);
-        rewriter.setInsertionPointToStart(continuation);
-      }
+          adaptor.getValue().size() == 2)
+        markGeneratedNBAUnknown(rewriter, op, staticRoot->second, unknown);
       Value value = widen(adaptor.getValue().front());
       uint32_t homeRegion =
           function ? getRuntimeEventRegion(function.getHomeRegion())

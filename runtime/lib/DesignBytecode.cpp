@@ -2632,6 +2632,10 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
                                                          instruction.auxiliary);
         if (!failed)
           nextEnd = nextStart + static_cast<int64_t>(instruction.auxiliary);
+        // IEEE 1800-2023 11.5.1: a disjoint select is an invalid view, not
+        // an address to encode. Its endpoint can be far outside the stable
+        // handle's offset range even though the signed index is valid.
+        failed |= !failed && (nextStart >= end || nextEnd <= sourceBegin);
         if (failed) {
           start = kInvalidHandleStart;
           end = 0;
@@ -2667,11 +2671,14 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
           start = kInvalidHandleStart;
         } else {
           nextEnd = nextStart + static_cast<int64_t>(instruction.auxiliary);
-          begin = std::max(begin, nextStart);
-          end = std::min(end, nextEnd);
-          start = nextStart;
-          if (begin > end)
-            begin = end;
+          if (nextStart >= end || nextEnd <= begin) {
+            begin = end = 0;
+            start = kInvalidHandleStart;
+          } else {
+            begin = std::max(begin, nextStart);
+            end = std::min(end, nextEnd);
+            start = nextStart;
+          }
         }
       }
       std::memcpy(address + 8, &begin, 8);

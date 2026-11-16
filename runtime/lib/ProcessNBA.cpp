@@ -4484,6 +4484,11 @@ talos_rt_v1_static_nba_direct_commit_guard(talos_rt_context *context) {
          canUseStaticAOTFanout(context) &&
          !context->nativeScheduleExternalWritePending &&
          !context->nativeScheduleDirtyRootsPresent &&
+         // A runtime capture can consume an earlier generated shadow, then
+         // be followed by another generated capture of the same root. Merge
+         // both in execution order before clearing their shared dirty bit
+         // (IEEE 1800-2023 4.6(b), 10.4.2).
+         !context->staticNBAAccumulatorsPending &&
          nativeStaticSpecializationEnvironmentClean(context) &&
          (!plan->specialization_fast || *plan->specialization_fast != 0);
 }

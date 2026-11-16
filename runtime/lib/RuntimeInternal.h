@@ -1607,6 +1607,9 @@ struct SignalSubscriptionDiagnostics {
   uint64_t aotFallbacks = 0;
   uint64_t aotCheckpoints = 0;
   uint64_t aotTerminalCheckpoints = 0;
+  // Count actual insertions into the general NBA event queue. Generated
+  // accumulators and eval's ordered captures do not use this queue.
+  uint64_t nbaQueueEnqueues = 0;
 };
 
 // Three packed edge planes with allocation-free storage for common signals up
@@ -2835,6 +2838,8 @@ struct talos_rt_context {
             : std::min(scheduledNBARegionLowerBound, update.execRegion);
     scheduledNBAs.push_back(std::move(update));
     scheduledNBARegionLowerBound = lower;
+    if (signalDiagnosticsEnabled)
+      ++signalDiagnostics.nbaQueueEnqueues;
   }
   // Path-delay events have one live entry per destination bit. Keeping them
   // in an ordered keyed calendar lets pulse rejection remove a superseded

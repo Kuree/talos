@@ -1,14 +1,17 @@
 // RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-compute-fusion,talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),convert-talos-sim-processes-to-llvm-coroutines)' -o %t.mlir
-// RUN: FileCheck %s --implicit-check-not='@__talos_eval_nba_commit_{{(widths|shifts|classes|regions|fixed_masks|clear|direct)}}_v1' < %t.mlir
+// RUN: FileCheck %s --implicit-check-not='@__talos_eval_nba_commit_{{(widths|shifts|classes|regions|fixed_masks|direct)}}_v1' < %t.mlir
 // RUN: talos-opt %s --mlir-disable-threading --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-compute-fusion,talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),convert-talos-sim-processes-to-llvm-coroutines)' | diff %t.mlir -
 // RUN: talos-opt %t.mlir --canonicalize --cse | FileCheck %s --check-prefix=FOLDED
 
 // Uniform integer columns become constants before native partitioning. This
 // includes zero shifts and nonzero width masks, but never the accumulator
 // pointer column. The ninth observer has a different trigger and mask; those
-// mixed columns must retain their indexed loads. NBA order and four-state
+// mixed columns must retain their indexed loads. Its canonical capture also
+// needs explicit metadata clearing; the private compact captures do not.
+// NBA order and four-state
 // payloads are unchanged (IEEE 1800-2023 4.3, 4.6, 6.3.1, 10.4.2).
 // CHECK-DAG: llvm.mlir.global internal constant @__talos_eval_nba_commit_accumulators_v1() {{.*}} : !llvm.array<9 x ptr>
+// CHECK-DAG: llvm.mlir.global internal constant @__talos_eval_nba_commit_clear_v1(dense<[0, 0, 0, 0, 0, 0, 0, 0, 1]>
 // CHECK-DAG: llvm.mlir.global internal constant @__talos_eval_nba_commit_edges_v1(dense<[0, 0, 0, 0, 0, 0, 0, 0, 1]>
 // CHECK-DAG: llvm.mlir.global internal constant @__talos_eval_nba_commit_watch_masks_v1(dense<[255, 255, 255, 255, 255, 255, 255, 255, 1]>
 // CHECK-DAG: llvm.mlir.global internal constant @__talos_eval_nba_commit_transients_v1(dense<[255, 255, 255, 255, 255, 255, 255, 255, 0]>

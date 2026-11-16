@@ -110,6 +110,7 @@ FailureOr<NativeStaticNBAPlan> buildNativeStaticNBAPlan(
     plan.generatedAccumulators.emplace_back();
     plan.generatedOffsets.push_back(bound->offset);
     plan.generatedCommitRegions.push_back(UINT32_MAX);
+    plan.generatedCompactStages.push_back(false);
     plan.generatedFullRootStages.push_back(false);
     plan.generatedFixedWriteMasks.push_back(0);
     if (bound->width <= TALOS_RT_GENERATED_NBA_MAX_BITS)
@@ -611,6 +612,11 @@ FailureOr<NativeStaticNBAPlan> buildNativeStaticNBAPlan(
       plan.generatedFixedWriteMasks[root] =
           fixedMask[root] ? writeMasks[root] : 0;
     }
+  for (uint32_t root = 0; root != plan.roots.size(); ++root)
+    plan.generatedCompactStages[root] =
+        eligible[root] && seen[root] && !hasUnmappedEnqueue &&
+        plan.mergeSafeRoots[root] &&
+        stateLayout.directHandles.contains(plan.roots[root].static_state);
   // LRM 4.3 permits an inert update to disappear, but equality at enqueue is
   // insufficient when a blocking writer can intervene before NBA replay.
   // Use instantiated process effects, including called tasks and aliases, to

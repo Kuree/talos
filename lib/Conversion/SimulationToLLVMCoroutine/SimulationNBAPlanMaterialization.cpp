@@ -27,6 +27,7 @@ materializeGeneratedNBAAccumulators(ModuleOp module,
   if (plan.generatedAccumulators.size() != plan.roots.size() ||
       plan.generatedOffsets.size() != plan.roots.size() ||
       plan.generatedCommitRegions.size() != plan.roots.size() ||
+      plan.generatedCompactStages.size() != plan.roots.size() ||
       plan.generatedFullRootStages.size() != plan.roots.size() ||
       plan.generatedFixedWriteMasks.size() != plan.roots.size())
     return module.emitError("generated NBA accumulator plan is malformed");
@@ -59,9 +60,11 @@ materializeGeneratedNBAAccumulators(ModuleOp module,
     if (module.lookupSymbol<LLVM::GlobalOp>(name))
       return module.emitError("generated NBA accumulator symbol is duplicated");
     builder.setInsertionPointToStart(module.getBody());
+    // The hot scalar value/unknown pair occupies the first 64 bytes. Keep
+    // it on one cache line independent of neighboring globals' sizes.
     auto global =
         LLVM::GlobalOp::create(builder, location, storageType, false,
-                               LLVM::Linkage::Internal, name, Attribute{}, 32);
+                               LLVM::Linkage::Internal, name, Attribute{}, 64);
     Block *initializer = new Block;
     global.getInitializerRegion().push_back(initializer);
     builder.setInsertionPointToStart(initializer);

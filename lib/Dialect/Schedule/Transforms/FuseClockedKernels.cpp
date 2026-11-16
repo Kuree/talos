@@ -171,16 +171,23 @@ bool isWrite(schedule::ComputeEffectKind kind) {
          kind == schedule::ComputeEffectKind::NBA;
 }
 
-/// The storage root of a whole-variable, constant-address handle.
-std::optional<uint64_t> wholeStorageRoot(Value value,
-                                         const analysis::HandleFacts &facts) {
+/// The storage or net root of a whole-object, constant-address handle.
+std::optional<uint64_t> wholeRoot(Value value,
+                                  const analysis::HandleFacts &facts) {
   auto found = facts.find(value);
   if (found == facts.end() || !found->second.descriptor ||
-      found->second.resource != schedule::ComputeResourceKind::Storage ||
       found->second.dynamic || found->second.low != 0 ||
       found->second.width != found->second.rootWidth)
     return std::nullopt;
-  return *found->second.descriptor;
+  return ActivationMemoryAnalysis::getRoot(found->second.resource,
+                                           *found->second.descriptor);
+}
+
+std::optional<uint64_t> wholeStorageRoot(Value value,
+                                         const analysis::HandleFacts &facts) {
+  auto root = wholeRoot(value, facts);
+  return root && *root < ActivationMemoryAnalysis::netRootTag ? root
+                                                              : std::nullopt;
 }
 
 /// The storage root a handle may select, if it is a known storage root.
@@ -1179,10 +1186,15 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
       bool supported = true;
       for (auto [watched, encoded] :
            llvm::zip_equal(anyWait.getWatched(), anyWait.getEdges())) {
-        auto ref = dyn_cast<sim::RefType>(watched.getType());
-        auto root = ref ? wholeStorageRoot(watched, facts) : std::nullopt;
+        Type type = watched.getType();
+        auto ref = dyn_cast<sim::RefType>(type);
+        auto net = dyn_cast<sim::NetType>(type);
+        Type element = ref   ? ref.getElementType()
+                       : net ? net.getElementType()
+                             : Type{};
+        auto root = wholeRoot(watched, facts);
         auto edge = static_cast<sim::EdgeKind>(encoded);
-        if (!ref || !root || !isClockBit(ref.getElementType()) ||
+        if (!element || !root || !isClockBit(element) ||
             (edge != sim::EdgeKind::Posedge &&
              edge != sim::EdgeKind::Negedge)) {
           supported = false;
@@ -2540,8 +2552,18 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
             return;
           auto reference =
               dyn_cast<sim::RefType>(enqueue.getDestination().getType());
+          auto view =
+              enqueue.getDestination().getDefiningOp<sim::SimRefDynExtractOp>();
+          // An overhanging view is legal only as an NBA destination. Keep
+          // its captured update: a ref.store cannot represent this clipping
+          // contract, even when the root is otherwise private (11.5.1).
+          bool overhanging =
+              view && *sim::getPackedWidth(
+                          view.getResult().getType().getElementType()) >
+                          *sim::getPackedWidth(
+                              view.getInput().getType().getElementType());
           if (nested || enqueue.getDelay() || enqueue.getClockingOutputAttr() ||
-              !reference ||
+              !reference || overhanging ||
               reference.getElementType() != enqueue.getValue().getType())
             unsupported.set(*index);
           else

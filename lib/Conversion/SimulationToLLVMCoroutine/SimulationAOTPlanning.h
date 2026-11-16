@@ -502,6 +502,10 @@ buildNativePeriodicAliasPlan(
     mlir::ArrayRef<NativePeriodicClock> periodicClocks);
 mlir::LogicalResult materializeNativePeriodicClockPlan(
     mlir::ModuleOp module, mlir::ArrayRef<NativePeriodicClock> periodicClocks);
+void materializeNativeNBAMetadataExport(
+    mlir::ModuleOp module, const NativeStaticNBAPlan &plan,
+    llvm::ArrayRef<llvm::SmallVector<uint32_t>> rootsByWord);
+
 void emitScalarNBACommitLoop(
     mlir::OpBuilder &builder, mlir::ModuleOp module,
     mlir::LLVM::LLVMFuncOp function, mlir::Block *exit, mlir::Value region,

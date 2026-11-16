@@ -1951,9 +1951,11 @@ materializeNativeEvalDispatch(ModuleOp module,
               builder, location, missingFastRoot,
               llvmConstant(builder, location, builder.getI1Type(), 1)));
     }
-    cf::CondBranchOp::create(builder, location, fastRootsKnown,
-                             fastTwoStateCommit, ValueRange{},
-                             checkCanonicalNBA, ValueRange{});
+    // Known destination certificates persist across ordinary clocks. Keep
+    // the value-only barrier on the hot path; X/Z recovery remains cold.
+    markLikelyTrue(cf::CondBranchOp::create(
+        builder, location, fastRootsKnown, fastTwoStateCommit, ValueRange{},
+        checkCanonicalNBA, ValueRange{}));
     builder.setInsertionPointToStart(checkFallbackNBA);
     // A four-state owner may stage only known values. If its dirty roots have
     // zero canonical and staged unknown bits, rejoin the ordinary handoff:
@@ -1983,9 +1985,9 @@ materializeNativeEvalDispatch(ModuleOp module,
                 llvmConstant(builder, location, builder.getI1Type(), 1),
                 llvmConstant(builder, location, builder.getI1Type(), 0)})
             .getResult();
-    cf::CondBranchOp::create(builder, location, canonicalNBAKnown, latchFastNBA,
-                             ValueRange{}, canonicalTwoStateCommit,
-                             ValueRange{});
+    markLikelyTrue(cf::CondBranchOp::create(
+        builder, location, canonicalNBAKnown, latchFastNBA, ValueRange{},
+        canonicalTwoStateCommit, ValueRange{}));
     builder.setInsertionPointToStart(latchFastNBA);
     markCurrentDirtyRootsFast();
     cf::BranchOp::create(builder, location, fastTwoStateCommit);
@@ -2000,7 +2002,8 @@ materializeNativeEvalDispatch(ModuleOp module,
     cf::BranchOp::create(builder, location, commitJoin,
                          ValueRange{fastTwoStateCall.getResult()});
     builder.setInsertionPointToStart(canonicalTwoStateCommit);
-    markCurrentDirtyRootsFast();
+    // Clearing the current mask can leave X/Z elsewhere in a partial root.
+    // Only the whole-root knownness query above may latch its certificate.
     tryStaticPublication(staticNBAPublicationTwoStateName);
     auto canonicalTwoStateCall = LLVM::CallOp::create(
         builder, location, TypeRange{i32},

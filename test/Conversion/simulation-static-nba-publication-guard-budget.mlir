@@ -11,8 +11,8 @@
 // against its current size. Publication bodies stay eligible for LLVM inlining.
 // INLINE-COUNT-3: limit=800 decision=inline
 // INLINE: guards complete: caller=__talos_eval_dispatch_v1 size={{[0-7][0-9][0-9]}} limit=800
-// MIXED: limit=260 decision=inline
-// MIXED-COUNT-2: limit=260 decision=fallback
+// MIXED-COUNT-2: limit=260 decision=inline
+// MIXED: limit=260 decision=fallback
 // MIXED: guards complete: caller=__talos_eval_dispatch_v1 size={{2[0-5][0-9]}} limit=260
 // TINY-COUNT-3: limit=1 decision=fallback
 // UNLIMITED-COUNT-3: limit=18446744073709551615 decision=inline

@@ -41,6 +41,10 @@ struct NativeBackendTestPipelineOptions
       llvm::cl::desc("lower as the driver does at this optimization level "
                      "instead of one actor per process (-1)"),
       llvm::cl::init(-1)};
+  Option<std::string> clockedKernels{
+      *this, "clocked-kernels",
+      llvm::cl::desc("clocked kernels: off, immediate, or deferred"),
+      llvm::cl::init("deferred")};
   Option<bool> timing{
       *this, "timing",
       llvm::cl::desc("print native planning traces, as --mlir-timing does"),
@@ -135,7 +139,8 @@ void buildNativeBackendTestPipeline(
         "lower-talos-to-sim{opt-level=" + std::to_string(options.simOptLevel) +
         " vpi=off static-specialization=" +
         std::string(*mode == 3 ? "on" : "auto") +
-        " clocked-kernels=deferred early-symbol-dce=true}";
+        " clocked-kernels=" + options.clockedKernels +
+        " early-symbol-dce=true}";
   }
   std::string pipeline =
       "convert-slang-to-talos,"

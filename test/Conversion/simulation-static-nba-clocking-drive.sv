@@ -1,4 +1,4 @@
-// RUN: talos -emit-slang %s | talos-opt --test-talos-native-backend='scheduler=auto sim-opt-level=3 timing=true' -o /dev/null 2> %t.trace
+// RUN: talos -emit-slang %s | talos-opt --test-talos-native-backend='scheduler=auto sim-opt-level=3 clocked-kernels=off timing=true' -o /dev/null 2> %t.trace
 // RUN: FileCheck %s < %t.trace
 
 // IEEE 1800-2023 14.16: a clocking-block drive updates its signal in the
@@ -10,6 +10,7 @@
 // root"). The registers keep their static roots and run in generated code,
 // also the first declared one, whose descriptor the unrooted commit's
 // placeholder matches.
+// Keep kernels off here so the register NBAs reach static NBA planning.
 module top;
   logic [7:0] q = 8'h05;
   logic clk = 0;

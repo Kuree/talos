@@ -86,6 +86,10 @@ struct NativeStaticNBAPlan {
   // root. Region and full-root coverage are separate proofs: fixed partial
   // writes still require a write mask but not valid/region bookkeeping.
   llvm::SmallVector<uint32_t> generatedCommitRegions;
+  // Every writer uses a clean generated scalar capture. Only these roots may
+  // derive validity from the dirty index inside eval; runtime handoff exports
+  // canonical fields. Region/geometry facts alone do not prove this protocol.
+  llvm::SmallVector<bool> generatedCompactStages;
   llvm::SmallVector<bool> generatedFullRootStages;
   // Nonzero when every reachable direct scalar enqueue writes the same fixed
   // root mask. The accumulator value can then be overwritten instead of
@@ -99,6 +103,15 @@ mlir::Value buildNativeNBAChange(mlir::OpBuilder &builder,
                                  mlir::Location location, uint64_t bitOffset,
                                  unsigned width, mlir::Value value,
                                  mlir::Value unknown);
+
+/// Branch from the builder's block to `continuation`, recording a four-state
+/// NBA handoff when the captured, destination-masked unknown bits are nonzero.
+/// The caller splits the block with its own rewriter; return at the start of
+/// the continuation so subsequent staging uses the same captured operands.
+void emitGeneratedNBAUnknownHandoff(mlir::OpBuilder &builder,
+                                    mlir::Location location, uint32_t root,
+                                    mlir::Value unknown,
+                                    mlir::Block *continuation);
 
 /// Before an NBA write merges into a generated accumulator word, record the
 /// staged bits it overwrites with a different value: OR

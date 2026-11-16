@@ -1180,14 +1180,19 @@ bool emitDirectDynamicPackedStore(
     Value left = resize(highClip, windowType);
     Value right = resize(lowClip, windowType);
     Value shift = resize(fieldBit, windowType);
-    Value mask = arith::ConstantOp::create(
+    Value payloadMask = arith::ConstantOp::create(
         rewriter, location, windowType,
         rewriter.getIntegerAttr(
             windowType,
             APInt::getLowBitsSet(windowType.getWidth(), inputType.getWidth())));
-    mask = arith::ShLIOp::create(
+    Value mask = arith::ShLIOp::create(
         rewriter, location,
-        arith::ShRUIOp::create(rewriter, location, mask, right), left);
+        arith::ShRUIOp::create(rewriter, location, payloadMask, right), left);
+    // The high-clipped target is shifted back into a complete in-root
+    // window. Discard mask bits beyond that window before positioning it in
+    // the plane; otherwise a select crossing the root's end writes into the
+    // next packed variable (IEEE 1800-2023 11.5.1).
+    mask = arith::AndIOp::create(rewriter, location, mask, payloadMask);
     mask = arith::ShLIOp::create(rewriter, location, mask, shift);
     mask = arith::SelectOp::create(
         rewriter, location, valid, mask,
