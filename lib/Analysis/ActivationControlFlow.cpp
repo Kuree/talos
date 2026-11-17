@@ -18,16 +18,94 @@
 #include "talos/Analysis/GraphAlgorithms.h"
 #include "talos/Analysis/OrderedDenseAnalysis.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
+#include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/SCCIterator.h"
+#include "llvm/ADT/SetVector.h"
 
 using namespace mlir;
 namespace talos::analysis {
 
+/// A conditional branch or switch whose every edge reaches the same block with
+/// the same operands, through empty forwarding blocks, is an unconditional
+/// branch. Visiting each block after its successors collapses a whole chain
+/// of such tests (an exhausted case statement whose arms all store the same
+/// value, say) in one sweep. The greedy driver needs one round per link,
+/// because folding a branch does not revisit the branches that target its
+/// block, and without block merging the chain outlasts its iteration limit.
+static void collapseConvergentBranches(Operation *operation) {
+  // The block an edge reaches and its operands, past argument-free blocks
+  // that only branch on. Their operands dominate the forwarding block, hence
+  // also the edge's source.
+  auto forward = [](Block *block, OperandRange operands) {
+    SmallVector<Value> values(operands);
+    llvm::SmallPtrSet<Block *, 8> seen;
+    while (values.empty() && block->getNumArguments() == 0 &&
+           llvm::hasSingleElement(*block) && seen.insert(block).second) {
+      auto branch = dyn_cast<cf::BranchOp>(block->getTerminator());
+      if (!branch)
+        break;
+      values.assign(branch.getDestOperands().begin(),
+                    branch.getDestOperands().end());
+      block = branch.getDest();
+    }
+    return std::pair{block, std::move(values)};
+  };
+  for (Region &region : operation->getRegions()) {
+    if (region.empty())
+      continue;
+    SmallVector<Block *> order(llvm::post_order(&region.front()));
+    for (Block *block : order) {
+      Operation *terminator = block->getTerminator();
+      SmallVector<std::pair<Block *, SmallVector<Value>>> targets;
+      Value condition;
+      if (auto branch = dyn_cast<cf::CondBranchOp>(terminator)) {
+        condition = branch.getCondition();
+        targets.push_back(
+            forward(branch.getTrueDest(), branch.getTrueDestOperands()));
+        targets.push_back(
+            forward(branch.getFalseDest(), branch.getFalseDestOperands()));
+      } else if (auto choice = dyn_cast<cf::SwitchOp>(terminator)) {
+        condition = choice.getFlag();
+        targets.push_back(forward(choice.getDefaultDestination(),
+                                  choice.getDefaultOperands()));
+        for (auto [index, destination] :
+             llvm::enumerate(choice.getCaseDestinations()))
+          targets.push_back(
+              forward(destination, choice.getCaseOperands(index)));
+      } else {
+        continue;
+      }
+      if (!llvm::all_equal(targets))
+        continue;
+      OpBuilder builder(terminator);
+      cf::BranchOp::create(builder, terminator->getLoc(), targets.front().first,
+                           targets.front().second);
+      terminator->erase();
+      // The test may now be dead; erasing it lets this block forward too. An
+      // op is queued at most once (several operands may share a definition),
+      // and an erased op had no uses, so nothing queues it again.
+      llvm::SetVector<Operation *> dead;
+      if (Operation *definition = condition.getDefiningOp())
+        dead.insert(definition);
+      while (!dead.empty()) {
+        Operation *candidate = dead.pop_back_val();
+        if (!isOpTriviallyDead(candidate))
+          continue;
+        for (Value operand : candidate->getOperands())
+          if (Operation *definition = operand.getDefiningOp())
+            dead.insert(definition);
+        candidate->erase();
+      }
+    }
+  }
+}
+
 LogicalResult canonicalizeActivationControlFlow(Operation *operation) {
+  collapseConvergentBranches(operation);
   RewritePatternSet patterns(operation->getContext());
-  operation->getContext()
-      ->getLoadedDialect<sim::TalosSimulationDialect>()
-      ->getCanonicalizationPatterns(patterns);
+  if (auto *simulation = operation->getContext()
+                             ->getLoadedDialect<sim::TalosSimulationDialect>())
+    simulation->getCanonicalizationPatterns(patterns);
   for (RegisteredOperationName name :
        operation->getContext()->getRegisteredOperations())
     if (name.getDialectNamespace() == "arith" ||

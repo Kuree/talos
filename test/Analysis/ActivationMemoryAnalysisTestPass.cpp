@@ -60,6 +60,33 @@ public:
   }
 };
 
+class ActivationCanonicalizeTestPass
+    : public PassWrapper<ActivationCanonicalizeTestPass,
+                         OperationPass<ModuleOp>> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ActivationCanonicalizeTestPass)
+  StringRef getArgument() const final {
+    return "test-talos-activation-canonicalize";
+  }
+  StringRef getDescription() const final {
+    return "print canonicalized disposable activation CFGs";
+  }
+  void runOnOperation() final {
+    getOperation().walk([&](func::FuncOp function) {
+      if (function.isExternal())
+        return;
+      OwningOpRef<func::FuncOp> copy(cast<func::FuncOp>(function->clone()));
+      bool converged =
+          succeeded(talos::analysis::canonicalizeActivationControlFlow(*copy));
+      llvm::errs() << "canonicalize @" << function.getSymName()
+                   << " converged=" << converged << '\n';
+      copy->print(llvm::errs());
+      llvm::errs() << '\n';
+    });
+    markAllAnalysesPreserved();
+  }
+};
+
 class ActivationControlFlowTestPass
     : public PassWrapper<ActivationControlFlowTestPass,
                          OperationPass<ModuleOp>> {
@@ -735,6 +762,7 @@ void talos::registerActivationMemoryAnalysisTestPass() {
   PassRegistration<RepeatableActivationTestPass>();
   PassRegistration<SourceMemoryForwardingTestPass>();
   PassRegistration<ActivationControlFlowTestPass>();
+  PassRegistration<ActivationCanonicalizeTestPass>();
   PassRegistration<RegionValueDependencyTestPass>();
   PassRegistration<ActivationMemoryTestPass>();
   PassRegistration<ActivationRegionTestPass>();
