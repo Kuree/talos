@@ -2492,6 +2492,13 @@ FailureOr<sim::SimFuncOp> materializeStraightLineKernel(
         });
     if (!retains)
       continue;
+    // Unlike always_comb, an `always @(list)` procedure waits until a change
+    // occurs on its list before it runs (IEEE 1800-2023 9.2.2.2.2, 9.4.2).
+    // Its armed form skips the body until its arming copy has seen that
+    // first event, so a startup run of the kernel leaves its retained state
+    // untouched.
+    if (schedule::has<schedule::Field::ArmedCombinational>(candidate.function))
+      continue;
     if (candidate.function.getEntryKind() != sim::EntryKind::AlwaysComb)
       return reject("region: retained state startup kind");
     // IEEE 1800-2023 9.2.2.2: retained state must not execute before the
@@ -2500,6 +2507,23 @@ FailureOr<sim::SimFuncOp> materializeStraightLineKernel(
     if (!retainedStartup)
       semanticOwner = candidate.function;
     retainedStartup = true;
+  }
+  // The kernel runs once at startup, as always_comb does at time zero after
+  // all initial and always procedures have started (9.2.2.2), whatever its
+  // owner. Do not let an armed `always` member name it; prefer an always_comb
+  // member so the kernel keeps always_comb handling.
+  if (!retainedStartup &&
+      schedule::has<schedule::Field::ArmedCombinational>(semanticOwner)) {
+    auto unarmed = llvm::make_filter_range(candidates, [](Candidate &c) {
+      return !schedule::has<schedule::Field::ArmedCombinational>(c.function);
+    });
+    auto comb = llvm::find_if(unarmed, [](Candidate &c) {
+      return c.function.getEntryKind() == sim::EntryKind::AlwaysComb;
+    });
+    if (comb != unarmed.end())
+      semanticOwner = comb->function;
+    else if (!unarmed.empty())
+      semanticOwner = unarmed.begin()->function;
   }
   SmallVector<NamedAttribute> attributes;
   if (IntegerAttr codeUnit = semanticOwner.getCodeUnitIdAttr())

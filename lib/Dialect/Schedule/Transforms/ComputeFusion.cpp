@@ -50,12 +50,19 @@ ConvexActivationGraph::ConvexActivationGraph(
         indices.try_emplace(fragment.getFunction().getAttr(), indices.size());
     auto function =
         symbols.lookup<sim::SimFuncOp>(fragment.getFunction().getValue());
+    // An armed `always @(list)` block runs its body and then waits on its
+    // list (ArmEventCombinational.cpp), the shape of an always_comb with its
+    // inferred sensitivity list (IEEE 1800-2023 9.2.2.2, 9.4.2), so its
+    // fragments share one owner as well.
     bool finite =
         function && (function.getEntryKind() == sim::EntryKind::AlwaysComb ||
                      function.getEntryKind() == sim::EntryKind::Continuous ||
                      function.getEntryKind() == sim::EntryKind::AlwaysLatch ||
                      function.getEntryKind() == sim::EntryKind::PortInput ||
-                     function.getEntryKind() == sim::EntryKind::PortOutput);
+                     function.getEntryKind() == sim::EntryKind::PortOutput ||
+                     (function.getEntryKind() == sim::EntryKind::Always &&
+                      schedule::has<schedule::Field::ArmedCombinational>(
+                          function)));
     if (inserted)
       found->second = successors.size();
     unsigned owner = finite && !inserted ? found->second : successors.size();
