@@ -2470,15 +2470,24 @@ void schedulerSignalTransition(talos_rt_context *context, uint64_t bitOffset,
     ContextMutexLock lock(context);
     if (context->schedulerStatus != TALOS_RT_OK)
       return;
+    // A range inside one static or automatic state has every bit in range,
+    // so its edge masks can be built a word at a time.
     bool packedRange = true;
-    uint32_t staticID = 0;
-    int64_t staticOffset = 0;
-    if (packedRange && decodeNativeStatic(bitOffset, staticID, staticOffset)) {
-      const NativeStaticState *state = findNativeStaticState(context, staticID);
+    uint32_t stateID = 0;
+    int64_t stateOffset = 0;
+    if (decodeNativeStatic(bitOffset, stateID, stateOffset)) {
+      const NativeStaticState *state = findNativeStaticState(context, stateID);
       packedRange =
-          state && staticOffset >= 0 &&
-          static_cast<uint64_t>(staticOffset) <= state->bitWidth &&
-          bitWidth <= state->bitWidth - static_cast<uint64_t>(staticOffset);
+          state && stateOffset >= 0 &&
+          static_cast<uint64_t>(stateOffset) <= state->bitWidth &&
+          bitWidth <= state->bitWidth - static_cast<uint64_t>(stateOffset);
+    } else if (decodeNativeAutomatic(bitOffset, stateID, stateOffset)) {
+      auto found = context->nativeAutomaticStates.find(stateID);
+      packedRange =
+          found != context->nativeAutomaticStates.end() && stateOffset >= 0 &&
+          static_cast<uint64_t>(stateOffset) <= found->second.bitWidth &&
+          bitWidth <=
+              found->second.bitWidth - static_cast<uint64_t>(stateOffset);
     } else {
       packedRange = false;
     }
