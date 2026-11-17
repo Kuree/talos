@@ -31,6 +31,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 #include <algorithm>
@@ -318,6 +319,9 @@ struct FunctionInfo {
   /// Functions this one starts as an independent process, directly or through
   /// a zero-time call. Indices into `ProgramAnalysis::functions`.
   SmallVector<unsigned> spawns;
+  /// The processes each resolved `process.event_pending` query may name.
+  /// Indices into `ProgramAnalysis::functions`; unresolved queries are absent.
+  DenseMap<Operation *, SmallVector<unsigned>> pendingTargets;
 };
 
 schedule::ComputeTriggerKind getTriggerKind(sim::EdgeKind edge) {
@@ -442,13 +446,17 @@ SmallVector<ComputeEffect> collectDirectEffects(const FunctionInfo &info,
           effects.push_back({schedule::ComputeEffectKind::Read});
           effects.push_back({schedule::ComputeEffectKind::Write});
         })
-        .Case<sim::SimEventSnapshotMaskOp, sim::SimProcessEventPendingOp>(
-            [&](auto) {
-              // Signal stores can synchronously latch an occurrence, even
-              // before the waiting process can run in its home region
-              // (1801-2018 9.7.3).
-              effects.push_back({schedule::ComputeEffectKind::Read});
-            })
+        .Case<sim::SimEventSnapshotMaskOp>([&](auto) {
+          // Signal stores can synchronously latch an occurrence, even before
+          // the waiting process can run in its home region (1801-2018 9.7.3).
+          effects.push_back({schedule::ComputeEffectKind::Read});
+        })
+        .Case<sim::SimProcessEventPendingOp>([&](auto op) {
+          // A query whose target processes are known reads their wait inputs
+          // (appendPendingReads); any other query may observe any latch.
+          if (!info.pendingTargets.count(op))
+            effects.push_back({schedule::ComputeEffectKind::Read});
+        })
         .Case<sim::SimSuspendChangeOp>([&](auto op) {
           appendEffect(info, schedule::ComputeEffectKind::Watch,
                        op.getWatched(), effects,
@@ -606,6 +614,29 @@ ComputeEffect substituteObserverEffect(const ComputeEffect &effect,
   return {effect.kind, target, effect.trigger, effect.deferred};
 }
 
+/// The data a `process.event_pending` query on `target` depends on. The
+/// query reads the target's latched occurrence. An occurrence is a value
+/// change of a waited expression, not of an operand alone, or a named event
+/// trigger (IEEE 1800-2023 9.4.2); the target consumes it by resuming, which
+/// is scheduling rather than data. Reading every watch and read of the
+/// target, a superset of its wait and observer inputs, covers that decision.
+/// A disable iff revoker queries a canceller waiting on the unsampled disable
+/// condition (16.12), so it reads that condition's current operands. A watch
+/// or read through the target's own formal names nothing in the querying
+/// process, so it stays an unknown read.
+void appendPendingReads(const FunctionInfo &target,
+                        SmallVectorImpl<ComputeEffect> &effects) {
+  for (const ComputeEffect &effect : target.summary) {
+    if (effect.kind != schedule::ComputeEffectKind::Watch &&
+        effect.kind != schedule::ComputeEffectKind::Read)
+      continue;
+    if (effect.target.formal)
+      effects.push_back({schedule::ComputeEffectKind::Read});
+    else
+      effects.push_back({schedule::ComputeEffectKind::Read, effect.target});
+  }
+}
+
 struct ProgramAnalysis {
   explicit ProgramAnalysis(sim::SimDesignOp design)
       : classDispatch(design), connectivity(design),
@@ -678,6 +709,81 @@ struct ProgramAnalysis {
   }
 };
 
+/// The processes a `process.event_pending` handle may name, as indices into
+/// `functions`. Process objects are created only when processes are spawned
+/// (IEEE 1800-2023 9.7). A handle is resolved when it is a spawn result in the
+/// querying function, or an entry capture of a process started only by
+/// spawns that each pass a spawn result there. Any other source, such as
+/// self() (9.7), a stored handle, or a call or other symbol use of the
+/// querying function, leaves the query unresolved.
+DenseMap<Operation *, SmallVector<unsigned>>
+resolvePendingTargets(sim::SimDesignOp design,
+                      ArrayRef<sim::SimFuncOp> functions) {
+  DenseMap<Operation *, SmallVector<unsigned>> resolved;
+  SmallVector<sim::SimProcessEventPendingOp> queries;
+  design.getBody().walk(
+      [&](sim::SimProcessEventPendingOp query) { queries.push_back(query); });
+  if (queries.empty())
+    return resolved;
+  llvm::StringMap<unsigned> indices;
+  for (auto [index, function] : llvm::enumerate(functions))
+    indices[sim::SimFuncOp(function).getSymName()] = index;
+  llvm::StringMap<SmallVector<sim::SimSpawnOp>> spawnSites;
+  llvm::StringSet<> otherUses;
+  design.getBody().walk([&](Operation *operation) {
+    if (auto spawn = dyn_cast<sim::SimSpawnOp>(operation)) {
+      spawnSites[spawn.getCallee()].push_back(spawn);
+      return;
+    }
+    operation->getAttrDictionary().walk([&](SymbolRefAttr reference) {
+      otherUses.insert(reference.getRootReference().getValue());
+    });
+  });
+  auto spawned = [&](Value handle) -> std::optional<unsigned> {
+    auto spawn = handle.getDefiningOp<sim::SimSpawnOp>();
+    if (!spawn)
+      return std::nullopt;
+    auto found = indices.find(spawn.getCallee());
+    if (found == indices.end())
+      return std::nullopt;
+    return found->second;
+  };
+  for (sim::SimProcessEventPendingOp query : queries) {
+    Value handle = query.getProcess();
+    if (std::optional<unsigned> target = spawned(handle)) {
+      resolved[query] = {*target};
+      continue;
+    }
+    auto argument = dyn_cast<BlockArgument>(handle);
+    if (!argument || !argument.getOwner()->isEntryBlock())
+      continue;
+    auto owner = dyn_cast<sim::SimFuncOp>(argument.getOwner()->getParentOp());
+    if (!owner || otherUses.contains(owner.getSymName()))
+      continue;
+    auto sites = spawnSites.find(owner.getSymName());
+    if (sites == spawnSites.end())
+      continue;
+    SmallVector<unsigned> targets;
+    bool known = true;
+    for (sim::SimSpawnOp site : sites->second) {
+      std::optional<unsigned> target;
+      if (argument.getArgNumber() < site.getNumOperands())
+        target = spawned(site.getOperand(argument.getArgNumber()));
+      if (!target) {
+        known = false;
+        break;
+      }
+      targets.push_back(*target);
+    }
+    if (!known)
+      continue;
+    llvm::sort(targets);
+    targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+    resolved[query] = std::move(targets);
+  }
+  return resolved;
+}
+
 ProgramAnalysis analyzeProgram(sim::SimDesignOp design) {
   ProgramAnalysis analysis(design);
 
@@ -686,6 +792,8 @@ ProgramAnalysis analyzeProgram(sim::SimDesignOp design) {
   llvm::sort(functions, [](sim::SimFuncOp lhs, sim::SimFuncOp rhs) {
     return lhs.getSymName() < rhs.getSymName();
   });
+  DenseMap<Operation *, SmallVector<unsigned>> pendingTargets =
+      resolvePendingTargets(design, functions);
   // Handle facts are read-only per-function solves. Compute them
   // concurrently, then summarize in name order.
   SmallVector<analysis::HandleFacts> provenances(functions.size());
@@ -706,6 +814,11 @@ ProgramAnalysis analyzeProgram(sim::SimDesignOp design) {
                           {schedule::ComputeEffectKind::Write}};
     } else {
       info.provenance = std::move(provenance);
+      function.walk([&](sim::SimProcessEventPendingOp query) {
+        auto targets = pendingTargets.find(query);
+        if (targets != pendingTargets.end())
+          info.pendingTargets.insert({query, targets->second});
+      });
       info.baseEffects = collectDirectEffects(info);
       analysis.expandConnectivity(info.baseEffects);
     }
@@ -765,6 +878,10 @@ ProgramAnalysis analyzeProgram(sim::SimDesignOp design) {
       if (evaluator != analysis.functionIndex.end())
         callsFrom[caller].push_back(evaluator->second);
     }
+    // A pending-event query reads its target's completed summary.
+    for (const SmallVector<unsigned> &targets :
+         llvm::make_second_range(analysis.functions[caller].pendingTargets))
+      llvm::append_range(callsFrom[caller], targets);
   }
 
   SmallVector<unsigned> callNodes;
@@ -880,6 +997,10 @@ ProgramAnalysis analyzeProgram(sim::SimDesignOp design) {
           llvm::append_range(nextSpawns,
                              analysis.functions[evaluator->second].spawns);
         }
+        for (const SmallVector<unsigned> &targets :
+             llvm::make_second_range(info.pendingTargets))
+          for (unsigned target : targets)
+            appendPendingReads(analysis.functions[target], nextEffects);
         analysis.expandConnectivity(nextEffects);
         normalizeEffects(nextEffects);
         llvm::sort(nextSpawns);
@@ -941,6 +1062,14 @@ collectFragmentEffects(const ProgramAnalysis &analysis,
            analysis.functions[evaluator->second].summary)
         effects.push_back(substituteObserverEffect(effect, binding, info));
     }
+  }
+  for (sim::SimProcessEventPendingOp query :
+       block.getOps<sim::SimProcessEventPendingOp>()) {
+    auto targets = info.pendingTargets.find(query);
+    if (targets == info.pendingTargets.end())
+      continue;
+    for (unsigned target : targets->second)
+      appendPendingReads(analysis.functions[target], effects);
   }
   analysis.expandConnectivity(effects);
   normalizeEffects(effects);
