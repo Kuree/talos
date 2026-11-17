@@ -437,7 +437,10 @@ module {
     ^resume:
       cf.br ^outer(%start : i8)
     }
-    // CHECK-LABEL: regions @loaded_initializer valid=0 reason=termination
+    // A start loaded before the inner loop is fixed while it runs, so any i8
+    // start reaches the limit without overflow and termination holds. The
+    // index range that start allows is too wide for an exact memory model.
+    // CHECK-LABEL: regions @loaded_initializer valid=0 reason=memory effects
     simulation.code_unit.decl 11 in 0 always_comb hierarchy "loaded_initializer"
     simulation.func @loaded_initializer(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 4 : i32, code_unit_id = 11 : i64} {
       %src = simulation.context.storage %ctx[0] : !simulation.ref<!array>

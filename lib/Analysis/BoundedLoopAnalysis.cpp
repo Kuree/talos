@@ -266,14 +266,38 @@ matchLogicInductionTest(Value condition) {
                             {isTrue.getOperation()}};
 }
 
-/// Infer invariant expressions through dialect interfaces. Only constants and
-/// enclosing inductions are leaves: neither mutable design state nor a value
-/// carried by the current loop can establish a finite recurrence.
+/// Infer the range of an expression that is invariant while the loop at
+/// `header` runs. Constants and enclosing inductions keep their exact ranges,
+/// and dialect interfaces refine expressions over them. Any other SSA value
+/// computed before the loop is immutable while it runs, as is a pure
+/// expression of such values (for example a field of a by-value subroutine
+/// argument, 13.5.1); without a tighter range it may hold any value of its
+/// integer type, which still bounds a monotone induction. A load in the loop
+/// or a value the loop carries is not invariant.
 static std::optional<ConstantIntRanges>
 inferInvariantRange(Value value, Block *header, ArrayRef<BoundedLoop> enclosing,
                     DominanceInfo &dominance) {
   DenseMap<Value, ConstantIntRanges> ranges;
   DenseSet<Value> visiting;
+  DenseMap<Value, bool> invariant;
+  auto isInvariant = [&](Value value, auto &isInvariant) -> bool {
+    if (auto found = invariant.find(value); found != invariant.end())
+      return found->second;
+    invariant[value] = false; // Values carried around a cycle are not.
+    bool result = false;
+    Block *block = value.getParentBlock();
+    if (block != header && dominance.properlyDominates(block, header))
+      result = true;
+    else if (Operation *definition = value.getDefiningOp())
+      result = definition->getNumRegions() == 0 &&
+               isMemoryEffectFree(definition) &&
+               isSpeculatable(definition) &&
+               llvm::all_of(definition->getOperands(), [&](Value operand) {
+                 return isInvariant(operand, isInvariant);
+               });
+    invariant[value] = result;
+    return result;
+  };
   auto infer = [&](Value value,
                    auto &infer) -> std::optional<ConstantIntRanges> {
     if (auto found = ranges.find(value); found != ranges.end())
@@ -288,25 +312,28 @@ inferInvariantRange(Value value, Block *header, ArrayRef<BoundedLoop> enclosing,
         return getInductionRange(outer, false);
     Operation *definition = value.getDefiningOp();
     auto interface = dyn_cast_or_null<InferIntRangeInterface>(definition);
-    if (!interface || !isMemoryEffectFree(definition) ||
-        !isSpeculatable(definition) || !visiting.insert(value).second)
-      return std::nullopt;
-    SmallVector<ConstantIntRanges> inputs;
-    for (Value operand : definition->getOperands()) {
-      auto input = infer(operand, infer);
-      if (!input)
-        return std::nullopt;
-      inputs.push_back(*input);
+    if (interface && isMemoryEffectFree(definition) &&
+        isSpeculatable(definition) && visiting.insert(value).second) {
+      SmallVector<ConstantIntRanges> inputs;
+      for (Value operand : definition->getOperands()) {
+        auto input = infer(operand, infer);
+        if (!input)
+          break;
+        inputs.push_back(*input);
+      }
+      visiting.erase(value);
+      if (inputs.size() == definition->getNumOperands())
+        interface.inferResultRanges(
+            inputs, [&](Value result, const ConstantIntRanges &range) {
+              ranges.try_emplace(result, range);
+            });
+      if (auto found = ranges.find(value); found != ranges.end())
+        return found->second;
     }
-    interface.inferResultRanges(
-        inputs, [&](Value result, const ConstantIntRanges &range) {
-          ranges.try_emplace(result, range);
-        });
-    visiting.erase(value);
-    auto found = ranges.find(value);
-    return found == ranges.end()
-               ? std::nullopt
-               : std::optional<ConstantIntRanges>(found->second);
+    auto type = dyn_cast<IntegerType>(value.getType());
+    if (type && isInvariant(value, isInvariant))
+      return ConstantIntRanges::maxRange(type.getWidth());
+    return std::nullopt;
   };
   return infer(value, infer);
 }
