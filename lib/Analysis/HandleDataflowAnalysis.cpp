@@ -285,10 +285,16 @@ public:
                          c.constantAddress;
         // Array selectors validate against their declared parent range before
         // adding its fixed root offset (LRM 7.4.5). A bounded array field is
-        // therefore as direct as a whole-root array. Packed part-selects still
-        // require the whole-root proof because they can overlap a boundary.
+        // therefore as direct as a whole-root array. Packed part-selects need
+        // the whole-root proof unless they are proven contained, because they
+        // can overlap a boundary.
         bool boundedArray = array && !p.dynamic && c.constantAddress &&
                             c.laneKnown && !c.clipped;
+        // A packed part-select proven to lie within its fixed parent cannot
+        // reach the parent's boundary, so it needs no clipping there
+        // (IEEE 1800-2023 11.5.1) and is as direct as a whole-root one.
+        bool containedPacked =
+            !array && !p.dynamic && c.constantAddress && selectorValid;
         auto stride = array ? sim::getArrayElementStorageStride(parentType)
                             : std::optional<uint64_t>{1};
         bool lane = !p.dynamic && c.laneKnown && *width && stride &&
@@ -303,9 +309,10 @@ public:
           c.low = c.width = c.stride = 0;
           c.clipped = false;
         }
-        c.directDynamicSelection =
-            (wholeRoot || boundedArray || c.directDynamicSelection) ? result
-                                                                    : Value{};
+        c.directDynamicSelection = (wholeRoot || boundedArray ||
+                                    containedPacked || c.directDynamicSelection)
+                                       ? result
+                                       : Value{};
         p.dynamic = true;
       }
       put(value);

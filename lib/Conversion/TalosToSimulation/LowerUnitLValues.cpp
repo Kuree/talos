@@ -2031,9 +2031,11 @@ LogicalResult UnitLowering::writeCapturedLValue(CapturedLValue &destination,
     CapturedLValue selected;
     selected.semanticNode = destination.semanticNode;
     selected.type = destination.type;
+    // Here the index has no X/Z bits, so its two-state value selects the same
+    // bits (IEEE 1800-2023 11.5.1). Selecting by it lets integer range
+    // analysis see the in-range test above and prove the reference contained.
     selected.reference = sim::SimRefDynExtractOp::create(
-        builder, location, selectedType, destination.reference,
-        destination.index);
+        builder, location, selectedType, destination.reference, low);
     if (failed(writeCapturedLValue(selected, *converted, false, nonblocking,
                                    location, delay)))
       return failure();

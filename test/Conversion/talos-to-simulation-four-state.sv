@@ -13,7 +13,6 @@
 // CHECK-DAG: simulation.logic.binary sub {{.*}} : !simulation.logic<66>
 // CHECK-DAG: simulation.logic.dyn_extract {{.*}} from {{.*}}!simulation.logic<66>
 // CHECK-DAG: simulation.logic.dyn_extract {{.*}} from {{.*}}i66
-// CHECK-DAG: simulation.ref.dyn_extract {{.*}} from {{.*}}!simulation.logic<66>
 // CHECK-DAG: simulation.ref.dyn_extract {{.*}} from {{.*}}i66
 // CHECK-DAG: simulation.bits.dyn_extract {{.*}} from {{.*}}!simulation.logic<66>
 // CHECK-DAG: simulation.bits.dyn_extract {{.*}} from {{.*}}i66
