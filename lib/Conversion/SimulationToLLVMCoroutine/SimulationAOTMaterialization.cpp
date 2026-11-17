@@ -5776,11 +5776,26 @@ FailureOr<bool> makeNativeEvalPlan(
         module.lookupSymbol<LLVM::GlobalOp>(evalFastNBARootsName),
         builder.getArrayAttr(rootDependencies));
   }
+  // A wide root's waiter without a generated ready bit also needs the node
+  // bitmap: the dynamic commit records its wake there (IEEE 1800-2023 9.4.2).
+  uint64_t directFanoutBits = uint64_t{(mergedFragments.size() + 63) / 64} * 64;
   bool generateGroupedFanout =
-      llvm::any_of(scalarRootsByWord, [&](ArrayRef<uint32_t> roots) {
-        return llvm::any_of(roots, [&](uint32_t rootIndex) {
-          return !fanoutIndicesOf(nbaRoots[rootIndex].static_state).empty();
-        });
+      llvm::any_of(scalarRootsByWord,
+                   [&](ArrayRef<uint32_t> roots) {
+                     return llvm::any_of(roots, [&](uint32_t rootIndex) {
+                       return !fanoutIndicesOf(nbaRoots[rootIndex].static_state)
+                                   .empty();
+                     });
+                   }) ||
+      llvm::any_of(nbaRoots, [&](const talos_rt_static_nba_root &root) {
+        return root.bit_width > 64 &&
+               llvm::any_of(fanoutIndicesOf(root.static_state),
+                            [&](uint32_t fanoutIndex) {
+                              const auto &entry = fanoutEntries[fanoutIndex];
+                              return fanoutRoute(entry) !=
+                                         TALOS_RT_FANOUT_DIRECT ||
+                                     entry.merged_bit >= directFanoutBits;
+                            });
       });
   uint32_t activationWordCount =
       generateGroupedFanout
@@ -7005,6 +7020,65 @@ FailureOr<bool> makeNativeEvalPlan(
       scalarBlocks.push_back(&block);
 
   builder.setInsertionPointToStart(genericNBACommit);
+  // IEEE 1800-2023 4.5, 10.4.2: an NBA update is an update event for every
+  // process sensitive to the root (9.4.2). A static fanout waiter without a
+  // generated ready bit (Runtime route: a finite initial bootstrap, a
+  // Reactive or another runtime-owned actor) is recorded in activatedNodes by
+  // the commits above, whose edge tests are exact. Hand those wakes to the
+  // runtime, which marks a node ready only while its actor still waits at that
+  // continuation. Periodic handoff declines while such a waiter is live, so a
+  // woken actor runs in this time slot.
+  // Only words holding such a waiter's node can be set; test them inline so
+  // a barrier without a runtime-routed wake makes no runtime call.
+  SmallVector<uint64_t> runtimeNodeWords(activationWordCount, 0);
+  for (const talos_rt_static_nba_root &root : staticNBAPlan.roots)
+    for (uint32_t fanoutIndex : fanoutIndicesOf(root.static_state)) {
+      const auto &entry = fanoutEntries[fanoutIndex];
+      bool direct = fanoutRoute(entry) == TALOS_RT_FANOUT_DIRECT &&
+                    entry.merged_bit < directActivationWordCount * 64 &&
+                    directActivationWordCount != 0;
+      if (!direct && entry.compute_node < activationWordCount * 64)
+        runtimeNodeWords[entry.compute_node / 64] |=
+            uint64_t{1} << (entry.compute_node % 64);
+    }
+  if (activatedNodes && llvm::any_of(runtimeNodeWords, [](uint64_t word) {
+        return word != 0;
+      })) {
+    Value any = llvmConstant(builder, location, builder.getI1Type(), 0);
+    for (auto [word, mask] : llvm::enumerate(runtimeNodeWords)) {
+      if (mask == 0)
+        continue;
+      Value activated =
+          LLVM::LoadOp::create(builder, location, i64,
+                               byteGEP(builder, location, activatedNodes,
+                                       uint64_t{word} * sizeof(uint64_t)),
+                               8);
+      any = arith::OrIOp::create(
+          builder, location, any,
+          arith::CmpIOp::create(builder, location, arith::CmpIPredicate::ne,
+                                activated,
+                                llvmConstant(builder, location, i64, 0)));
+    }
+    Block *activate = new Block;
+    Block *activated = new Block;
+    auto &blocks = nbaCommit.getBody().getBlocks();
+    blocks.insertAfter(Region::iterator(genericNBACommit), activate);
+    blocks.insertAfter(Region::iterator(activate), activated);
+    cf::CondBranchOp::create(builder, location, any, activate, ValueRange{},
+                             activated, ValueRange{});
+    builder.setInsertionPointToStart(activate);
+    auto call = LLVM::CallOp::create(
+        builder, location, TypeRange{},
+        SymbolRefAttr::get(context,
+                           "talos_rt_v1_scheduler_activate_static_nodes"),
+        ValueRange{nbaCommitEntry->getArgument(1), activatedNodes,
+                   llvmConstant(builder, location, i32, activationWordCount)});
+    ::talos::schedule::set<
+        ::talos::schedule::Field::EvalRuntimeRoutedPublication>(
+        call, UnitAttr::get(context));
+    cf::BranchOp::create(builder, location, activated);
+    builder.setInsertionPointToStart(activated);
+  }
   if (directActivationWordCount != 0 && !clockKernels.empty()) {
     Value ingress = LLVM::AddressOfOp::create(builder, location, pointer,
                                               evalModelIngressName);

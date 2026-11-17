@@ -320,8 +320,11 @@ bool isEvalClosureRuntimeCall(LLVM::CallOp call, LLVM::LLVMFuncOp function,
   // any calendar. Periodic handoff declines while such a wait is
   // live and a shared calendar drains it in every slot, so a
   // delivered waiter always runs in this time slot.
+  // The NBA barrier hands the same runtime-routed waits to the runtime as
+  // node activations (IEEE 1800-2023 4.5, 10.4.2).
   if ((*callee == "talos_rt_v1_scheduler_static_transition_owned" ||
-       *callee == "talos_rt_v1_scheduler_static_transition") &&
+       *callee == "talos_rt_v1_scheduler_static_transition" ||
+       *callee == "talos_rt_v1_scheduler_activate_static_nodes") &&
       ::talos::schedule::has<
           ::talos::schedule::Field::EvalRuntimeRoutedPublication>(call))
     return true;

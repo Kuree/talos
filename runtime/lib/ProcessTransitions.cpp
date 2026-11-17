@@ -3218,10 +3218,19 @@ extern "C" void talos_rt_v1_scheduler_activate_static_nodes(
     hasNodes |= nodeWords[word] != 0;
   if (!hasNodes)
     return;
-  if ((activeNativeAOTContext != context &&
-       !canUseIndexedExternalAOTFanout(context)) ||
-      (!canUseStaticAOTFanout(context) &&
-       !canUseIndexedExternalAOTFanout(context)) ||
+  // The generated NBA barrier computes these wakes with exact edge tests on
+  // the values it commits (IEEE 1800-2023 9.4.2, 10.4.2). Inside the generated
+  // plan they are node wakes of the runtime-driven node loop even before the
+  // eval island is certified: certification governs exclusive calendar
+  // ownership, not ready nodes, and the checks below still require each actor
+  // to wait at that continuation.
+  bool generatedPlan = activeNativeAOTContext == context &&
+                       !context->nativeScheduleDeoptimized;
+  bool indexedExternal = canUseIndexedExternalAOTFanout(context);
+  bool usable = generatedPlan ||
+                ((activeNativeAOTContext == context || indexedExternal) &&
+                 (canUseStaticAOTFanout(context) || indexedExternal));
+  if (!usable ||
       (context->nativeSchedulePlan->flags &
        (TALOS_RT_NATIVE_SCHEDULE_CLEAN_SUPERSTEP |
         TALOS_RT_NATIVE_SCHEDULE_STATIC_EVAL_ISLAND)) == 0 ||
