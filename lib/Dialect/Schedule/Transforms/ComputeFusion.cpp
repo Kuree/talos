@@ -532,6 +532,25 @@ CombinationalFusionAnalysis::CombinationalFusionAnalysis(
   }
 }
 
+bool CombinationalFusionAnalysis::isExclusiveWriter(
+    StringAttr owner,
+    const analysis::ActivationMemoryAnalysis::Range &range) const {
+  if (unsupported)
+    return false;
+  auto writers = storageWriters.find(range.root);
+  if (writers == storageWriters.end())
+    return false;
+  return llvm::all_of(writers->second, [&](const auto &writer) {
+    auto [function, effect] = writer;
+    if (function == owner)
+      return true;
+    return !effect.getDynamic() && effect.getWidth() &&
+           effect.getLow() <= UINT64_MAX - effect.getWidth() &&
+           (effect.getLow() + effect.getWidth() <= range.low ||
+            range.low + range.width <= effect.getLow());
+  });
+}
+
 namespace {
 using ActivationRange = analysis::ActivationMemoryAnalysis::Range;
 using ActivationRanges = analysis::ActivationMemoryAnalysis::Ranges;

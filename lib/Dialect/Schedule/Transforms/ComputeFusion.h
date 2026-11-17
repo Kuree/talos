@@ -151,6 +151,12 @@ public:
   /// A sensitivity edge carries the whole watch, so test its producer's
   /// actual writes too. Unknown provenance always retains the source edge.
   bool isLiveSensitivityEdge(schedule::ComputeEdgeAttr edge) const;
+  /// Whether `owner` is the only writer of every bit of `range`: no other
+  /// function writes, schedules an NBA to or drives an overlapping bit, and
+  /// no write to its root has an unresolved range.
+  bool isExclusiveWriter(
+      mlir::StringAttr owner,
+      const analysis::ActivationMemoryAnalysis::Range &range) const;
   /// The opaque observer that keeps `root` out of the glitch-insensitive
   /// storage, when one was recorded; diagnostics only.
   mlir::StringAttr getGlitchObserver(uint64_t root) const {

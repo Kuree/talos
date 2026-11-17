@@ -2791,12 +2791,30 @@ FailureOr<sim::SimFuncOp> materializeStraightLineKernel(
     bool ordered = interleaving || slices;
     DenseMap<uint64_t, SmallVector<std::pair<uint64_t, uint64_t>>> groupWrites;
     if (ordered) {
-      for (Candidate &producer : candidates)
-        for (const auto &range :
-             producer.combinationalBody->structured->getMemory()
-                 .getMustWrites())
+      for (Candidate &producer : candidates) {
+        const auto &memory =
+            producer.combinationalBody->structured->getMemory();
+        for (const auto &range : memory.getMustWrites())
           groupWrites[range.root].emplace_back(range.low,
                                                range.low + range.width);
+        // A statement slice order runs every in-kernel read of a range after
+        // its writes. A range only this member writes, even conditionally,
+        // therefore changes only while the kernel runs and before its
+        // readers, and a running process is not waiting on its event control
+        // (9.4.2). Like an always_comb, whose implicit sensitivity excludes
+        // what the block itself writes (IEEE 1800-2023 9.2.2.2.1(b)), the
+        // kernel need not wake on it; keeping it would wake the kernel on its
+        // own conditional outputs, such as a latch's held value. Admission
+        // already rejects non-exclusive writers and keeps incomplete writers
+        // atomic in slice plans (CombinationalFusionAnalysis::analyze); the
+        // exclusivity query re-checks that here, where it is relied on.
+        if (slices)
+          for (const auto &range : memory.getMayWrites())
+            if (combinational.isExclusiveWriter(
+                    producer.function.getSymNameAttr(), range))
+              groupWrites[range.root].emplace_back(range.low,
+                                                   range.low + range.width);
+      }
       for (auto &[root, writes] : groupWrites)
         llvm::sort(writes);
     }

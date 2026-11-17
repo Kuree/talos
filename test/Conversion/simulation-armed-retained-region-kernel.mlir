@@ -7,7 +7,8 @@
 // until a change occurs" (9.2.2.2.2, 9.4.2). The armed form tests its bit
 // before the body, and only its arming copy sets the bit at that first event,
 // so a startup run leaves q untouched and the latch may join the kernel. The
-// always_comb members stay outside the guard and still run at startup.
+// always_comb members stay outside the guard and still run at startup. The
+// kernel wakes on a, en, the bit and b, but not on its own output q.
 // a_latch sorts first among the members, yet the kernel takes comb_y as its
 // always_comb owner. @check only keeps z live.
 // CHECK: simulation.spawn @a_latch_arm(
@@ -15,17 +16,20 @@
 // CHECK: simulation.func private @[[KERNEL]](
 // CHECK-SAME: code_unit_id = 3 : i64
 // CHECK-SAME: entry_kind = 4 : i32
-// CHECK-DAG: %[[Q:.+]] = simulation.context.storage %arg0[2]
+// CHECK-DAG: %[[A:.+]] = simulation.context.storage %arg0[0]
+// CHECK-DAG: %[[EN:.+]] = simulation.context.storage %arg0[1]
+// CHECK-DAG: %[[B:.+]] = simulation.context.storage %arg0[3]
 // CHECK-DAG: %[[ARMED:.+]] = simulation.context.storage %arg0[6]
 // CHECK: ^[[ENTRY:bb[0-9]+]]:
-// CHECK-NEXT: %[[SET:.+]] = simulation.ref.load %[[ARMED]]
-// CHECK-NEXT: cf.cond_br %[[SET]], ^[[BODY:bb[0-9]+]], ^[[REST:bb[0-9]+]]
+// CHECK-DAG: %[[Q:.+]] = simulation.context.storage %arg0[2]
+// CHECK-DAG: %[[SET:.+]] = simulation.ref.load %[[ARMED]]
+// CHECK: cf.cond_br %[[SET]], ^[[BODY:bb[0-9]+]], ^[[REST:bb[0-9]+]]
 // CHECK: ^[[BODY]]:
 // CHECK: simulation.ref.store %{{.+}} to %[[Q]]
 // CHECK: ^[[REST]]:
 // CHECK: %[[Z:.+]] = simulation.context.storage %arg0[5]
 // CHECK: simulation.ref.store %{{.+}} to %[[Z]]
-// CHECK: simulation.suspend.any {{.*}}%[[ARMED]]{{[, ]}}{{.*}} to ^[[ENTRY]]
+// CHECK: simulation.suspend.any %[[A]], %[[EN]], %[[ARMED]], %[[B]] edges [0, 0, 0, 0] to ^[[ENTRY]]
 
 !r = !simulation.ref<i1>
 module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", schedule.native_scheduler = 3 : i32, native.closed_executable} {
