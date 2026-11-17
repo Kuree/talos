@@ -350,6 +350,9 @@ def DetachedControls : ScheduleField<"DetachedControls", "schedule.detached_cont
 def PrioritySignalResume : ScheduleField<"PrioritySignalResume", "schedule.priority_signal_resume", "::mlir::UnitAttr">;
 def ProgramOwnerId : ScheduleField<"ProgramOwnerId", "schedule.program_owner_id", "::mlir::IntegerAttr">;
 def ConcurrentCancel : ScheduleField<"ConcurrentCancel", "schedule.concurrent_cancel", "::mlir::UnitAttr">;
+// IEEE 1800-2023 9.4.2: an `always @(list)` block reshaped body-first with an
+// armed bit (talos-sim-arm-event-combinational).
+def ArmedCombinational : ScheduleField<"ArmedCombinational", "schedule.armed_combinational", "::mlir::UnitAttr">;
 def ConcurrentAbort : ScheduleField<"ConcurrentAbort", "schedule.concurrent_abort", "::mlir::UnitAttr">;
 def ConcurrentCancelLevelTrue : ScheduleField<"ConcurrentCancelLevelTrue", "schedule.concurrent_cancel_level_true", "::mlir::UnitAttr">;
 def ConcurrentAbortLevelTrue : ScheduleField<"ConcurrentAbortLevelTrue", "schedule.concurrent_abort_level_true", "::mlir::UnitAttr">;

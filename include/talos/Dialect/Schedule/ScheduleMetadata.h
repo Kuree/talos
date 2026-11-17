@@ -136,6 +136,7 @@ inline bool pinsOperationBoundary(Field field) {
   case Field::PrioritySignalResume:
   case Field::ProgramOwnerId:
   case Field::ConcurrentCancel:
+  case Field::ArmedCombinational:
   case Field::ConcurrentAbort:
   case Field::ConcurrentCancelLevelTrue:
   case Field::ConcurrentAbortLevelTrue:

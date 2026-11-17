@@ -10,6 +10,7 @@
 
 #include "talos/Analysis/SimulationAnalysis.h"
 #include "talos/Dialect/Native/NativeDialect.h"
+#include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/Transforms/NativeTransforms.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
 
@@ -604,10 +605,15 @@ std::string CombinationalFusionFailure::getMessage() const {
 
 static bool isInterleavableKind(sim::SimFuncOp function) {
   auto kind = function.getEntryKind();
+  // An armed `always @(list)` block is body-first like always_comb, and the
+  // sole writer of its targets as always_comb is (9.2.2.2), which
+  // ArmEventCombinational.cpp proves before marking it.
   return kind == sim::EntryKind::AlwaysComb ||
          kind == sim::EntryKind::Continuous ||
          kind == sim::EntryKind::PortInput ||
-         kind == sim::EntryKind::PortOutput;
+         kind == sim::EntryKind::PortOutput ||
+         (kind == sim::EntryKind::Always &&
+          schedule::has<schedule::Field::ArmedCombinational>(function));
 }
 
 void CombinationalFusionAnalysis::prepareActivations() const {
@@ -700,9 +706,14 @@ std::optional<CombinationalFusionBody> CombinationalFusionAnalysis::analyze(
                isa_and_nonnull<IntegerType, sim::LogicType>(
                    sim::getPackedScalarType(store.getValue().getType()));
       });
-      if (!finalValuesOnly ||
-          function.getEntryKind() != sim::EntryKind::AlwaysComb ||
-          !memory.hasValueDependencies() || !packed)
+      // An armed `always @(list)` block is its targets' sole writer, as
+      // always_comb is (9.2.2.2, ArmEventCombinational.cpp).
+      bool exclusive =
+          function.getEntryKind() == sim::EntryKind::AlwaysComb ||
+          (function.getEntryKind() == sim::EntryKind::Always &&
+           schedule::has<schedule::Field::ArmedCombinational>(function));
+      if (!finalValuesOnly || !exclusive || !memory.hasValueDependencies() ||
+          !packed)
         return reject({Reason::IncompleteWrites});
       idempotent = memory.hasIdempotentFinalState() ||
                    analysis::hasIdempotentStateTransition(

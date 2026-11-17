@@ -109,6 +109,29 @@ def TalosSimFuseComputeFragmentsPass
   ];
 }
 
+def TalosSimArmEventCombinationalPass
+    : Pass<"talos-sim-arm-event-combinational", "talos::sim::SimDesignOp"> {
+  let summary = "Reshape `always @(list)` blocks body-first with an armed bit";
+  let description = [{
+    Gives each root-spawned `always` process whose only wait is one leading
+    change-only event control a two-state design bit, set by a one-shot
+    initial process at the first event of that control (IEEE 1800-2023
+    9.4.2). The block becomes body-first: it runs its body while the bit is
+    set and then waits on its list and the bit, so combinational statement
+    planning can treat it like always_comb. Only blocks that are the sole
+    writer of their targets qualify. Behavior is preserved up to the order of
+    the processes one event wakes (4.7); designs that can observe the extra
+    process or variable (process identity, random-state capture, waveform
+    dumps) are left alone. Skipped without a VPI-off compute graph;
+    invalidates the compute graph when it changes the design.
+  }];
+  let dependentDialects = [
+    "talos::sim::TalosSimulationDialect",
+    "mlir::arith::ArithDialect",
+    "mlir::cf::ControlFlowDialect",
+  ];
+}
+
 def TalosSimFuseObservedProcessesPass
     : Pass<"talos-sim-fuse-observed-processes", "talos::sim::SimDesignOp"> {
   let summary = "Resume all Observed waiters of one clock edge as one process";

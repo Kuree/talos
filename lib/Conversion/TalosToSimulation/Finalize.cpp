@@ -1218,6 +1218,17 @@ static void buildTalosToSimulationPipelineImpl(
           std::move(observedGraphOptions)));
     }
     if (optLevel >= 3) {
+      if (vpiMode == "off") {
+        // IEEE 1800-2023 9.4.2: reshape `always @(list)` blocks body-first
+        // with an armed bit, so statement planning can schedule them.
+        designManager.addPass(createTalosSimArmEventCombinationalPass());
+        TalosSimBuildComputeGraphPassOptions armedGraphOptions;
+        armedGraphOptions.workers = workers;
+        armedGraphOptions.vpi = vpiMode.str();
+        armedGraphOptions.pruneEffectFree = true;
+        designManager.addPass(createTalosSimBuildCurrentComputeGraphPass(
+            std::move(armedGraphOptions)));
+      }
       PlanCombinationalStatementsPassOptions statementOptions;
       statementOptions.componentSections = true;
       designManager.addPass(
