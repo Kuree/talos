@@ -1,5 +1,5 @@
 // RUN: talos-opt %s '--lower-talos-to-sim=opt-level=0' | FileCheck %s
-// RUN: talos-opt %s '--lower-talos-to-sim=opt-level=3' | FileCheck %s
+// RUN: talos-opt %s '--lower-talos-to-sim=opt-level=3 observed-kernels=false' | FileCheck %s
 // RUN: talos-opt %s '--lower-talos-to-sim=opt-level=3' '--encode-talos-sim-to-bytecode=vpi=off' -o /dev/null
 
 // Direct first_match cover sequences use the persistent repetition DFA's

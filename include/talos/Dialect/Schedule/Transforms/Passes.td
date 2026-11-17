@@ -109,6 +109,25 @@ def TalosSimFuseComputeFragmentsPass
   ];
 }
 
+def TalosSimFuseObservedProcessesPass
+    : Pass<"talos-sim-fuse-observed-processes", "talos::sim::SimDesignOp"> {
+  let summary = "Resume all Observed waiters of one clock edge as one process";
+  let description = [{
+    Fuses root-spawned processes whose only wait is an edge wait that resumes
+    in the Observed region, such as concurrent assertions (IEEE 1800-2023
+    4.4.2.5), when they wait for the same edge of the same root. The fused
+    process runs every member's start-up code in turn, waits once, and runs
+    each member's activation in turn, an order of their Observed events that
+    4.7 permits. Members must not depend on their process identity, use
+    random state, or write design state. Skipped when the compute graph has
+    VPI enabled; invalidates the compute graph when it changes the design.
+  }];
+  let dependentDialects = [
+    "talos::sim::TalosSimulationDialect",
+    "mlir::cf::ControlFlowDialect"
+  ];
+}
+
 def TalosSimFuseClockedKernelsPass
     : Pass<"talos-sim-fuse-clocked-kernels", "talos::sim::SimDesignOp"> {
   let summary = "Run each clock edge's processes as one activation with direct NBA stores";

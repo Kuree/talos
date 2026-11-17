@@ -1227,6 +1227,13 @@ static int executeCompilation(const InputArgList &args,
                     "'; expected off, immediate, or deferred");
     valid = false;
   }
+  StringRef observedKernels =
+      args.getLastArgValue(OPT_observed_kernels_EQ, "on");
+  if (observedKernels != "on" && observedKernels != "off") {
+    emitDriverError(Twine("unsupported observed kernels '") + observedKernels +
+                    "'; expected on or off");
+    valid = false;
+  }
   if (const Arg *coverage = args.getLastArg(OPT_coverage, OPT_coverage_EQ)) {
     if (coverage->getOption().matches(OPT_coverage_EQ)) {
       SmallVector<StringRef> metrics;
@@ -1591,7 +1598,8 @@ static int executeCompilation(const InputArgList &args,
           // unrelated native lowering decisions early. Reusable IR/object
           // outputs must retain their open-world host mutation contract.
           /*closedModel=*/native && targetName == "native" && !emitObject &&
-              !emitLLVM && optLevel > 0);
+              !emitLLVM && optLevel > 0,
+          /*observedKernels=*/observedKernels == "on");
     if (failed(passManager.run(*module)) || failed(verify(*module)))
       return 1;
   }

@@ -132,6 +132,10 @@ def clocked_kernels_EQ : Joined<["--"], "clocked-kernels=">,
   Group<Compilation_Group>, MetaVarName<"<off|immediate|deferred>">,
   Values<"off,immediate,deferred">,
   HelpText<"Select clocked kernels with direct NBA stores (default: deferred)">;
+def observed_kernels_EQ : Joined<["--"], "observed-kernels=">,
+  Group<Compilation_Group>, MetaVarName<"<on|off>">,
+  Values<"on,off">,
+  HelpText<"Resume each clock edge's Observed waiters, such as concurrent assertions, as one process (default: on)">;
 def forward_copies_EQ : Joined<["--"], "forward-copies=">,
   Group<Compilation_Group>, MetaVarName<"<on|off|census>">,
   Values<"on,off,census">,

@@ -89,12 +89,16 @@ void buildTalosToSimulationPipeline(mlir::OpPassManager &manager,
 /// a design database reads (see talos-sim-prune-vpi-inventory).
 /// `closedModel` authorizes source proofs that rely on all model mutation
 /// being inventoried; object and reusable IR emission must leave it false.
+/// `observedKernels` resumes the Observed waiters of each clock edge, such as
+/// concurrent assertions, as one process at O1 and above with VPI off (see
+/// talos-sim-fuse-observed-processes).
 void buildTalosToSimulationPipeline(
     mlir::OpPassManager &manager, uint32_t workers, llvm::StringRef vpiMode,
     uint32_t optLevel, llvm::StringRef staticSpecialization,
     bool earlySymbolDCE = true, llvm::StringRef clockedKernels = "deferred",
     llvm::StringRef forwardCopies = "on", bool enableUPF = false,
-    bool pruneVPIInventory = false, bool closedModel = false);
+    bool pruneVPIInventory = false, bool closedModel = false,
+    bool observedKernels = true);
 
 /// Register the aggregate serial/parallel/serial lowering pipeline.
 void registerTalosToSimulationPipeline();

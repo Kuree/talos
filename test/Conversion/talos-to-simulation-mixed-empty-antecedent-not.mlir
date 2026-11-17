@@ -1,5 +1,5 @@
 // RUN: talos-opt %s '--lower-talos-to-sim=opt-level=0' | FileCheck %s
-// RUN: talos-opt %s '--lower-talos-to-sim=opt-level=3' | FileCheck %s
+// RUN: talos-opt %s '--lower-talos-to-sim=opt-level=3 observed-kernels=false' | FileCheck %s
 // RUN: talos-opt %s '--lower-talos-to-sim=opt-level=3' --emit-bytecode -o /dev/null
 module {
   talos.sv.symbol.definition @s0.top attributes {definition_kind = 0 : i32, hierarchical_name = "top", name = "top", node_id = 0 : i64} {

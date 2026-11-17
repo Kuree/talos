@@ -538,6 +538,11 @@ struct TalosToSimulationPipelineOptions
       *this, "clocked-kernels",
       llvm::cl::desc("clocked kernels: off, immediate, or deferred"),
       llvm::cl::init("deferred")};
+  Option<bool> observedKernels{
+      *this, "observed-kernels",
+      llvm::cl::desc(
+          "resume each clock edge's Observed waiters as one process"),
+      llvm::cl::init(true)};
   Option<std::string> forwardCopies{
       *this, "forward-copies",
       llvm::cl::desc("substitute single-driver continuous assignments into "
@@ -883,7 +888,8 @@ static void buildTalosToSimulationPipelineImpl(
     OpPassManager &manager, uint32_t workers, StringRef vpiMode,
     uint32_t optLevel, StringRef staticSpecialization, bool earlySymbolDCE,
     StringRef clockedKernels, bool instrumentVPIFrames, StringRef forwardCopies,
-    bool enableUPF, bool pruneVPIInventory, bool closedModel) {
+    bool enableUPF, bool pruneVPIInventory, bool closedModel,
+    bool observedKernels) {
   TalosSimPreparePassOptions prepareOptions;
   prepareOptions.pruneUnusedCoverage = earlySymbolDCE && vpiMode == "off";
   // Source inventory may outlive executable code. Only a VPI profile needs
@@ -1200,6 +1206,17 @@ static void buildTalosToSimulationPipelineImpl(
       designManager.addPass(createTalosSimBuildCurrentComputeGraphPass(
           std::move(clockedGraphOptions)));
     }
+    if (vpiMode == "off" && observedKernels) {
+      // IEEE 1800-2023 4.4.2.5, 4.7: resume every Observed waiter of one
+      // clock edge, such as the concurrent assertions on that clock, once.
+      designManager.addPass(createTalosSimFuseObservedProcessesPass());
+      TalosSimBuildComputeGraphPassOptions observedGraphOptions;
+      observedGraphOptions.workers = workers;
+      observedGraphOptions.vpi = vpiMode.str();
+      observedGraphOptions.pruneEffectFree = optLevel > 0;
+      designManager.addPass(createTalosSimBuildCurrentComputeGraphPass(
+          std::move(observedGraphOptions)));
+    }
     if (optLevel >= 3) {
       PlanCombinationalStatementsPassOptions statementOptions;
       statementOptions.componentSections = true;
@@ -1270,17 +1287,15 @@ static void buildTalosToSimulationPipelineImpl(
   manager.addPass(createTalosSimFinalizePass());
 }
 
-void buildTalosToSimulationPipeline(OpPassManager &manager, uint32_t workers,
-                                    StringRef vpiMode, uint32_t optLevel,
-                                    StringRef staticSpecialization,
-                                    bool earlySymbolDCE,
-                                    StringRef clockedKernels,
-                                    StringRef forwardCopies, bool enableUPF,
-                                    bool pruneVPIInventory, bool closedModel) {
-  buildTalosToSimulationPipelineImpl(manager, workers, vpiMode, optLevel,
-                                     staticSpecialization, earlySymbolDCE,
-                                     clockedKernels, false, forwardCopies,
-                                     enableUPF, pruneVPIInventory, closedModel);
+void buildTalosToSimulationPipeline(
+    OpPassManager &manager, uint32_t workers, StringRef vpiMode,
+    uint32_t optLevel, StringRef staticSpecialization, bool earlySymbolDCE,
+    StringRef clockedKernels, StringRef forwardCopies, bool enableUPF,
+    bool pruneVPIInventory, bool closedModel, bool observedKernels) {
+  buildTalosToSimulationPipelineImpl(
+      manager, workers, vpiMode, optLevel, staticSpecialization, earlySymbolDCE,
+      clockedKernels, false, forwardCopies, enableUPF, pruneVPIInventory,
+      closedModel, observedKernels);
 }
 
 void buildTalosToSimulationPipeline(OpPassManager &manager) {
@@ -1312,7 +1327,8 @@ void registerTalosToSimulationPipeline() {
             options.clockedKernels.getValue(),
             options.instrumentVPIFrames.getValue(),
             options.forwardCopies.getValue(), options.upf.getValue(),
-            /*pruneVPIInventory=*/false, /*closedModel=*/false);
+            /*pruneVPIInventory=*/false, /*closedModel=*/false,
+            options.observedKernels.getValue());
       });
 }
 

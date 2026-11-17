@@ -1,6 +1,6 @@
 // RUN: talos -emit-slang %s | talos-opt --convert-slang-to-talos '--test-talos-set-module-attributes=attrs="{llvm.data_layout = \"e-m:e-p:64:64-i64:64-n8:16:32:64-S128\", llvm.target_triple = \"x86_64-unknown-linux-gnu\"}"' -o %t.talos.mlir
 // RUN: talos-opt %t.talos.mlir '--lower-talos-to-sim=opt-level=0' | FileCheck %s
-// RUN: talos-opt %t.talos.mlir '--lower-talos-to-sim=opt-level=3' | FileCheck %s
+// RUN: talos-opt %t.talos.mlir '--lower-talos-to-sim=opt-level=3 observed-kernels=false' | FileCheck %s
 // RUN: talos-opt %t.talos.mlir '--lower-talos-to-sim=opt-level=3' '--encode-talos-sim-to-bytecode=vpi=off' -o /dev/null
 
 // REQUIRES: z3

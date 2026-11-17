@@ -2,6 +2,7 @@ add_mlir_library(TalosScheduleTransforms
   PARTIAL_SOURCES_INTENDED
   ComputeFusion.cpp
   FuseClockedKernels.cpp
+  FuseObservedProcesses.cpp
   FuseComputeFragments.cpp
   LowerConditionalReferenceAccesses.cpp
   MaterializeComputeFusion.cpp
