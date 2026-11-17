@@ -85,6 +85,15 @@ public:
   /// Using only these final dependencies requires a separate proof that no
   /// observer can distinguish the intermediate transitions.
   llvm::ArrayRef<Range> getFinalInputs() const { return finalInputs; }
+  /// The final inputs other than an incoming lane copied unchanged into the
+  /// same final lane. This includes every input selecting such a copy.
+  llvm::ArrayRef<Range> getFinalStateInputs() const { return finalStateInputs; }
+  /// No written lane is a final state input. Each written lane then ends
+  /// with either its incoming value or a value of unwritten inputs, chosen by
+  /// unwritten inputs, so repeating the activation with unchanged inputs
+  /// reproduces its final state. Unlike hasIdempotentStateTransition, this
+  /// holds through loops; it is not path-sensitive.
+  bool hasIdempotentFinalState() const;
   bool hasValueDependencies() const { return valid && valueDependencies; }
   /// Per-access, per-output-lane dependence. These facts do not authorize
   /// reordering effects, removing sensitivity, or hiding intermediate writes.
@@ -124,8 +133,8 @@ private:
   unsigned partitions = 0;
   unsigned valueNodes = 0;
   llvm::StringRef dependencyFailure = "not requested";
-  Ranges liveIns, valueInputs, finalInputs, mayWrites, mustWrites,
-      repeatedWrites;
+  Ranges liveIns, valueInputs, finalInputs, finalStateInputs, mayWrites,
+      mustWrites, repeatedWrites;
   llvm::DenseMap<mlir::Operation *, Ranges> reads, writes;
   llvm::DenseSet<mlir::Operation *> privateReads;
   llvm::DenseMap<mlir::Operation *, llvm::SmallVector<Publication>>

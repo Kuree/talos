@@ -364,6 +364,10 @@ public:
                               analysis.getMemory(), handles,
                               idempotenceMaximumOperations)
                        << '\n';
+        if (idempotence && reachingValues && analysis.isValid())
+          llvm::errs() << "  final-state-idempotent="
+                       << analysis.getMemory().hasIdempotentFinalState()
+                       << '\n';
         if (inputs) {
           const auto &memory = analysis.getMemory();
           auto print = [&](StringRef label, auto ranges) {
@@ -387,6 +391,7 @@ public:
                          << '\n';
           print("value-input", memory.getValueInputs());
           print("final-input", memory.getFinalInputs());
+          print("final-state-input", memory.getFinalStateInputs());
           print("must-write", memory.getMustWrites());
           print("may-write", memory.getMayWrites());
         }

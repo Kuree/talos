@@ -704,8 +704,9 @@ std::optional<CombinationalFusionBody> CombinationalFusionAnalysis::analyze(
           function.getEntryKind() != sim::EntryKind::AlwaysComb ||
           !memory.hasValueDependencies() || !packed)
         return reject({Reason::IncompleteWrites});
-      idempotent = analysis::hasIdempotentStateTransition(
-          activation->getActivationFunction(), memory, analysis);
+      idempotent = memory.hasIdempotentFinalState() ||
+                   analysis::hasIdempotentStateTransition(
+                       activation->getActivationFunction(), memory, analysis);
       if (!*idempotent)
         return reject({Reason::IncompleteWrites});
     }
@@ -752,13 +753,17 @@ std::optional<CombinationalFusionBody> CombinationalFusionAnalysis::analyze(
       if (finalValuesOnly &&
           activationRangeCovered(memory.getMayWrites(), read)) {
         if (!idempotent)
-          idempotent = analysis::hasIdempotentStateTransition(
-              activation->getActivationFunction(), memory, analysis);
+          idempotent =
+              memory.hasIdempotentFinalState() ||
+              analysis::hasIdempotentStateTransition(
+                  activation->getActivationFunction(), memory, analysis);
         // The activation keeps every state update. Publication slicing groups
         // all source-local snapshots with their writers in the same slice.
-        // A retained value is a stable parameter on precisely the paths that
-        // use it. Repeating the observer with unchanged inputs cannot count
-        // transitions or expose an earlier state version. Writer exclusivity
+        // Either the path proof shows a retained value is a stable parameter
+        // on precisely the paths that use it, or the value graph shows it
+        // only reaches its own final lane unchanged. Repeating the observer
+        // with unchanged inputs cannot count transitions or expose an earlier
+        // state version. Writer exclusivity
         // and the transitive output-observer closure are still checked below.
         if (*idempotent)
           continue;

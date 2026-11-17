@@ -82,10 +82,14 @@ private:
 struct Influence {
   uint64_t low, width;
   Range source;
+  /// Each lane depends only on the corresponding source lane.
   bool identity;
+  /// Moreover, on every path the lane is that source lane's incoming value,
+  /// unchanged. Lane-aligned bitwise operations keep `identity` only.
+  bool copy = false;
   bool operator==(const Influence &other) const {
     return low == other.low && width == other.width && source == other.source &&
-           identity == other.identity;
+           identity == other.identity && copy == other.copy;
   }
 };
 using Influences = SmallVector<Influence>;
@@ -130,6 +134,8 @@ void normalize(Influences &influences) {
             last.low;
         if (last.identity)
           last.source.width = last.width;
+        // A merged relation is a copy only if every contribution is one.
+        last.copy = last.copy && influence.copy;
         continue;
       }
     }
@@ -188,18 +194,22 @@ struct LaneLink {
   unsigned source;
   uint64_t sourceLow, sourceWidth;
   LaneMapping mapping;
+  /// An identity link that also preserves each lane's value. Lane-aligned
+  /// bitwise operations are identity links but not copies.
+  bool copy = true;
   bool operator==(const LaneLink &other) const {
-    return std::tie(low, width, source, sourceLow, sourceWidth, mapping) ==
-           std::tie(other.low, other.width, other.source, other.sourceLow,
-                    other.sourceWidth, other.mapping);
+    return std::tie(low, width, source, sourceLow, sourceWidth, mapping,
+                    copy) == std::tie(other.low, other.width, other.source,
+                                      other.sourceLow, other.sourceWidth,
+                                      other.mapping, other.copy);
   }
 };
 using LaneLinks = SmallVector<LaneLink>;
 bool linkLess(const LaneLink &a, const LaneLink &b) {
   return std::tie(a.source, a.mapping, a.low, a.sourceLow, a.width,
-                  a.sourceWidth) < std::tie(b.source, b.mapping, b.low,
-                                            b.sourceLow, b.width,
-                                            b.sourceWidth);
+                  a.sourceWidth, a.copy) < std::tie(b.source, b.mapping, b.low,
+                                                    b.sourceLow, b.width,
+                                                    b.sourceWidth, b.copy);
 }
 void normalize(LaneLinks &links) {
   llvm::sort(links, linkLess);
@@ -477,6 +487,9 @@ public:
             project(source->influences, link.sourceLow, link.sourceWidth);
         if (link.mapping == LaneMapping::AllToAll)
           part = spread(sources(part), link.width);
+        else if (!link.copy)
+          for (Influence &influence : part)
+            influence.copy = false;
         llvm::append_range(next, project(part, 0, link.width, link.low));
       }
       auto *state = states[id];
@@ -631,7 +644,8 @@ public:
     auto [it, inserted] = incoming.try_emplace(root, 0);
     if (inserted) {
       it->second = addNode(width, &function.getBody().front(), nullptr);
-      nodes[it->second]->seed.push_back({0, width, {root, 0, width}, true});
+      nodes[it->second]->seed.push_back(
+          {0, width, {root, 0, width}, /*identity=*/true, /*copy=*/true});
       nodes[it->second]->logical = rootLanes.lookup(root);
     }
     return it->second;
@@ -766,14 +780,15 @@ public:
     return node;
   }
   LogicalResult solve(
-      Ranges &inputs, Ranges &finalInputs, const ReachingMap &finalMemory,
-      ArrayRef<Range> finalWrites,
+      Ranges &inputs, Ranges &finalInputs, Ranges &finalStateInputs,
+      const ReachingMap &finalMemory, ArrayRef<Range> finalWrites,
       DenseMap<Operation *, SmallVector<ActivationMemoryAnalysis::Publication>>
           &publications,
       bool inputsOnly = false) {
     // Keep the final reaching version of each written lane distinct from
     // intermediate publications. A whole-array copy inside an induction loop
     // can expose old lanes early and overwrite them before the activation ends.
+    DenseMap<unsigned, Range> finalLanes;
     for (auto range : inputsOnly ? ArrayRef<Range>{} : finalWrites) {
       const ReachingDefinitions *found = finalMemory.find(range.root);
       if (!found)
@@ -782,6 +797,7 @@ public:
           addNode(range.width, &function.getBody().front(), function);
       append(node, projectLinks(found->links, range.low, range.width));
       finalSinks.insert(node);
+      finalLanes.try_emplace(node, range);
     }
     SmallVector<unsigned> representatives = collapseForwarders();
     DataFlowSolver solver(DataFlowConfig().setInterprocedural(false));
@@ -795,8 +811,20 @@ public:
       unite(inputs, sources(facts(node)));
     if (inputsOnly)
       return success();
-    for (unsigned node : finalSinks)
+    for (unsigned node : finalSinks) {
       unite(finalInputs, sources(facts(node)));
+      // A lane may end with its incoming value only as an unchanged copy of
+      // that same lane. Every other influence, including each control that
+      // selects between the incoming and a new value, is a state input.
+      auto lanes = finalLanes.find(node);
+      for (const Influence &influence : facts(node))
+        if (lanes == finalLanes.end() || !influence.copy ||
+            !(influence.source == Range{lanes->second.root,
+                                        lanes->second.low + influence.low,
+                                        influence.width}))
+          finalStateInputs.push_back(influence.source);
+    }
+    normalize(finalStateInputs);
     // Influences are per written root: a store of a collapsed net publishes
     // the same value to every member, each at its own offsets.
     DenseMap<std::pair<Operation *, uint64_t>, Influences> stored;
@@ -874,8 +902,8 @@ private:
       return id;
     };
     auto isForward = [](const LaneNode &node, const LaneLink &link) {
-      return link.mapping == LaneMapping::Identity && link.low == 0 &&
-             link.sourceLow == 0 && link.width == node.width &&
+      return link.mapping == LaneMapping::Identity && link.copy &&
+             link.low == 0 && link.sourceLow == 0 && link.width == node.width &&
              link.sourceWidth == node.width;
     };
     auto forwardedSource =
@@ -976,13 +1004,14 @@ void ActivationValueGraph::pure(Operation *op,
     if (!constants.lookup(result))
       append(valueNode(result), links);
   };
-  auto slice = [&](Value input, Value result, uint64_t low, uint64_t width) {
+  auto slice = [&](Value input, Value result, uint64_t low, uint64_t width,
+                   bool copy = true) {
     auto span = sim::getProvenanceSpan(input.getType());
     if (!span || low > *span || width > *span - low ||
         width != valueSpan(result))
       return false;
-    put(result,
-        {{0, width, valueNode(input), low, width, LaneMapping::Identity}});
+    put(result, {{0, width, valueNode(input), low, width, LaneMapping::Identity,
+                  copy}});
     return true;
   };
   auto insert = [&](Value input, Value replacement, Value result, uint64_t low,
@@ -1080,8 +1109,11 @@ void ActivationValueGraph::pure(Operation *op,
              (isa<arith::TruncIOp>(op) &&
               cast<arith::TruncIOp>(op).getOverflowFlags() ==
                   arith::IntegerOverflowFlags::none)) {
+    // IEEE 1800-2023 6.11.2: a conversion to a two-state type maps X and Z
+    // to 0, so its lanes follow the operand but do not copy its value.
     if (slice(op->getOperand(0), op->getResult(0), 0,
-              valueSpan(op->getResult(0))))
+              valueSpan(op->getResult(0)),
+              /*copy=*/!isa<sim::SimLogicToBitsOp>(op)))
       return;
   } else if (auto extract = dyn_cast<sim::SimLogicExtractOp>(op)) {
     if (slice(extract.getInput(), extract.getResult(), extract.getLowBit(),
@@ -1145,11 +1177,12 @@ void ActivationValueGraph::pure(Operation *op,
     // Integer concatenations and packed projections lower to extension,
     // shifts and bitwise operations. Each bitwise result lane depends only
     // on the corresponding operand lanes, independently of their values.
+    // The result is not a copy of any operand: `x ^ -1` inverts every lane.
     uint64_t width = valueSpan(op->getResult(0));
     LaneLinks links;
     for (Value operand : op->getOperands())
-      links.push_back(
-          {0, width, valueNode(operand), 0, width, LaneMapping::Identity});
+      links.push_back({0, width, valueNode(operand), 0, width,
+                       LaneMapping::Identity, /*copy=*/false});
     put(op->getResult(0), std::move(links));
     return;
   }
@@ -2277,8 +2310,8 @@ ActivationMemoryAnalysis::ActivationMemoryAnalysis(
       dependencyFailure = "private slot";
     else if (ambiguousReferences)
       dependencyFailure = "reference store";
-    else if (failed(values->solve(valueInputs, finalInputs, finalMemory,
-                                  mayWrites, publications,
+    else if (failed(values->solve(valueInputs, finalInputs, finalStateInputs,
+                                  finalMemory, mayWrites, publications,
                                   mode == DependencyMode::Inputs)))
       dependencyFailure = "lane dataflow";
     else {
@@ -2288,6 +2321,10 @@ ActivationMemoryAnalysis::ActivationMemoryAnalysis(
     }
     valueNodes = values->size();
   }
+}
+bool ActivationMemoryAnalysis::hasIdempotentFinalState() const {
+  return hasValueDependencies() &&
+         intersect(finalStateInputs, mayWrites).empty();
 }
 bool ActivationMemoryAnalysis::hasCompleteWrites() const {
   return valid && subtract(mayWrites, mustWrites).empty();
