@@ -6,8 +6,7 @@
 // RUN: %target_cxx %t.o %runtime_link_flags -o %t.exe
 // RUN: %t.exe --execution-tier=native | FileCheck %s --check-prefix=OUTPUT
 
-// Integer conditionals can canonicalize to a select between net handles.
-// Both resolved nets and the selector are dependencies of that read. Retain
+// Each conditional net read depends on its resolved net and on the selector. Retain
 // the request -> transform -> response order, including when the net and
 // output storage have the same descriptor number.
 // PLAN: 1 plans (1 data-dependence order)
@@ -16,15 +15,14 @@
 // CHECK-NOT: simulation.spawn @transform
 // CHECK: simulation.func private @__talos_region_kernel_0_0
 // CHECK: simulation.driver.drive
-// CHECK: arith.select {{.*}} : !simulation.net<i8>
-// CHECK: simulation.net.read
+// CHECK: cf.cond_br
+// CHECK: simulation.net.read %arg1
+// CHECK: simulation.net.read %arg2
 // CHECK: simulation.driver.drive
 // CHECK: simulation.ref.store
-// A select of known net handles must become a select of loaded values in the
-// hot body, without passing through the arbitrary-handle runtime ABI.
+// Each arm reads its known net in the hot body, without passing through the
+// arbitrary-handle runtime ABI.
 // LLVM-LABEL: llvm.func @__talos_region_kernel_0_0.__talos_eval_body_0(
-// LLVM-NOT: llvm.call @talos_rt_v1_native_state_load_plane
-// LLVM: llvm.select {{.*}} : i1, i8
 // LLVM-NOT: llvm.call @talos_rt_v1_native_state_load_plane
 // LLVM: llvm.return
 // OUTPUT-NOT: FAIL

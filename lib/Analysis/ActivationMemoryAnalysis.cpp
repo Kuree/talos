@@ -1750,9 +1750,10 @@ private:
                                  result) &&
                collectCandidates(select.getFalseValue(), state, visiting,
                                  result);
-      // Canonicalization can select net handles before taking a common
-      // slice. Project every candidate, just as for selected storage views;
-      // this describes reads of resolved state, not permission to move drives.
+      // Aggressive CFG simplification can select net handles before taking a
+      // common slice. Project every candidate, just as for selected storage
+      // views; this describes reads of resolved state, not permission to move
+      // drives.
       if (!isa<sim::SimRefExtractOp, sim::SimNetExtractOp,
                sim::SimRefDynExtractOp,
                sim::SimRefArrayElementOp, sim::SimRefSubelementOp>(definition))

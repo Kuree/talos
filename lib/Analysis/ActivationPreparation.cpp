@@ -256,8 +256,9 @@ cloneActivation(sim::SimFuncOp source, Operation *suspend, bool resume,
       if (failed(canonicalizeActivationControlFlow(copy)))
         return {};
     }
-  // CFG simplification may share a case tail using reference arguments.
-  // Recover its static aliases before any memory/value summary is derived;
+  // Aggressive CFG simplification before this view (not the canonicalization
+  // above) may have shared a case tail using reference arguments. Recover its
+  // static aliases before any memory/value summary is derived;
   // otherwise section recovery can mistake that lost precision for feedback
   // and discard the owner before interleaving analysis ever sees it.
   specializeStaticHandleTails(copy.getBody());

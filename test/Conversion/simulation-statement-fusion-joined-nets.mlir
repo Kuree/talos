@@ -5,13 +5,15 @@
 // RUN: %target_cxx %t.o %runtime_link_flags -o %t.exe
 // RUN: %t.exe --execution-tier=native | FileCheck %s --check-prefix=OUTPUT
 
-// Three conditional net reads and a computed fourth arm canonicalize to a
-// three-predecessor net-handle phi. The native load must accept every proved
-// static alternative, retaining the actual CFG choice and read ordering.
+// Three conditional net reads and a computed fourth arm stay on their own
+// branches. Each native load reads its proved static net, retaining the actual
+// CFG choice and read ordering.
 // CHECK: simulation.spawn @__talos_region_kernel_0_0
 // CHECK-LABEL: simulation.func private @__talos_region_kernel_0_0
-// CHECK: ^bb{{[0-9]+}}(%[[NET:.*]]: !simulation.net<i8>):
-// CHECK-NEXT: %{{.*}} = simulation.net.read %[[NET]] {{.*}} : !simulation.net<i8> -> i8
+// CHECK: simulation.net.read %arg1
+// CHECK: simulation.net.read %arg2
+// CHECK: simulation.net.read %arg3
+// CHECK: ^bb{{[0-9]+}}(%{{.*}}: i8): // 4 preds
 // LLVM-LABEL: llvm.func @__talos_region_kernel_0_0.__talos_eval_body_0(
 // LLVM-NOT: llvm.call @talos_rt_v1_native_state_load_plane
 // LLVM: llvm.return

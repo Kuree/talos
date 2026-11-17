@@ -33,7 +33,14 @@ LogicalResult canonicalizeActivationControlFlow(Operation *operation) {
     if (name.getDialectNamespace() == "arith" ||
         name.getDialectNamespace() == "cf")
       name.getCanonicalizationPatterns(patterns, operation->getContext());
-  return applyPatternsGreedily(operation, std::move(patterns));
+  // Aggressive region simplification merges blocks that differ only in their
+  // operands, turning distinct store targets into a reference block argument
+  // or a reference select. A store through such a merged handle has no static
+  // target, so memory and value summaries fall back to whole-root accesses
+  // and lose the per-lane publication proofs. Keep edge-specific blocks.
+  GreedyRewriteConfig config;
+  config.setRegionSimplificationLevel(GreedySimplifyRegionLevel::Normal);
+  return applyPatternsGreedily(operation, std::move(patterns), config);
 }
 
 ControlActivationAnalysis::ControlActivationAnalysis(sim::SimDesignOp design) {
@@ -255,10 +262,12 @@ struct ThreadedEdge {
 };
 } // namespace
 
-// CFG canonicalization shares identical case tails, passing the selected
-// references as block arguments. Recover edge-specific tails in a disposable
-// view before exposing their publications. Every dynamic path still executes
-// exactly one copy; no operation moves across a branch or a memory access.
+// Aggressive CFG simplification shares identical case tails, passing the
+// selected references as block arguments. canonicalizeActivationControlFlow
+// no longer merges blocks, but its input may already contain such tails.
+// Recover edge-specific tails in a disposable view before exposing their
+// publications. Every dynamic path still executes exactly one copy; no
+// operation moves across a branch or a memory access.
 bool specializeStaticHandleTails(Region &region,
                                  llvm::function_ref<bool(Block *)> eligible) {
   SmallVector<Block *> tails;

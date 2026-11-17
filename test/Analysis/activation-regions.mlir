@@ -89,11 +89,11 @@ module {
       simulation.suspend.change %flag to ^loop : !simulation.ref<i1>
     }
 
-    // Alternative writes may be joined by ordinary CFG canonicalization.
-    // Neither source store must dominate the suspension individually.
+    // Alternative writes on exclusive branches form one region unit together
+    // with their branch. Neither store must dominate the suspension alone.
     // CHECK: regions @alternative_writes valid=1
     // CHECK-NEXT: node simulation.ref.load read:s4[0,1)
-    // CHECK-NEXT: node simulation.ref.store write:s3[0,8)
+    // CHECK-NEXT: node cf.cond_br write:s3[0,8)
     simulation.code_unit.decl 4 in 0 always_comb hierarchy "alternative_writes"
     simulation.func @alternative_writes(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 4 : i32, code_unit_id = 4 : i64} {
       %flag = simulation.context.storage %ctx[4] : !simulation.ref<i1>
