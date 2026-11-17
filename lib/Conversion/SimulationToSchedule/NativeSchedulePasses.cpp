@@ -31,6 +31,89 @@
 using namespace mlir;
 namespace talos::detail {
 namespace {
+/// How a wait of an initial procedure belongs to its finite bootstrap prefix
+/// (IEEE 1800-2023 9.2.1: an initial procedure executes once).
+enum class InitialBootstrap {
+  None,
+  /// The wait heads a loop carrying repeat state.
+  Loop,
+  /// No control-flow cycle reaches the wait again.
+  Once,
+};
+
+InitialBootstrap classifyInitialBootstrapWait(Operation *wait) {
+  if (!wait || wait->getNumSuccessors() != 1)
+    return InitialBootstrap::None;
+  if (wait->getSuccessor(0)->getNumArguments() != 0)
+    return InitialBootstrap::Loop;
+  Block *start = wait->getBlock();
+  SmallVector<Block *> pending(start->getSuccessors().begin(),
+                               start->getSuccessors().end());
+  llvm::SmallPtrSet<Block *, 16> seen;
+  while (!pending.empty()) {
+    Block *block = pending.pop_back_val();
+    if (block == start)
+      return InitialBootstrap::None;
+    if (seen.insert(block).second)
+      llvm::append_range(pending, block->getSuccessors());
+  }
+  return InitialBootstrap::Once;
+}
+
+/// The bootstrap class of every suspension of `actor` that resumes at
+/// `continuation`. Several suspensions, of any kind, may share a site: all
+/// must belong to the prefix, and one once-reached wait makes the site Once.
+InitialBootstrap classifyInitialBootstrapSite(sim::SimFuncOp actor,
+                                              uint32_t continuation) {
+  bool matched = false;
+  InitialBootstrap result = InitialBootstrap::Loop;
+  actor.walk([&](Operation *operation) {
+    if (!operation->hasTrait<OpTrait::IsTerminator>())
+      return;
+    auto site =
+        operation->getAttrOfType<schedule::ContinuationSiteAttr>("site");
+    if (!site || site.getId() != continuation)
+      return;
+    matched = true;
+    InitialBootstrap wait = classifyInitialBootstrapWait(operation);
+    if (wait == InitialBootstrap::None || result == InitialBootstrap::None)
+      result = InitialBootstrap::None;
+    else if (wait == InitialBootstrap::Once)
+      result = InitialBootstrap::Once;
+  });
+  return matched ? result : InitialBootstrap::None;
+}
+
+/// Whether a static fanout entry watches a periodic clock bit or a periodic
+/// alias target. talos_rt_v1_scheduler_prepare_periodic_aot drains exactly
+/// those runtime waiters, edge by edge, before the generated loop owns the
+/// calendar.
+bool watchesPeriodicSource(const NativeStateLayout &layout,
+                           ArrayRef<NativePeriodicClock> clocks,
+                           ArrayRef<NativePeriodicAlias> aliases,
+                           const talos_rt_static_fanout_entry &entry) {
+  // Exactly the source bit: a wider entry also watches bits that only the
+  // generated closure writes, and an edge on a vector watches its least
+  // significant bit (9.4.2), not necessarily the periodic one.
+  auto covers = [&](uint32_t staticState, uint64_t bitOffset) {
+    if (entry.static_state != staticState || entry.bit_width != 1)
+      return false;
+    const auto *bound = layout.findBound(staticState);
+    if (!bound || bitOffset < bound->offset ||
+        bitOffset - bound->offset >= bound->width)
+      return false;
+    return entry.low_bit == bitOffset - bound->offset;
+  };
+  return llvm::any_of(clocks,
+                      [&](const NativePeriodicClock &clock) {
+                        return covers(clock.getStaticState(),
+                                      clock.getBitOffset());
+                      }) ||
+         llvm::any_of(aliases, [&](const NativePeriodicAlias &alias) {
+           return covers(alias.getTargetStaticState(),
+                         alias.getTargetBitOffset());
+         });
+}
 /// Constant parameter queries cannot reach design state through an export
 /// (IEEE 1800-2023 35.5.1.3, 35.5.3). Keep the ordinary context/scope and VPI
 /// instrumentation: this proves only that the export body needs no publication
@@ -1234,30 +1317,24 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
         if (std::optional<uint32_t> slot = aotActorSlotFor(actor))
           actorsBySlot.try_emplace(*slot, actor);
       });
-    // The coordinator drains a finite initial loop that carries repeat state
-    // before entering the periodic loop, so such a bootstrap needs no
-    // executor when a periodic clock exists (see isFiniteInitialBootstrap).
+    // A finite initial bootstrap needs no executor when a periodic clock
+    // exists: it stays runtime-owned (classifyInitialBootstrapSite). A repeat
+    // loop may wait on any root, as before; a once-reached wait qualifies only
+    // on a periodic source, which the periodic preparation drains edge by
+    // edge before the generated loop owns the calendar
+    // (watchesPeriodicSource).
     auto finiteInitialBootstrap = [&](sim::SimFuncOp actor,
-                                      uint32_t continuation) {
+                                      const talos_rt_static_fanout_entry
+                                          &entry) {
       if (periodicClocks.empty() ||
           actor.getEntryKind() != sim::EntryKind::Initial)
         return false;
-      bool loopCarried = false;
-      actor.walk([&](Operation *operation) {
-        schedule::ContinuationSiteAttr site;
-        if (auto suspend = dyn_cast<sim::SimSuspendChangeOp>(operation))
-          site = suspend.getSiteAttr();
-        else if (auto suspend = dyn_cast<sim::SimSuspendEdgeOp>(operation))
-          site = suspend.getSiteAttr();
-        else if (auto suspend = dyn_cast<sim::SimSuspendAnyOp>(operation))
-          site = suspend.getSiteAttr();
-        else if (auto suspend = dyn_cast<sim::SimSuspendObserveOp>(operation))
-          site = suspend.getSiteAttr();
-        if (site && site.getId() == continuation &&
-            operation->getNumSuccessors() == 1)
-          loopCarried |= operation->getSuccessor(0)->getNumArguments() != 0;
-      });
-      return loopCarried;
+      InitialBootstrap kind =
+          classifyInitialBootstrapSite(actor, entry.continuation);
+      return kind == InitialBootstrap::Loop ||
+             (kind == InitialBootstrap::Once &&
+              watchesPeriodicSource(*stateLayout, periodicClocks,
+                                    periodicAliases, entry));
     };
     for (const talos_rt_static_fanout_entry &entry : staticFanoutPlan.entries) {
       // The periodic loop forwards an alias entry itself (see
@@ -1269,7 +1346,7 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
         executorDemand = true;
         continue;
       }
-      if (finiteInitialBootstrap(actor, entry.continuation))
+      if (finiteInitialBootstrap(actor, entry))
         continue;
       // IEEE 1800-2023 4.5: Reactive actors may remain runtime owners.
       if (actor.getHomeRegion() != sim::EventRegion::Reactive)
@@ -1719,42 +1796,27 @@ LogicalResult NativePipelineAnalysis::planOwnership() {
       if (slot && *slot < actorsBySlot.size())
         actorsBySlot[*slot] = actor;
     });
-    auto isFiniteInitialBootstrap = [&](uint32_t actorSlot,
-                                        uint32_t continuation) {
-      if (actorSlot >= actorsBySlot.size())
+    auto isFiniteInitialBootstrap =
+        [&](const talos_rt_static_fanout_entry &entry) {
+      if (entry.actor_slot >= actorsBySlot.size())
         return false;
-      sim::SimFuncOp actor = actorsBySlot[actorSlot];
+      sim::SimFuncOp actor = actorsBySlot[entry.actor_slot];
       if (!actor || actor.getEntryKind() != sim::EntryKind::Initial)
         return false;
-      bool loopCarriedContinuation = false;
-      actor.walk([&](Operation *operation) {
-        schedule::ContinuationSiteAttr site;
-        if (auto suspend = dyn_cast<schedule::NativeSuspendChangeOp>(operation))
-          site = suspend.getSiteAttr();
-        else if (auto suspend =
-                     dyn_cast<schedule::NativeSuspendEdgeOp>(operation))
-          site = suspend.getSiteAttr();
-        else if (auto suspend =
-                     dyn_cast<schedule::NativeSuspendAnyOp>(operation))
-          site = suspend.getSiteAttr();
-        else if (auto suspend =
-                     dyn_cast<schedule::NativeSuspendObserveOp>(operation))
-          site = suspend.getSiteAttr();
-        if (site && site.getId() == continuation &&
-            operation->getNumSuccessors() == 1)
-          loopCarriedContinuation |=
-              operation->getSuccessor(0)->getNumArguments() != 0;
-      });
-      return loopCarriedContinuation;
+      InitialBootstrap kind =
+          classifyInitialBootstrapSite(actor, entry.continuation);
+      return kind == InitialBootstrap::Loop ||
+             (kind == InitialBootstrap::Once &&
+              watchesPeriodicSource(*stateLayout, periodicClocks,
+                                    periodicAliases, entry));
     };
     llvm::SmallDenseSet<StringRef, 16> executors;
     for (auto [entryIndex, entry] : llvm::enumerate(staticFanoutPlan.entries)) {
-      // A finite initial loop is deliberately runtime-owned while it carries
-      // repeat/control state. Periodic handoff drains this bootstrap prefix
-      // and checks that no such subscription remains live before entering the
-      // generated loop, so it is not a member of the steady-state owner set.
-      if (!periodicClocks.empty() &&
-          isFiniteInitialBootstrap(entry.actor_slot, entry.continuation))
+      // A finite initial bootstrap is deliberately runtime-owned. Periodic
+      // handoff drains this prefix and checks that no such waiter remains live
+      // before entering the generated loop, so it is not a member of the
+      // steady-state owner set (see finiteInitialBootstrap in planSchedule).
+      if (!periodicClocks.empty() && isFiniteInitialBootstrap(entry))
         continue;
       if (entryIndex >= evalOwnership.fanoutOwners.size())
         return module.emitError("eval ownership plan is incomplete"), failure();

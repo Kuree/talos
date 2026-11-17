@@ -2225,6 +2225,15 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_prepare_periodic_aot(
               scheduled.suspendKind == TALOS_RT_SUSPEND_EDGE ||
               scheduled.suspendKind == TALOS_RT_SUSPEND_OBSERVER);
     };
+    auto isPeriodicFanout = [&](const talos_rt_static_fanout_entry &entry) {
+      for (uint32_t clockIndex = 0; clockIndex != clockCount; ++clockIndex)
+        if (periodicFanoutMatches(entry, clocks[clockIndex]))
+          return true;
+      for (uint32_t aliasIndex = 0; aliasIndex != aliasCount; ++aliasIndex)
+        if (aliasTargetFanoutMatches(entry, aliases[aliasIndex]))
+          return true;
+      return false;
+    };
     auto missingPeriodicFanoutActive = [&] {
       // A generated owner remains generated even when its source process is
       // classified as an initial process (always/always_comb use that
@@ -2232,12 +2241,7 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_prepare_periodic_aot(
       // runtime-owned until its continuation terminates.
       for (uint64_t index : context->nativeScheduleRuntimeFanoutIndices) {
         const auto &entry = context->nativeScheduleFanoutEntries[index];
-        bool periodic = false;
-        for (uint32_t clockIndex = 0; clockIndex != clockCount; ++clockIndex)
-          periodic |= periodicFanoutMatches(entry, clocks[clockIndex]);
-        for (uint32_t aliasIndex = 0; aliasIndex != aliasCount; ++aliasIndex)
-          periodic |= aliasTargetFanoutMatches(entry, aliases[aliasIndex]);
-        if (!periodic ||
+        if (!isPeriodicFanout(entry) ||
             entry.actor_slot >= context->nativeScheduleActors.size())
           continue;
         talos_rt_process_instance_v1 *actor =
@@ -2343,11 +2347,8 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_prepare_periodic_aot(
           talos_rt_process_instance_v1 *actor =
               context->nativeScheduleActors[entry.actor_slot];
           // A finite framed process makes the whole periodic slot a runtime
-          // transaction.  Run every live actor in event order, then let the
-          // generated coordinator drain publications and the shared NBA
-          // barrier.  Mixing a runtime reset continuation with generated
-          // clocked actors in the same slot can expose a partially reset
-          // four-state model at the eventual handoff.
+          // transaction: its waiters and the generated owners of this edge
+          // all run in the slot drain below, before the next edge.
           if (actor && actor->continuation == entry.continuation &&
               isLiveFanout(entry)) {
             if (std::find_if(activated.begin(), activated.end(),
@@ -2419,11 +2420,17 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_prepare_periodic_aot(
             context->nativeScheduleActorIndices[activation.actor];
         if (processIndex >= context->scheduledProcesses.size())
           return TALOS_RT_INVALID_CONTINUATION;
-        context->scheduledProcesses[processIndex].signalTriggered = true;
-        NativeScheduleStepScope step(context, activation.actor, false);
-        status = runScheduler(context);
-        if (status != TALOS_RT_OK || !step.executed())
-          return status != TALOS_RT_OK ? status : TALOS_RT_INVALID_CONTINUATION;
+        // Wake the actor exactly as the static fanout's runtime route does
+        // (9.4.2), and let the ordinary slot drain below run it in any Active
+        // order (4.7). A generated checkpoint reached by that drain returns
+        // with the wake still queued, so the plan entry's next preparation
+        // resumes this slot instead of losing the activation.
+        if (!markNativeAOTActorReadyUnlocked(context, activation.actor))
+          return TALOS_RT_INVALID_CONTINUATION;
+        ScheduledProcess &scheduled = context->scheduledProcesses[processIndex];
+        scheduled.signalTriggered = true;
+        if (scheduled.signalLatch)
+          scheduled.signalLatch->triggered = true;
       }
       // An unsupported cold-prefix activation may stage into a generated NBA
       // accumulator without publishing direct ingress.  It still participates
@@ -2436,6 +2443,26 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_prepare_periodic_aot(
       if (context->schedulerFinishRequested.load(std::memory_order_relaxed))
         return TALOS_RT_TIER_UNAVAILABLE;
     }
+    // Every woken bootstrap waiter must have run before the generated loop
+    // owns its source (9.4.2). A generated checkpoint can split a slot across
+    // preparations, so check the queued wakes themselves rather than the
+    // activations of the last edge; the AOT node loop owns any that remain.
+    if (!sharedCalendar)
+      for (uint64_t index : context->nativeScheduleRuntimeFanoutIndices) {
+        const auto &entry = context->nativeScheduleFanoutEntries[index];
+        if (!isPeriodicFanout(entry) ||
+            entry.actor_slot >= context->nativeScheduleActors.size())
+          continue;
+        talos_rt_process_instance_v1 *actor =
+            context->nativeScheduleActors[entry.actor_slot];
+        size_t processIndex =
+            context->nativeScheduleActorIndices[entry.actor_slot];
+        if (actor && actor->continuation == entry.continuation &&
+            processIndex < context->scheduledProcesses.size() &&
+            context->scheduledProcesses[processIndex].instance == actor &&
+            context->scheduledProcesses[processIndex].signalTriggered)
+          return TALOS_RT_TIER_UNAVAILABLE;
+      }
 
     // A finite clocked bootstrap prefix can also enable waveform collection.
     if (dumpBlocksLoop())
