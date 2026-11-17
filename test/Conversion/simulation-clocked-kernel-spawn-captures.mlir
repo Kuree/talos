@@ -4,8 +4,10 @@
 // IEEE 1800-2023 9.3.2, 13.5.2, 23.3.3: a fork captures the actual reference,
 // so a private counter stays private even when forwarded by another fork. The
 // members watch a port copy of the clock that the root initializer sets by call.
+// The graph resolves the forwarded capture to the root initializer's
+// allocation, so the worker publishes no write at all.
 // ROOTS-LABEL: phases accepted_captures valid=1
-// ROOTS: @worker:{{.*}} writes=local
+// ROOTS: @worker: ^0{1|-} ^1{1|1} ^2{-|1}{{$}}
 // CHECK-LABEL: simulation.design @accepted_captures
 // CHECK: simulation.spawn @clock_port
 // CHECK: simulation.spawn @[[KERNEL:__talos_clocked_[0-9_]+]]

@@ -637,17 +637,176 @@ void appendPendingReads(const FunctionInfo &target,
   }
 }
 
+/// The spawn sites that start each function, and the functions some other
+/// symbol use may also enter: a call, an observer binding, or any attribute
+/// naming them. Spawn operands are the callee's entry captures, one per entry
+/// argument.
+class SpawnEntries {
+public:
+  explicit SpawnEntries(sim::SimDesignOp design) {
+    design.getBody().walk([&](Operation *operation) {
+      if (auto spawn = dyn_cast<sim::SimSpawnOp>(operation)) {
+        sites[spawn.getCallee()].push_back(spawn);
+        return;
+      }
+      for (NamedAttribute attribute : operation->getAttrs()) {
+        // Attributes without elements cannot name a symbol.
+        if (isa<IntegerAttr, StringAttr, UnitAttr, BoolAttr, FloatAttr,
+                DenseArrayAttr>(attribute.getValue()))
+          continue;
+        attribute.getValue().walk([&](SymbolRefAttr reference) {
+          otherUses.insert(reference.getRootReference().getValue());
+        });
+      }
+    });
+  }
+
+  /// The spawn sites of `function` when nothing else can start it.
+  std::optional<ArrayRef<sim::SimSpawnOp>>
+  getOnlyEntries(StringRef function) const {
+    if (otherUses.contains(function))
+      return std::nullopt;
+    auto found = sites.find(function);
+    if (found == sites.end())
+      return std::nullopt;
+    return ArrayRef(found->second);
+  }
+
+private:
+  llvm::StringMap<SmallVector<sim::SimSpawnOp>> sites;
+  llvm::StringSet<> otherUses;
+};
+
 struct ProgramAnalysis {
   explicit ProgramAnalysis(sim::SimDesignOp design)
-      : classDispatch(design), connectivity(design),
+      : design(design), classDispatch(design), connectivity(design),
         descriptorProvenance(design) {}
 
+  sim::SimDesignOp design;
   ::talos::analysis::ClassDispatchAnalysis classDispatch;
   ::talos::analysis::NetConnectivityAnalysis connectivity;
   ::talos::analysis::HandleDataflowAnalysis descriptorProvenance;
   SmallVector<FunctionInfo, 0> functions;
   llvm::StringMap<unsigned> functionIndex;
   DenseMap<Operation *, unsigned> indexForFunction;
+  /// What each entry capture of a process started only by spawns refers to
+  /// in the spawners, keyed by (function index, formal). An empty list means
+  /// every actual is a spawner's local allocation; nullopt is unresolved.
+  DenseMap<std::pair<unsigned, unsigned>,
+           std::optional<SmallVector<HandleFact>>>
+      captureTargets;
+
+  /// Built on first use: designs without such queries or captures pay
+  /// nothing for the symbol-use walk.
+  const SpawnEntries &getSpawnEntries() {
+    if (!spawnEntries)
+      spawnEntries.emplace(design);
+    return *spawnEntries;
+  }
+
+  /// A spawned process shares its spawner's variables rather than copies: a
+  /// fork's lifetime spans its processes and its enclosing scope's (IEEE
+  /// 1800-2023 6.21, 9.3.2), and a reference shares one representation with
+  /// its actual (13.5.2). So a capture names exactly the actuals its spawn
+  /// sites pass. A spawner's local allocation (`simulation.ref.alloc`, the
+  /// only source of local provenance) is automatic storage that no
+  /// hierarchical reference can name (6.21), so it aliases no design root. A
+  /// spawner's own capture resolves the same way; any other actual leaves the
+  /// capture a wildcard.
+  std::optional<SmallVector<HandleFact>> resolveCapture(unsigned function,
+                                                        unsigned formal) {
+    // The provisional unresolved entry also ends capture cycles.
+    auto [found, inserted] = captureTargets.try_emplace({function, formal});
+    if (!inserted)
+      return found->second;
+    std::optional<SmallVector<HandleFact>> result =
+        [&]() -> std::optional<SmallVector<HandleFact>> {
+      std::optional<ArrayRef<sim::SimSpawnOp>> entries =
+          getSpawnEntries().getOnlyEntries(
+              functions[function].getFunction().getSymName());
+      if (!entries)
+        return std::nullopt;
+      SmallVector<HandleFact> targets;
+      for (sim::SimSpawnOp spawn : *entries) {
+        auto spawner = indexForFunction.find(
+            spawn->getParentOfType<sim::SimFuncOp>().getOperation());
+        if (formal >= spawn.getNumOperands() ||
+            spawner == indexForFunction.end())
+          return std::nullopt;
+        const FunctionInfo &info = functions[spawner->second];
+        auto known = info.provenance.find(spawn.getOperand(formal));
+        if (known == info.provenance.end())
+          return std::nullopt;
+        HandleFact actual = known->second;
+        if (actual.resource == schedule::ComputeResourceKind::Local)
+          continue;
+        if (actual.descriptor) {
+          targets.push_back(actual);
+          continue;
+        }
+        if (!actual.formal ||
+            actual.resource == schedule::ComputeResourceKind::Unknown)
+          return std::nullopt;
+        std::optional<SmallVector<HandleFact>> outer =
+            resolveCapture(spawner->second, *actual.formal);
+        if (!outer)
+          return std::nullopt;
+        for (const HandleFact &target : *outer)
+          targets.push_back(
+              actual.dynamic || target.dynamic
+                  ? widenDynamic(target)
+                  : narrowProvenance(target, actual.low, actual.width));
+      }
+      return targets;
+    }();
+    captureTargets[{function, formal}] = result;
+    return result;
+  }
+
+  /// Rewrite writes through resolved captures of `function` to the roots they
+  /// update. A write to a spawner's local allocation updates no design root,
+  /// like the spawner's own (appendEffect), so it publishes nothing a wildcard
+  /// writer would. Reads and watches keep their formal: a private value, such
+  /// as an iff guard (9.4.2.3), still carries its producer's influence, which
+  /// consumers admit conservatively. As for calls (substituteEffect), a staged
+  /// update keeps its formal too: its site has one stable commit identity.
+  void substituteCaptures(unsigned function,
+                          SmallVectorImpl<ComputeEffect> &effects) const {
+    SmallVector<ComputeEffect> substituted;
+    for (const ComputeEffect &effect : effects) {
+      auto found = effect.target.formal && isImmediateWrite(effect)
+                       ? captureTargets.find({function, *effect.target.formal})
+                       : captureTargets.end();
+      if (found == captureTargets.end() || !found->second) {
+        substituted.push_back(effect);
+        continue;
+      }
+      for (const HandleFact &actual : *found->second)
+        substituted.push_back({effect.kind,
+                               effect.target.dynamic || actual.dynamic
+                                   ? widenDynamic(actual)
+                                   : narrowProvenance(actual, effect.target.low,
+                                                      effect.target.width),
+                               effect.trigger, effect.deferred});
+    }
+    effects.assign(substituted.begin(), substituted.end());
+  }
+
+  /// Resolve, then substitute, every capture `effects` write through.
+  void resolveCaptures(unsigned function,
+                       SmallVectorImpl<ComputeEffect> &effects) {
+    for (const ComputeEffect &effect : effects)
+      if (effect.target.formal && isImmediateWrite(effect))
+        resolveCapture(function, *effect.target.formal);
+    substituteCaptures(function, effects);
+  }
+
+  static bool isImmediateWrite(const ComputeEffect &effect) {
+    return effect.kind == schedule::ComputeEffectKind::Write ||
+           effect.kind == schedule::ComputeEffectKind::Drive ||
+           (effect.kind == schedule::ComputeEffectKind::Trigger &&
+            !effect.deferred);
+  }
 
   const FunctionInfo &operator[](sim::SimFuncOp function) const {
     return functions[indexForFunction.lookup(function.getOperation())];
@@ -707,6 +866,9 @@ struct ProgramAnalysis {
     effects.assign(expanded.begin(), expanded.end());
     normalizeEffects(effects);
   }
+
+private:
+  std::optional<SpawnEntries> spawnEntries;
 };
 
 /// The processes a `process.event_pending` handle may name, as indices into
@@ -718,7 +880,8 @@ struct ProgramAnalysis {
 /// querying function, leaves the query unresolved.
 DenseMap<Operation *, SmallVector<unsigned>>
 resolvePendingTargets(sim::SimDesignOp design,
-                      ArrayRef<sim::SimFuncOp> functions) {
+                      ArrayRef<sim::SimFuncOp> functions,
+                      ProgramAnalysis &analysis) {
   DenseMap<Operation *, SmallVector<unsigned>> resolved;
   SmallVector<sim::SimProcessEventPendingOp> queries;
   design.getBody().walk(
@@ -728,17 +891,6 @@ resolvePendingTargets(sim::SimDesignOp design,
   llvm::StringMap<unsigned> indices;
   for (auto [index, function] : llvm::enumerate(functions))
     indices[sim::SimFuncOp(function).getSymName()] = index;
-  llvm::StringMap<SmallVector<sim::SimSpawnOp>> spawnSites;
-  llvm::StringSet<> otherUses;
-  design.getBody().walk([&](Operation *operation) {
-    if (auto spawn = dyn_cast<sim::SimSpawnOp>(operation)) {
-      spawnSites[spawn.getCallee()].push_back(spawn);
-      return;
-    }
-    operation->getAttrDictionary().walk([&](SymbolRefAttr reference) {
-      otherUses.insert(reference.getRootReference().getValue());
-    });
-  });
   auto spawned = [&](Value handle) -> std::optional<unsigned> {
     auto spawn = handle.getDefiningOp<sim::SimSpawnOp>();
     if (!spawn)
@@ -758,14 +910,14 @@ resolvePendingTargets(sim::SimDesignOp design,
     if (!argument || !argument.getOwner()->isEntryBlock())
       continue;
     auto owner = dyn_cast<sim::SimFuncOp>(argument.getOwner()->getParentOp());
-    if (!owner || otherUses.contains(owner.getSymName()))
-      continue;
-    auto sites = spawnSites.find(owner.getSymName());
-    if (sites == spawnSites.end())
+    std::optional<ArrayRef<sim::SimSpawnOp>> sites =
+        owner ? analysis.getSpawnEntries().getOnlyEntries(owner.getSymName())
+              : std::nullopt;
+    if (!sites)
       continue;
     SmallVector<unsigned> targets;
     bool known = true;
-    for (sim::SimSpawnOp site : sites->second) {
+    for (sim::SimSpawnOp site : *sites) {
       std::optional<unsigned> target;
       if (argument.getArgNumber() < site.getNumOperands())
         target = spawned(site.getOperand(argument.getArgNumber()));
@@ -793,7 +945,7 @@ ProgramAnalysis analyzeProgram(sim::SimDesignOp design) {
     return lhs.getSymName() < rhs.getSymName();
   });
   DenseMap<Operation *, SmallVector<unsigned>> pendingTargets =
-      resolvePendingTargets(design, functions);
+      resolvePendingTargets(design, functions, analysis);
   // Handle facts are read-only per-function solves. Compute them
   // concurrently, then summarize in name order.
   SmallVector<analysis::HandleFacts> provenances(functions.size());
@@ -1001,6 +1153,7 @@ ProgramAnalysis analyzeProgram(sim::SimDesignOp design) {
              llvm::make_second_range(info.pendingTargets))
           for (unsigned target : targets)
             appendPendingReads(analysis.functions[target], nextEffects);
+        analysis.resolveCaptures(caller, nextEffects);
         analysis.expandConnectivity(nextEffects);
         normalizeEffects(nextEffects);
         llvm::sort(nextSpawns);
@@ -1071,6 +1224,11 @@ collectFragmentEffects(const ProgramAnalysis &analysis,
     for (unsigned target : targets->second)
       appendPendingReads(analysis.functions[target], effects);
   }
+  // Every capture a fragment reaches also occurs in its function's summary,
+  // which resolved it.
+  analysis.substituteCaptures(
+      analysis.indexForFunction.lookup(info.getFunction().getOperation()),
+      effects);
   analysis.expandConnectivity(effects);
   normalizeEffects(effects);
   return effects;
