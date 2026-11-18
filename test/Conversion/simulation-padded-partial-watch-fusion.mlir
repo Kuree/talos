@@ -57,6 +57,9 @@ module {
 // CHECK: simulation.func private @__talos_region_kernel_
 // CHECK: %[[INPUT:.*]] = simulation.context.storage %arg0[0]
 // CHECK: %[[DATA:.*]] = simulation.context.storage %arg0[2]
-// CHECK: %[[MIDDLE:.*]] = simulation.ref.subelement %[[DATA]]{{\[\[1, 0\]\]}}
-// CHECK: %[[LAST:.*]] = simulation.ref.subelement %[[DATA]]{{\[\[2, 0\]\]}}
+// Each element's i3 lane plus the padding after it is the whole element, so
+// the kernel watches data[1] and data[2] themselves (the padding never
+// changes, IEEE 1800-2023 9.4.2).
+// CHECK: %[[MIDDLE:.*]] = simulation.ref.subelement %[[DATA]]{{\[\[1\]\]}}
+// CHECK: %[[LAST:.*]] = simulation.ref.subelement %[[DATA]]{{\[\[2\]\]}}
 // CHECK: simulation.suspend.any %[[INPUT]], %[[MIDDLE]], %[[LAST]] edges [0, 0, 0]

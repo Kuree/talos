@@ -2189,6 +2189,83 @@ uint64_t shareStableBranchConditions(sim::SimFuncOp function,
   return shared;
 }
 
+/// Whether [low, high) of a value of `type` holds only storage padding: bits
+/// between or after the children of a laid-out unpacked aggregate that belong
+/// to no element. Such bits never change, so a watch over them adds no event
+/// (IEEE 1800-2023 9.4.2).
+bool spansOnlyPadding(Type type, uint64_t low, uint64_t high) {
+  if (low >= high)
+    return true;
+  if (!isa<sim::UnpackedArrayType, sim::UnpackedStructType>(type))
+    return false;
+  // Only bits inside the value can be padding.
+  auto span = sim::getProvenanceSpan(type);
+  if (!span || high > *span)
+    return false;
+  Attribute layout = isa<sim::UnpackedArrayType>(type)
+                         ? cast<sim::UnpackedArrayType>(type).getLayout()
+                         : cast<sim::UnpackedStructType>(type).getLayout();
+  if (!isa_and_nonnull<sim::StorageLayoutAttr>(layout))
+    return false;
+  unsigned first = 0, count = sim::getAggregateNumElements(type);
+  // Array elements sit at ordinal * stride, so skip those that end before
+  // `low`, as appendWatchRange does.
+  if (isa<sim::UnpackedArrayType>(type) && count > 1) {
+    auto second = sim::getAggregateProvenanceSubelement(type, 1);
+    if (!second || !second->first)
+      return false;
+    first = std::min<uint64_t>(count, low / second->first);
+  }
+  for (unsigned index = first; index < count; ++index) {
+    auto child = sim::getAggregateProvenanceSubelement(type, index);
+    if (!child)
+      return false;
+    if (child->first >= high)
+      break;
+    uint64_t begin = std::max(low, child->first);
+    uint64_t end = std::min(high, child->first + child->second);
+    if (begin < end &&
+        !spansOnlyPadding(sim::getAggregateElementType(type, index),
+                          begin - child->first, end - child->first))
+      return false;
+  }
+  return true;
+}
+
+/// Sort `ranges`, which are offsets into a handle of `type` shifted by
+/// `base`, and merge ranges that overlap, touch, or are separated only by
+/// padding. A watch of the merged ranges observes exactly the same logical
+/// bits, with far fewer views when padding splits every element.
+void mergeWatchRanges(Type type, uint64_t base,
+                      SmallVectorImpl<std::pair<uint64_t, uint64_t>> &ranges) {
+  llvm::sort(ranges);
+  Type element = type;
+  if (auto reference = dyn_cast<sim::RefType>(type))
+    element = reference.getElementType();
+  SmallVector<std::pair<uint64_t, uint64_t>> merged;
+  for (auto range : ranges) {
+    if (!merged.empty() &&
+        (range.first <= merged.back().second ||
+         spansOnlyPadding(element, merged.back().second - base,
+                          range.first - base))) {
+      merged.back().second = std::max(merged.back().second, range.second);
+      continue;
+    }
+    merged.push_back(range);
+  }
+  // Leading and trailing padding of the handle joins its neighbor too, so a
+  // range covering every logical bit becomes a whole-handle watch.
+  if (auto span = sim::getProvenanceSpan(element); span && !merged.empty()) {
+    if (merged.front().first > base &&
+        spansOnlyPadding(element, 0, merged.front().first - base))
+      merged.front().first = base;
+    if (merged.back().second < base + *span &&
+        spansOnlyPadding(element, merged.back().second - base, *span))
+      merged.back().second = base + *span;
+  }
+  ranges.assign(merged.begin(), merged.end());
+}
+
 /// Represent an exact external sensitivity interval with existing typed views.
 /// Unpacked aggregate offsets use the same structural layout as provenance;
 /// packed leaves use bit extracts. Explicit ABI padding has no logical value
@@ -2821,6 +2898,19 @@ FailureOr<sim::SimFuncOp> materializeStraightLineKernel(
     SmallVector<Value> watched;
     uint64_t watchBudget =
         schedule::getMaxInlineOperations(design->getParentOfType<ModuleOp>());
+    // An ordered kernel watches each member's live lanes outside the group's
+    // own writes. They are collected first so that ranges split only by
+    // padding merge and ranges inside another watched range of the same root
+    // drop out before any view is built.
+    struct OrderedWatch {
+      Candidate *candidate;
+      IRMapping *mapping;
+      Value watch;
+      uint64_t root;
+      uint64_t base;
+      SmallVector<std::pair<uint64_t, uint64_t>> lanes;
+    };
+    SmallVector<OrderedWatch> orderedWatches;
     for (auto [candidate, mapping] : llvm::zip_equal(candidates, mappings)) {
       auto facts = ordered ? provenance.derive(candidate.function)
                            : analysis::HandleFacts{};
@@ -2854,39 +2944,73 @@ FailureOr<sim::SimFuncOp> materializeStraightLineKernel(
               candidate.function.getSymNameAttr(), effect);
           if (!live)
             return bail("region: unresolved scheduling watch");
-          SmallVector<std::pair<uint64_t, uint64_t>> external;
+          // The parts of [low, high) outside the group's own writes.
+          auto subtractGroupWrites =
+              [&](uint64_t low, uint64_t high,
+                  SmallVectorImpl<std::pair<uint64_t, uint64_t>> &external) {
+                uint64_t cursor = low;
+                for (auto [written, writtenEnd] : groupWrites[*root]) {
+                  if (writtenEnd <= cursor || written >= high)
+                    continue;
+                  if (cursor < written)
+                    external.emplace_back(cursor, written);
+                  cursor = std::min(high, std::max(cursor, writtenEnd));
+                }
+                if (cursor < high)
+                  external.emplace_back(cursor, high);
+              };
+          OrderedWatch pendingWatch{&candidate, mapping.get(), watch, *root,
+                                    range.low, {}};
           // Use exactly the same event lanes as planning. Keeping a dead
           // member watch after fusion could wake another, non-repeatable
           // member: the original member's certificate would no longer justify
           // that composite activation (IEEE 1800-2023 4.3, 9.4.2).
-          for (const auto &lane : *live) {
-            uint64_t cursor = lane.low, end = lane.low + lane.width;
-            for (auto [low, high] : groupWrites[*root]) {
-              if (high <= cursor || low >= end)
-                continue;
-              if (cursor < low)
-                external.emplace_back(cursor, low);
-              cursor = std::min(end, std::max(cursor, high));
-            }
-            if (cursor < end)
-              external.emplace_back(cursor, end);
-          }
-          if (external.empty())
+          for (const auto &lane : *live)
+            subtractGroupWrites(lane.low, lane.low + lane.width,
+                                pendingWatch.lanes);
+          if (pendingWatch.lanes.empty())
             continue;
-          Value handle = mapWatchHandle(watch, *mapping, mapWatchHandle);
-          if (!handle)
-            return bail("region: unhoistable watch handle");
-          for (auto [low, high] : external)
-            if (failed(appendWatchRange(builder, candidate.suspend->getLoc(),
-                                        handle, low - range.low, high - low,
-                                        watched, watchBudget)))
-              return bail("region: watch range budget or layout");
+          mergeWatchRanges(watch.getType(), range.low, pendingWatch.lanes);
+          orderedWatches.push_back(std::move(pendingWatch));
           continue;
         }
         Value handle = mapWatchHandle(watch, *mapping, mapWatchHandle);
         if (!handle)
           return bail("region: unhoistable watch handle");
         watched.push_back(handle);
+      }
+    }
+    if (!orderedWatches.empty()) {
+      // A range inside another watched range of the same root adds no event
+      // (9.4.2): drop it, keeping the first of identical ranges.
+      DenseMap<uint64_t, SmallVector<std::pair<uint64_t, uint64_t>>> covering;
+      for (const OrderedWatch &pendingWatch : orderedWatches)
+        llvm::append_range(covering[pendingWatch.root], pendingWatch.lanes);
+      DenseSet<std::tuple<uint64_t, uint64_t, uint64_t>> emitted;
+      auto subsumed = [&](uint64_t root, std::pair<uint64_t, uint64_t> range) {
+        if (!emitted.insert({root, range.first, range.second}).second)
+          return true;
+        return llvm::any_of(covering[root], [&](auto other) {
+          return other != range && other.first <= range.first &&
+                 range.second <= other.second;
+        });
+      };
+      for (const OrderedWatch &pendingWatch : orderedWatches) {
+        SmallVector<std::pair<uint64_t, uint64_t>> ranges;
+        for (auto range : pendingWatch.lanes)
+          if (!subsumed(pendingWatch.root, range))
+            ranges.push_back(range);
+        if (ranges.empty())
+          continue;
+        Value handle = mapWatchHandle(pendingWatch.watch,
+                                      *pendingWatch.mapping, mapWatchHandle);
+        if (!handle)
+          return bail("region: unhoistable watch handle");
+        for (auto [low, high] : ranges)
+          if (failed(appendWatchRange(
+                  builder, pendingWatch.candidate->suspend->getLoc(), handle,
+                  low - pendingWatch.base, high - low, watched, watchBudget)))
+            return bail("region: watch range budget or layout");
       }
     }
     if (watched.empty())
