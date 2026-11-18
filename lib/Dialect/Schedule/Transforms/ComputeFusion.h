@@ -132,6 +132,21 @@ public:
   /// fixpoint, computed on first use for this context. Net roots carry the
   /// activation-memory net tag.
   const llvm::DenseSet<uint64_t> &getGlitchInsensitiveStorage() const;
+  /// The same greatest fixpoint, also crossing held-state observers
+  /// (isHeldStateObserver). A root in this set but not in
+  /// getGlitchInsensitiveStorage() is observed in transition only by such
+  /// observers; a client must prove for each of them that nothing it can see
+  /// distinguishes the transition from a legal schedule.
+  const llvm::DenseSet<uint64_t> &getHeldStateInsensitiveStorage() const;
+  /// Whether `function` passes analyze()'s final-value observer checks once
+  /// state it holds between activations is allowed: an incomplete update,
+  /// which leaves a variable's value (6.5), as a `case` with no matching item
+  /// (12.5) or a latch (9.2.2.3) does, or a read of its own output. It is
+  /// still a change-triggered Active activation with precise watches,
+  /// exclusive writes and no other effect, but may read inputs it does not
+  /// watch; clients must treat every read as an input. Every transparent
+  /// observer passes too.
+  bool isHeldStateObserver(sim::SimFuncOp function) const;
   /// Builds the activation of every process analyze() can interleave, one
   /// worker per process, so that a serial visit afterwards finds each built.
   /// A no-op off the main thread.
@@ -164,11 +179,20 @@ public:
   }
 
 private:
+  std::optional<CombinationalFusionBody>
+  analyzeImpl(sim::SimFuncOp function,
+              const analysis::HandleDataflowAnalysis &provenance,
+              bool interleaved, CombinationalFusionFailure *failureReason,
+              bool finalValuesOnly, bool retainedState) const;
+  llvm::DenseSet<uint64_t> computeGlitchInsensitiveStorage(
+      bool admitHeldState,
+      llvm::DenseMap<uint64_t, mlir::StringAttr> *observers) const;
   bool unsupported = false;
   ObservationContext observationContext;
   sim::SimDesignOp design;
   const analysis::HandleDataflowAnalysis *provenance = nullptr;
   mutable std::optional<llvm::DenseSet<uint64_t>> glitchInsensitive;
+  mutable std::optional<llvm::DenseSet<uint64_t>> heldStateInsensitive;
   /// Design-wide facts canInterleave needs: toggle-observable roots, watch
   /// resolvability and the change watchers per root. Built once; the planner
   /// asks per owner for thousands of growth candidates.

@@ -676,7 +676,24 @@ std::optional<CombinationalFusionBody> CombinationalFusionAnalysis::analyze(
     sim::SimFuncOp function, const analysis::HandleDataflowAnalysis &analysis,
     bool interleaved, CombinationalFusionFailure *failureReason,
     bool finalValuesOnly) const {
+  return analyzeImpl(function, analysis, interleaved, failureReason,
+                     finalValuesOnly, /*retainedState=*/false);
+}
+
+bool CombinationalFusionAnalysis::isHeldStateObserver(
+    sim::SimFuncOp function) const {
+  return analyzeImpl(function, *provenance, /*interleaved=*/true, nullptr,
+                     /*finalValuesOnly=*/true, /*retainedState=*/true)
+      .has_value();
+}
+
+std::optional<CombinationalFusionBody> CombinationalFusionAnalysis::analyzeImpl(
+    sim::SimFuncOp function, const analysis::HandleDataflowAnalysis &analysis,
+    bool interleaved, CombinationalFusionFailure *failureReason,
+    bool finalValuesOnly, bool retainedState) const {
   using Reason = CombinationalFusionFailure::Reason;
+  assert((!retainedState || (interleaved && finalValuesOnly)) &&
+         "held state is a final-value observer property");
   if (failureReason)
     *failureReason = {};
   auto reject = [&](CombinationalFusionFailure reason)
@@ -708,7 +725,12 @@ std::optional<CombinationalFusionBody> CombinationalFusionAnalysis::analyze(
     const auto &memory = activation->getMemory();
     if (memory.getMayWrites().empty())
       return reject({Reason::IncompleteWrites});
-    if (observationContext == ObservationContext::RegionBoundary) {
+    // A held-state observer may keep any output between activations: an
+    // incomplete update leaves the variable's value (6.5, 12.5), and a read
+    // of its own output state is that held value. Every other condition below
+    // still applies.
+    if (observationContext == ObservationContext::RegionBoundary &&
+        !retainedState) {
       if (!memory.hasCompleteWrites())
         return reject({Reason::IncompleteWrites});
       auto inputs = memory.hasValueDependencies() ? memory.getFinalInputs()
@@ -720,7 +742,7 @@ std::optional<CombinationalFusionBody> CombinationalFusionAnalysis::analyze(
           return reject({Reason::IncomingOutputState});
     }
     std::optional<bool> idempotent;
-    if (!memory.hasCompleteWrites()) {
+    if (!memory.hasCompleteWrites() && !retainedState) {
       // IEEE 1800-2023 4.3/9.4.2/10.4.1: an omitted packed-cell update
       // holds exactly the old value, like an explicit self-assignment. Only
       // the final-value/observer proof may use that equivalence. Keep the
@@ -782,6 +804,10 @@ std::optional<CombinationalFusionBody> CombinationalFusionAnalysis::analyze(
     // overwritten publications. Ordinary fusion keeps every intermediate input.
     if (finalValuesOnly && memory.hasValueDependencies())
       inputs = memory.getFinalInputs();
+    // A held-state observer's inputs, watched or not, are its clients' cone
+    // seeds rather than a transparency obligation.
+    if (retainedState)
+      inputs = {};
     // Every publication and control decision must be independent of incoming
     // output state. Reaching values can discharge old snapshots whose lanes
     // are fully overwritten without hiding an intermediate publication.
@@ -1353,10 +1379,23 @@ bool CombinationalFusionAnalysis::canReorder(
 
 const DenseSet<uint64_t> &
 CombinationalFusionAnalysis::getGlitchInsensitiveStorage() const {
-  if (glitchInsensitive)
-    return *glitchInsensitive;
-  glitchInsensitive.emplace();
-  auto &result = *glitchInsensitive;
+  if (!glitchInsensitive)
+    glitchInsensitive = computeGlitchInsensitiveStorage(
+        /*admitHeldState=*/false, &glitchObservers);
+  return *glitchInsensitive;
+}
+
+const DenseSet<uint64_t> &
+CombinationalFusionAnalysis::getHeldStateInsensitiveStorage() const {
+  if (!heldStateInsensitive)
+    heldStateInsensitive = computeGlitchInsensitiveStorage(
+        /*admitHeldState=*/true, /*observers=*/nullptr);
+  return *heldStateInsensitive;
+}
+
+DenseSet<uint64_t> CombinationalFusionAnalysis::computeGlitchInsensitiveStorage(
+    bool admitHeldState, DenseMap<uint64_t, StringAttr> *observers) const {
+  DenseSet<uint64_t> result;
   auto design = this->design;
   auto graph = design.getComputeGraphAttr();
   if (unsupported || !graph || graph.getVpi() != schedule::ComputeVPIMode::Off)
@@ -1422,8 +1461,10 @@ CombinationalFusionAnalysis::getGlitchInsensitiveStorage() const {
     auto [found, inserted] = transparent.try_emplace(owner);
     if (inserted) {
       auto function = symbols.lookup<sim::SimFuncOp>(owner);
-      if (function && analyze(function, *provenance, /*interleaved=*/true,
-                              nullptr, /*finalValuesOnly=*/true)) {
+      if (function &&
+          (analyze(function, *provenance, /*interleaved=*/true, nullptr,
+                   /*finalValuesOnly=*/true) ||
+           (admitHeldState && isHeldStateObserver(function)))) {
         SmallVector<uint64_t> roots;
         for (const auto &write :
              activations.at(function)->getMemory().getMayWrites())
@@ -1448,8 +1489,8 @@ CombinationalFusionAnalysis::getGlitchInsensitiveStorage() const {
         if (roots && !exposed)
           continue;
         // Remember the first opaque observer along the propagation path.
-        glitchObservers[root] =
-            exposed ? glitchObservers.lookup(*exposed) : owner;
+        if (observers)
+          (*observers)[root] = exposed ? observers->lookup(*exposed) : owner;
         result.erase(root);
         changed = true;
         break;

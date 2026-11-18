@@ -1407,6 +1407,136 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
     }
   }
 
+  // Held-state observers: change-triggered combinational activations that
+  // keep some output between activations, such as a `case` whose selector
+  // matches no item (12.5) or a latch (9.2.2.3). Seeing a direct
+  // store before the NBA region can change what such an observer holds, so
+  // a root they watch is not glitch-insensitive. The exception is a root
+  // whose observers are all quiescent for the kernel (see planRoots). An
+  // observer's cone is the set of written roots that reach its inputs through
+  // transparent processes and other held-state observers.
+  struct HeldCone {
+    SmallVector<uint64_t> roots;
+    /// Held-state observers writing a root of the cone, itself included.
+    SmallVector<StringAttr> observers;
+  };
+  DenseMap<StringAttr, HeldCone> heldCones;
+  DenseMap<uint64_t, SmallVector<StringAttr>> heldObserversOf;
+  DenseMap<StringAttr, SmallVector<uint32_t>> heldBlocks;
+  DenseMap<StringAttr, SmallVector<schedule::ComputeFragmentAttr>> fragmentsOf;
+  // The processes exposure follows: with held-state observers in play, an
+  // activation reading a held observer's output also sees its inputs early.
+  std::vector<ConeAnalysis::Process> exposureProcesses = combinationalProcesses;
+  const DenseSet<uint64_t> &heldInsensitive =
+      combinational.getHeldStateInsensitiveStorage();
+  if (llvm::any_of(heldInsensitive, [&](uint64_t root) {
+        return !glitchInsensitive.contains(root);
+      })) {
+    for (Attribute attribute : nodes)
+      if (auto fragment = dyn_cast<schedule::ComputeFragmentAttr>(attribute))
+        fragmentsOf[fragment.getFunction().getAttr()].push_back(fragment);
+    // Observers of at least one root that only held-state observers see.
+    DenseMap<StringAttr, bool> heldCache;
+    auto isHeld = [&](StringAttr name) {
+      auto [found, inserted] = heldCache.try_emplace(name, false);
+      if (inserted && !isTransparent(name))
+        if (auto function = symbols.lookup<sim::SimFuncOp>(name))
+          found->second = combinational.isHeldStateObserver(function);
+      return found->second;
+    };
+    llvm::SetVector<StringAttr> held;
+    for (auto &[root, list] : watchers)
+      if (heldInsensitive.contains(root) && !glitchInsensitive.contains(root))
+        for (StringAttr watcher : list)
+          if (isHeld(watcher))
+            held.insert(watcher);
+    SmallVector<StringAttr> ordered(held.begin(), held.end());
+    llvm::sort(ordered, [](StringAttr a, StringAttr b) {
+      return a.getValue() < b.getValue();
+    });
+    // Every read and watch is an input: a read the observer does not wait on
+    // still decides what it holds. An unresolved one leaves its cone open.
+    DenseMap<StringAttr, SetVector<uint64_t>> inputs;
+    DenseSet<StringAttr> open;
+    for (Attribute attribute : nodes) {
+      auto fragment = dyn_cast<schedule::ComputeFragmentAttr>(attribute);
+      if (!fragment)
+        continue;
+      StringAttr name = fragment.getFunction().getAttr();
+      if (!held.contains(name))
+        continue;
+      heldBlocks[name].push_back(fragment.getBlock());
+      for (auto effect :
+           fragment.getEffects().getAsRange<schedule::ComputeEffectAttr>()) {
+        if (effect.getTarget() == schedule::ComputeTargetKind::Local ||
+            (effect.getEffect() != schedule::ComputeEffectKind::Read &&
+             effect.getEffect() != schedule::ComputeEffectKind::Watch))
+          continue;
+        if (std::optional<SmallVector<uint64_t>> roots =
+                effectRoots(name, effect))
+          inputs[name].insert(roots->begin(), roots->end());
+        else
+          open.insert(name);
+      }
+    }
+    DenseMap<StringAttr, SmallVector<uint64_t>> heldWrites;
+    for (auto &[root, list] : writers)
+      for (const Writer &write : list)
+        if (held.contains(write.function))
+          heldWrites[write.function].push_back(root);
+    // A change can make a transparent process run and publish again, even
+    // where no published value depends on it, and the held-state observer
+    // then evaluates again. Its cone therefore follows every watch to every
+    // write, as the glitch-insensitivity fixpoint does, not value
+    // dependencies alone.
+    std::vector<ConeAnalysis::Process> coneProcesses = combinationalProcesses;
+    for (ConeAnalysis::Process &process : coneProcesses) {
+      process.precise = false;
+      process.dependencies.clear();
+    }
+    for (StringAttr name : ordered)
+      coneProcesses.push_back({symbols.lookup<sim::SimFuncOp>(name),
+                               inputs[name].takeVector(),
+                               heldWrites.lookup(name)});
+    SmallVector<uint64_t> writtenRoots;
+    for (auto &[root, list] : writers)
+      writtenRoots.push_back(root);
+    llvm::sort(writtenRoots);
+    // An unresolved read may observe any root, so no root is then known to
+    // reach only bounded cones.
+    ArrayRef<ConeAnalysis::Process> heldProcesses =
+        open.empty()
+            ? ArrayRef(coneProcesses).drop_front(combinationalProcesses.size())
+            : ArrayRef<ConeAnalysis::Process>();
+    for (const ConeAnalysis::Process &process : heldProcesses) {
+      StringAttr name = sim::SimFuncOp(process.function).getSymNameAttr();
+      DataFlowSolver solver;
+      solver.load<ConeAnalysis>(design.getOperation(), coneProcesses,
+                                process.watched,
+                                ConeAnalysis::Direction::Sources);
+      if (process.watched.empty() || failed(solver.initializeAndRun(design))) {
+        heldCones.clear();
+        heldObserversOf.clear();
+        break;
+      }
+      HeldCone &cone = heldCones[name];
+      DenseSet<StringAttr> observers{name};
+      cone.observers.push_back(name);
+      for (uint64_t root : writtenRoots) {
+        if (!ConeAnalysis::contains(solver, design.getOperation(), root))
+          continue;
+        cone.roots.push_back(root);
+        heldObserversOf[root].push_back(name);
+        for (const Writer &write : writers.lookup(root))
+          if (held.contains(write.function) &&
+              observers.insert(write.function).second)
+            cone.observers.push_back(write.function);
+      }
+    }
+    if (!heldCones.empty())
+      llvm::append_range(exposureProcesses, heldProcesses);
+  }
+
   // IEEE 1800-2023 20.2 and 9.2.3: `$finish` ends the simulation at once,
   // and final procedures then read the state with no remaining scheduled
   // event executed, including NBAs still pending. Find the activations that
@@ -1504,6 +1634,30 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
   DenseMap<std::pair<uint64_t, unsigned>, EdgeBodies> edgeBodies;
   DenseMap<uint64_t, SmallVector<uint64_t>> classClockRoots;
   DenseMap<uint64_t, DenseSet<uint64_t>> classNetCopies;
+  // The events of each multi-edge member, for the held-state proof's NBA
+  // order. Copied, since planning later removes members from their groups.
+  struct MultiEdgeEvents {
+    SmallVector<uint64_t, 2> roots;
+    SmallVector<sim::EdgeKind, 2> edges;
+  };
+  DenseMap<StringAttr, MultiEdgeEvents> multiEdgeMembers;
+  // Across kernels, for held-state observers (planRoots): the functions a
+  // kernel stores a root of some held cone for, and the writers a kernel's
+  // proof relied on to execute after its members, keeping their NBAs. One
+  // function in both would apply some NBA early that a proof assumed late.
+  DenseSet<StringAttr> heldStorers, trailingWriters;
+  for (auto &[key, members] : groups)
+    for (const Member &member : members) {
+      if (!member.eventSignature)
+        continue;
+      auto wait = cast<sim::SimSuspendAnyOp>(member.wait->getTerminator());
+      MultiEdgeEvents &events =
+          multiEdgeMembers[sim::SimFuncOp(member.function).getSymNameAttr()];
+      events.roots.assign(member.eventRoots.begin(), member.eventRoots.end());
+      events.edges.clear();
+      for (int32_t edge : wait.getEdges())
+        events.edges.push_back(static_cast<sim::EdgeKind>(edge));
+    }
   for (auto &[key, members] : groups) {
     sim::EdgeKind edge = groupEdge(key);
     bool directed =
@@ -1883,15 +2037,101 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
           found != edgeBodies.end())
         otherSlot = &found->second;
     }
-    auto meetsKernel = [&](StringAttr function, uint32_t blockIndex) {
+    auto meetsPhases = [&](StringAttr function, uint32_t blockIndex,
+                           Phases kernel) {
       Phases at = phases.getPhases(function, blockIndex);
       if (otherSlot && otherSlot->indices.contains({function, blockIndex})) {
         at.later = 0;
         if (otherSlotAtZero)
           at.zero = 0;
       }
-      return at.meets(kernelPhases);
+      return at.meets(kernel);
     };
+    auto meetsKernel = [&](StringAttr function, uint32_t blockIndex) {
+      return meetsPhases(function, blockIndex, kernelPhases);
+    };
+    // The kernel's phases without time zero when its edge cannot occur then.
+    // Change phases do not tell edges apart. If every time-zero write of the
+    // class root (outside its declaration initializer) stores the same known
+    // level the edge cannot end at, the root moves at most once, to that
+    // level, and a posedge needs a final 1, x or z, a negedge a final 0, x or
+    // z (Table 9-2). Writes inside calls, delayed NBAs, other writing
+    // operations and unresolved targets keep time zero.
+    Phases edgeKernelPhases = kernelPhases;
+    if (kernelPhases.zero && !multiEvent && netCopies.empty() &&
+        classRoot < ActivationMemoryAnalysis::netRootTag &&
+        (kernelEdge == sim::EdgeKind::Posedge ||
+         kernelEdge == sim::EdgeKind::Negedge) &&
+        llvm::none_of(
+            unknownWriters,
+            [&](const Writer &write) {
+              return phases.getPhases(write.function, write.block).zero != 0;
+            })) {
+      bool rising = kernelEdge == sim::EdgeKind::Posedge;
+      DenseSet<StringAttr> scanned;
+      bool quiet = true;
+      for (const Writer &write : writers.lookup(classRoot)) {
+        if (!quiet)
+          break;
+        if (write.function == rootInitializer.getSymNameAttr() ||
+            !phases.getPhases(write.function, write.block).zero ||
+            !scanned.insert(write.function).second)
+          continue;
+        auto function = symbols.lookup<sim::SimFuncOp>(write.function);
+        if (!function) {
+          quiet = false;
+          break;
+        }
+        for (Block &block : function.getBody()) {
+          if (!quiet || !phases.getPhases(&block).zero)
+            continue;
+          for (Operation &operation : block) {
+            Value target, value;
+            if (auto store = dyn_cast<sim::SimRefStoreOp>(&operation)) {
+              target = store.getReference();
+              value = store.getValue();
+            } else if (auto enqueue =
+                           dyn_cast<sim::SimNBAEnqueueOp>(&operation)) {
+              target = enqueue.getDestination();
+              value = enqueue.getDelay() ? Value() : enqueue.getValue();
+            } else {
+              // Any other write may be one of the class root, and so may a
+              // task or process-control operation.
+              if (isa<sim::SimTaskCallOp, sim::SimClassVirtualTaskCallOp,
+                      sim::SimProcessControlOp, sim::SimControlBoundaryOp>(
+                      operation)) {
+                quiet = false;
+                continue;
+              }
+              if (isSuspension(&operation) || isMemoryEffectFree(&operation))
+                continue;
+              auto effects = dyn_cast<MemoryEffectOpInterface>(&operation);
+              if (!effects || effects.hasEffect<MemoryEffects::Write>() ||
+                  isa<CallOpInterface, sim::SimSpawnOp>(operation))
+                quiet = false;
+              continue;
+            }
+            std::optional<uint64_t> root = phases.getRoot(function, target);
+            if (!root) {
+              quiet = false;
+              break;
+            }
+            if (*root != classRoot)
+              continue;
+            auto level = value ? value.getDefiningOp<sim::SimLogicConstantOp>()
+                               : sim::SimLogicConstantOp();
+            if (!level || level.getValue().getBitWidth() != 1 ||
+                !level.getUnknown().isZero() ||
+                level.getValue().isOne() == rising) {
+              quiet = false;
+              break;
+            }
+          }
+        }
+      }
+      if (quiet)
+        edgeKernelPhases.zero = 0;
+    }
 
     // The kernel must run at most once between NBA regions. A second run in
     // the same phase would read its own direct stores, where its NBAs would
@@ -2055,7 +2295,8 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
     // every activation that may run between the kernel and its NBA region.
     enum class Mode { Immediate, Deferred };
     auto planRoots = [&, &members = members](Mode mode,
-                                             llvm::StringMap<uint64_t> &reasons)
+                                             llvm::StringMap<uint64_t> &reasons,
+                                             DenseSet<StringAttr> &trailing)
         -> std::optional<DenseSet<uint64_t>> {
       auto refuse = [&](StringRef reason) { ++reasons[reason]; };
       bool deferred = mode == Mode::Deferred;
@@ -2109,7 +2350,7 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
       // A root is exposed when anything in its combinational cone is accessed
       // by such an activation, or feeds this kernel's clock.
       DataFlowSolver exposure;
-      exposure.load<ConeAnalysis>(design.getOperation(), combinationalProcesses,
+      exposure.load<ConeAnalysis>(design.getOperation(), exposureProcesses,
                                   seeds, ConeAnalysis::Direction::Sources);
       if (failed(exposure.initializeAndRun(design))) {
         refuse("exposure analysis");
@@ -2128,6 +2369,8 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
         return mayFollow(write.function, write.block);
       };
       DenseSet<uint64_t> eligible;
+      // Roots only held-state observers see, decided after the others.
+      SmallVector<uint64_t> heldPending;
       for (Member &member : members)
         for (uint64_t root : member.nbaWrites) {
           if (eligible.contains(root))
@@ -2143,9 +2386,28 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
             continue;
           }
           if (!glitchInsensitive.contains(root)) {
-            refuse("root observed");
-            if (report)
-              ++observedRootsBy[combinational.getGlitchObserver(root)];
+            if (!heldInsensitive.contains(root) ||
+                !heldObserversOf.count(root)) {
+              refuse("root observed");
+              if (report)
+                ++observedRootsBy[combinational.getGlitchObserver(root)];
+              continue;
+            }
+            heldPending.push_back(root);
+          } else if (heldObserversOf.count(root)) {
+            // Insensitive for its watchers, but a held-state observer reads
+            // it: storing it early is visible to that observer whenever
+            // another input wakes it before this NBA would apply.
+            heldPending.push_back(root);
+          }
+          // An earlier kernel's proof keeps this member's NBAs late.
+          if (heldObserversOf.count(root) &&
+              llvm::any_of(writers.lookup(root), [&](const Writer &write) {
+                return write.kind == schedule::ComputeEffectKind::NBA &&
+                       memberNames.contains(write.function) &&
+                       trailingWriters.contains(write.function);
+              })) {
+            refuse("root held-state observer");
             continue;
           }
           if (isExposed(root)) {
@@ -2169,6 +2431,272 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
           eligible.insert(root);
         }
 
+      // A held-state observer sees the direct stores as one legal NBA region
+      // when nothing else changes its cone in the kernel's slot (4.4, 4.7,
+      // 10.4.2). In the reference, the members' NBAs are all pending until
+      // the NBA region, which may apply every one of them before any
+      // evaluation they cause (4.5, 4.6(b)). Moving them into the kernel's
+      // Active phase instead lets the observer evaluate once on those same
+      // values, unless something else changes its cone in that phase, or lands
+      // in the same NBA region in an order the members cannot precede. Then a
+      // reference evaluation the observer must make on old values could be
+      // lost, and with it what it holds, e.g. under an X/Z case selector
+      // (12.5). So no clock of the kernel may feed the cone, and every write
+      // to a cone root that can land with the kernel must be one of:
+      //   - the root initializer, before any slot;
+      //   - a transparent or held-state process, which changes only when
+      //     its inputs do (the cone includes the inputs of those it reaches);
+      //   - an immediate NBA of a member, stored directly together with that
+      //     member's other NBAs into the cone;
+      //   - an NBA a body of this clock edge executes in the kernel's phase.
+      // Activations that read the observer's outputs see its inputs early, so
+      // exposure follows held-state observers too.
+      // No held-state observer of the cone may evaluate in the kernel's
+      // phases, including its time-zero startup (9.2.2.2.2). A refused root
+      // can refuse its member's other roots in turn, to a fixpoint.
+      if (!heldPending.empty()) {
+        DenseSet<uint64_t> clocks(clockRoots.begin(), clockRoots.end());
+        // Whether `function`, an edge-triggered member or a writer that runs
+        // in these phases only after this edge, may execute after every
+        // member with the same effects (4.7): there it writes only by NBA and
+        // reads no root anything writes otherwise there. Its own trigger has
+        // already occurred, so its waits do not matter. Without this, a
+        // blocking write it reads, or one it makes that a member reads, can
+        // force it before a member, as the kernel's own order and values do.
+        bool unknownBlocking =
+            llvm::any_of(unknownWriters, [&](const Writer &w) {
+              return w.kind != schedule::ComputeEffectKind::NBA &&
+                     meetsPhases(w.function, w.block, edgeKernelPhases);
+            });
+        DenseMap<uint64_t, bool> blockingWritten;
+        auto writtenInPhase = [&](uint64_t root) {
+          auto [found, inserted] = blockingWritten.try_emplace(root, false);
+          if (inserted)
+            found->second =
+                llvm::any_of(writers.lookup(root), [&](const Writer &w) {
+                  return w.kind != schedule::ComputeEffectKind::NBA &&
+                         w.function != rootInitializer.getSymNameAttr() &&
+                         meetsPhases(w.function, w.block, edgeKernelPhases);
+                });
+          return found->second;
+        };
+        DenseMap<StringAttr, bool> commuting;
+        auto commutes = [&](StringAttr function) {
+          if (auto found = commuting.find(function); found != commuting.end())
+            return found->second;
+          bool result = !unknownBlocking;
+          for (schedule::ComputeFragmentAttr fragment :
+               fragmentsOf.lookup(function)) {
+            if (!result)
+              break;
+            if (!meetsPhases(function, fragment.getBlock(), edgeKernelPhases))
+              continue;
+            for (auto effect : fragment.getEffects()
+                                   .getAsRange<schedule::ComputeEffectAttr>()) {
+              auto kind = effect.getEffect();
+              if (effect.getTarget() == schedule::ComputeTargetKind::Local ||
+                  kind == schedule::ComputeEffectKind::NBA ||
+                  kind == schedule::ComputeEffectKind::Watch)
+                continue;
+              if (kind != schedule::ComputeEffectKind::Read) {
+                result = false;
+                break;
+              }
+              std::optional<SmallVector<uint64_t>> roots =
+                  effectRoots(function, effect);
+              if (!roots || llvm::any_of(*roots, writtenInPhase)) {
+                result = false;
+                break;
+              }
+            }
+          }
+          commuting[function] = result;
+          return result;
+        };
+        // Whether no other process enqueues an NBA to a root `function` does
+        // in the kernel's phases. Moving `function` after the members then
+        // reorders no NBAs of one variable (4.6(b)).
+        DenseMap<StringAttr, bool> owning;
+        auto ownsItsNBAs = [&](StringAttr function) {
+          if (auto found = owning.find(function); found != owning.end())
+            return found->second;
+          auto otherNBA = [&](const Writer &w) {
+            return w.function != function &&
+                   w.kind == schedule::ComputeEffectKind::NBA &&
+                   (w.deferred ||
+                    meetsPhases(w.function, w.block, edgeKernelPhases));
+          };
+          bool result = llvm::none_of(unknownWriters, otherNBA);
+          for (schedule::ComputeFragmentAttr fragment :
+               fragmentsOf.lookup(function)) {
+            for (auto effect : fragment.getEffects()
+                                   .getAsRange<schedule::ComputeEffectAttr>()) {
+              if (!result)
+                break;
+              if (effect.getTarget() == schedule::ComputeTargetKind::Local ||
+                  effect.getEffect() != schedule::ComputeEffectKind::NBA)
+                continue;
+              std::optional<SmallVector<uint64_t>> roots =
+                  effectRoots(function, effect);
+              result = roots && llvm::none_of(*roots, [&](uint64_t root) {
+                         return llvm::any_of(writers.lookup(root), otherNBA);
+                       });
+            }
+          }
+          owning[function] = result;
+          return result;
+        };
+        // A blocking write in the kernel's phase, or an NBA landing in it,
+        // changes the cone where the observer must still see the members' old
+        // values. An NBA executed in the kernel's phase lands in the members'
+        // NBA region, performed in execution order (4.6(b)): one executed
+        // before the members' edge, by the process causing it or before a
+        // later edge in the phase, applies first, and the observer could
+        // never see the members' new values with its old one. Only a process
+        // that runs in these phases solely after this clock edge (9.4.2), as
+        // the members do and in any order with them (4.7), may also follow
+        // them: a body of this edge, or a multi-edge member whose other
+        // events never occur in the kernel's phases. A storage root in the
+        // class is an exact copy of it, so its edges are the class's. The same
+        // root's NBA order is check (b)'s.
+        const EdgeBodies *sameEdge = nullptr;
+        bool directed = kernelEdge == sim::EdgeKind::Posedge ||
+                        kernelEdge == sim::EdgeKind::Negedge;
+        if (directed)
+          if (auto found = edgeBodies.find(
+                  {classRoot, static_cast<unsigned>(kernelEdge)});
+              found != edgeBodies.end())
+            sameEdge = &found->second;
+        auto afterEdgeOnly = [&](const Writer &write) {
+          if (sameEdge &&
+              sameEdge->indices.contains({write.function, write.block}))
+            return true;
+          auto found = multiEdgeMembers.find(write.function);
+          if (!directed || found == multiEdgeMembers.end() ||
+              found->second.roots.size() != found->second.edges.size())
+            return false;
+          bool thisEdge = false;
+          for (auto [root, edge] :
+               llvm::zip_equal(found->second.roots, found->second.edges)) {
+            if (root < ActivationMemoryAnalysis::netRootTag &&
+                classes.find(root) == classRoot && edge == kernelEdge) {
+              thisEdge = true;
+              continue;
+            }
+            if (phases.getChangePhases(root).meets(edgeKernelPhases))
+              return false;
+          }
+          return thisEdge;
+        };
+        // A writer another kernel stores a held-cone root for applies some
+        // NBA early, so it cannot trail; one that trails is recorded, so that
+        // its own kernel keeps those NBAs.
+        auto landsWithKernel = [&](const Writer &write,
+                                   DenseSet<StringAttr> *trailed = nullptr) {
+          if (write.kind != schedule::ComputeEffectKind::NBA)
+            return meetsPhases(write.function, write.block, edgeKernelPhases);
+          if (write.deferred ||
+              analysis::ActivationPhaseAnalysis::afterNBA(
+                  phases.getPhases(write.function, write.block))
+                  .meets(edgeKernelPhases))
+            return true;
+          if (!meetsPhases(write.function, write.block, edgeKernelPhases))
+            return false;
+          if (heldStorers.contains(write.function) || !afterEdgeOnly(write) ||
+              !commutes(write.function) || !ownsItsNBAs(write.function))
+            return true;
+          if (trailed)
+            trailed->insert(write.function);
+          return false;
+        };
+        auto memberNBA = [&](const Writer &write) {
+          return write.kind == schedule::ComputeEffectKind::NBA &&
+                 !write.deferred && memberNames.contains(write.function);
+        };
+        bool unknownLands =
+            llvm::any_of(unknownWriters, [&](const Writer &write) {
+              return landsWithKernel(write);
+            });
+        DenseMap<StringAttr, bool> quiet;
+        DenseMap<StringAttr, DenseSet<StringAttr>> trailedBy;
+        auto isQuiet = [&](StringAttr held) {
+          if (auto found = quiet.find(held); found != quiet.end())
+            return found->second;
+          auto cone = heldCones.find(held);
+          bool result =
+              cone != heldCones.end() && !unknownLands &&
+              llvm::none_of(
+                  cone->second.observers,
+                  [&](StringAttr observer) {
+                    return llvm::any_of(
+                        heldBlocks.lookup(observer), [&](uint32_t block) {
+                          return meetsPhases(observer, block, edgeKernelPhases);
+                        });
+                  }) &&
+              llvm::none_of(cone->second.roots, [&](uint64_t root) {
+                return clocks.contains(root) ||
+                       llvm::any_of(
+                           writers.lookup(root), [&](const Writer &write) {
+                             return write.function !=
+                                        rootInitializer.getSymNameAttr() &&
+                                    !isTransparent(write.function) &&
+                                    !heldBlocks.count(write.function) &&
+                                    !memberNBA(write) &&
+                                    landsWithKernel(write, &trailedBy[held]);
+                           });
+              });
+          quiet[held] = result;
+          return result;
+        };
+        // One reference order serves every observer: the kernel's order,
+        // with every member keeping an NBA into a held-state observer's cone
+        // moved after the members storing a root of such a cone. One process
+        // executes its NBAs in statement order (4.6(a)) and they apply in that
+        // order (4.6(b)), so no member may do both. A keeper must commute with
+        // the phase and own its NBA roots, so that moving it after the others
+        // changes neither its effects nor the order of any variable's NBAs.
+        // Refusing a root can make its member a keeper, so iterate to a
+        // fixpoint.
+        for (bool changed = true; changed;) {
+          changed = false;
+          DenseSet<StringAttr> storers;
+          for (auto &[root, list] : heldObserversOf)
+            if (eligible.contains(root))
+              for (const Writer &write : writers.lookup(root))
+                if (memberNBA(write))
+                  storers.insert(write.function);
+          auto trails = [&](const Writer &kept) {
+            return !memberNBA(kept) ||
+                   (!storers.contains(kept.function) &&
+                    commutes(kept.function) && ownsItsNBAs(kept.function));
+          };
+          for (uint64_t root : heldPending) {
+            if (!eligible.contains(root))
+              continue;
+            for (StringAttr held : heldObserversOf.lookup(root)) {
+              if (isQuiet(held) &&
+                  llvm::all_of(
+                      heldCones.find(held)->second.roots, [&](uint64_t other) {
+                        return eligible.contains(other) ||
+                               llvm::all_of(writers.lookup(other), trails);
+                      }))
+                continue;
+              eligible.erase(root);
+              refuse("root held-state observer");
+              if (report)
+                ++observedRootsBy[held];
+              changed = true;
+              break;
+            }
+          }
+        }
+        for (uint64_t root : heldPending)
+          if (eligible.contains(root))
+            for (StringAttr held : heldObserversOf.lookup(root))
+              for (StringAttr writer : trailedBy.lookup(held))
+                trailing.insert(writer);
+      }
+
       return eligible;
     };
 
@@ -2178,9 +2706,11 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
     // immediate kernel refuses for them ((b), (d)), or rescue a clock that
     // could run an immediate kernel twice per phase.
     llvm::StringMap<uint64_t> immediateReasons, deferredReasons;
+    DenseSet<StringAttr> immediateTrailing, deferredTrailing;
     std::optional<DenseSet<uint64_t>> immediate, deferred;
     if (singleClockSource)
-      immediate = planRoots(Mode::Immediate, immediateReasons);
+      immediate =
+          planRoots(Mode::Immediate, immediateReasons, immediateTrailing);
     if (defer && deferrable.contains(&members) &&
         (!immediate ||
          immediateReasons.count("root accessed by event activation") ||
@@ -2188,7 +2718,7 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
       if (StringRef blocker = analyzeDeferral(); !blocker.empty())
         reject(("deferral: " + blocker).str());
       else
-        deferred = planRoots(Mode::Deferred, deferredReasons);
+        deferred = planRoots(Mode::Deferred, deferredReasons, deferredTrailing);
     }
     bool useDeferred =
         deferred && (!immediate || deferred->size() > immediate->size());
@@ -2206,6 +2736,14 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
       rejections[reason] += total;
     DenseSet<uint64_t> eligibleRoots =
         std::move(useDeferred ? *deferred : *immediate);
+    for (StringAttr writer : useDeferred ? deferredTrailing : immediateTrailing)
+      trailingWriters.insert(writer);
+    for (uint64_t root : eligibleRoots)
+      if (heldObserversOf.count(root))
+        for (const Writer &write : writers.lookup(root))
+          if (write.kind == schedule::ComputeEffectKind::NBA &&
+              memberNames.contains(write.function))
+            heldStorers.insert(write.function);
 
     // Kernel order: readers of an eligible root before its NBA writers;
     // otherwise keep the existing schedule order, including between writers
@@ -2842,6 +3380,18 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
     for (unsigned index = 0; index != rootList.size(); ++index)
       if (!lateReads[index].empty() || opaqueLate.test(index))
         if (!snapshots.count(index) && !delayed.test(index))
+          unsupported.set(index);
+    // The held-state proof (planRoots) assumed every root of a held cone the
+    // plan admits is stored. If one keeps its NBA here, every other one keeps
+    // its NBA too: a member could otherwise store one and keep another, which
+    // the proof's single reference order forbids (4.6(b)). Kept NBAs are the
+    // reference itself.
+    if (llvm::any_of(llvm::enumerate(rootList), [&](auto entry) {
+          return unsupported.test(entry.index()) &&
+                 heldObserversOf.count(entry.value());
+        }))
+      for (auto [index, root] : llvm::enumerate(rootList))
+        if (heldObserversOf.count(root))
           unsupported.set(index);
     builder.setInsertionPoint(activation->getTerminator());
     for (auto &[index, snapshot] : snapshots) {
