@@ -1,5 +1,6 @@
 // RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-unroll-loops,schedule-version-known-activations{minimum-benefit=1})' -o /dev/null 2>&1 | FileCheck %s
 // RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-set-module-attributes{attrs="{schedule.native.max_inline_ops = 0 : i64}"},test-talos-unroll-loops,schedule-version-known-activations{minimum-benefit=1})' -o /dev/null 2>&1 | FileCheck %s --allow-empty --check-prefix=UNLIMITED
+// RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-unroll-loops,schedule-version-known-activations{minimum-benefit=1 checked-reads=true})' -o /dev/null 2>&1 | FileCheck %s --check-prefix=CHECKED
 
 // A clocked kernel above the inline budget fuses many independent processes, so
 // one X/Z among all their inputs would send every member to its four-state body.
@@ -19,6 +20,10 @@
 // and so does any other large function.
 // CHECK-NOT: talos known activation: __talos_clocked_0_2_0
 // CHECK-NOT: talos known activation: large_function
+
+// Checked reads transfer later uses of each read, which the segment copies
+// planned on the untouched body would not see, so no whole-body copy is made.
+// CHECKED-NOT: talos known activation whole body
 
 // Without an inline budget nothing counts as large: the source keeps its one
 // body, and the variant gets one whole-body copy as any small activation does.

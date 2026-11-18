@@ -1164,12 +1164,16 @@ public:
                                       staysUnknown, provenKnownStore,
                                       large ? 1u : 0u, inputs->topology.get()});
     // A large kernel's two-state variant also gets one copy of its whole body
-    // under one check (below). Plan it on the untouched body too.
+    // under one check (below). Plan it on the untouched body too. The segment
+    // plan is then applied to the original operations after that copy, so
+    // only a whole-body copy that changes none of them qualifies: one with no
+    // checked reads (their transfer renames later uses) and no private slot
+    // to test (its allocation would be hoisted).
     std::optional<Segments> wholeSegments;
     std::optional<LocalUnknownAnalysis> wholeAnalysis;
-    if (large &&
+    if (large && !checkedReads &&
         schedule::has<schedule::Field::EvalInductiveTwoState>(function)) {
-      wholeSegments.emplace(cut(function, segmentSize));
+      wholeSegments.emplace(cut(function, 0));
       wholeAnalysis.emplace(
           function, handles,
           LocalUnknownAnalysis::Options{&wholeSegments->segmentation,
@@ -1229,6 +1233,8 @@ public:
     // the whole-body copy only cloned. Each failed whole-body check costs one
     // summary scan (IEEE 1800-2023 6.3.1).
     if (wholeAnalysis && wholeAnalysis->getSegments().size() == 1 &&
+        wholeAnalysis->getSegments().front().checks == 0 &&
+        wholeAnalysis->getSegments().front().slotChecks.empty() &&
         profitable(wholeAnalysis->getSegments().front())) {
       Versioner outer(function, *wholeAnalysis, *inputs);
       const auto &whole = wholeAnalysis->getSegments().front();
