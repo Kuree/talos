@@ -141,11 +141,12 @@ public:
   /// Whether `function` passes analyze()'s final-value observer checks once
   /// state it holds between activations is allowed: an incomplete update,
   /// which leaves a variable's value (6.5), as a `case` with no matching item
-  /// (12.5) or a latch (9.2.2.3) does, or a read of its own output. It is
-  /// still a change-triggered Active activation with precise watches,
-  /// exclusive writes and no other effect, but may read inputs it does not
-  /// watch; clients must treat every read as an input. Every transparent
-  /// observer passes too.
+  /// does (12.5), or a read of its own output. It is still a change-triggered
+  /// Active activation of an interleavable kind (always_comb, a continuous or
+  /// port copy, or an armed `always @(list)`; not yet always_latch, 9.2.2.3)
+  /// with precise watches, exclusive writes and no other effect, but may read
+  /// inputs it does not watch; clients must treat every read as an input.
+  /// Every transparent observer passes too.
   bool isHeldStateObserver(sim::SimFuncOp function) const;
   /// Builds the activation of every process analyze() can interleave, one
   /// worker per process, so that a serial visit afterwards finds each built.

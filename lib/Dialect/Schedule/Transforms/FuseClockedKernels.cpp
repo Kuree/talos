@@ -1409,12 +1409,13 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
 
   // Held-state observers: change-triggered combinational activations that
   // keep some output between activations, such as a `case` whose selector
-  // matches no item (12.5) or a latch (9.2.2.3). Seeing a direct
-  // store before the NBA region can change what such an observer holds, so
-  // a root they watch is not glitch-insensitive. The exception is a root
-  // whose observers are all quiescent for the kernel (see planRoots). An
-  // observer's cone is the set of written roots that reach its inputs through
-  // transparent processes and other held-state observers.
+  // matches no item (12.5); see isHeldStateObserver for the kinds admitted.
+  // Seeing a direct store before the NBA region can change what such an
+  // observer holds, so a root they watch is not glitch-insensitive. The
+  // exception is a root whose observers are all quiescent for the kernel (see
+  // planRoots). An observer's cone is the set of written roots that reach its
+  // inputs through transparent processes and the held-state observers
+  // collected here; any other writer of a cone root is checked as a writer.
   struct HeldCone {
     SmallVector<uint64_t> roots;
     /// Held-state observers writing a root of the cone, itself included.
@@ -2438,7 +2439,7 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
       // when nothing else changes its cone in the kernel's slot (4.4, 4.7,
       // 10.4.2). In the reference, the members' NBAs are all pending until
       // the NBA region, which may apply every one of them before any
-      // evaluation they cause (4.5, 4.6(b)). Moving them into the kernel's
+      // evaluation they cause (4.5, 4.7). Moving them into the kernel's
       // Active phase instead lets the observer evaluate once on those same
       // values, unless something else changes its cone in that phase, or lands
       // in the same NBA region in an order the members cannot precede. Then a
