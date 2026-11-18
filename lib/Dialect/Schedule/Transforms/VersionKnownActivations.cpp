@@ -1163,6 +1163,21 @@ public:
                                       false, provenKnown, checkedReads,
                                       staysUnknown, provenKnownStore,
                                       large ? 1u : 0u, inputs->topology.get()});
+    // A large kernel's two-state variant also gets one copy of its whole body
+    // under one check (below). Plan it on the untouched body too.
+    std::optional<Segments> wholeSegments;
+    std::optional<LocalUnknownAnalysis> wholeAnalysis;
+    if (large &&
+        schedule::has<schedule::Field::EvalInductiveTwoState>(function)) {
+      wholeSegments.emplace(cut(function, segmentSize));
+      wholeAnalysis.emplace(
+          function, handles,
+          LocalUnknownAnalysis::Options{&wholeSegments->segmentation,
+                                        &inputs->callees, false, provenKnown,
+                                        checkedReads, staysUnknown,
+                                        provenKnownStore, 0u,
+                                        inputs->topology.get()});
+    }
     // A copy must save clearly more than its checks cost: about three
     // instructions per tested summary word, slot or live-in and two per
     // tested read. A segment's roots are numbered together, so a word covers
@@ -1205,6 +1220,30 @@ public:
       limitLargeKernelCopies(results, admissions);
     unsigned versioned = 0;
     uint64_t benefit = 0, roots = 0;
+    bool wholeVersioned = false;
+    // Once its inputs are known, a large kernel's two-state variant usually
+    // finds every member's inputs known together: one check then covers the
+    // whole body, as one copy. Where some member's inputs hold X/Z, that check
+    // fails and the original body runs, still carrying the members' own
+    // segment copies, versioned next into those original operations, which
+    // the whole-body copy only cloned. Each failed whole-body check costs one
+    // summary scan (IEEE 1800-2023 6.3.1).
+    if (wholeAnalysis && wholeAnalysis->getSegments().size() == 1 &&
+        profitable(wholeAnalysis->getSegments().front())) {
+      Versioner outer(function, *wholeAnalysis, *inputs);
+      const auto &whole = wholeAnalysis->getSegments().front();
+      if (outer.version(wholeSegments->begins.front(), nullptr, whole)) {
+        wholeVersioned = true;
+        if (diagnostics) {
+          std::string text;
+          llvm::raw_string_ostream os(text);
+          os << "talos known activation whole body: " << function.getSymName()
+             << " benefit=" << whole.benefit
+             << " gate-roots=" << whole.gate.size() << '\n';
+          llvm::errs() << text;
+        }
+      }
+    }
     Versioner versioner(function, analysis, *inputs);
     for (auto [index, segment] : llvm::enumerate(results)) {
       bool admitted = admissions[index];
@@ -1241,7 +1280,7 @@ public:
          << '\n';
       llvm::errs() << text;
     }
-    if (!versioned)
+    if (!versioned && !wholeVersioned)
       return markAllAnalysesPreserved();
     MLIRContext *context = function.getContext();
     schedule::set<schedule::Field::NativeKnownVersioned>(

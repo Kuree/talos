@@ -7,10 +7,13 @@
 // whole-body two-state variant (IEEE 1800-2023 6.3.1). They are cut small, and
 // bounded: only half the segments get a copy, the variant being a copy already.
 // CHECK-DAG: talos known activation: __talos_clocked_0_1_0.__talos_eval_body_0 segments=3/7 
-// Its two-state variant runs once every gated input is known. Each residual
-// run still checks its own inputs, which @poison can leave X/Z, so an X/Z in
-// one sends only that run to four-state code: the variant keeps every copy
+// Its two-state variant runs once every gated input is known. Usually every
+// member's inputs are then known together, so one check covers one copy of
+// the whole body. When @poison leaves some X/Z, that check fails and the
+// original body runs, where each residual run still checks its own inputs, so
+// an X/Z in one sends only that run to four-state code: it keeps every copy
 // that pays for its check.
+// CHECK-DAG: talos known activation whole body: __talos_clocked_0_1_0.__talos_eval_body_0.__talos_two_state_0 benefit=
 // CHECK-DAG: talos known activation: __talos_clocked_0_1_0.__talos_eval_body_0.__talos_two_state_0 segments=7/7 
 // A source with a variant keeps its one body otherwise: so does a small kernel,
 // and so does any other large function.
