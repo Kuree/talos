@@ -26,6 +26,7 @@ using DisableTwoStateSpecialization =
 using TwoState = NativeDialect::TwoStateAttrHelper;
 using NBAField = NativeDialect::NbaFieldAttrHelper;
 using DebugTiming = NativeDialect::DebugTimingAttrHelper;
+using FallbackReport = NativeDialect::FallbackReportAttrHelper;
 using ProcessesMaterialized = NativeDialect::ProcessesMaterializedAttrHelper;
 using ClosedExecutable = NativeDialect::ClosedExecutableAttrHelper;
 using Partition = NativeDialect::PartitionAttrHelper;

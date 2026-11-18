@@ -49,6 +49,11 @@ struct NativeBackendTestPipelineOptions
       *this, "timing",
       llvm::cl::desc("print native planning traces, as --mlir-timing does"),
       llvm::cl::init(false)};
+  Option<bool> fallbackReport{
+      *this, "fallback-report",
+      llvm::cl::desc("print one record per tier-1 fallback, as "
+                     "--fallback-report does"),
+      llvm::cl::init(false)};
   Option<std::string> stopAfter{
       *this, "stop-after",
       llvm::cl::desc("stop after 'lowering' (simulation IR with the backend "
@@ -118,6 +123,8 @@ void buildNativeBackendTestPipeline(
     backendAttributes += ", native.closed_executable";
   if (options.timing)
     backendAttributes += ", native.debug_timing";
+  if (options.fallbackReport)
+    backendAttributes += ", native.fallback_report";
   // By default lowering keeps one actor per process (no fusion or clocked
   // kernels) under the generic scheduler; the backend then clones evaluators
   // itself, so the input stays independent of the simulation optimization

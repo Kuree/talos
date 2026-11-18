@@ -4,6 +4,7 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/SymbolTable.h"
+#include "talos/Dialect/Native/FallbackReport.h"
 #include "talos/Analysis/GraphAlgorithms.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
@@ -733,6 +734,25 @@ public:
           cost > selectedBudget)
         reason = ComponentRejection::OperationBudget;
       if (reason != ComponentRejection::None) {
+        if (native::isFallbackReportEnabled(
+                design->getParentOfType<ModuleOp>())) {
+          std::string detail = "members=" + std::to_string(members.size()) +
+                               " operations=" + std::to_string(cost);
+          if (!contractionPath.empty()) {
+            detail += " path=";
+            llvm::raw_string_ostream os(detail);
+            llvm::interleave(
+                contractionPath, os,
+                [&](StringAttr name) { os << '@' << name.getValue(); },
+                " -> ");
+          }
+          native::reportFallback(
+              design->getParentOfType<ModuleOp>(),
+              {"cohort-rejected",
+               stringifyComponentRejection(reason, observerReason),
+               members.front().getSymName(), members.front().getLoc(),
+               std::nullopt, std::move(detail)});
+        }
         if (trace) {
           llvm::errs() << "talos statement cohort rejected: members="
                        << members.size() << " operations=" << cost << " reason="

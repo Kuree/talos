@@ -119,6 +119,16 @@ public:
   const llvm::DenseSet<mlir::Operation *> &getRuntimeCheckpointActors() const {
     return runtimeCheckpointActors;
   }
+  /// Why a runtime checkpoint actor is one, for fallback reports.
+  struct CheckpointCause {
+    std::string reason;
+    /// The operation that required the checkpoint, when one did.
+    mlir::Operation *blocker = nullptr;
+  };
+  const llvm::DenseMap<mlir::Operation *, CheckpointCause> &
+  getRuntimeCheckpointCauses() const {
+    return runtimeCheckpointCauses;
+  }
   const llvm::DenseSet<mlir::Operation *> &getRuntimeOwnedFanoutActors() const {
     return runtimeOwnedFanoutActors;
   }
@@ -143,6 +153,7 @@ private:
   llvm::DenseMap<mlir::Operation *, mlir::SmallVector<mlir::Block *>>
       bytecodeFragments;
   llvm::DenseSet<mlir::Operation *> runtimeCheckpointActors;
+  llvm::DenseMap<mlir::Operation *, CheckpointCause> runtimeCheckpointCauses;
   llvm::DenseSet<mlir::Operation *> runtimeOwnedFanoutActors;
   llvm::DenseSet<mlir::Operation *> negativeTimingFanoutActors;
 };

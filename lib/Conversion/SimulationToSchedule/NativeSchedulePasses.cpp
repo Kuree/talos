@@ -17,6 +17,7 @@
 #include "talos/Analysis/StorageWriteAnalysis.h"
 #include "talos/Conversion/Passes.h"
 #include "talos/Dialect/DPI/DPIDialect.h"
+#include "talos/Dialect/Native/FallbackReport.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleDialect.h"
@@ -341,6 +342,16 @@ LogicalResult NativePipelineAnalysis::planActors() {
       runtimeCheckpointContinuations.insert(
           {codeUnit.getUInt(), suspension.continuationID});
     checkpointOnlyActors.insert(codeUnit.getUInt());
+    if (native::isFallbackReportEnabled(module)) {
+      auto cause = aotEligibility.getRuntimeCheckpointCauses().lookup(operation);
+      native::reportFallback(
+          module, {"checkpoint", "runtime-checkpoint-actor",
+                   function.getSymName(), function.getLoc(),
+                   cause.blocker ? std::optional<Location>(
+                                       cause.blocker->getLoc())
+                                 : std::nullopt,
+                   cause.reason});
+    }
   }
   // SimFunc operations may be rebuilt by two-state specialization and packed
   // lowering. Preserve the analysis actor identity as a stable code-unit join
@@ -624,6 +635,9 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
                    << " eligible=" << runtimeCalendar << '\n';
     DenseMap<Operation *, bool> runtimeStateFunctions;
     DenseMap<Operation *, Operation *> runtimeStateOperations;
+    // Every runtime-requiring operation of a function, for fallback reports.
+    DenseMap<Operation *, SmallVector<Operation *>> runtimeStateBlockers;
+    bool reportFallbacks = native::isFallbackReportEnabled(module);
     // Values with managed handles (strings, queues, mailboxes, semaphores,
     // class objects, ...) and design storage roots holding one. Static
     // specialization never makes such a root direct state (it admits fixed
@@ -669,10 +683,12 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
       Operation *runtimeOperation = nullptr;
       SmallVector<sim::SimFuncOp> pending{function};
       llvm::SmallPtrSet<Operation *, 8> visited;
+      SmallVector<sim::SimFuncOp> closure;
       while (!pending.empty()) {
         sim::SimFuncOp current = pending.pop_back_val();
         if (!visited.insert(current.getOperation()).second)
           continue;
+        closure.push_back(current);
         auto [classification, inserted] =
             runtimeStateFunctions.try_emplace(current.getOperation(), false);
         if (inserted) {
@@ -848,6 +864,8 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
             classification->second |= requiresRuntime;
             if (requiresRuntime && detailedTiming)
               runtimeStateOperations.try_emplace(current, operation);
+            if (requiresRuntime && reportFallbacks)
+              runtimeStateBlockers[current].push_back(operation);
           });
         }
         runtimeLocal |= classification->second;
@@ -865,6 +883,27 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
       if (runtimeLocal) {
         ::talos::schedule::set<::talos::schedule::Field::EvalCheckpointOnly>(
             function, UnitAttr::get(module.getContext()));
+        if (reportFallbacks) {
+          // List every runtime-requiring operation, not only the first: one
+          // is enough to demote the body, so each one is a blocker.
+          SmallVector<Operation *> blockers;
+          for (sim::SimFuncOp reached : closure) {
+            auto found = runtimeStateBlockers.find(reached);
+            if (found != runtimeStateBlockers.end())
+              llvm::append_range(blockers, found->second);
+          }
+          if (blockers.empty())
+            native::reportFallback(
+                module, {"checkpoint", "runtime-state-access",
+                         actor.getSymName(), actor.getLoc(), std::nullopt,
+                         function.getSymName().str()});
+          for (Operation *blocker : blockers)
+            native::reportFallback(
+                module,
+                {"checkpoint", "runtime-state-access", actor.getSymName(),
+                 actor.getLoc(), blocker->getLoc(),
+                 blocker->getName().getStringRef().str()});
+        }
         if (detailedTiming) {
           llvm::errs() << "talos eval checkpoint admission: actor="
                        << *aotActorSlotFor(actor)
@@ -1216,6 +1255,27 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
                        << ",";
         llvm::errs() << '\n';
       }
+      if (!::talos::schedule::has<evalRuntimeNBARequiredAttr>(function)) {
+        // An owner already at a checkpoint adds no new blocker of its own.
+        std::string cause;
+        if (::talos::schedule::has<
+                ::talos::schedule::Field::EvalCheckpointOnly>(function))
+          cause = "checkpoint-body";
+        else if (bodyNeedsOrderedNBA[index] && !everySiteGenerated)
+          cause = "ordered-nba-queue-open";
+        else
+          for (uint32_t root : bodyWideRoots[index])
+            if (!orderedRootClosed[root] || !queuePayloadSupported[root]) {
+              cause = ("wide-root=" + Twine(root) + ":" +
+                       Twine(staticNBAPlan.roots[root].bit_width))
+                          .str();
+              break;
+            }
+        native::reportFallback(module,
+                               {"checkpoint", "runtime-nba-owner",
+                                function.getSymName(), function.getLoc(),
+                                std::nullopt, "cause=" + cause});
+      }
       ::talos::schedule::set<evalRuntimeNBARequiredAttr>(
           function, UnitAttr::get(module.getContext()));
       processedRuntimeOwners.insert(index);
@@ -1377,6 +1437,13 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
                        << " continuation=" << entry.continuation
                        << " function=" << actor.getSymName()
                        << " source=" << actor.getLoc() << '\n';
+        native::reportFallback(
+            module, {"eval-disabled", "fanout-owner-without-direct-body",
+                     actor.getSymName(), actor.getLoc(), std::nullopt,
+                     ("continuation=" + Twine(entry.continuation)).str()});
+        // The decision needs one owner; the report lists every one.
+        if (native::isFallbackReportEnabled(module))
+          continue;
         break;
       }
       auto bytecode = aotBytecodeContinuations.find(actor.getOperation());
@@ -1390,16 +1457,32 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
         llvm::errs() << "partial eval disabled: bytecode fanout owner actor="
                      << entry.actor_slot
                      << " continuation=" << entry.continuation << '\n';
+      native::reportFallback(
+          module, {"eval-disabled", "bytecode-fanout-owner",
+                   actor.getSymName(), actor.getLoc(), std::nullopt,
+                   ("continuation=" + Twine(entry.continuation)).str()});
+      if (native::isFallbackReportEnabled(module))
+        continue;
       break;
     }
-    if (!bytecodeFanoutOwner && !executorDemand && detailedTiming)
-      llvm::errs() << "partial eval disabled: no generated executor\n";
+    if (!bytecodeFanoutOwner && !executorDemand) {
+      if (detailedTiming)
+        llvm::errs() << "partial eval disabled: no generated executor\n";
+      native::reportFallback(module, {"eval-disabled", "no-generated-executor",
+                                      {}, module.getLoc(), std::nullopt, {}});
+    }
   }
   // The packed NBA lowering below emits references to generated schedule
   // globals. Decide a partial Auto fallback before that irreversible rewrite.
   if (nativeScheduler == schedule::NativeSchedulerMode::Auto &&
       !aotEligibility.isFullyEligible() &&
       (!staticFanoutPlan.exact || bytecodeFanoutOwner || !executorDemand)) {
+    native::reportFallback(
+        module, {"aot-disabled", "partial-auto-fallback", {}, module.getLoc(),
+                 std::nullopt,
+                 !staticFanoutPlan.exact ? "inexact-static-fanout"
+                 : bytecodeFanoutOwner   ? "bytecode-fanout-owner"
+                                         : "no-executor-demand"});
     useAOT = false;
     // The exact transition set belongs to the discarded eval fanout plan.
     // Generic scheduling must check direct-state writes for transitions again.
@@ -1661,6 +1744,10 @@ LogicalResult NativePipelineAnalysis::planOwnership() {
       if (detailedTiming)
         llvm::errs() << "generated eval disabled: "
                      << unsupportedCheckpointOwner << '\n';
+      native::reportFallback(module,
+                             {"eval-disabled", "unguarded-runtime-leaf", {},
+                              unsupportedLoc, std::nullopt,
+                              unsupportedCheckpointOwner});
       evalScheduler = false;
     }
   }
@@ -1673,6 +1760,20 @@ LogicalResult NativePipelineAnalysis::planOwnership() {
   // republication; the union of direct owners must still cover the SCC.
   if (evalScheduler) {
     std::string invalidConvergenceOwnership;
+    // Report a direct executor that runs in the convergence fixpoint.
+    std::function<void(NativeDirectFragment &, StringRef, std::string)>
+        reportTier2;
+    if (native::isFallbackReportEnabled(module))
+      reportTier2 = [&](NativeDirectFragment &direct, StringRef reason,
+                        std::string detail) {
+        auto body = evalSymbols.getSymbolTable(metadataDesign)
+                        .lookup<sim::SimFuncOp>(direct.body);
+        native::reportFallback(
+            module, {"tier2", reason, direct.body,
+                     body ? std::optional<Location>(body.getLoc())
+                          : std::nullopt,
+                     std::nullopt, std::move(detail)});
+      };
 
     // Procedural event waits are not graph-level settling SCCs: projecting
     // every sensitivity edge through its resume edge would make every
@@ -1711,6 +1812,15 @@ LogicalResult NativePipelineAnalysis::planOwnership() {
               continue;
             if (fragment == sensitivity.getSource()) {
               direct.tier2Convergence = true;
+              if (reportTier2) {
+                std::string detail = "edge=" +
+                                     std::to_string(sensitivity.getSource()) +
+                                     "->" +
+                                     std::to_string(sensitivity.getTarget());
+                if (auto resource = sensitivity.getResource())
+                  detail += " watch=" + std::to_string(resource.getDescriptor());
+                reportTier2(direct, "local-feedback", std::move(detail));
+              }
               break;
             }
             for (uint32_t successor : proceduralSuccessors[fragment])
@@ -1733,6 +1843,11 @@ LogicalResult NativePipelineAnalysis::planOwnership() {
           return llvm::is_contained(direct.fragmentIDs, fragment);
         };
         if (llvm::any_of(kernel.memberIDs, ownsFragment)) {
+          if (reportTier2 && !direct.tier2Convergence)
+            reportTier2(direct, "process-scc",
+                        "kernel=" + std::to_string(kernel.id) +
+                            " members=" +
+                            std::to_string(kernel.memberIDs.size()));
           direct.tier2Convergence = true;
           hasDirectOwner = true;
         }
@@ -1782,6 +1897,10 @@ LogicalResult NativePipelineAnalysis::planOwnership() {
       if (detailedTiming)
         llvm::errs() << "generated eval disabled: "
                      << invalidConvergenceOwnership << '\n';
+      native::reportFallback(module,
+                             {"eval-disabled", "tier2-scc-without-direct-owner",
+                              {}, module.getLoc(), std::nullopt,
+                              invalidConvergenceOwnership});
       evalScheduler = false;
       for (NativeDirectFragment &direct : *directFragments)
         direct.tier2Convergence = false;
@@ -1891,6 +2010,11 @@ LogicalResult NativePipelineAnalysis::planOwnership() {
         if (certifiedRuntimeNBAFallback)
           ::talos::schedule::set<evalRuntimeNBAFallbackAttr>(
               module, UnitAttr::get(context));
+        native::reportFallback(
+            module, {"eval-disabled",
+                     certifiedRuntimeNBAFallback ? "runtime-ordered-nba-owner"
+                                                 : "exact-owner-miss",
+                     {}, module.getLoc(), std::nullopt, detail});
         evalScheduler = false;
         break;
       }
@@ -1900,6 +2024,8 @@ LogicalResult NativePipelineAnalysis::planOwnership() {
       if (detailedTiming)
         llvm::errs() << "generated eval coordinator capacity rejected: owners="
                      << executors.size() << '\n';
+      native::reportFallback(module, {"eval-disabled", "no-executors", {},
+                                      module.getLoc(), std::nullopt, {}});
       evalScheduler = false;
     }
   }
@@ -1915,6 +2041,10 @@ LogicalResult NativePipelineAnalysis::planOwnership() {
           << "partial eval ownership failed after static NBA lowering";
       return failure();
     }
+    if (useAOT)
+      native::reportFallback(module,
+                             {"aot-disabled", "partial-eval-disabled", {},
+                              module.getLoc(), std::nullopt, {}});
     useAOT = false;
     stateLayout->transitionHandlesExact = false;
     stateLayout->transitionHandles.clear();

@@ -346,6 +346,8 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
   llvm::StringMap<unsigned> reasonIndices;
   SmallVector<std::string> reasonNames;
   llvm::DenseMap<Block *, SmallVector<unsigned>> blockReasons;
+  // The first operation that sent each uncertified block to bytecode.
+  llvm::DenseMap<Block *, Operation *> blockBlockers;
   llvm::DenseMap<Operation *, SmallVector<unsigned>> actorReasons;
   auto internReason = [&](StringRef reason) {
     auto [entry, inserted] =
@@ -467,8 +469,10 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
     auto function = operation->getParentOfType<sim::SimFuncOp>();
     if (!function || !operation->getBlock())
       return;
-    if (uncertified)
+    if (uncertified) {
       uncertifiedBlocks.insert(operation->getBlock());
+      blockBlockers.try_emplace(operation->getBlock(), operation);
+    }
     noteReason(blockReasons[operation->getBlock()], internReason(reason));
     auto &fragments = result.bytecodeFragments[function.getOperation()];
     if (!llvm::is_contained(fragments, operation->getBlock()))
@@ -774,6 +778,8 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
     // island could publish and advance time without waking the observer.
     if (!result.runtimeCheckpointActors.insert(function.getOperation()).second)
       continue;
+    result.runtimeCheckpointCauses[function.getOperation()] = {
+        "runtime-observed-source", nullptr};
     for (Block &owned : function.getBody())
       requireBytecodeFragment(owned.getTerminator(),
                               "runtime-observed source publication",
@@ -1743,6 +1749,22 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
   }
   for (sim::SimFuncOp function : checkpointActors) {
     result.runtimeCheckpointActors.insert(function.getOperation());
+    // Name the first uncertified block's reasons and the operation that
+    // sent it to bytecode.
+    for (Block *block : result.bytecodeFragments.lookup(function)) {
+      if (!uncertifiedBlocks.contains(block))
+        continue;
+      std::string reason;
+      for (unsigned index : blockReasons.lookup(block)) {
+        if (!reason.empty())
+          reason += ",";
+        reason += reasonNames[index];
+      }
+      result.runtimeCheckpointCauses[function.getOperation()] = {
+          reason.empty() ? std::string("uncertified-bytecode") : reason,
+          blockBlockers.lookup(block)};
+      break;
+    }
     for (Block &owned : function.getBody())
       requireBytecodeFragment(owned.getTerminator(),
                               "bytecode fragment in a slotted actor",

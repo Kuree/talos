@@ -70,6 +70,9 @@ def dump_ir_after_EQ : Joined<["--"], "dump-ir-after=">,
 def dump_ir_path_EQ : Joined<["--"], "dump-ir-path=">,
   Group<Diagnostic_Group>, Flags<[HelpHidden]>, MetaVarName<"<file>">,
   HelpText<"Destination of --dump-ir-before/--dump-ir-after (.mlirbc for bytecode)">;
+def fallback_report_EQ : Joined<["--"], "fallback-report=">,
+  Group<Diagnostic_Group>, Flags<[HelpHidden]>, MetaVarName<"<file>">,
+  HelpText<"Write one JSON line to <file> for each executor or cohort that leaves the tier-1 path, and why">;
 def debug_native_execution_counts : Flag<["--"], "debug-native-execution-counts">,
   Group<Diagnostic_Group>, Flags<[HelpHidden]>,
   HelpText<"Instrument generated native function entries and print counts at exit">;

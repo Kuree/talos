@@ -33,7 +33,7 @@ NativeDialect::verifyOperationAttribute(Operation *operation,
   if (failed(discardable::verify<
              OptimizationLevel, MaxStateDomainFunctions,
              DisableTwoStateSpecialization, TwoState, NBAField, DebugTiming,
-             ProcessesMaterialized, ClosedExecutable, Partition,
+             FallbackReport, ProcessesMaterialized, ClosedExecutable, Partition,
              PartitionManifest, PartitionManifests, ElementDefaults,
              PhysicalPartitionManifest, Frame, FrameInputs, FrameCheckpoint,
              EntryKind, ScratchSize, ObserverWidth, ObserverFourState,
@@ -62,6 +62,7 @@ NativeDialect::verifyOperationAttribute(Operation *operation,
                       name == DisableTwoStateSpecialization::getNameStr() ||
                       name == TwoState::getNameStr() ||
                       name == DebugTiming::getNameStr() ||
+                      name == FallbackReport::getNameStr() ||
                       name == ProcessesMaterialized::getNameStr() ||
                       name == ClosedExecutable::getNameStr() ||
                       name == PartitionManifests::getNameStr() ||

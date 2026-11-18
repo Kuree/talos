@@ -24,6 +24,7 @@
 #include "talos/Conversion/TalosToSimulation.h"
 #include "talos/Dialect/Coverage/CoverageDialect.h"
 #include "talos/Dialect/DPI/DPIDialect.h"
+#include "talos/Dialect/Native/FallbackReport.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
 #include "talos/Dialect/SAIF/SAIFDialect.h"
@@ -79,6 +80,17 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+namespace {
+/// Destination of --fallback-report. Opened once, so a generic-scheduler
+/// retry appends to the same file, and it lives until exit because native
+/// lowering after the main pipeline still reports into it. Destruction
+/// detaches it first.
+struct FallbackReportFile {
+  std::unique_ptr<llvm::raw_fd_ostream> stream;
+  ~FallbackReportFile() { talos::native::setFallbackReportStream(nullptr); }
+} fallbackReport;
+} // namespace
 
 using namespace llvm;
 using namespace llvm::opt;
@@ -1571,6 +1583,23 @@ static int executeCompilation(const InputArgList &args,
     // after every internal pass repeatedly walks large elaborated designs;
     // talos-opt still verifies each pass when testing the transformations.
     passManager.enableVerifier(args.hasArg(OPT_mlir_verify_each));
+    if (const llvm::opt::Arg *report =
+            args.getLastArg(OPT_fallback_report_EQ)) {
+      if (!fallbackReport.stream) {
+        std::error_code error;
+        fallbackReport.stream = std::make_unique<llvm::raw_fd_ostream>(
+            report->getValue(), error, llvm::sys::fs::OF_Text);
+        if (error) {
+          fallbackReport.stream.reset();
+          llvm::errs() << "error: cannot open fallback report '"
+                       << report->getValue() << "': " << error.message()
+                       << '\n';
+          return 1;
+        }
+        talos::native::setFallbackReportStream(fallbackReport.stream.get());
+      }
+      talos::native::mark<talos::native::FallbackReport>(*module);
+    }
     if (args.hasArg(OPT_mlir_timing)) {
       passManager.enableTiming();
       // Cohort fusion runs here, long before native lowering sets the same

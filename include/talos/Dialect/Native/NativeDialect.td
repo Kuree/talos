@@ -32,6 +32,9 @@ def NativeDialect : Dialect {
     "::mlir::IntegerAttr":$nba_field,
     // Print native planning and timing diagnostics to stderr.
     "::mlir::UnitAttr":$debug_timing,
+    // Report every executor, cohort or design-wide mode that leaves the
+    // tier-1 path, one structured record per decision (FallbackReport.h).
+    "::mlir::UnitAttr":$fallback_report,
     // Module: native processes are materialized as functions, so LLVM
     // function preparation may begin; native LLVM finalization removes it.
     "::mlir::UnitAttr":$processes_materialized,
