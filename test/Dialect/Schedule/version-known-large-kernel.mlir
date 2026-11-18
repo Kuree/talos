@@ -6,13 +6,21 @@
 // Its source therefore gets known copies of its member runs, even with a
 // whole-body two-state variant (IEEE 1800-2023 6.3.1). They are cut small, and
 // bounded: only half the segments get a copy, the variant being a copy already.
-// CHECK: talos known activation: __talos_clocked_0_1_0.__talos_eval_body_0 segments=3/7 
+// CHECK-DAG: talos known activation: __talos_clocked_0_1_0.__talos_eval_body_0 segments=3/7 
+// Its two-state variant runs once every gated input is known. Each residual
+// run still checks its own inputs, which @poison can leave X/Z, so an X/Z in
+// one sends only that run to four-state code: the variant keeps every copy
+// that pays for its check.
+// CHECK-DAG: talos known activation: __talos_clocked_0_1_0.__talos_eval_body_0.__talos_two_state_0 segments=7/7 
 // A source with a variant keeps its one body otherwise: so does a small kernel,
 // and so does any other large function.
 // CHECK-NOT: talos known activation: __talos_clocked_0_2_0
 // CHECK-NOT: talos known activation: large_function
 
-// Without an inline budget nothing counts as large.
+// Without an inline budget nothing counts as large: the source keeps its one
+// body, and the variant gets one whole-body copy as any small activation does.
+// UNLIMITED-NOT: talos known activation: __talos_clocked_0_1_0.__talos_eval_body_0 
+// UNLIMITED: talos known activation: __talos_clocked_0_1_0.__talos_eval_body_0.__talos_two_state_0 segments=1/1 
 // UNLIMITED-NOT: talos known activation
 
 !c = !simulation.context
@@ -27,6 +35,8 @@ module attributes {native.optimization_level = 3 : i32, native.debug_timing, sch
     simulation.code_unit.decl 2 in 0 function hierarchy "top.small"
     simulation.code_unit.decl 3 in 0 function hierarchy "top.other"
     simulation.code_unit.decl 4 in 0 function hierarchy "top.variant"
+    simulation.code_unit.decl 5 in 0 function hierarchy "top.kernel_two_state"
+    simulation.code_unit.decl 6 in 0 function hierarchy "top.poison"
     simulation.func @two_state_body(%ctx: !c {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 8 : i32, code_unit_id = 4 : i64} {
       simulation.return
     }
@@ -43,6 +53,27 @@ module attributes {native.optimization_level = 3 : i32, native.debug_timing, sch
         %z = simulation.logic.binary and %y, %x : !l8
         simulation.ref.store %z to %b : !l8, !r8
       }
+      simulation.return
+    }
+    simulation.func @__talos_clocked_0_1_0.__talos_eval_body_0.__talos_two_state_0(%ctx: !c {simulation.capture_kind = 0 : i32})
+        attributes {entry_kind = 8 : i32, code_unit_id = 5 : i64, schedule.eval.inductive_two_state} {
+      %a = simulation.context.storage %ctx[0] : !r8
+      %b = simulation.context.storage %ctx[1] : !r8
+      %lower = arith.constant 0 : index
+      %upper = arith.constant 200 : index
+      %step = arith.constant 1 : index
+      scf.for %i = %lower to %upper step %step {
+        %x = simulation.ref.load %a : !r8 -> !l8
+        %y = simulation.logic.binary add %x, %x : !l8
+        %z = simulation.logic.binary and %y, %x : !l8
+        simulation.ref.store %z to %b : !l8, !r8
+      }
+      simulation.return
+    }
+    simulation.func @poison(%ctx: !c {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 8 : i32, code_unit_id = 6 : i64} {
+      %a = simulation.context.storage %ctx[0] : !r8
+      %x = simulation.logic.constant 0 : i8, -1 : i8 : !l8
+      simulation.ref.store %x to %a : !l8, !r8
       simulation.return
     }
     simulation.func @__talos_clocked_0_2_0.__talos_eval_body_0(%ctx: !c {simulation.capture_kind = 0 : i32})

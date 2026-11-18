@@ -73,9 +73,9 @@ bool isLargeClockedKernel(sim::SimFuncOp function) {
       .wasInterrupted();
 }
 
-/// Bound copies inside a large fused kernel, including a partially specialized
-/// variant: at most half of its segments, largest residual savings first.
-/// Each dropped segment still runs correctly in the four-state source.
+/// Bound copies inside a large fused kernel's four-state source: at most half
+/// of its segments, largest residual savings first. Each dropped segment still
+/// runs correctly in the four-state source.
 void limitLargeKernelCopies(ArrayRef<LocalUnknownAnalysis::Segment> segments,
                             SmallVectorImpl<bool> &admitted) {
   uint64_t allowed = segments.size() / 2;
@@ -1196,7 +1196,12 @@ public:
     SmallVector<bool> admissions;
     for (const auto &segment : results)
       admissions.push_back(profitable(segment));
-    if (large)
+    // Each segment copy has its own entry check, so an X/Z in one member's
+    // inputs sends only that segment to four-state code. The cap bounds the
+    // copies of a large kernel's four-state source, which runs only while
+    // some input holds X/Z; its two-state variant runs once those inputs are
+    // known, and keeps every copy that pays for its check.
+    if (large && !nested)
       limitLargeKernelCopies(results, admissions);
     unsigned versioned = 0;
     uint64_t benefit = 0, roots = 0;
