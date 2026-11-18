@@ -2300,9 +2300,11 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
         -> std::optional<DenseSet<uint64_t>> {
       auto refuse = [&](StringRef reason) { ++reasons[reason]; };
       bool deferred = mode == Mode::Deferred;
+      // A kernel whose edge cannot occur at time zero runs in no time-zero
+      // phase, so nothing there follows it or shares its NBA region.
       auto mayFollow = [&](StringAttr function, uint32_t block) {
         return deferred ? isAfter(function, block)
-                        : meetsKernel(function, block);
+                        : meetsPhases(function, block, edgeKernelPhases);
       };
       // (d) Accesses by activations that may follow the kernel.
       SmallVector<uint64_t> seeds(clockRoots);
@@ -2365,7 +2367,8 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
       // the kernel would be overwritten by the NBA but not by the store.
       auto conflicts = [&](const Writer &write) {
         if (write.kind == schedule::ComputeEffectKind::NBA)
-          return write.deferred || meetsKernel(write.function, write.block);
+          return write.deferred ||
+                 meetsPhases(write.function, write.block, edgeKernelPhases);
         return mayFollow(write.function, write.block);
       };
       DenseSet<uint64_t> eligible;

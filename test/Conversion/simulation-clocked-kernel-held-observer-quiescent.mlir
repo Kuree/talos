@@ -2722,3 +2722,149 @@ module attributes {schedule.native_scheduler = 1 : i32} {
     }
   }
 }
+
+// -----
+
+// S: @other's time-zero NBA of en wakes @shift in the time-zero phase where
+// the clock moves to 0. That move is no posedge, so the kernel never runs at
+// time zero and @shift's reads there follow no kernel; with en landing before
+// the edge phase in later slots too, sel and x are stored directly.
+// CHECK-LABEL: simulation.design @time_zero_observer
+// CHECK: simulation.func private @__talos_clocked_0_1_0(
+// CHECK: simulation.ref.store %{{.+}} to %{{.+}} {schedule.eval.nba_equivalent_store} : !simulation.logic<2>,
+// CHECK: simulation.ref.store %{{.+}} to %{{.+}} {schedule.eval.nba_equivalent_store} : !simulation.logic<1>,
+// CHECK: simulation.ref.store %{{.+}} to %{{.+}} {schedule.eval.nba_equivalent_store} : !simulation.logic<3>,
+// CHECK-NOT: simulation.nba.enqueue
+// CHECK: {{^    }$}}
+
+!bit = !simulation.logic<1>
+!sel = !simulation.logic<2>
+!tri = !simulation.logic<3>
+!ref = !simulation.ref<!bit>
+!sref = !simulation.ref<!sel>
+!tref = !simulation.ref<!tri>
+module attributes {schedule.native_scheduler = 1 : i32} {
+  simulation.design @time_zero_observer {
+    simulation.scope.decl 0
+    simulation.storage.decl 0 in 0 : !bit design
+    simulation.storage.decl 1 in 0 : !sel design
+    simulation.storage.decl 2 in 0 : !bit design
+    simulation.storage.decl 3 in 0 : !bit design
+    simulation.storage.decl 4 in 0 : !bit design
+    simulation.storage.decl 5 in 0 : !bit design
+    simulation.storage.decl 6 in 0 : !bit design
+    simulation.storage.decl 7 in 0 : !bit design
+    simulation.storage.decl 8 in 0 : !bit design
+    simulation.storage.decl 9 in 0 : !tri design
+    simulation.storage.decl 10 in 0 : !tri design
+    simulation.storage.decl 11 in 0 : !bit design
+    simulation.code_unit.decl 1 in 0 root_initializer hierarchy "root"
+    simulation.code_unit.decl 2 in 0 initial hierarchy "clock"
+    simulation.code_unit.decl 3 in 0 always_ff hierarchy "regs"
+    simulation.code_unit.decl 4 in 0 always_comb hierarchy "shift"
+    simulation.code_unit.decl 5 in 0 initial hierarchy "other"
+    simulation.code_unit.decl 6 in 0 always_ff hierarchy "regs_x"
+    simulation.code_unit.decl 7 in 0 always_comb hierarchy "decode"
+    simulation.code_unit.decl 8 in 0 always_comb hierarchy "tail"
+    simulation.code_unit.decl 9 in 0 always_ff hierarchy "async"
+    simulation.code_unit.decl 10 in 0 initial hierarchy "reset"
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 1 : i64} {
+      %clk = simulation.context.storage %ctx[0] : !ref
+      %sel = simulation.context.storage %ctx[1] : !sref
+      %x = simulation.context.storage %ctx[2] : !ref
+      %y = simulation.context.storage %ctx[3] : !ref
+      %en = simulation.context.storage %ctx[4] : !ref
+      %seen = simulation.context.storage %ctx[5] : !ref
+      %r = simulation.context.storage %ctx[6] : !ref
+      %q = simulation.context.storage %ctx[7] : !ref
+      %t = simulation.context.storage %ctx[8] : !ref
+      %z = simulation.context.storage %ctx[9] : !tref
+      %w = simulation.context.storage %ctx[10] : !tref
+      %arst = simulation.context.storage %ctx[11] : !ref
+      %p0 = simulation.spawn @clock(%ctx, %clk) : !simulation.context, !ref -> !simulation.process
+      %p1 = simulation.spawn @regs(%ctx, %clk, %sel, %x, %z) : !simulation.context, !ref, !sref, !ref, !tref -> !simulation.process
+      %p2 = simulation.spawn @shift(%ctx, %sel, %x, %y, %en) : !simulation.context, !sref, !ref, !ref, !ref -> !simulation.process
+      %p3 = simulation.spawn @other(%ctx, %en) : !simulation.context, !ref -> !simulation.process
+      %p4 = simulation.spawn @tail(%ctx, %z, %w) : !simulation.context, !tref, !tref -> !simulation.process
+      simulation.return
+    }
+    simulation.func @clock(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %clk: !ref {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}) attributes {entry_kind = 1 : i32, code_unit_id = 2 : i64} {
+      %delay = simulation.time.constant 5
+      %one = simulation.logic.constant true, false : !bit
+      %zero = simulation.logic.constant false, false : !bit
+      %start = simulation.logic.constant false, false : !bit
+      simulation.nba.enqueue %start to %clk : (!bit, !ref) -> ()
+      cf.br ^low
+    ^low:
+      simulation.suspend.delay %delay to ^rise
+    ^rise:
+      simulation.nba.enqueue %one to %clk : (!bit, !ref) -> ()
+      simulation.suspend.delay %delay to ^fall
+    ^fall:
+      simulation.nba.enqueue %zero to %clk : (!bit, !ref) -> ()
+      cf.br ^low
+    }
+    simulation.func private @regs(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %clk: !ref {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}, %sel: !sref {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 1 : i64}, %x: !ref {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 2 : i64}, %z: !tref {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 9 : i64}) attributes {entry_kind = 5 : i32, code_unit_id = 3 : i64} {
+      cf.br ^wait
+    ^wait:
+      simulation.suspend.edge posedge %clk to ^body : !ref
+    ^body:
+      %s0 = simulation.ref.load %sel : !sref -> !sel
+      %inc0 = simulation.logic.constant 1 : i2, 0 : i2 : !sel
+      %n0 = simulation.logic.binary add %s0, %inc0 : !sel
+      simulation.nba.enqueue %n0 to %sel : (!sel, !sref) -> ()
+      %s1 = simulation.ref.load %x : !ref -> !bit
+      %n1 = simulation.logic.unary logical_not %s1 : (!bit) -> !bit
+      simulation.nba.enqueue %n1 to %x : (!bit, !ref) -> ()
+      %s2 = simulation.ref.load %z : !tref -> !tri
+      %inc2 = simulation.logic.constant 1 : i3, 0 : i3 : !tri
+      %n2 = simulation.logic.binary add %s2, %inc2 : !tri
+      simulation.nba.enqueue %n2 to %z : (!tri, !tref) -> ()
+      cf.br ^wait
+    }
+    simulation.func @shift(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %sel: !sref {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 1 : i64}, %x: !ref {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 2 : i64}, %y: !ref {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 3 : i64}, %en: !ref {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 4 : i64}) attributes {entry_kind = 4 : i32, code_unit_id = 4 : i64} {
+      %c0 = simulation.logic.constant 0 : i2, 0 : i2 : !sel
+      %c1 = simulation.logic.constant 1 : i2, 0 : i2 : !sel
+      %c2 = simulation.logic.constant -2 : i2, 0 : i2 : !sel
+      %c3 = simulation.logic.constant -1 : i2, 0 : i2 : !sel
+      cf.br ^body
+    ^body:
+      %s = simulation.ref.load %sel : !sref -> !sel
+      %v0 = simulation.ref.load %x : !ref -> !bit
+      %e = simulation.ref.load %en : !ref -> !bit
+      %v = simulation.logic.binary xor %v0, %e : !bit
+      %n = simulation.logic.unary bit_not %v : (!bit) -> !bit
+      %e0 = simulation.logic.compare case_eq %s, %c0 : (!sel, !sel) -> i1
+      cf.cond_br %e0, ^same, ^t1
+    ^t1:
+      %e1 = simulation.logic.compare case_eq %s, %c1 : (!sel, !sel) -> i1
+      cf.cond_br %e1, ^flip, ^t2
+    ^t2:
+      %e2 = simulation.logic.compare case_eq %s, %c2 : (!sel, !sel) -> i1
+      cf.cond_br %e2, ^same, ^t3
+    ^t3:
+      %e3 = simulation.logic.compare case_eq %s, %c3 : (!sel, !sel) -> i1
+      cf.cond_br %e3, ^flip, ^wait
+    ^same:
+      simulation.ref.store %v to %y : !bit, !ref
+      cf.br ^wait
+    ^flip:
+      simulation.ref.store %n to %y : !bit, !ref
+      cf.br ^wait
+    ^wait:
+      simulation.suspend.any %sel, %x, %en edges [0, 0, 0] to ^body : !sref, !ref, !ref
+    }
+    simulation.func @other(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %en: !ref {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 4 : i64}) attributes {entry_kind = 1 : i32, code_unit_id = 5 : i64} {
+      %one = simulation.logic.constant true, false : !bit
+      simulation.nba.enqueue %one to %en : (!bit, !ref) -> ()
+      simulation.return
+    }
+    simulation.func @tail(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %z: !tref {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 9 : i64}, %w: !tref {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 10 : i64}) attributes {entry_kind = 4 : i32, code_unit_id = 8 : i64} {
+      cf.br ^body
+    ^body:
+      %v = simulation.ref.load %z : !tref -> !tri
+      simulation.ref.store %v to %w : !tri, !tref
+      simulation.suspend.change %z to ^body : !tref
+    }
+  }
+}
