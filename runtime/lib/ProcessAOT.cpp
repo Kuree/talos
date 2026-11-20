@@ -3790,6 +3790,11 @@ void talos_rt_release_native_schedule_plan(talos_rt_context *context) noexcept {
   context->nativeScheduleNodeIngress.clear();
   context->nativeScheduleFanoutRanges.clear();
   context->nativeFanoutWindows.clear();
+  if (!context->scalarNBAFanoutMasks.empty())
+    for (auto &update : context->scheduledNBAs)
+      update.packedStaticState = 0;
+  context->scalarNBAFanoutMasks.clear();
+  context->packedNBAChanges.reset();
   context->nativeScheduleRuntimeFanoutIndices.clear();
   context->nativePeriodicRuntimeFanoutRanges.clear();
   context->nativeScheduleReadyNodes.resize(0);

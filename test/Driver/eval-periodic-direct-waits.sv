@@ -1,5 +1,6 @@
 // RUN: talos -O3 --vpi=off --native-scheduler=eval %s -o %t && %t > %t.out
 // RUN: FileCheck %s < %t.out
+// RUN: talos -O3 --vpi=off --native-scheduler=eval --nba-queue=generic %s -o %t.fifo && %t.fifo | diff -u %t.out -
 // RUN: talos -O0 --execution-tier=bytecode %s -o %t.ref && %t.ref | diff -u %t.out -
 
 module top;

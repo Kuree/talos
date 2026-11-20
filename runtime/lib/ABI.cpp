@@ -1750,6 +1750,17 @@ ABI_FUNCTION(talos_rt_v1_scheduler_nba,
              talos_rt_status (*)(talos_rt_context *, uint8_t *, uint8_t *,
                                  uint64_t, uint64_t, uint64_t, uint64_t,
                                  const uint8_t *, const uint8_t *));
+ABI_FUNCTION(talos_rt_v1_scheduler_generic_nba_words,
+             const uint64_t *(*)(talos_rt_context *, uint32_t));
+ABI_FUNCTION(talos_rt_v1_scheduler_generic_nba_pending,
+             uint32_t (*)(talos_rt_context *, uint32_t));
+ABI_FUNCTION(talos_rt_v1_scheduler_nba_scalar,
+             void (*)(talos_rt_context *, uint8_t *, uint8_t *, uint64_t,
+                      uint64_t, uint64_t, uint64_t, uint64_t));
+ABI_FUNCTION(talos_rt_v1_scheduler_nba_if_changed,
+             talos_rt_status (*)(talos_rt_context *, uint8_t *, uint8_t *,
+                                 uint64_t, uint64_t, uint64_t, uint64_t,
+                                 const uint8_t *, const uint8_t *));
 ABI_FUNCTION(talos_rt_v1_power_nba,
              talos_rt_status (*)(talos_rt_context *, uint8_t *, uint8_t *,
                                  uint64_t, uint64_t, uint64_t, uint64_t,

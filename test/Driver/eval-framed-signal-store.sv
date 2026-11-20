@@ -1,6 +1,7 @@
 // RUN: talos -O3 --vpi=off --native-scheduler=eval %s -o %t
 // RUN: env TALOS_RT_SIGNAL_DIAGNOSTICS=1 %t > %t.out 2> %t.diag
 // RUN: FileCheck %s < %t.out && FileCheck %s --check-prefix=FRAME < %t.diag
+// RUN: talos -O3 --vpi=off --native-scheduler=eval --nba-queue=generic %s -o %t.fifo && %t.fifo | diff -u %t.out -
 // RUN: talos -O0 --execution-tier=bytecode %s -o %t.bc && %t.bc | diff -u %t.out -
 
 module top;

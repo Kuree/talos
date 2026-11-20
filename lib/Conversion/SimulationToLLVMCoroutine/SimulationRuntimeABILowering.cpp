@@ -217,6 +217,29 @@ void declareNativeRuntimeABI(ModuleOp module) {
        IntegerType::get(context, 64), LLVM::LLVMPointerType::get(context),
        LLVM::LLVMPointerType::get(context)});
   getOrDeclareLLVMFunction(
+      module, "talos_rt_v1_scheduler_generic_nba_words",
+      LLVM::LLVMPointerType::get(context),
+      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32)});
+  getOrDeclareLLVMFunction(
+      module, "talos_rt_v1_scheduler_nba_scalar",
+      LLVM::LLVMVoidType::get(context),
+      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
+       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
+       IntegerType::get(context, 64), IntegerType::get(context, 64),
+       IntegerType::get(context, 64), IntegerType::get(context, 64)});
+  getOrDeclareLLVMFunction(
+      module, "talos_rt_v1_scheduler_generic_nba_pending",
+      IntegerType::get(context, 32),
+      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32)});
+  getOrDeclareLLVMFunction(
+      module, "talos_rt_v1_scheduler_nba_if_changed",
+      IntegerType::get(context, 32),
+      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
+       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
+       IntegerType::get(context, 64), IntegerType::get(context, 64),
+       IntegerType::get(context, 64), LLVM::LLVMPointerType::get(context),
+       LLVM::LLVMPointerType::get(context)});
+  getOrDeclareLLVMFunction(
       module, "talos_rt_v1_scheduler_packed_slice_nba",
       IntegerType::get(context, 32),
       {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),

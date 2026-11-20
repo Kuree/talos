@@ -4417,6 +4417,30 @@ talos_rt_status talos_rt_v1_scheduler_nba(
     talos_rt_context *context, uint8_t *value_plane, uint8_t *unknown_plane,
     uint64_t plane_bit_count, uint64_t bit_offset, uint64_t bit_width,
     uint64_t delay, const uint8_t *value, const uint8_t *unknown);
+// Enqueue a zero-delay scalar on the same FIFO, taking its two sampled
+// planes by value. Capture failures set the scheduler status.
+void talos_rt_v1_scheduler_nba_scalar(talos_rt_context *context,
+                                      uint8_t *value_plane,
+                                      uint8_t *unknown_plane,
+                                      uint64_t plane_bit_count,
+                                      uint64_t bit_offset, uint64_t bit_width,
+                                      uint64_t value, uint64_t unknown);
+// A closed native producer has proved that no blocking writer can intervene.
+// Queue every update except one that is already equal in both planes and has
+// no older pending writer. A value-changing update uses the ordinary queue.
+// A non-suspending generated evaluator may inspect this queue window until
+// it returns. Word zero guards unknown destinations; subsequent words record
+// the static roots with pending updates. An unavailable window requires
+// enqueue.
+const uint64_t *
+talos_rt_v1_scheduler_generic_nba_words(talos_rt_context *context,
+                                        uint32_t maximum_static_state);
+uint32_t talos_rt_v1_scheduler_generic_nba_pending(talos_rt_context *context,
+                                                   uint32_t static_state);
+talos_rt_status talos_rt_v1_scheduler_nba_if_changed(
+    talos_rt_context *context, uint8_t *value_plane, uint8_t *unknown_plane,
+    uint64_t plane_bit_count, uint64_t bit_offset, uint64_t bit_width,
+    uint64_t delay, const uint8_t *value, const uint8_t *unknown);
 
 // IEEE 1801-2018 9.7.3: one atomic backing/output update qualified at actual
 // NBA commit. The pure, capture-free observer returns known i1 true to admit

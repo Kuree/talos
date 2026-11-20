@@ -1965,6 +1965,21 @@ computeNBATransientObservers(sim::SimDesignOp design, bool guardedVPI) {
   // inventory task bodies and resolve their reference actuals too (13.5).
   // Preserve this before fusion introduces private references.
   llvm::DenseSet<uint64_t> immediateWriters;
+  llvm::DenseSet<uint64_t> unboundedWriters;
+  analysis::Ranges nbaRanges, writtenRanges;
+  auto bounded = [](schedule::ComputeEffectAttr effect) {
+    return !effect.getDynamic() && effect.getWidth() != 0 &&
+           effect.getWidth() <= uint64_t(INT64_MAX) &&
+           effect.getLow() <= uint64_t(INT64_MAX) - effect.getWidth();
+  };
+  auto recordWriter = [&](uint64_t descriptor,
+                          schedule::ComputeEffectAttr effect) {
+    immediateWriters.insert(descriptor);
+    if (bounded(effect))
+      writtenRanges.push_back({descriptor, effect.getLow(), effect.getWidth()});
+    else
+      unboundedWriters.insert(descriptor);
+  };
   bool immediateComplete = true;
   for (sim::SimFuncOp function : functions) {
     if (function.getEntryKind() == sim::EntryKind::RootInitializer ||
@@ -1976,6 +1991,12 @@ computeNBATransientObservers(sim::SimDesignOp design, bool guardedVPI) {
       continue;
     }
     for (auto effect : summary.getAsRange<schedule::ComputeEffectAttr>()) {
+      if (effect.getEffect() == schedule::ComputeEffectKind::NBA &&
+          effect.getResource() == schedule::ComputeResourceKind::Storage &&
+          effect.getTarget() == schedule::ComputeTargetKind::Descriptor &&
+          bounded(effect))
+        nbaRanges.push_back(
+            {effect.getDescriptor(), effect.getLow(), effect.getWidth()});
       if (effect.getEffect() != schedule::ComputeEffectKind::Write &&
           effect.getEffect() != schedule::ComputeEffectKind::Drive)
         continue;
@@ -1983,16 +2004,13 @@ computeNBATransientObservers(sim::SimDesignOp design, bool guardedVPI) {
         immediateComplete = false;
       else if (effect.getResource() == schedule::ComputeResourceKind::Storage) {
         if (effect.getTarget() == schedule::ComputeTargetKind::Formal)
-          immediateComplete &= formals.resolve(
-              function.getSymNameAttr(), effect,
-              [&](uint64_t descriptor, schedule::ComputeEffectAttr) {
-                immediateWriters.insert(descriptor);
-              },
-              /*ignorePrivate=*/true);
+          immediateComplete &=
+              formals.resolve(function.getSymNameAttr(), effect, recordWriter,
+                              /*ignorePrivate=*/true);
         else if (effect.getTarget() != schedule::ComputeTargetKind::Descriptor)
           immediateComplete = false;
         else
-          immediateWriters.insert(effect.getDescriptor());
+          recordWriter(effect.getDescriptor(), effect);
       }
     }
   }
@@ -2016,6 +2034,17 @@ computeNBATransientObservers(sim::SimDesignOp design, bool guardedVPI) {
     });
   });
   if (immediateComplete) {
+    // For a pipeline array, combinational wiring may drive stage zero while
+    // nonblocking assignments target other stages. Keep only bits disjoint
+    // from every immediate writer. A dynamic or formal writer covers its
+    // entire root. The native planner still validates the physical layout.
+    llvm::erase_if(nbaRanges, [&](const analysis::Range &range) {
+      return !immediateWriters.contains(range.root) ||
+             unboundedWriters.contains(range.root);
+    });
+    analysis::normalize(nbaRanges);
+    analysis::normalize(writtenRanges);
+    result.holdRanges = analysis::subtract(nbaRanges, writtenRanges);
     result.immediateWriters = std::move(immediateWriters);
   }
   llvm::DenseSet<uint64_t> &observable = result.observable;

@@ -1,4 +1,5 @@
 // RUN: talos -O3 --vpi=off --native-scheduler=eval %s -o %t && %t > %t.out && FileCheck %s < %t.out
+// RUN: talos -O3 --vpi=off --native-scheduler=eval --nba-queue=generic %s -o %t.queue && %t.queue | diff -u %t.out -
 // RUN: talos -O0 --execution-tier=bytecode %s -o %t.ref && %t.ref | diff -u %t.out -
 
 // A seed propagates around a feedback loop. A real sensitivity event can

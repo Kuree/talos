@@ -624,6 +624,18 @@ static talos_rt_status schedulerNBA(
           (context->nativeSchedulePlan->flags &
            TALOS_RT_NATIVE_SCHEDULE_FULLY_STATIC) != 0)
         ++context->signalDiagnostics.aotNBAStages;
+    } else if (sourceBitOffset % 8 == 0) {
+      // A zero-delay or delayed NBA owns the sampled RHS. Byte-aligned
+      // captures can copy it directly, masking padding in the last byte.
+      auto capture = [&](std::vector<uint8_t> &stored, const uint8_t *plane) {
+        const uint8_t *begin = plane + sourceBitOffset / 8;
+        stored.assign(begin, begin + byteCount);
+        if (bitWidth % 8)
+          stored.back() &= static_cast<uint8_t>((1u << (bitWidth % 8)) - 1);
+      };
+      capture(update.value, value);
+      if (unknownPlane)
+        capture(update.unknown, unknown);
     } else {
       update.value.assign(static_cast<size_t>(byteCount), 0);
       if (unknownPlane)
@@ -744,13 +756,238 @@ talos_rt_v1_power_cancel_nba(talos_rt_context *context, uint64_t target,
   return TALOS_RT_OK;
 }
 
+void talos_rt_context::indexGenericNBAEnqueue() {
+  // A single queue can include delayed, clipped and part-select records.
+  // Bound this conservative membership by the installed static layout.
+  if (scheduledNBAs.size() == 1 && scheduledNBARegionLowerBound != UINT32_MAX) {
+    // Cancellation can empty the queue outside its normal barrier.
+    std::fill(genericPendingNBARoots.begin(), genericPendingNBARoots.end(), 0);
+  }
+  uint32_t id;
+  int64_t offset;
+  if (decodeNativeStatic(scheduledNBAs.back().bitOffset, id, offset) &&
+      1 + id / 64 < genericPendingNBARoots.size())
+    genericPendingNBARoots[1 + id / 64] |= uint64_t{1} << (id % 64);
+  else
+    genericPendingNBARoots.front() = UINT64_MAX;
+}
+
+[[gnu::noinline]] static const uint64_t *
+initializeGenericNBAIndex(talos_rt_context *context, uint32_t id) {
+  size_t words = (context->nativeScheduleStaticStateIndex.size() + 63) / 64;
+  if (id / 64 >= words)
+    return nullptr;
+  TALOS_RT_TRY { context->genericPendingNBARoots.resize(1 + words); }
+  TALOS_RT_CATCH_ALL { return nullptr; }
+  // Older events were enqueued before the index was installed.
+  context->genericPendingNBARoots.front() =
+      context->scheduledNBAs.empty() ? 0 : UINT64_MAX;
+  return context->genericPendingNBARoots.data();
+}
+
+extern "C" const uint64_t *
+talos_rt_v1_scheduler_generic_nba_words(talos_rt_context *context,
+                                        uint32_t id) {
+  if (!context || lockedNativeAOTContext != context ||
+      activeNativeAOTContext != context)
+    return nullptr;
+  const auto *plan = context->nativeSchedulePlan;
+  if (!plan || plan->nba_root_count || context->nativeScheduleDeoptimized ||
+      context->nativeScheduleDirtyRootsPresent ||
+      context->nativeScheduleExternalWritePending ||
+      context->vpiObservationDemand || context->powerNBAs || context->saif ||
+      context->coverage || !context->forceMask.empty() ||
+      !context->assignMask.empty() || !context->scheduledDesignNBAs.empty() ||
+      !context->scheduledInertialPathNBAs.empty() ||
+      !context->stateValue.shared() ||
+      reinterpret_cast<const uint8_t *>(context->stateValue.data()) !=
+          plan->state_value ||
+      reinterpret_cast<const uint8_t *>(context->stateUnknown.data()) !=
+          plan->state_unknown)
+    return nullptr;
+  if (context->genericPendingNBARoots.empty())
+    return initializeGenericNBAIndex(context, id);
+  return 1 + id / 64 < context->genericPendingNBARoots.size()
+             ? context->genericPendingNBARoots.data()
+             : nullptr;
+}
+
+extern "C" uint32_t
+talos_rt_v1_scheduler_generic_nba_pending(talos_rt_context *context,
+                                          uint32_t id) {
+  const uint64_t *words = talos_rt_v1_scheduler_generic_nba_words(context, id);
+  return !words ||
+         (!context->scheduledNBAs.empty() &&
+          (words[0] || (words[1 + id / 64] & (uint64_t{1} << (id % 64)))));
+}
+
+extern "C" talos_rt_status talos_rt_v1_scheduler_nba_if_changed(
+    talos_rt_context *context, uint8_t *valuePlane, uint8_t *unknownPlane,
+    uint64_t planeBitCount, uint64_t handle, uint64_t width, uint64_t delay,
+    const uint8_t *value, const uint8_t *unknown) {
+  const auto *plan = context && lockedNativeAOTContext == context &&
+                             activeNativeAOTContext == context
+                         ? context->nativeSchedulePlan
+                         : nullptr;
+  auto enqueue = [&] {
+    return talos_rt_v1_scheduler_nba(context, valuePlane, unknownPlane,
+                                     planeBitCount, handle, width, delay, value,
+                                     unknown);
+  };
+  if (!plan || !value || !valuePlane || !width || width > UINT64_MAX - 7 ||
+      (width + 7) / 8 > SIZE_MAX || delay || (unknownPlane && !unknown) ||
+      valuePlane != plan->state_value || unknownPlane != plan->state_unknown ||
+      planeBitCount != plan->state_bit_count)
+    return enqueue();
+  uint32_t id;
+  int64_t offset;
+  if (!decodeNativeStatic(handle, id, offset) || offset < 0)
+    return enqueue();
+  const NativeStaticState *state = findNativeStaticState(context, id);
+  if (!state || uint64_t(offset) > state->bitWidth ||
+      width > state->bitWidth - uint64_t(offset) ||
+      state->bitOffset > planeBitCount ||
+      state->bitWidth > planeBitCount - state->bitOffset)
+    return enqueue();
+  if (talos_rt_v1_scheduler_generic_nba_pending(context, id))
+    return enqueue();
+  uint64_t start = state->bitOffset + uint64_t(offset);
+  if (start % 8 == 0 && width >= 8) {
+    size_t bytes = width / 8;
+    if (std::memcmp(valuePlane + start / 8, value, bytes) ||
+        (unknownPlane && std::memcmp(unknownPlane + start / 8, unknown, bytes)))
+      return enqueue();
+    unsigned tail = width % 8;
+    if (!tail)
+      return TALOS_RT_OK;
+    uint8_t delta = valuePlane[start / 8 + bytes] ^ value[bytes];
+    if (unknownPlane)
+      delta |= unknownPlane[start / 8 + bytes] ^ unknown[bytes];
+    return (delta & ((1u << tail) - 1)) ? enqueue() : TALOS_RT_OK;
+  }
+  for (uint64_t bit = 0; bit < width; bit += 64) {
+    uint64_t span = std::min<uint64_t>(64, width - bit);
+    if (loadPackedBits(context->stateValue, start + bit, span) !=
+            loadPackedBytes(value, bit, span) ||
+        (unknownPlane &&
+         loadPackedBits(context->stateUnknown, start + bit, span) !=
+             loadPackedBytes(unknown, bit, span)))
+      return enqueue();
+  }
+  return TALOS_RT_OK;
+}
+
+template <typename Captured>
+static std::optional<talos_rt_status>
+enqueueGenericScalar(talos_rt_context *context, uint8_t *valuePlane,
+                     uint8_t *unknownPlane, uint64_t planeBitCount,
+                     uint64_t bitOffset, uint64_t bitWidth, Captured captured) {
+  // A plain scalar issued by the locked evaluator still goes onto the single
+  // ordered generic queue. Construct its record at the tail, with its sampled
+  // RHS and the same sequence used by every other event (1800-2023 10.4.2).
+  const auto *plan = context && lockedNativeAOTContext == context &&
+                             activeNativeAOTContext == context
+                         ? context->nativeSchedulePlan
+                         : nullptr;
+  if (plan && !context->nativeScheduleDeoptimized && !context->saif &&
+      !context->powerNBAs && !plan->nba_root_count && bitWidth &&
+      bitWidth <= 64 && valuePlane && valuePlane == plan->state_value &&
+      (!unknownPlane || unknownPlane == plan->state_unknown) &&
+      planeBitCount == plan->state_bit_count) {
+    uint32_t id;
+    int64_t offset;
+    const auto *state = decodeNativeStatic(bitOffset, id, offset)
+                            ? findNativeStaticState(context, id)
+                            : nullptr;
+    if (state && offset >= 0 && uint64_t(offset) <= state->bitWidth &&
+        bitWidth <= state->bitWidth - uint64_t(offset) &&
+        state->bitOffset <= planeBitCount &&
+        state->bitWidth <= planeBitCount - state->bitOffset &&
+        context->nextSchedulerSequence) {
+      uint32_t region =
+          talos_rt_commit_region(context->activeHomeRegion == UINT32_MAX
+                                     ? uint32_t(TALOS_RT_REGION_ACTIVE)
+                                     : context->activeHomeRegion);
+      if (region != UINT32_MAX) {
+        TALOS_RT_TRY {
+          auto [value, unknown] = captured();
+          auto &update = context->scheduledNBAs.emplace_back();
+          update.sequence = context->nextSchedulerSequence++;
+          update.execRegion = region;
+          update.dueTime = context->schedulerTime;
+          update.valuePlane = valuePlane;
+          update.unknownPlane = unknownPlane;
+          update.planeBitCount = planeBitCount;
+          update.bitOffset = bitOffset;
+          update.bitWidth = bitWidth;
+          update.inlinePacked = true;
+          update.packedPlaneBit = state->bitOffset + uint64_t(offset);
+          if (id < context->scalarNBAFanoutMasks.size() &&
+              state == &context->nativeScheduleStaticStateIndex[id])
+            update.packedStaticState = id;
+          update.inlineValue = value;
+          update.inlineUnknown = unknown;
+          context->recordNBAEnqueue();
+          return TALOS_RT_OK;
+        }
+        TALOS_RT_CATCH(const std::bad_alloc &) {
+          talos_rt_v1_scheduler_fail(context, TALOS_RT_OUT_OF_MEMORY);
+          return TALOS_RT_OUT_OF_MEMORY;
+        }
+        TALOS_RT_CATCH_ALL {
+          talos_rt_v1_scheduler_fail(context, TALOS_RT_INVALID_ARGUMENT);
+          return TALOS_RT_INVALID_ARGUMENT;
+        }
+      }
+    }
+  }
+  return std::nullopt;
+}
+
 extern "C" talos_rt_status
 talos_rt_v1_scheduler_nba(talos_rt_context *context, uint8_t *valuePlane,
                           uint8_t *unknownPlane, uint64_t planeBitCount,
                           uint64_t bitOffset, uint64_t bitWidth, uint64_t delay,
                           const uint8_t *value, const uint8_t *unknown) {
+  if (!delay && value && (!unknownPlane || unknown))
+    if (auto status = enqueueGenericScalar(
+            context, valuePlane, unknownPlane, planeBitCount, bitOffset,
+            bitWidth, [&] {
+              return std::pair{
+                  loadPackedBytes(value, 0, bitWidth),
+                  unknownPlane ? loadPackedBytes(unknown, 0, bitWidth) : 0};
+            }))
+      return *status;
   return schedulerNBA(context, valuePlane, unknownPlane, planeBitCount,
                       bitOffset, bitWidth, delay, value, unknown, false);
+}
+
+extern "C" void
+talos_rt_v1_scheduler_nba_scalar(talos_rt_context *context, uint8_t *valuePlane,
+                                 uint8_t *unknownPlane, uint64_t planeBitCount,
+                                 uint64_t bitOffset, uint64_t bitWidth,
+                                 uint64_t value, uint64_t unknown) {
+  if (!bitWidth || bitWidth > 64) {
+    talos_rt_v1_scheduler_fail(context, TALOS_RT_INVALID_ARGUMENT);
+    return;
+  }
+  uint64_t mask = packedWidthMask(bitWidth);
+  if (auto status = enqueueGenericScalar(
+          context, valuePlane, unknownPlane, planeBitCount, bitOffset, bitWidth,
+          [&] {
+            return std::pair{value & mask, unknownPlane ? unknown & mask : 0};
+          })) {
+    // Failures in the capture path are latched at the point of failure.
+    return;
+  }
+  value = packedLittleEndian(value);
+  unknown = packedLittleEndian(unknown);
+  auto status =
+      schedulerNBA(context, valuePlane, unknownPlane, planeBitCount, bitOffset,
+                   bitWidth, 0, reinterpret_cast<const uint8_t *>(&value),
+                   reinterpret_cast<const uint8_t *>(&unknown), false);
+  if (status != TALOS_RT_OK)
+    talos_rt_v1_scheduler_fail(context, status);
 }
 
 // Epoch mismatch is permanent: remove those events before choosing a future

@@ -1,4 +1,15 @@
 // RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o %t.mlir 2> %t.trace
+// RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-set-module-attributes{attrs="{native.closed_executable, schedule.force_generic_nba}"},simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines,materialize-runtime-byte-globals)' -o %t.rank.mlir 2> %t.rank && FileCheck %s --check-prefix=ACYCLIC < %t.rank
+// RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-set-module-attributes{attrs="{native.closed_executable, schedule.force_generic_nba}"},test-talos-edit-attributes{has=test.feedback_slice set={low_bit = 0 : i64}},simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o /dev/null 2>&1 | FileCheck %s --check-prefix=FEEDBACK
+//
+// The ranked calendar proves that cycle_a reads only the low byte and
+// cycle_b writes only the high byte. Changing that write to the low byte
+// creates a backward publisher. Its later wake runs the forward receiver
+// on the next settling pass (1800-2023 4.3, 9.4.2).
+// ACYCLIC: talos eval refined convergence: owners=2
+// ACYCLIC-NEXT: talos eval executor inventory: tier1=8 tier2=0 runtime_checkpoints=0
+// FEEDBACK: talos eval refined convergence: owners=1
+// FEEDBACK-NEXT: talos eval executor inventory: tier1=7 tier2=1 runtime_checkpoints=0
 // RUN: FileCheck %s < %t.mlir
 // RUN: FileCheck %s --check-prefix=TRACE < %t.trace
 // RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-set-module-attributes{attrs="{schedule.native.max_inline_ops = 1 : i64}"},simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' | FileCheck %s --check-prefix=SMALL
@@ -131,7 +142,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
       simulation.suspend.change %in to ^body {site = #schedule.continuation<id = 61>} : !simulation.ref<!simulation.logic<8>>
     ^body:
       %v = simulation.ref.load %in : !simulation.ref<!simulation.logic<8>> -> !simulation.logic<8>
-      %high = simulation.ref.extract %root from 8 : !simulation.ref<!simulation.logic<16>> -> !simulation.ref<!simulation.logic<8>>
+      %high = simulation.ref.extract %root from 8 {test.feedback_slice} : !simulation.ref<!simulation.logic<16>> -> !simulation.ref<!simulation.logic<8>>
       simulation.ref.store %v to %high : !simulation.logic<8>, !simulation.ref<!simulation.logic<8>>
       cf.br ^wait
     }

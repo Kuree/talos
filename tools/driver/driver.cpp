@@ -1231,6 +1231,12 @@ static int executeCompilation(const InputArgList &args,
                     "'; expected on, off, or census");
     valid = false;
   }
+  StringRef nbaQueue = args.getLastArgValue(OPT_nba_queue_EQ, "auto");
+  if (nbaQueue != "auto" && nbaQueue != "generic") {
+    emitDriverError(Twine("unsupported NBA queue '") + nbaQueue +
+                    "'; expected auto or generic");
+    valid = false;
+  }
   StringRef clockedKernels =
       args.getLastArgValue(OPT_clocked_kernels_EQ, "deferred");
   if (clockedKernels != "off" && clockedKernels != "immediate" &&
@@ -1572,6 +1578,9 @@ static int executeCompilation(const InputArgList &args,
                               ? talos::schedule::NativeSchedulerMode::Generic
                               : talos::schedule::NativeSchedulerMode::Eval;
     }
+    if (nbaQueue == "generic")
+      ::talos::schedule::set<::talos::schedule::Field::ForceGenericNBA>(
+          *module, UnitAttr::get(&context));
     ::talos::schedule::set<::talos::schedule::Field::NativeScheduler>(
         (*module), talos::schedule::NativeSchedulerModeAttr::get(
                        &context, pipelineScheduler));
@@ -1621,7 +1630,8 @@ static int executeCompilation(const InputArgList &args,
                   executionTier != "bytecode"
               ? "on"
               : staticSpecialization,
-          /*earlySymbolDCE=*/true, clockedKernels, forwardCopies,
+          /*earlySymbolDCE=*/true,
+          nbaQueue == "generic" ? "off" : clockedKernels, forwardCopies,
           /*enableUPF=*/!upfPaths.empty(), /*pruneVPIInventory=*/native,
           // Match the backend's closed executable authority, without enabling
           // unrelated native lowering decisions early. Reusable IR/object

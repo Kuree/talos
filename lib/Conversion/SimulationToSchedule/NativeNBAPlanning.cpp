@@ -9,6 +9,7 @@
 #include "talos/Analysis/NBAInfluenceAnalysis.h"
 #include "talos/Analysis/ParallelWalk.h"
 #include "talos/Analysis/SimulationAnalysis.h"
+#include "talos/Analysis/SimulationEffectAnalysis.h"
 #include "talos/Analysis/StaticSpecializationAnalysis.h"
 #include "talos/Analysis/StorageWriteAnalysis.h"
 #include "talos/Conversion/SimulationRuntime.h"
@@ -567,11 +568,17 @@ FailureOr<NativeStaticNBAPlan> buildNativeStaticNBAPlan(
                                     homeRegion == TALOS_RT_REGION_REACTIVE
                                 ? homeRegion + 2
                                 : UINT32_MAX;
+    // A whole fixed unpacked array/struct of plain bits also captures both
+    // planes by value (1800-2023 7.4, 7.6, 4.9.4). Its captured width is the
+    // native storage span, including every element. Managed elements keep
+    // their assignment, lifetime and reference-copy paths.
+    bool byValue =
+        sim::getPackedWidth(enqueue.getValue().getType()).has_value() ||
+        (width && analysis::isPlainValueType(enqueue.getValue().getType()));
     immediateOnly[rootIndex] =
         immediateOnly[rootIndex] && !enqueue.getDelay() && !site.getTiming() &&
         !enqueue.getClockingOutputAttr() &&
-        isa<sim::RefType>(enqueue.getDestination().getType()) &&
-        bool(sim::getPackedWidth(enqueue.getValue().getType())) &&
+        isa<sim::RefType>(enqueue.getDestination().getType()) && byValue &&
         site.getStorage() != schedule::ComputeNBAStorageKind::DynamicFrontier &&
         commitRegion == TALOS_RT_REGION_NBA;
     bool direct =
@@ -623,6 +630,7 @@ FailureOr<NativeStaticNBAPlan> buildNativeStaticNBAPlan(
   // exclude every physical root with an immediate writer. Declaration
   // initialization precedes all processes (6.8); it cannot intervene here.
   llvm::DenseSet<uint32_t> immediateWriters;
+  llvm::DenseMap<uint32_t, uint64_t> writerDescriptors;
   bool completeWriters = bool(design);
   unsigned explainedIncompleteWriters = 0;
   auto incompleteWriter = [&](sim::SimFuncOp function, StringRef reason) {
@@ -640,6 +648,10 @@ FailureOr<NativeStaticNBAPlan> buildNativeStaticNBAPlan(
         decoded.kind != TALOS_RT_STABLE_HANDLE_STATIC)
       return false;
     immediateWriters.insert(decoded.id);
+    auto [writer, inserted] =
+        writerDescriptors.try_emplace(decoded.id, descriptor);
+    if (!inserted && writer->second != descriptor)
+      writer->second = UINT64_MAX;
     return true;
   };
   auto sourceWriters =
@@ -689,11 +701,72 @@ FailureOr<NativeStaticNBAPlan> buildNativeStaticNBAPlan(
     });
   plan.unchangedSafeRoots.assign(plan.roots.size(), false);
   plan.completeSourceWriters = completeWriters;
+  // A value-change observer is sensitive to a transition, including X/Z,
+  // even on an externally visible root (1800-2023 4.3, 9.4.2). An equal
+  // capture with no earlier pending update cannot cause such a transition
+  // when no immediate writer can intervene (4.6(b), 10.4.2). Use the closed
+  // source writer inventory. Forces and power-loss cancellation have their
+  // own write ordering and retain the ordinary path.
+  bool closedWriters =
+      sourceWriters && design.getComputeGraphAttr() &&
+      design.getComputeGraphAttr().getVpi() == schedule::ComputeVPIMode::Off &&
+      schedule::has<schedule::Field::EvalRuntimeCalendar>(module) &&
+      !design
+           .walk([](Operation *op) {
+             return isa<sim::SimOverrideOp, sim::SimReleaseOverrideOp,
+                        sim::SimDynamicOverrideOp, sim::SimPowerNBAOp,
+                        sim::SimPowerNBAViewOp>(op)
+                        ? WalkResult::interrupt()
+                        : WalkResult::advance();
+           })
+           .wasInterrupted();
   for (auto [index, root] : llvm::enumerate(plan.roots)) {
     plan.unchangedSafeRoots[index] =
         completeWriters && native::has<native::ClosedExecutable>(module) &&
-        plan.privateInfluenceRoots[index] && seen[index] &&
+        (plan.privateInfluenceRoots[index] || closedWriters) && seen[index] &&
         immediateOnly[index] && !immediateWriters.contains(root.static_state);
+  }
+  auto ranges = design ? schedule::get<schedule::Field::NbaHoldRanges>(design)
+                       : DenseI64ArrayAttr{};
+  if (closedWriters && completeWriters && ranges && ranges.size() % 3 == 0 &&
+      native::has<native::ClosedExecutable>(module)) {
+    // A source slice is a certificate for one descriptor. If separate
+    // immediately written descriptors alias its native root, keep the
+    // ordinary capture. Revalidate each range against the native bounds.
+    DenseMap<uint32_t, SmallVector<std::pair<uint64_t, uint64_t>>> byState;
+    auto data = ranges.asArrayRef();
+    for (size_t i = 0; i < data.size(); i += 3) {
+      if (data[i] < 0 || data[i + 1] < 0 || data[i + 2] <= 0)
+        continue;
+      auto mapped = stateLayout.storage.find(data[i]);
+      talos_rt_stable_handle_v1 handle{};
+      if (mapped == stateLayout.storage.end() ||
+          !talos_rt_stable_handle_decode(mapped->second, &handle) ||
+          handle.kind != TALOS_RT_STABLE_HANDLE_STATIC || handle.offset < 0)
+        continue;
+      auto writer = writerDescriptors.find(handle.id);
+      auto *bound = stateLayout.findBound(handle.id);
+      uint64_t low = uint64_t(handle.offset) + uint64_t(data[i + 1]);
+      uint64_t width = uint64_t(data[i + 2]);
+      if (writer != writerDescriptors.end() &&
+          writer->second == uint64_t(data[i]) && bound && low <= bound->width &&
+          width <= bound->width - low)
+        byState[handle.id].emplace_back(low, low + width);
+    }
+    for (auto [site, offset] : plan.siteFixedOffsets) {
+      uint32_t index = plan.siteRoots.at(site);
+      if (!seen[index] || !immediateOnly[index])
+        continue;
+      auto partial = byState.find(plan.roots[index].static_state);
+      if (partial == byState.end())
+        continue;
+      uint64_t width = plan.siteWidths.lookup(site);
+      for (auto [low, end] : partial->second)
+        if (width && low <= offset && offset < end && width <= end - offset) {
+          plan.unchangedSiteWidths.try_emplace(site, end - offset);
+          break;
+        }
+    }
   }
   if (native::has<native::DebugTiming>(module))
     llvm::errs() << "talos native unchanged NBA roots: "
@@ -701,6 +774,7 @@ FailureOr<NativeStaticNBAPlan> buildNativeStaticNBAPlan(
                  << plan.roots.size() << " complete-writers=" << completeWriters
                  << " immediate-only=" << llvm::count(immediateOnly, true)
                  << " immediate-writers=" << immediateWriters.size()
+                 << " disjoint-writer-sites=" << plan.unchangedSiteWidths.size()
                  << " closed-executable="
                  << native::has<native::ClosedExecutable>(module) << '\n';
   return plan;

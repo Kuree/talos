@@ -5263,6 +5263,7 @@ void TalosSimMaterializeComputeFusionPass::runOnOperation() {
       schedule::remove<schedule::Field::NbaPrivateInfluence>(design);
       schedule::remove<schedule::Field::NbaGuardedPrivateInfluence>(design);
       schedule::remove<schedule::Field::NbaImmediateWriters>(design);
+      schedule::remove<schedule::Field::NbaHoldRanges>(design);
       return;
     }
   }
@@ -5287,6 +5288,14 @@ void TalosSimMaterializeComputeFusionPass::runOnOperation() {
       if (observers->immediateWriters)
         schedule::set<schedule::Field::NbaImmediateWriters>(
             design, sorted(*observers->immediateWriters));
+      if (!observers->holdRanges.empty()) {
+        SmallVector<int64_t> ranges;
+        for (const auto &range : observers->holdRanges)
+          ranges.append(
+              {int64_t(range.root), int64_t(range.low), int64_t(range.width)});
+        schedule::set<schedule::Field::NbaHoldRanges>(
+            design, DenseI64ArrayAttr::get(design.getContext(), ranges));
+      }
       // Keep original activation dependencies: a fused summary would connect
       // unrelated reads and writes. Sparse backward dataflow closes observer
       // influence through immediate state updates and aliases before fusion.

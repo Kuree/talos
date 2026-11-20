@@ -23,6 +23,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/SymbolTable.h"
+#include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -633,6 +634,113 @@ proveDynamicEvalNBA(LLVM::CallOp call,
   return proof;
 }
 
+// The ordinary queue's storage is stable through a non-suspending eval
+// function. Ask for its authority once. Enqueues can change any membership
+// word between two captures, so each equal-value check reloads both words.
+static void
+materializeGenericNBAQueueWindows(ModuleOp module,
+                                  const NativeStaticFanoutPlan &fanout,
+                                  const llvm::StringSet<> *selectedRawBodies) {
+  if (!schedule::has<schedule::Field::ForceGenericNBA>(module) ||
+      !schedule::has<schedule::Field::EvalRuntimeCalendar>(module))
+    return;
+  MLIRContext *context = module.getContext();
+  Type pointer = LLVM::LLVMPointerType::get(context);
+  for (auto function :
+       collectGeneratedEvalCallClosure(module, selectedRawBodies)) {
+    if (!isGeneratedEvalBody(function, selectedRawBodies) ||
+        function.getEntryKind() != sim::EntryKind::Function ||
+        function.isExternal())
+      continue;
+    SmallVector<std::pair<LLVM::CallOp, uint32_t>> queries;
+    uint32_t maximum = 0;
+    function.walk([&](LLVM::CallOp call) {
+      if (call.getCallee() != "talos_rt_v1_scheduler_generic_nba_pending" ||
+          call.getArgOperands().size() != 2)
+        return;
+      auto root = constantU64(call.getArgOperands()[1]);
+      if (!root || *root > UINT32_MAX)
+        return;
+      queries.emplace_back(call, uint32_t(*root));
+      maximum = std::max(maximum, uint32_t(*root));
+    });
+    if (queries.empty())
+      continue;
+    // A foreign call, scheduler handoff or runtime-observed publication can
+    // change the binding or introduce another writer between captures.
+    // Recheck authority at each original query in such a body.
+    WalkResult window = function.walk([&](Operation *op) {
+      if (auto call = dyn_cast<LLVM::CallOp>(op)) {
+        auto name = call.getCallee();
+        bool local =
+            name && (*name == "talos_rt_v1_scheduler_generic_nba_pending" ||
+                     *name == "talos_rt_v1_scheduler_nba" ||
+                     *name == "talos_rt_v1_scheduler_nba_scalar" ||
+                     *name == "talos_rt_v1_scheduler_nba_if_changed" ||
+                     *name == "talos_rt_v1_scheduler_fail" ||
+                     *name == "talos_rt_v1_native_handle_offset");
+        return local ? WalkResult::advance() : WalkResult::interrupt();
+      }
+      if (auto transition = dyn_cast<schedule::NativeTransitionOp>(op))
+        if (fanout.runtimeTransitionStates.contains(
+                transition.getStaticState()))
+          return WalkResult::interrupt();
+      if (isa<CallOpInterface, LLVM::InlineAsmOp>(op) ||
+          sim::isSuspensionOp(op))
+        return WalkResult::interrupt();
+      if (op->getDialect() == function->getDialect() &&
+          !isa<sim::SimFuncOp, sim::SimReturnOp, sim::SimRefLoadOp>(op) &&
+          !isMemoryEffectFree(op))
+        return WalkResult::interrupt();
+      return WalkResult::advance();
+    });
+    if (window.wasInterrupted())
+      continue;
+    OpBuilder b = OpBuilder::atBlockBegin(&function.getBody().front());
+    Location at = function.getLoc();
+    Value current = LLVM::LoadOp::create(
+        b, at, pointer,
+        LLVM::AddressOfOp::create(b, at, pointer, "__talos_current_context"));
+    Value words =
+        LLVM::CallOp::create(
+            b, at, TypeRange{pointer},
+            SymbolRefAttr::get(context,
+                               "talos_rt_v1_scheduler_generic_nba_words"),
+            ValueRange{current, llvmConstant(b, at, b.getI32Type(), maximum)})
+            .getResult();
+    Value valid = LLVM::ICmpOp::create(b, at, LLVM::ICmpPredicate::ne, words,
+                                       LLVM::ZeroOp::create(b, at, pointer));
+    for (auto [call, root] : queries) {
+      Location loc = call.getLoc();
+      Block *head = call->getBlock();
+      Block *join = head->splitBlock(Block::iterator(call));
+      Block *read = b.createBlock(head->getParent(), join->getIterator());
+      auto result = join->addArgument(b.getI32Type(), loc);
+      b.setInsertionPointToEnd(head);
+      cf::CondBranchOp::create(
+          b, loc, valid, read, ValueRange{}, join,
+          ValueRange{llvmConstant(b, loc, b.getI32Type(), 1)});
+      b.setInsertionPointToEnd(read);
+      Value all = LLVM::LoadOp::create(b, loc, b.getI64Type(), words, 8);
+      Value bits = LLVM::LoadOp::create(
+          b, loc, b.getI64Type(),
+          byteGEP(b, loc, words, uint64_t{1 + root / 64} * 8), 8);
+      Value mask =
+          llvmConstant(b, loc, b.getI64Type(), uint64_t{1} << (root % 64));
+      Value any = arith::OrIOp::create(
+          b, loc, all, arith::AndIOp::create(b, loc, bits, mask));
+      Value pending =
+          arith::CmpIOp::create(b, loc, arith::CmpIPredicate::ne, any,
+                                llvmConstant(b, loc, b.getI64Type(), 0));
+      cf::BranchOp::create(
+          b, loc, join,
+          ValueRange{arith::ExtUIOp::create(b, loc, b.getI32Type(), pending)});
+      call.getResult().replaceAllUsesWith(result);
+      call.erase();
+    }
+  }
+}
+
 // Wide port/storage copies use the generic snapshot ABI during state lowering.
 // On a clean, fully owned generated route, publish its machine-word slices
 // through the same exact fanout logic as narrow stores. All state bytes have
@@ -820,6 +928,8 @@ FailureOr<bool> makeNativeEvalPlan(
   if (!resolved->clockKernels.empty()) {
     // Normalize before the ingress/NBA proof so wide clock disturbances are
     // visible to the same range analysis as ordinary narrow publications.
+    materializeGenericNBAQueueWindows(module, staticFanoutPlan,
+                                      selectedRawBodies);
     normalizeGeneratedWideTransitions(module, dataLayout, stateLayout,
                                       staticFanoutPlan, directFragments,
                                       selectedRawBodies, wholePublications);

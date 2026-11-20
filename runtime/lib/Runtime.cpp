@@ -362,6 +362,17 @@ void talos_rt_report_signal_diagnostics_unlocked(talos_rt_context *context) {
                      context->signalDiagnostics.frameStoresShared),
                  static_cast<unsigned long long>(
                      context->signalDiagnostics.frameStoreFallbacks));
+  if (context->scalarNBAWordPublications)
+    std::fprintf(
+        stderr, "talos-nba-fifo word_publications=%llu\n",
+        static_cast<unsigned long long>(context->scalarNBAWordPublications));
+  if (context->packedFIFOReplays)
+    std::fprintf(stderr, "talos-nba-fifo packed_records=%llu\n",
+                 static_cast<unsigned long long>(context->packedFIFOReplays));
+  if (context->packedNBAChanges && context->packedNBAChanges->publications)
+    std::fprintf(stderr, "talos-nba-fifo mapped_changes=%llu\n",
+                 static_cast<unsigned long long>(
+                     context->packedNBAChanges->publications));
   if (context->signalDiagnostics.observedBatchActivations)
     std::fprintf(stderr, "talos-observed-batch activations=%llu\n",
                  static_cast<unsigned long long>(

@@ -557,7 +557,8 @@ LogicalResult NativePipelineAnalysis::planActors() {
                      (evalScheduler ||
                       nativeScheduler == schedule::NativeSchedulerMode::Auto) &&
                      (!aotEligibility.isFullyEligible() ||
-                      !rankedActiveActors.empty());
+                      !rankedActiveActors.empty() ||
+                      schedule::has<schedule::Field::ForceGenericNBA>(module));
   closedStaticIsland = aotEligibility.isFullyEligible() || staticEvalIsland;
   cleanSuperstep = certifiedStaticSuperstep && closedStaticIsland;
 
@@ -595,7 +596,8 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
     // elaborated sensitivity graph. Live observation revokes the runtime
     // lease; force/release and deposits retain their publication barriers.
     staticFanout = vpi.hasComputeGraph();
-    staticNBA = staticSpecialization && !stateLayout->nbaHandles.empty();
+    staticNBA = staticSpecialization && !stateLayout->nbaHandles.empty() &&
+                !schedule::has<schedule::Field::ForceGenericNBA>(module);
   }
   if (staticControl) {
     module.walk([&](sim::SimFuncOp function) {
@@ -747,7 +749,20 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
         bool ranked =
             activeHandoff &&
             aotEligibility.getRuntimeCheckpointActors().contains(actor);
-        hasInactiveDelay |= !ranked;
+        // An initial or fork child with no generated activation keeps its
+        // #0 on its original frame. The shared calendar resumes that frame
+        // in Inactive before it replays the NBA FIFO (1800-2023 4.4.2.3-4,
+        // 4.5, 9.3.2).
+        bool runtimeFrameDelay =
+            constant &&
+            schedule::has<schedule::Field::ForceGenericNBA>(module) &&
+            (actor.getEntryKind() == sim::EntryKind::Initial ||
+             actor.getEntryKind() == sim::EntryKind::Fork) &&
+            actor.getHomeRegion() == sim::EventRegion::Active &&
+            !schedule::has<schedule::Field::EvalBody>(actor) &&
+            (!delay.getResumeRegion() ||
+             delay.getResumeRegion() == sim::EventRegion::Inactive);
+        hasInactiveDelay |= !ranked && !runtimeFrameDelay;
         if (detailedTiming && explainedDelays++ < 3)
           llvm::errs() << "talos eval runtime-calendar delay: actor="
                        << delay->getParentOfType<sim::SimFuncOp>().getSymName()
@@ -1090,6 +1105,34 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
         llvm::errs() << "talos eval assertion inputs: roots="
                      << assertionInputs.size() << " forwarded=" << copies
                      << '\n';
+    }
+  }
+  if (schedule::has<schedule::Field::ForceGenericNBA>(module) &&
+      schedule::has<schedule::Field::EvalRuntimeCalendar>(module)) {
+    // Reuse the source writer proof without installing accumulators or static
+    // sites. The ordinary queue checks its pending writes at each capture.
+    ScopedDiagnosticHandler optionalProof(
+        module.getContext(), [](Diagnostic &) { return success(); });
+    auto writes =
+        buildNativeStaticNBAPlan(module, *stateLayout, staticNBACommits, true);
+    if (succeeded(writes)) {
+      for (auto [root, inert] :
+           llvm::zip_equal(writes->roots, writes->unchangedSafeRoots))
+        if (inert)
+          stateLayout->genericNBAHoldRoots.insert(root.static_state);
+      for (auto [site, offset] : writes->siteFixedOffsets) {
+        uint32_t root = writes->siteRoots.at(site);
+        uint64_t width = writes->unchangedSafeRoots[root]
+                             ? writes->roots[root].bit_width - offset
+                             : writes->unchangedSiteWidths.lookup(site);
+        if (width && offset <= INT32_MAX)
+          stateLayout->genericNBAHoldTargets.try_emplace(
+              site, NativeStateLayout::NBAHoldTarget{
+                        talos_rt_stable_handle_encode(
+                            TALOS_RT_STABLE_HANDLE_STATIC,
+                            writes->roots[root].static_state, int64_t(offset)),
+                        width});
+      }
     }
   }
   if (staticNBA) {

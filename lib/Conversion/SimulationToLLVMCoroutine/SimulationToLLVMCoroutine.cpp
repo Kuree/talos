@@ -310,6 +310,47 @@ bool isEvalClosureRuntimeCall(LLVM::CallOp call, LLVM::LLVMFuncOp function,
   // without executing actors or advancing time. Its actor/root are
   // fixed by the installed generated plan; scheduling stays outside
   // this non-suspending activation.
+  // The generic queue captures the RHS and destination here. Its barrier
+  // belongs to the shared runtime calendar, which applies updates in enqueue
+  // order after Active/Inactive quiesce (1800-2023 4.5, 4.6(b), 10.4.2).
+  if ((*callee == "talos_rt_v1_scheduler_generic_nba_pending" ||
+       *callee == "talos_rt_v1_scheduler_generic_nba_words") &&
+      schedule::has<schedule::Field::ForceGenericNBA>(module) &&
+      schedule::has<schedule::Field::EvalRuntimeCalendar>(module) &&
+      call.getArgOperands().size() == 2 &&
+      call.getArgOperands()[1].getDefiningOp<LLVM::ConstantOp>())
+    return true;
+  if ((*callee == "talos_rt_v1_scheduler_nba" ||
+       *callee == "talos_rt_v1_scheduler_nba_if_changed") &&
+      schedule::has<schedule::Field::ForceGenericNBA>(module) &&
+      schedule::has<schedule::Field::EvalRuntimeCalendar>(module) &&
+      call.getArgOperands().size() == 9) {
+    APInt delay;
+    return matchPattern(call.getArgOperands()[6], m_ConstantInt(&delay)) &&
+           delay.isZero();
+  }
+  if (*callee == "talos_rt_v1_scheduler_nba_scalar" &&
+      schedule::has<schedule::Field::ForceGenericNBA>(module) &&
+      schedule::has<schedule::Field::EvalRuntimeCalendar>(module) &&
+      call.getArgOperands().size() == 8) {
+    APInt width;
+    return matchPattern(call.getArgOperands()[5], m_ConstantInt(&width)) &&
+           width.getLimitedValue() != 0 && width.getLimitedValue() <= 64;
+  }
+  if (*callee == "talos_rt_v1_scheduler_packed_slice_nba" &&
+      schedule::has<schedule::Field::ForceGenericNBA>(module) &&
+      schedule::has<schedule::Field::EvalRuntimeCalendar>(module) &&
+      call.getArgOperands().size() == 14) {
+    // IEEE 1800-2023 10.4.2, 11.5.1. Clipping the selected portion and
+    // capturing both planes only appends an ordinary NBA. A static site,
+    // delayed capture or clocking output has a different scheduling owner.
+    APInt delay, site, clocking;
+    auto args = call.getArgOperands();
+    return matchPattern(args[9], m_ConstantInt(&delay)) && delay.isZero() &&
+           matchPattern(args[10], m_ConstantInt(&site)) && site.isAllOnes() &&
+           matchPattern(args[11], m_ConstantInt(&clocking)) &&
+           clocking.isAllOnes();
+  }
   if ((*callee == "talos_rt_v1_scheduler_wide_transition_owned" ||
        *callee == "talos_rt_v1_scheduler_wide_transition_projected") &&
       call.getArgOperands().size() == 8 &&

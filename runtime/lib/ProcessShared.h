@@ -314,6 +314,27 @@ bool validNativeStatePlanesUnlocked(const talos_rt_context *context,
                                     const uint8_t *unknown, uint64_t bitCount);
 void indexNativeFanoutWindows(talos_rt_context &context,
                               const talos_rt_static_fanout_entry *entries);
+void indexScalarNBAFanout(talos_rt_context &context,
+                          const talos_rt_static_fanout_entry *entries);
+bool publishScalarNBAChangeUnlocked(talos_rt_context *context,
+                                    uint64_t stableID, uint64_t width,
+                                    uint64_t changed, uint64_t posedge,
+                                    uint64_t negedge);
+class NativeNBAUpdateScope {
+public:
+  explicit NativeNBAUpdateScope(talos_rt_context &context)
+      : applying(context.schedulerApplyingNativeUpdate), previous(applying) {
+    applying = true;
+  }
+  ~NativeNBAUpdateScope() { applying = previous; }
+
+private:
+  bool &applying;
+  bool previous;
+};
+size_t replayPackedFIFOPrefixUnlocked(talos_rt_context *context,
+                                      uint32_t region, size_t start,
+                                      bool &changed, bool &knownnessChange);
 bool publishStaticAOTSignalTransitionUnlocked(
     talos_rt_context *context, uint64_t stableID, uint64_t bitWidth,
     const uint8_t *changed, const uint8_t *posedge, const uint8_t *negedge,

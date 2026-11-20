@@ -4,6 +4,7 @@
 #define TALOS_LIB_DIALECT_SIMULATION_TRANSFORMS_COMPUTEFUSION_H
 
 #include "talos/Analysis/ActivationRegionAnalysis.h"
+#include "talos/Analysis/RangeSet.h"
 #include "talos/Analysis/SimulationAnalysis.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "llvm/ADT/DenseSet.h"
@@ -257,6 +258,7 @@ struct NBATransientObservers {
   /// Immediate source-process writers, excluding declaration initialization.
   /// Absence is incomplete, rather than an empty writer set.
   std::optional<llvm::DenseSet<uint64_t>> immediateWriters;
+  analysis::Ranges holdRanges;
 };
 
 /// Classify the design's storage, or std::nullopt when its observers cannot

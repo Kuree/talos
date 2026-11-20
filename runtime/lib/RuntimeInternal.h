@@ -887,6 +887,28 @@ struct NativeStaticStateRange {
   uint32_t id = 0;
 };
 
+// For a bounded source whose static destinations are all change-sensitive
+// clock-kernel rows, map its changed bits to a local bitmap of those rows.
+// Arming remains a property of the live process at each FIFO publication.
+struct PackedNBAChangeMap {
+  struct Root {
+    uint64_t all = 0;
+    size_t firstWord = 0, words = 0;
+  };
+  struct Word {
+    uint64_t all = 0;
+    size_t firstMask = 0, masks = 0;
+    size_t run = 1;
+  };
+  struct Mask {
+    uint64_t bits, rows;
+  };
+  std::vector<Root> roots;
+  std::vector<Word> words;
+  std::vector<Mask> masks;
+  uint64_t publications = 0;
+};
+
 // The generated per-root unknown summary
 // (talos_rt_v1_native_state_bind_unknown_summary), which generated code
 // tests directly. With TALOS_RT_VERIFY_UNKNOWN_SUMMARY set, scheduler steps
@@ -970,6 +992,9 @@ struct ScheduledNBA {
   uint64_t planeBitCount = 0;
   uint64_t bitOffset = 0;
   uint64_t bitWidth = 0;
+  // A bounded ordinary packed capture can reuse its validated address at
+  // commit. A detached image or an intervening override uses normal replay.
+  uint64_t packedPlaneBit = UINT64_MAX;
   bool stringValue = false;
   bool driver = false;
   bool deferDriverResolution = false;
@@ -978,6 +1003,9 @@ struct ScheduledNBA {
   uint32_t realWidth = 0;
   bool managedValue = false;
   bool inlinePacked = false;
+  // Set only for an immediate scalar captured against the installed shared
+  // image. Releasing that plan clears the binding on every remaining record.
+  uint32_t packedStaticState = 0;
   talos_rt_string_v1 rootedString = 0;
   talos_rt_object_v1 *rootedManaged = nullptr;
   uint64_t inlineValue = 0;
@@ -2858,15 +2886,24 @@ struct talos_rt_context {
   // empty. Cancellation, clipping and compaction may leave it conservative;
   // a due entry at this bound still proves the scan has found the minimum.
   uint32_t scheduledNBARegionLowerBound = UINT32_MAX;
-  void enqueueNBA(ScheduledNBA &&update) {
-    uint32_t lower =
-        scheduledNBAs.empty()
-            ? update.execRegion
-            : std::min(scheduledNBARegionLowerBound, update.execRegion);
-    scheduledNBAs.push_back(std::move(update));
-    scheduledNBARegionLowerBound = lower;
+  // Set membership only. Actual value-changing events retain their original
+  // order and payloads in scheduledNBAs.
+  std::vector<uint64_t> genericPendingNBARoots;
+  void indexGenericNBAEnqueue();
+  void recordNBAEnqueue() {
+    if (!genericPendingNBARoots.empty())
+      indexGenericNBAEnqueue();
+    uint32_t region = scheduledNBAs.back().execRegion;
+    scheduledNBARegionLowerBound =
+        scheduledNBAs.size() == 1
+            ? region
+            : std::min(scheduledNBARegionLowerBound, region);
     if (signalDiagnosticsEnabled)
       ++signalDiagnostics.nbaQueueEnqueues;
+  }
+  void enqueueNBA(ScheduledNBA &&update) {
+    scheduledNBAs.push_back(std::move(update));
+    recordNBAEnqueue();
   }
   // Path-delay events have one live entry per destination bit. Keeping them
   // in an ordered keyed calendar lets pulse rejection remove a superseded
@@ -3299,6 +3336,12 @@ struct talos_rt_context {
     std::vector<std::pair<uint64_t, uint64_t>> bounds;
   };
   std::vector<NativeFanoutWindow> nativeFanoutWindows;
+  // Full-root change waits sharing one kernel ingress word in a generic NBA
+  // plan. Only the destinations are static. Their arming is checked at commit.
+  std::vector<uint64_t> scalarNBAFanoutMasks;
+  uint64_t scalarNBAWordPublications = 0;
+  uint64_t packedFIFOReplays = 0;
+  std::unique_ptr<PackedNBAChangeMap> packedNBAChanges;
   talos_rt_context();
   ~talos_rt_context();
 };

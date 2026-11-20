@@ -181,6 +181,11 @@ struct NativeStateLayout : analysis::NativeStateLayoutAnalysis {
   llvm::DenseSet<uint32_t> directHandles;
   llvm::DenseSet<uint32_t> guardedHandles;
   llvm::DenseSet<uint32_t> nbaHandles;
+  llvm::DenseSet<uint32_t> genericNBAHoldRoots;
+  struct NBAHoldTarget {
+    uint64_t handle, width;
+  };
+  llvm::DenseMap<uint64_t, NBAHoldTarget> genericNBAHoldTargets;
   llvm::DenseSet<uint32_t> transitionHandles;
   // Inferred waveform, source domain, and update cadence, independent of
   // calendar ownership. Tick-driven signals need not have periodic waveforms.

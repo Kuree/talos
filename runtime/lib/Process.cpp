@@ -2847,6 +2847,8 @@ talos_rt_v1_scheduler_install_aot(talos_rt_context *context,
       context->nativeScheduleNodeIngress.clear();
       context->nativeScheduleFanoutRanges.clear();
       context->nativeFanoutWindows.clear();
+      context->scalarNBAFanoutMasks.clear();
+      context->packedNBAChanges.reset();
       context->nativeScheduleRuntimeFanoutIndices.clear();
       context->nativeScheduleReadyNodes.resize(0);
       context->nativeScheduleDeadlines.assign(plan->actor_capacity, UINT64_MAX);
@@ -2903,6 +2905,8 @@ talos_rt_v1_scheduler_install_aot(talos_rt_context *context,
       }
       if (plan->flags & TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL) {
         indexNativeFanoutWindows(*context, fanoutEntries);
+        if (!nbaRootCount && clockKernelCount)
+          indexScalarNBAFanout(*context, fanoutEntries);
       }
       size_t dirtyWords =
           (context->nativeScheduleStaticStateIndex.size() + 63) / 64;
@@ -4752,6 +4756,141 @@ idleCurrentSlotResult(talos_rt_context *context,
 }
 } // namespace
 
+// Test the captured value at its actual position in the NBA queue. Earlier
+// updates, including a pulse that returns to this value, have already run
+// (1800-2023 4.6(b), 9.4.2, 10.4.2). Detached mirrors, driver resolution,
+// and power/inertial transactions still use the full commit.
+static bool sharesPackedNBAImage(const talos_rt_context *context,
+                                 const ScheduledNBA &update) {
+  const auto *plan = context->nativeSchedulePlan;
+  // A two-state destination in a mixed design captures a known scalar
+  // without an unknown-plane argument. Commit still compares and updates
+  // both canonical planes, including any previously unknown bits.
+  if (!plan || update.driver || update.realWidth || update.managedValue ||
+      update.commitGuard != NBACommitGuard::None ||
+      update.inertialNetBit != UINT64_MAX ||
+      update.clockingOutput != UINT64_MAX || !context->stateValue.shared() ||
+      context->vpiObservationDemand || context->saif || context->coverage ||
+      plan->state_bit_count != update.planeBitCount ||
+      context->nativeStateBitCount != update.planeBitCount ||
+      plan->state_value != update.valuePlane ||
+      (plan->state_unknown != update.unknownPlane &&
+       (!update.inlinePacked || update.unknownPlane || update.inlineUnknown)) ||
+      context->nativeStateValue != update.valuePlane ||
+      context->nativeStateUnknown != plan->state_unknown ||
+      reinterpret_cast<const uint8_t *>(context->stateValue.data()) !=
+          update.valuePlane ||
+      reinterpret_cast<const uint8_t *>(context->stateUnknown.data()) !=
+          plan->state_unknown)
+    return false;
+  return true;
+}
+
+static bool commitSharedScalarNBA(talos_rt_context *context,
+                                  const ScheduledNBA &update, bool &changed,
+                                  bool *held) {
+  if (update.packedPlaneBit == UINT64_MAX || !update.inlinePacked ||
+      !context->forceMask.empty() || !context->assignMask.empty() ||
+      context->powerNBAs || context->clockOccurrences || context->exactEvents ||
+      !sharesPackedNBAImage(context, update))
+    return false;
+  // This is one ordinary FIFO record. Compare against CURRENT at its own
+  // position in the queue, then deliver its edge before applying any later
+  // record (1800-2023 4.6(b), 9.4.2, 10.4.2).
+  uint64_t bit = update.packedPlaneBit, width = update.bitWidth;
+  uint64_t oldValue = loadPackedBits(context->stateValue, bit, width);
+  uint64_t oldUnknown = loadPackedBits(context->stateUnknown, bit, width);
+  uint64_t value = update.inlineValue, unknown = update.inlineUnknown;
+  uint64_t difference = (oldValue ^ value) | (oldUnknown ^ unknown);
+  if (!difference) {
+    if (held)
+      *held = true;
+    return true;
+  }
+  changed = true;
+  storePackedBits(context->stateValue, bit, width, value);
+  storePackedBits(context->stateUnknown, bit, width, unknown);
+  if (unknown != oldUnknown) {
+    publishNativeKnownnessChangeUnlocked(context->nativeSchedulePlan, bit,
+                                         width, oldUnknown, unknown);
+    markNativeUnknownBitsUnlocked(context, bit, width, unknown);
+  }
+  uint64_t mask = packedWidthMask(width);
+  uint64_t oldZero = ~oldUnknown & ~oldValue & mask;
+  uint64_t oldOne = ~oldUnknown & oldValue & mask;
+  uint64_t newZero = ~unknown & ~value & mask;
+  uint64_t newOne = ~unknown & value & mask;
+  uint64_t posedge = (oldZero & ~newZero) | (oldUnknown & newOne);
+  uint64_t negedge = (oldOne & ~newOne) | (oldUnknown & newZero);
+  if (publishScalarNBAChangeUnlocked(context, update.bitOffset, width,
+                                     difference, posedge, negedge))
+    return true;
+  auto bytes = [](const uint64_t &word) {
+    return reinterpret_cast<const uint8_t *>(&word);
+  };
+  (void)publishCommittedSignalTransitionUnlocked(
+      context, update.bitOffset, width, bytes(difference), bytes(posedge),
+      bytes(negedge), bytes(oldValue), bytes(oldUnknown), bytes(value),
+      bytes(unknown));
+  return true;
+}
+
+// The first event was checked against CURRENT at its FIFO position and
+// published nothing. No callback or actor executes between consecutive
+// identical ordinary events in this drain (1800-2023 4.5, 4.6(b), 9.4.2).
+// Keep the complete queue and all earlier pulses. A different capture,
+// including X versus Z, is replayed by the ordinary commit path.
+static size_t lastIdenticalHeldNBA(const std::vector<ScheduledNBA> &queue,
+                                   size_t index) {
+  const auto &first = queue[index];
+  uint64_t sequence = first.sequence;
+  while (index + 1 < queue.size()) {
+    const auto &next = queue[index + 1];
+    if (next.bitOffset != first.bitOffset || next.bitWidth != first.bitWidth ||
+        next.inlineValue != first.inlineValue ||
+        next.inlineUnknown != first.inlineUnknown ||
+        next.packedPlaneBit != first.packedPlaneBit || !next.inlinePacked ||
+        next.cancelled || next.retainedAutomaticID ||
+        next.execRegion != first.execRegion || next.dueTime != first.dueTime ||
+        next.sequence != sequence + 1 || next.valuePlane != first.valuePlane ||
+        next.unknownPlane != first.unknownPlane ||
+        next.planeBitCount != first.planeBitCount)
+      break;
+    ++sequence;
+    ++index;
+  }
+  return index;
+}
+
+static bool unchangedSharedPackedNBA(const talos_rt_context *context,
+                                     const ScheduledNBA &update, uint64_t bit) {
+  if (update.inlinePacked)
+    return loadPackedBits(context->stateValue, bit, update.bitWidth) ==
+               update.inlineValue &&
+           loadPackedBits(context->stateUnknown, bit, update.bitWidth) ==
+               update.inlineUnknown;
+  if (bit % 8 == 0 && update.bitWidth % 8 == 0) {
+    size_t bytes = update.bitWidth / 8;
+    return std::memcmp(update.valuePlane + bit / 8, update.value.data(),
+                       bytes) == 0 &&
+           (!update.unknownPlane ||
+            (!update.unknown.empty() &&
+             std::memcmp(update.unknownPlane + bit / 8, update.unknown.data(),
+                         bytes) == 0));
+  }
+  for (uint64_t source = 0; source < update.bitWidth; source += 64) {
+    uint64_t width = std::min<uint64_t>(64, update.bitWidth - source);
+    if (loadPackedBits(context->stateValue, bit + source, width) !=
+            loadPackedBytes(update.value.data(), source, width) ||
+        loadPackedBits(context->stateUnknown, bit + source, width) !=
+            (update.unknown.empty()
+                 ? 0
+                 : loadPackedBytes(update.unknown.data(), source, width)))
+      return false;
+  }
+  return true;
+}
+
 constexpr size_t maxLinearNativeCandidates = 16;
 
 static auto nativeOrderingKey(const talos_rt_context &context,
@@ -6337,7 +6476,9 @@ talos_rt_status runScheduler(talos_rt_context *context,
           delayedNetCause = update.saifCause;
           return true;
         };
-        auto applyNative = [&](ScheduledNBA &update) {
+        auto applyNative = [&](ScheduledNBA &update, bool *held = nullptr) {
+          if (commitSharedScalarNBA(context, update, changed, held))
+            return;
           SAIFExecutionScope activity(context, update.saifCause);
           bool powerSnapshot = update.powerGuardHalf() &&
                                snapshotPublications && context->exactEvents &&
@@ -6563,7 +6704,6 @@ talos_rt_status runScheduler(talos_rt_context *context,
             equalStringContents =
                 talos_rt_v1_string_compare(previous, update.rootedString) == 0;
           }
-          PackedSignalTransitionBuffer transitions(update.bitWidth);
           uint64_t packedPlaneBit = 0;
           bool canonicalPacked =
               canonical && !automatic && !update.stringValue &&
@@ -6588,6 +6728,12 @@ talos_rt_status runScheduler(talos_rt_context *context,
                                          update.bitWidth) &&
               !nativeMaskIntersectsRange(context->assignMask, packedPlaneBit,
                                          update.bitWidth);
+          bool sharedPacked =
+              canonicalPacked && sharesPackedNBAImage(context, update);
+          if (sharedPacked &&
+              unchangedSharedPackedNBA(context, update, packedPlaneBit))
+            return;
+          PackedSignalTransitionBuffer transitions(update.bitWidth);
           if (canonicalPacked) {
             auto *canonicalValue =
                 reinterpret_cast<uint8_t *>(context->stateValue.data());
@@ -6621,6 +6767,12 @@ talos_rt_status runScheduler(talos_rt_context *context,
                 oldRealBits = oldValue;
                 newRealBits = newValue;
               }
+              if (sharedPacked && !changedBits) {
+                // The transition masks start at zero. Every mirror already
+                // contains this word, including both four-state planes.
+                source += width;
+                continue;
+              }
               uint64_t oldZero = ~oldUnknown & ~oldValue & widthMask;
               uint64_t oldOne = ~oldUnknown & oldValue & widthMask;
               uint64_t newZero = ~newUnknown & ~newValue & widthMask;
@@ -6631,16 +6783,18 @@ talos_rt_status runScheduler(talos_rt_context *context,
                                changedBits);
               storePackedBytes(transitions.posedge(), source, width, posedge);
               storePackedBytes(transitions.negedge(), source, width, negedge);
-              if (update.valuePlane && update.valuePlane != canonicalValue)
-                storePackedBytes(update.valuePlane, destination, width,
-                                 newValue);
-              if (update.unknownPlane &&
-                  update.unknownPlane != canonicalUnknown)
-                storePackedBytes(update.unknownPlane, destination, width,
+              if (!sharedPacked) {
+                if (update.valuePlane && update.valuePlane != canonicalValue)
+                  storePackedBytes(update.valuePlane, destination, width,
+                                   newValue);
+                if (update.unknownPlane &&
+                    update.unknownPlane != canonicalUnknown)
+                  storePackedBytes(update.unknownPlane, destination, width,
+                                   newUnknown);
+                storePackedBytes(canonicalValue, destination, width, newValue);
+                storePackedBytes(canonicalUnknown, destination, width,
                                  newUnknown);
-              storePackedBytes(canonicalValue, destination, width, newValue);
-              storePackedBytes(canonicalUnknown, destination, width,
-                               newUnknown);
+              }
               std::optional<uint64_t> nativeOldUnknown;
               if (context->nativeSchedulePlan &&
                   canonicalUnknown ==
@@ -7141,6 +7295,27 @@ talos_rt_status runScheduler(talos_rt_context *context,
             !snapshotPublications) {
           size_t retained = 0;
           size_t index = 0;
+          if (options.completeNBABarrier != UINT32_MAX &&
+              !context->scheduledNBAs.empty() &&
+              !context->nativeScheduleNBARootCount) {
+            while (index < context->scheduledNBAs.size()) {
+              bool knownnessChange;
+              index = replayPackedFIFOPrefixUnlocked(
+                  context, barrierRegion, index, changed, knownnessChange);
+              if (context->schedulerStatus != TALOS_RT_OK)
+                return context->schedulerStatus;
+              if (!knownnessChange)
+                break;
+              // This is a plain static record at its original FIFO position.
+              // Let its normal commit invalidate or recover promotion and
+              // deliver the exact four-state edges before checking the proof
+              // for the next record (1800-2023 6.11.2, Table 9-2, 10.4.2).
+              NativeNBAUpdateScope updateScope(*context);
+              applyNative(context->scheduledNBAs[index++]);
+              if (context->schedulerStatus != TALOS_RT_OK)
+                return context->schedulerStatus;
+            }
+          }
           for (;; ++index) {
             if (index == context->scheduledNBAs.size()) {
               if (!flushDelayedNetPublications())
@@ -7167,21 +7342,36 @@ talos_rt_status runScheduler(talos_rt_context *context,
             }
             uint32_t retainedAutomaticID = update.retainedAutomaticID;
             if (!update.cancelled) {
-              if (!prepareDelayedNetBatch(update))
-                return context->schedulerStatus;
-              if (context->vpiState && (context->schedulerFinishRequested.load(
-                                            std::memory_order_relaxed) &
-                                        1))
-                break;
-              ScheduledNBA &current = context->scheduledNBAs[index];
-              bool pathCurrent =
-                  currentNativeNBAUpdateUnlocked(context, current);
-              if (pathCurrent)
-                completeInertial(current);
-              context->schedulerApplyingNativeUpdate = pathCurrent;
-              if (pathCurrent)
-                applyNative(current);
-              context->schedulerApplyingNativeUpdate = false;
+              // A tagged scalar is a plain zero-delay event captured into
+              // this FIFO. Only a preceding net or power publication could
+              // require a flush before its turn (1800-2023 4.6(b), 10.4.2).
+              bool plainScalar = update.packedPlaneBit != UINT64_MAX &&
+                                 delayedNetGroup == UINT64_MAX &&
+                                 powerPublication == UINT64_MAX &&
+                                 delayedNetPublications.empty();
+              bool apply = true;
+              if (!plainScalar) {
+                if (!prepareDelayedNetBatch(update))
+                  return context->schedulerStatus;
+                if (context->vpiState &&
+                    (context->schedulerFinishRequested.load(
+                         std::memory_order_relaxed) &
+                     1))
+                  break;
+                // The flush can append records, reallocating the vector.
+                ScheduledNBA &current = context->scheduledNBAs[index];
+                apply = currentNativeNBAUpdateUnlocked(context, current);
+                if (apply)
+                  completeInertial(current);
+              }
+              if (apply) {
+                bool held = false;
+                context->schedulerApplyingNativeUpdate = true;
+                applyNative(context->scheduledNBAs[index], &held);
+                context->schedulerApplyingNativeUpdate = false;
+                if (plainScalar && held && !context->vpiState)
+                  index = lastIdenticalHeldNBA(context->scheduledNBAs, index);
+              }
               if (context->schedulerStatus != TALOS_RT_OK)
                 return context->schedulerStatus;
             }
@@ -7464,6 +7654,15 @@ talos_rt_status runScheduler(talos_rt_context *context,
                 delayedNetGroup == UINT64_MAX && !flushDelayedNetPublications())
               return context->schedulerStatus;
           }
+        }
+        // A generated equality check can read the membership bitmap before
+        // the next enqueue. Remove the drained queue's bits at the barrier.
+        if (context->scheduledNBAs.empty() &&
+            context->scheduledNBARegionLowerBound != UINT32_MAX &&
+            !context->genericPendingNBARoots.empty()) {
+          std::fill(context->genericPendingNBARoots.begin(),
+                    context->genericPendingNBARoots.end(), 0);
+          context->scheduledNBARegionLowerBound = UINT32_MAX;
         }
         if ((changed || eventTriggered) && ++context->schedulerEpoch == 0)
           context->schedulerEpoch = 1;

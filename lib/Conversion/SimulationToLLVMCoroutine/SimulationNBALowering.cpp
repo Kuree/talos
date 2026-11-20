@@ -3,6 +3,7 @@
 #include "SimulationNBALowering.h"
 #include "NativeStateAccess.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
+#include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
@@ -1260,8 +1261,8 @@ private:
 Value buildGeneratedNBAChange(OpBuilder &builder, Location location,
                               uint64_t bitOffset, unsigned width, Value value,
                               Value unknown) {
-  assert(width > 0 && width <= 64);
-  Type i64 = builder.getI64Type();
+  auto resultType = cast<IntegerType>(value.getType());
+  assert(width > 0 && width <= resultType.getWidth());
   unsigned firstBit = bitOffset % 8;
   auto spanType =
       IntegerType::get(builder.getContext(), ((width + firstBit + 7) / 8) * 8);
@@ -1272,22 +1273,22 @@ Value buildGeneratedNBAChange(OpBuilder &builder, Location location,
       current = arith::ShRUIOp::create(
           builder, location, current,
           llvmConstant(builder, location, spanType, firstBit));
-    if (spanType.getWidth() < 64)
-      return LLVM::ZExtOp::create(builder, location, i64, current);
-    if (spanType.getWidth() > 64)
-      return LLVM::TruncOp::create(builder, location, i64, current);
-    return current;
+    return resizeNativeInteger(builder, location, current, resultType);
   };
-  Value changed = arith::OrIOp::create(
-      builder, location,
-      arith::XOrIOp::create(builder, location, value,
-                            loadCurrent(schedule::StatePlane::Value)),
-      arith::XOrIOp::create(builder, location, unknown,
-                            loadCurrent(schedule::StatePlane::Unknown)));
-  return arith::AndIOp::create(
-      builder, location, changed,
-      llvmConstant(builder, location, i64,
-                   width == 64 ? UINT64_MAX : (uint64_t{1} << width) - 1));
+  Value changed = arith::XOrIOp::create(
+      builder, location, value, loadCurrent(schedule::StatePlane::Value));
+  if (unknown)
+    changed = arith::OrIOp::create(
+        builder, location, changed,
+        arith::XOrIOp::create(builder, location, unknown,
+                              loadCurrent(schedule::StatePlane::Unknown)));
+  if (width == resultType.getWidth())
+    return changed;
+  Value mask = LLVM::ConstantOp::create(
+      builder, location, resultType,
+      builder.getIntegerAttr(
+          resultType, APInt::getLowBitsSet(resultType.getWidth(), width)));
+  return arith::AndIOp::create(builder, location, changed, mask);
 }
 
 class ImmediateNBAConversion final
@@ -1296,10 +1297,11 @@ public:
   ImmediateNBAConversion(const TypeConverter &converter, MLIRContext *context,
                          uint64_t stateBitCount,
                          const NativeStaticNBAPlan *staticPlan,
+                         const NativeStateLayout *stateLayout,
                          bool staticSitesEnabled, bool guardedClaims)
       : OpConversionPattern(converter, context), stateBitCount(stateBitCount),
-        staticPlan(staticPlan), staticSitesEnabled(staticSitesEnabled),
-        guardedClaims(guardedClaims) {}
+        staticPlan(staticPlan), stateLayout(stateLayout),
+        staticSitesEnabled(staticSitesEnabled), guardedClaims(guardedClaims) {}
 
   LogicalResult
   matchAndRewrite(sim::SimNBAEnqueueOp op, OneToNOpAdaptor adaptor,
@@ -1455,8 +1457,8 @@ public:
       auto emitDirectGeneratedStage = [&] {
         Block *unchangedContinuation = nullptr;
         if (directPartialScalarStage &&
-            staticRoot->second < staticPlan->unchangedSafeRoots.size() &&
-            staticPlan->unchangedSafeRoots[staticRoot->second]) {
+            staticPlan->canDiscardUnchanged(staticRoot->second, site.getId(),
+                                            decoded.offset, *width)) {
           // Retain RHS/target evaluation, and never discard a write that may
           // overwrite an earlier pending NBA (LRM 4.6, 4.9.4, 10.4.2).
           // The shared dirty index covers both runtime and generated stages.
@@ -1860,6 +1862,25 @@ public:
           function &&
           ::talos::schedule::has<::talos::schedule::Field::EvalOrderedNbaQueue>(
               function);
+      talos_rt_stable_handle_v1 destination{};
+      auto holdTarget = destinationValue;
+      bool fixedHold = false;
+      if (stateLayout && site) {
+        auto target = stateLayout->genericNBAHoldTargets.find(site.getId());
+        if (target != stateLayout->genericNBAHoldTargets.end() &&
+            *width <= target->second.width &&
+            (!holdTarget || *holdTarget == target->second.handle)) {
+          holdTarget = target->second.handle;
+          fixedHold = true;
+        }
+      }
+      bool genericHold =
+          !driverDestination && !op.getClockingOutputAttr() && !op.getDelay() &&
+          holdTarget && stateLayout &&
+          talos_rt_stable_handle_decode(*holdTarget, &destination) &&
+          destination.kind == TALOS_RT_STABLE_HANDLE_STATIC &&
+          (fixedHold ||
+           stateLayout->genericNBAHoldRoots.contains(destination.id));
       bool staticallyStaged =
           !op.getClockingOutputAttr() && !driverDestination &&
           staticSitesEnabled && mappedSite &&
@@ -1883,27 +1904,124 @@ public:
       if (auto clockingOutput = op.getClockingOutputAttr())
         arguments.push_back(llvmConstant(
             rewriter, location, i64, clockingOutput.getValue().getZExtValue()));
-      Value status =
-          LLVM::CallOp::create(
-              rewriter, location, TypeRange{i32},
-              SymbolRefAttr::get(
-                  rewriter.getContext(),
-                  op.getClockingOutputAttr()
-                      ? driverDestination
-                            ? "talos_rt_v1_scheduler_clocking_driver_nba"
-                            : "talos_rt_v1_scheduler_clocking_nba"
-                  : driverDestination ? "talos_rt_v1_scheduler_driver_nba"
-                  : staticallyStaged  ? "talos_rt_v1_scheduler_static_nba"
-                                      : "talos_rt_v1_scheduler_nba"),
-              arguments)
-              .getResult();
-      if (mappedSite)
-        schedule::set<schedule::Field::EvalPendingRuntimeRoot>(
-            status.getDefiningOp(), rewriter.getI32IntegerAttr(rootIndex));
-      LLVM::CallOp::create(rewriter, location, TypeRange{},
-                           SymbolRefAttr::get(rewriter.getContext(),
-                                              "talos_rt_v1_scheduler_fail"),
-                           ValueRange{runtimeContext, status});
+      Block *continuation = nullptr;
+      // A held-value comparison does not stage an accumulator. In forced
+      // FIFO eval a bounded packed aggregate can compare its complete value
+      // and unknown planes and reuse the same pending-root view as a scalar.
+      // A previous overlapping enqueue still forces capture (4.6(b), 10.4.2).
+      ModuleOp module = op->getParentOfType<ModuleOp>();
+      uint64_t comparisonBits =
+          schedule::has<schedule::Field::ForceGenericNBA>(module) &&
+                  schedule::has<schedule::Field::EvalRuntimeCalendar>(module)
+              ? 4096
+              : TALOS_RT_GENERATED_NBA_MAX_BITS;
+      const auto *bound = genericHold && *width <= comparisonBits &&
+                                  destination.offset >= 0
+                              ? stateLayout->findBound(destination.id)
+                              : nullptr;
+      auto capturedType =
+          dyn_cast<IntegerType>(adaptor.getValue().front().getType());
+      if (bound && uint64_t(destination.offset) <= bound->width &&
+          *width <= bound->width - uint64_t(destination.offset) &&
+          capturedType && capturedType.getWidth() >= *width) {
+        Value captured = adaptor.getValue().front();
+        Value x;
+        // A promoted leaf in a four-state design still compares CURRENT's
+        // unknown bits. Only a two-state model has no unknown plane at all.
+        if (!native::has<native::TwoState>(op->getParentOfType<ModuleOp>()))
+          x = adaptor.getValue().size() == 2
+                  ? adaptor.getValue()[1]
+                  : llvmConstant(rewriter, location, captured.getType(), 0);
+        Value diff = buildGeneratedNBAChange(rewriter, location,
+                                             bound->offset + destination.offset,
+                                             *width, captured, x);
+        Value changed = arith::CmpIOp::create(
+            rewriter, location, arith::CmpIPredicate::ne, diff,
+            llvmConstant(rewriter, location, diff.getType(), 0));
+        // A captured view may still be an SSA argument during conversion.
+        // Only use its source proof when this execution produced that handle.
+        if (!destinationValue)
+          changed = arith::OrIOp::create(
+              rewriter, location, changed,
+              arith::CmpIOp::create(
+                  rewriter, location, arith::CmpIPredicate::ne,
+                  adaptor.getDestination().front(),
+                  llvmConstant(rewriter, location, i64, *holdTarget)));
+        Block *head = op->getBlock();
+        continuation = rewriter.splitBlock(head, Block::iterator(op));
+        auto *region = head->getParent();
+        Block *check =
+            rewriter.createBlock(region, continuation->getIterator());
+        Block *stage =
+            rewriter.createBlock(region, continuation->getIterator());
+        rewriter.setInsertionPointToEnd(head);
+        cf::CondBranchOp::create(rewriter, location, changed, stage, check);
+        rewriter.setInsertionPointToEnd(check);
+        Value pending =
+            LLVM::CallOp::create(
+                rewriter, location, TypeRange{i32},
+                SymbolRefAttr::get(rewriter.getContext(),
+                                   "talos_rt_v1_scheduler_generic_nba_pending"),
+                ValueRange{runtimeContext, llvmConstant(rewriter, location, i32,
+                                                        destination.id)})
+                .getResult();
+        cf::CondBranchOp::create(
+            rewriter, location,
+            arith::CmpIOp::create(rewriter, location, arith::CmpIPredicate::ne,
+                                  pending,
+                                  llvmConstant(rewriter, location, i32, 0)),
+            stage, continuation);
+        rewriter.setInsertionPointToEnd(stage);
+        genericHold = false;
+      } else if (!destinationValue)
+        genericHold = false;
+      bool scalarFIFO =
+          schedule::has<schedule::Field::ForceGenericNBA>(module) &&
+          schedule::has<schedule::Field::EvalRuntimeCalendar>(module) &&
+          !staticallyStaged && !genericHold && !driverDestination &&
+          !op.getClockingOutputAttr() && !op.getDelay() && *width <= 64 &&
+          capturedType && capturedType.getWidth() <= 64;
+      if (scalarFIFO) {
+        auto word = [&](Value plane) {
+          return resizeNativeInteger(rewriter, location, plane,
+                                     rewriter.getI64Type());
+        };
+        Value x = adaptor.getValue().size() == 2
+                      ? word(adaptor.getValue()[1])
+                      : llvmConstant(rewriter, location, i64, 0);
+        LLVM::CallOp::create(
+            rewriter, location, TypeRange{}, "talos_rt_v1_scheduler_nba_scalar",
+            ValueRange{runtimeContext, valuePlane, unknownPlane, arguments[3],
+                       adaptor.getDestination().front(), arguments[5],
+                       word(adaptor.getValue().front()), x});
+      } else {
+        Value status =
+            LLVM::CallOp::create(
+                rewriter, location, TypeRange{i32},
+                SymbolRefAttr::get(
+                    rewriter.getContext(),
+                    op.getClockingOutputAttr()
+                        ? driverDestination
+                              ? "talos_rt_v1_scheduler_clocking_driver_nba"
+                              : "talos_rt_v1_scheduler_clocking_nba"
+                    : driverDestination ? "talos_rt_v1_scheduler_driver_nba"
+                    : staticallyStaged  ? "talos_rt_v1_scheduler_static_nba"
+                    : genericHold       ? "talos_rt_v1_scheduler_nba_if_changed"
+                                        : "talos_rt_v1_scheduler_nba"),
+                arguments)
+                .getResult();
+        if (mappedSite)
+          schedule::set<schedule::Field::EvalPendingRuntimeRoot>(
+              status.getDefiningOp(), rewriter.getI32IntegerAttr(rootIndex));
+        LLVM::CallOp::create(rewriter, location, TypeRange{},
+                             SymbolRefAttr::get(rewriter.getContext(),
+                                                "talos_rt_v1_scheduler_fail"),
+                             ValueRange{runtimeContext, status});
+      }
+      if (continuation) {
+        cf::BranchOp::create(rewriter, location, continuation);
+        rewriter.setInsertionPoint(op);
+      }
     }
     rewriter.eraseOp(op);
     return success();
@@ -1912,6 +2030,7 @@ public:
 private:
   uint64_t stateBitCount;
   const NativeStaticNBAPlan *staticPlan;
+  const NativeStateLayout *stateLayout;
   bool staticSitesEnabled;
   bool guardedClaims;
 };
@@ -1989,7 +2108,7 @@ void populateNBAToLLVMConversionPatterns(
       converter, patterns.getContext(), stateBitCount, staticPlan, stateLayout,
       staticSitesEnabled, guardedClaims, completePackedSliceNBAs);
   patterns.add<ImmediateNBAConversion>(converter, patterns.getContext(),
-                                       stateBitCount, staticPlan,
+                                       stateBitCount, staticPlan, stateLayout,
                                        staticSitesEnabled, guardedClaims);
 }
 

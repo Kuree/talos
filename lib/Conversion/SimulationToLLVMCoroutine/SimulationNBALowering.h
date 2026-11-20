@@ -69,6 +69,17 @@ struct NativeStaticNBAPlan {
   // after declaration initialization. With no pending NBA, assigning their
   // current four-state value cannot change state before or at the barrier.
   llvm::SmallVector<bool> unchangedSafeRoots;
+  // For a fixed site on a mixed-writer root, the extent starting at its
+  // captured offset that is disjoint from every immediate write.
+  llvm::DenseMap<uint64_t, uint64_t> unchangedSiteWidths;
+  bool canDiscardUnchanged(uint32_t root, uint64_t site, uint64_t offset,
+                           uint64_t width) const {
+    if (root < unchangedSafeRoots.size() && unchangedSafeRoots[root])
+      return true;
+    auto range = unchangedSiteWidths.find(site);
+    return range != unchangedSiteWidths.end() && width <= range->second &&
+           siteRoots.at(site) == root && siteFixedOffsets.at(site) == offset;
+  }
   // Merge-safe roots whose watchers wait for any change. Each merge into
   // their accumulator ORs bits rewritten with a different value into its
   // transient mask; each commit reports those bits as changed.

@@ -131,6 +131,10 @@ def static_specialization_EQ : Joined<["--"], "static-specialization=">,
   Group<Compilation_Group>, MetaVarName<"<auto|off|on>">,
   Values<"auto,off,on">,
   HelpText<"Select direct static-state and narrow-NBA specialization">;
+def nba_queue_EQ : Joined<["--"], "nba-queue=">,
+  Group<Compilation_Group>, MetaVarName<"<auto|generic>">,
+  Values<"auto,generic">,
+  HelpText<"Select NBA delivery. The generic queue retains enqueue order and disables direct clocked NBA stores (default: auto)">;
 def clocked_kernels_EQ : Joined<["--"], "clocked-kernels=">,
   Group<Compilation_Group>, MetaVarName<"<off|immediate|deferred>">,
   Values<"off,immediate,deferred">,

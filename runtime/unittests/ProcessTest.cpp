@@ -5753,6 +5753,60 @@ TEST(Scheduler, AOTCleanSuperstepRequiresACompleteStaticPlan) {
   talos_rt_v1_context_destroy(context);
 }
 
+TEST(Scheduler, OrdinaryScalarCaptureSurvivesReleasingItsLayout) {
+  AOTTestState state;
+  uint64_t ingress = 0, active = 1, value = 0, unknown = 0;
+  talos_rt_native_clock_kernel clock{
+      1, TALOS_RT_WAIT_EDGE_POSEDGE, 0, 1, &ingress, 1, 0, &active};
+  talos_rt_native_merged_fragment member{0, 1, 0, 0, 0, 0,
+                                        generatedCheckpointCallback};
+  auto plan = makeAOTPlan(state, 1);
+  plan.clock_kernels = &clock;
+  plan.clock_kernel_count = 1;
+  plan.merged_fragments = &member;
+  plan.merged_fragment_count = 1;
+  plan.timeslot_coordinator = clockCoordinator;
+  plan.promotion_invalidate = schedulerInvalidatePromotion;
+  plan.promotion_ready = schedulerPromotionReady;
+  plan.flags = TALOS_RT_NATIVE_SCHEDULE_EVAL |
+               TALOS_RT_NATIVE_SCHEDULE_STATIC_EVAL_ISLAND |
+               TALOS_RT_NATIVE_SCHEDULE_STATIC_CONTROL |
+               TALOS_RT_NATIVE_SCHEDULE_GENERATED_ACTIONS |
+               TALOS_RT_NATIVE_SCHEDULE_STATIC_FANOUT |
+               TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL;
+  plan.state_value = reinterpret_cast<uint8_t *>(&value);
+  plan.state_unknown = reinterpret_cast<uint8_t *>(&unknown);
+  plan.state_bit_count = 64;
+  talos_rt_execution_descriptor_v1 execution{};
+  execution.version = TALOS_RT_VERSION;
+  execution.state_bit_count = 64;
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 0, 1),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 2, 8, 8),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
+  uint64_t handle = talos_rt_v1_native_state_static_handle(2);
+  {
+    NativeAOTContextScope executing(context);
+    NativeAOTMutexScope locked(context);
+    talos_rt_v1_scheduler_nba_scalar(context, plan.state_value,
+                                     plan.state_unknown, 64, handle, 8, 0x81, 2);
+  }
+  ASSERT_EQ(context->scheduledNBAs.size(), 1u);
+  EXPECT_EQ(context->scheduledNBAs.front().packedStaticState, 2u);
+  talos_rt_release_native_schedule_plan(context);
+  ASSERT_EQ(context->scheduledNBAs.size(), 1u);
+  const auto &pending = context->scheduledNBAs.front();
+  EXPECT_EQ(pending.packedStaticState, 0u);
+  EXPECT_EQ(pending.bitOffset, handle);
+  EXPECT_EQ(pending.inlineValue, 0x81u);
+  EXPECT_EQ(pending.inlineUnknown, 2u);
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(Scheduler, AOTStaticEvalIslandIsDistinctFromFullyStatic) {
   AOTTestState state;
   uint64_t ingress = 0;

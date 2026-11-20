@@ -2,12 +2,16 @@
 
 #include "SimulationAOTPlanning.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/SymbolTable.h"
+#include "mlir/Interfaces/CallInterfaces.h"
 #include "talos/Dialect/Native/NativeDialect.h"
+#include "talos/Dialect/Schedule/ClockedKernelName.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
+#include "talos/Dialect/Schedule/ScheduleOps.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallBitVector.h"
@@ -391,6 +395,32 @@ ArrayAttr extendArgAttrs(MLIRContext *context, ArrayAttr original, unsigned n) {
   return ArrayAttr::get(context, attrs);
 }
 
+static LLVM::LLVMFuncOp moveBodyWithPointerArgument(LLVM::LLVMFuncOp original,
+                                                    StringRef suffix,
+                                                    ArrayAttr argumentAttrs,
+                                                    SymbolTable &symbols) {
+  OpBuilder b(original);
+  Location loc = original.getLoc();
+  auto ptr = LLVM::LLVMPointerType::get(original.getContext());
+  SmallVector<Type> args(original.getArgumentTypes());
+  args.push_back(ptr);
+  auto type = LLVM::LLVMFunctionType::get(
+      original.getFunctionType().getReturnType(), args);
+  auto core = LLVM::LLVMFuncOp::create(
+      b, loc, (original.getSymName() + suffix).str(), type);
+  symbols.insert(core);
+  for (NamedAttribute attr : original->getAttrs())
+    if (attr.getName() != "sym_name" && attr.getName() != "function_type" &&
+        attr.getName() != "arg_attrs")
+      core->setAttr(attr.getName(), attr.getValue());
+  core.setLinkage(LLVM::Linkage::Internal);
+  if (argumentAttrs)
+    core.setArgAttrsAttr(argumentAttrs);
+  core.getBody().takeBody(original.getBody());
+  core.getBody().front().addArgument(ptr, loc);
+  return core;
+}
+
 // Calls that cannot inspect/stage pending NBA captures. The source writer
 // inventory separately excludes runtime Active writers of localized roots.
 bool pendingRuntimeTransparent(LLVM::CallOp call,
@@ -476,9 +506,258 @@ bool pendingRuntimeTransparent(LLVM::CallOp call,
   return false;
 }
 
+// Ordinary generated plane and stack reads/writes cannot rebind the queue.
+// A store through a context argument or another unproved pointer can.
+static bool accessesOnlyGeneratedStorage(Operation *op) {
+  if (auto store = dyn_cast<LLVM::StoreOp>(op)) {
+    Value address = store.getAddr();
+    while (auto gep = address.getDefiningOp<LLVM::GEPOp>())
+      address = gep.getBase();
+    auto global = address.getDefiningOp<LLVM::AddressOfOp>();
+    return (global && global.getGlobalName() != "__talos_current_context") ||
+           isa_and_nonnull<LLVM::AllocaOp, schedule::NativeStateAddressOp,
+                           schedule::NativeStateWindowAddressOp>(
+               address.getDefiningOp());
+  }
+  if (isa<CallOpInterface, LLVM::InlineAsmOp>(op))
+    return false;
+  return isMemoryEffectFree(op) ||
+         isa<LLVM::LoadOp, LLVM::AllocaOp, LLVM::ReturnOp,
+             schedule::NativeStateLoadOp, schedule::NativeStateStoreOp,
+             schedule::NativeReadyReadOp, schedule::NativeReadyUpdateOp,
+             schedule::NativeReadyCommitOp, schedule::NativeReadyMergeOp>(op);
+}
+
+// A periodic clock can call hundreds of capture-only register bodies in
+// succession. They update the common FIFO and its membership words, but none
+// changes which bitmap describes that FIFO. Pass that checked view down the
+// straight-line clock prefix. Every check in a body still reads the current
+// words at the original capture (1800-2023 4.6(b), 9.4.2, 10.4.2).
+static void shareGenericQueueView(ModuleOp module) {
+  auto run =
+      module.lookupSymbol<LLVM::LLVMFuncOp>("__talos_aot_schedule_run_v1");
+  if (!run || run.isExternal() ||
+      !module.lookupSymbol("__talos_current_context"))
+    return;
+  MLIRContext *ctx = module.getContext();
+  Type ptr = LLVM::LLVMPointerType::get(ctx);
+  SymbolTable symbols(module);
+  constexpr StringLiteral queryName = "talos_rt_v1_scheduler_generic_nba_words";
+  struct Body {
+    bool closed = false;
+    std::optional<uint32_t> maxState;
+    LLVM::LLVMFuncOp implementation;
+  };
+  DenseMap<Operation *, Body> bodies;
+  auto ordinary = [](LLVM::CallOp call) {
+    return call.getCConv() == LLVM::CConv::C &&
+           call.getOpBundleSizes().empty() && !call.getVarCalleeType() &&
+           call.getTailCallKind() == LLVM::tailcallkind::TailCallKind::None;
+  };
+  auto captureOnly = [](LLVM::CallOp call, StringRef name) {
+    return name == "talos_rt_v1_scheduler_nba_scalar" ||
+           name == "talos_rt_v1_native_handle_offset" ||
+           name == "talos_rt_v1_scheduler_fail" ||
+           ((name == "talos_rt_v1_scheduler_nba" ||
+             name == "talos_rt_v1_scheduler_nba_if_changed") &&
+            call.getArgOperands().size() == 9 &&
+            zero(call.getArgOperands()[6]));
+  };
+  // Check the actual executable closure, including the two-state selector
+  // and its four-state alternative. A cold foreign call still ends the view.
+  std::function<Body(LLVM::LLVMFuncOp)> inspect =
+      [&](LLVM::LLVMFuncOp fn) -> Body {
+    if (!fn || fn == run || fn.isExternal() || fn.isVarArg() ||
+        fn.getCConv() != LLVM::CConv::C)
+      return {};
+    if (auto found = bodies.find(fn); found != bodies.end())
+      return found->second;
+    bodies.try_emplace(fn); // A recursive call has no certificate.
+    bool raw = schedule::has<schedule::Field::EvalRawCaptures>(fn);
+    bool selected =
+        raw || schedule::has<schedule::Field::EvalInfallible>(fn) ||
+        schedule::has<schedule::Field::EvalPathKnownPredicate>(fn) ||
+        schedule::has<schedule::Field::EvalStateMetadataOnly>(fn);
+    if (auto attrs = fn.getPassthroughAttr())
+      selected |=
+          llvm::is_contained(attrs, StringAttr::get(ctx, "alwaysinline"));
+    if (!selected)
+      return {};
+    Body facts;
+    auto include = [&](uint32_t id) {
+      facts.maxState = std::max(id, facts.maxState.value_or(0));
+    };
+    WalkResult checked = fn.walk([&](Operation *op) {
+      auto call = dyn_cast<LLVM::CallOp>(op);
+      if (!call)
+        return op == fn || accessesOnlyGeneratedStorage(op)
+                   ? WalkResult::advance()
+                   : WalkResult::interrupt();
+      auto callee = call.getCallee();
+      if (!callee || !ordinary(call))
+        return WalkResult::interrupt();
+      if (*callee == queryName) {
+        APInt id;
+        if (!raw || call.getArgOperands().size() != 2 ||
+            !matchPattern(call.getArgOperands()[1], m_ConstantInt(&id)) ||
+            id.getActiveBits() > 32)
+          return WalkResult::interrupt();
+        auto load = call.getArgOperands()[0].getDefiningOp<LLVM::LoadOp>();
+        auto address = load ? load.getAddr().getDefiningOp<LLVM::AddressOfOp>()
+                            : LLVM::AddressOfOp{};
+        if (!address || address.getGlobalName() != "__talos_current_context")
+          return WalkResult::interrupt();
+        include(id.getZExtValue());
+      } else if (!captureOnly(call, *callee)) {
+        Body child = inspect(symbols.lookup<LLVM::LLVMFuncOp>(*callee));
+        if (!child.closed)
+          return WalkResult::interrupt();
+        if (child.maxState)
+          include(*child.maxState);
+      }
+      return WalkResult::advance();
+    });
+    if (!checked.wasInterrupted()) {
+      facts.closed = true;
+      bodies[fn] = facts;
+    }
+    return bodies.lookup(fn);
+  };
+  llvm::SetVector<Operation *> needed;
+  llvm::MapVector<Operation *, Operation *> selected;
+  uint32_t maximum = 0;
+  run.walk([&](LLVM::CallOp call) {
+    if (!call.getCallee() || !ordinary(call))
+      return;
+    auto function = symbols.lookup<LLVM::LLVMFuncOp>(*call.getCallee());
+    Body facts = inspect(function);
+    if (facts.closed && facts.maxState) {
+      selected.insert({call, function});
+      needed.insert(function);
+      maximum = std::max(maximum, *facts.maxState);
+    }
+  });
+  if (selected.size() < 2)
+    return;
+  for (size_t i = 0; i < needed.size(); ++i)
+    cast<LLVM::LLVMFuncOp>(needed[i]).walk([&](LLVM::CallOp call) {
+      if (auto name = call.getCallee())
+        if (auto child = symbols.lookup<LLVM::LLVMFuncOp>(*name))
+          if (bodies.lookup(child).maxState)
+            needed.insert(child);
+    });
+  auto current = [&](OpBuilder &b, Location loc) -> Value {
+    return LLVM::LoadOp::create(
+        b, loc, ptr,
+        LLVM::AddressOfOp::create(b, loc, ptr, "__talos_current_context"));
+  };
+  auto forward = [&](LLVM::CallOp call, LLVM::LLVMFuncOp target, Value view) {
+    if (auto attrs = call.getArgAttrsAttr()) {
+      SmallVector<Attribute> extended(attrs.begin(), attrs.end());
+      extended.push_back(DictionaryAttr::get(ctx));
+      call.setArgAttrsAttr(ArrayAttr::get(ctx, extended));
+    }
+    call.setCallee(target.getSymName());
+    call.getCalleeOperandsMutable().append(view);
+  };
+  // Keep one implementation of every register body, with a checked public
+  // adapter for calls made outside this invocation of the clock coordinator.
+  for (Operation *operation : needed) {
+    auto original = cast<LLVM::LLVMFuncOp>(operation);
+    Location loc = original.getLoc();
+    OpBuilder b(original);
+    ArrayAttr argumentAttrs;
+    if (auto attrs = original.getArgAttrsAttr()) {
+      SmallVector<Attribute> extended(attrs.begin(), attrs.end());
+      extended.push_back(b.getDictionaryAttr({}));
+      argumentAttrs = b.getArrayAttr(extended);
+    }
+    auto core = moveBodyWithPointerArgument(original, ".__talos_queue_view",
+                                            argumentAttrs, symbols);
+    Body &info = bodies[operation];
+    info.implementation = core;
+    Block *entry = original.addEntryBlock(b);
+    b.setInsertionPointToStart(entry);
+    SmallVector<Value> operands(entry->getArguments());
+    operands.push_back(
+        LLVM::CallOp::create(
+            b, loc, TypeRange{ptr}, queryName,
+            ValueRange{current(b, loc),
+                       llvmConstant(b, loc, b.getI32Type(), *info.maxState)})
+            .getResult());
+    auto result = LLVM::CallOp::create(b, loc, core, operands);
+    LLVM::ReturnOp::create(b, loc, result.getResults());
+  }
+  for (Operation *operation : needed) {
+    auto core = bodies.lookup(operation).implementation;
+    Value view = core.getBody().front().getArguments().back();
+    core.walk([&](LLVM::CallOp call) {
+      if (call.getCallee() == queryName) {
+        call.getResult().replaceAllUsesWith(view);
+        call.erase();
+      } else if (auto child =
+                     symbols.lookup<LLVM::LLVMFuncOp>(*call.getCallee())) {
+        if (auto next = bodies.lookup(child).implementation)
+          forward(call, next, view);
+      }
+    });
+  }
+  // The cache belongs to this invocation. Handoffs, callbacks and ordinary
+  // dispatchers cannot inherit it, even when they reenter the same model.
+  OpBuilder b = OpBuilder::atBlockBegin(&run.getBody().front());
+  Value slot = entryAlloca(b, run.getLoc(), ptr, 1, 8);
+  Value empty = LLVM::ZeroOp::create(b, run.getLoc(), ptr);
+  LLVM::StoreOp::create(b, run.getLoc(), empty, slot, 8);
+  SmallVector<Operation *> cuts;
+  run.walk([&](Operation *op) {
+    if (op != run && !accessesOnlyGeneratedStorage(op))
+      cuts.push_back(op);
+  });
+  for (Operation *op : cuts) {
+    b.setInsertionPoint(op);
+    Location loc = op->getLoc();
+    auto call = dyn_cast<LLVM::CallOp>(op);
+    if (!selected.count(op)) {
+      if (call && call.getCallee()) {
+        if (*call.getCallee() ==
+            "talos_rt_v1_scheduler_priority_signal_pending")
+          continue;
+        if (auto target = symbols.lookup<LLVM::LLVMFuncOp>(*call.getCallee()))
+          if (bodies.lookup(target).closed)
+            continue;
+      }
+      LLVM::StoreOp::create(b, loc, empty, slot, 8);
+      continue;
+    }
+    Value cached = LLVM::LoadOp::create(b, loc, ptr, slot, 8);
+    Block *head = op->getBlock();
+    Block *invoke = head->splitBlock(Block::iterator(op));
+    Block *query = b.createBlock(head->getParent(), invoke->getIterator());
+    Value words = invoke->addArgument(ptr, loc);
+    b.setInsertionPointToEnd(head);
+    Value valid =
+        LLVM::ICmpOp::create(b, loc, LLVM::ICmpPredicate::ne, cached, empty);
+    LLVM::CondBrOp::create(b, loc, valid, invoke, ValueRange{cached}, query,
+                           ValueRange{});
+    b.setInsertionPointToEnd(query);
+    Value fresh = LLVM::CallOp::create(
+                      b, loc, TypeRange{ptr}, queryName,
+                      ValueRange{current(b, loc),
+                                 llvmConstant(b, loc, b.getI32Type(), maximum)})
+                      .getResult();
+    LLVM::StoreOp::create(b, loc, fresh, slot, 8);
+    LLVM::BrOp::create(b, loc, ValueRange{fresh}, invoke);
+    b.setInsertionPoint(call);
+    forward(call, bodies.lookup(selected.lookup(op)).implementation, words);
+  }
+}
 } // namespace
 
 LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
+  if (schedule::has<schedule::Field::ForceGenericNBA>(module) &&
+      schedule::has<schedule::Field::EvalRuntimeCalendar>(module) &&
+      native::has<native::ClosedExecutable>(module))
+    shareGenericQueueView(module);
   auto certificate =
       schedule::get<schedule::Field::EvalTransactionRoots>(module);
   if (!certificate ||
@@ -845,25 +1124,10 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
     if (masks.lookup(operation).any())
       originals.push_back(cast<LLVM::LLVMFuncOp>(operation));
   for (auto original : originals) {
-    OpBuilder builder(original);
-    SmallVector<Type> args(original.getArgumentTypes());
-    args.push_back(LLVM::LLVMPointerType::get(context));
-    auto core = LLVM::LLVMFuncOp::create(
-        builder, original.getLoc(),
-        (original.getSymName() + ".__talos_pending").str(),
-        LLVM::LLVMFunctionType::get(original.getFunctionType().getReturnType(),
-                                    args));
-    symbols.insert(core);
-    for (NamedAttribute attr : original->getAttrs())
-      if (attr.getName() != "sym_name" && attr.getName() != "function_type" &&
-          attr.getName() != "arg_attrs")
-        core->setAttr(attr.getName(), attr.getValue());
-    core.setLinkage(LLVM::Linkage::Internal);
-    core.setArgAttrsAttr(extendArgAttrs(context, original.getArgAttrsAttr(),
-                                        original.getNumArguments()));
-    core.getBody().takeBody(original.getBody());
-    core.getBody().front().addArgument(LLVM::LLVMPointerType::get(context),
-                                       original.getLoc());
+    auto attrs = extendArgAttrs(context, original.getArgAttrsAttr(),
+                                original.getNumArguments());
+    auto core = moveBodyWithPointerArgument(original, ".__talos_pending", attrs,
+                                            symbols);
     cores.try_emplace(original.getOperation(), core);
   }
 

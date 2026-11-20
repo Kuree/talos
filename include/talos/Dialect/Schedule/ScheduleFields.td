@@ -179,6 +179,7 @@ def EvalReconstructsContinuationArgs : ScheduleField<"EvalReconstructsContinuati
     "::mlir::UnitAttr">;
 def EvalRouteProofDependencies : ScheduleField<"EvalRouteProofDependencies", "schedule.eval.route_proof_dependencies",
     "::talos::schedule::RouteProofDependencyAttr">;
+def ForceGenericNBA : ScheduleField<"ForceGenericNBA", "schedule.force_generic_nba", "::mlir::UnitAttr">;
 def EvalRuntimeCalendar : ScheduleField<"EvalRuntimeCalendar", "schedule.eval.runtime_calendar",
     "::mlir::UnitAttr">;
 def EvalAssertionObservers : ScheduleField<"EvalAssertionObservers", "schedule.eval.assertion_observers",
@@ -274,6 +275,10 @@ def NbaGuardedPrivateInfluence : ScheduleField<"NbaGuardedPrivateInfluence", "sc
 // Complete source-process inventory before fusion adds private scratch.
 // Absence means unknown; an empty array certifies no intervening writers.
 def NbaImmediateWriters : ScheduleField<"NbaImmediateWriters", "schedule.nba.immediate_writers",
+    "::mlir::DenseI64ArrayAttr">;
+// (storage descriptor, low bit, width) for NBA destinations on a mixed-writer
+// root whose bits no source process may write immediately.
+def NbaHoldRanges : ScheduleField<"NbaHoldRanges", "schedule.nba.hold_ranges",
     "::mlir::DenseI64ArrayAttr">;
 def NbaTransientObservable : ScheduleField<"NbaTransientObservable", "schedule.nba.transient_observable",
     "::mlir::DenseI64ArrayAttr">;

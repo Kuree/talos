@@ -1825,6 +1825,104 @@ static bool staticSignalObjectWatched(const talos_rt_context *context,
   return !pages || !pages->empty();
 }
 
+static void
+indexPackedNBAChangeRows(PackedNBAChangeMap &map, size_t id,
+                         const talos_rt_static_fanout_entry *entries,
+                         size_t count, uint64_t width) {
+  // Bound installation cost by the number of real fanout rows. Large or
+  // mixed-route sources keep the indexed interval walk.
+  if (!count || count > 64 || !width || 1 + (width - 1) / 64 > 8 * count)
+    return;
+  auto &root = map.roots[id];
+  uint64_t whole = 0;
+  for (size_t i = 0; i < count; ++i) {
+    const auto &row = entries[i];
+    if (row.edge != TALOS_RT_WAIT_EDGE_CHANGE ||
+        (row.reserved & TALOS_RT_FANOUT_ROUTE_MASK) != TALOS_RT_FANOUT_DIRECT ||
+        !row.bit_width || row.low_bit >= width ||
+        row.bit_width > width - row.low_bit)
+      return;
+    if (!row.low_bit && row.bit_width == width)
+      whole |= uint64_t{1} << i;
+  }
+  root.all = whole;
+  if (whole == packedWidthMask(count))
+    return;
+  root.firstWord = map.words.size();
+  root.words = 1 + (width - 1) / 64;
+  for (size_t word = 0; word < root.words; ++word) {
+    auto &part = map.words.emplace_back();
+    part.firstMask = map.masks.size();
+    uint64_t low = word * 64, end = low + std::min<uint64_t>(64, width - low);
+    for (size_t i = 0; i < count; ++i) {
+      uint64_t row = uint64_t{1} << i;
+      if (whole & row)
+        continue;
+      uint64_t from = std::max(low, entries[i].low_bit);
+      uint64_t to = std::min(end, entries[i].low_bit + entries[i].bit_width);
+      if (to <= from)
+        continue;
+      if (from == low && to == end) {
+        part.all |= row;
+        continue;
+      }
+      uint64_t bits = packedWidthMask(to - from) << (from - low);
+      auto found =
+          std::find_if(map.masks.begin() + part.firstMask, map.masks.end(),
+                       [&](const auto &m) { return m.bits == bits; });
+      if (found == map.masks.end())
+        map.masks.push_back({bits, row});
+      else
+        found->rows |= row;
+    }
+    part.masks = map.masks.size() - part.firstMask;
+  }
+  // Consecutive full words can have identical subscribers, for example
+  // within a packed array element. A byte comparison reports the entire
+  // interval's change with one predicate.
+  for (size_t i = root.words - 1; i != 0; --i) {
+    auto &previous = map.words[root.firstWord + i - 1];
+    const auto &next = map.words[root.firstWord + i];
+    if (!previous.masks && !next.masks && previous.all == next.all)
+      previous.run = 1 + next.run;
+  }
+}
+
+void indexScalarNBAFanout(talos_rt_context &context,
+                          const talos_rt_static_fanout_entry *entries) {
+  const auto &ranges = context.nativeScheduleFanoutRanges;
+  context.scalarNBAFanoutMasks.assign(ranges.size(), 0);
+  auto changes = std::make_unique<PackedNBAChangeMap>();
+  changes->roots.resize(ranges.size());
+  for (size_t id = 0; id != ranges.size(); ++id) {
+    auto [first, last] = ranges[id];
+    if (first == last)
+      continue;
+    uint32_t kernel = entries[first].kernel;
+    uint32_t word = entries[first].merged_bit / 64;
+    uint64_t mask = 0;
+    for (uint64_t i = first; i != last; ++i) {
+      const auto &entry = entries[i];
+      if (entry.edge != TALOS_RT_WAIT_EDGE_CHANGE || entry.low_bit ||
+          entry.bit_width !=
+              context.nativeScheduleStaticStateIndex[id].bitWidth ||
+          (entry.reserved & TALOS_RT_FANOUT_ROUTE_MASK) !=
+              TALOS_RT_FANOUT_DIRECT ||
+          entry.kernel != kernel || entry.merged_bit / 64 != word) {
+        mask = 0;
+        break;
+      }
+      mask |= uint64_t{1} << (entry.merged_bit % 64);
+    }
+    context.scalarNBAFanoutMasks[id] = mask;
+    if (!mask)
+      indexPackedNBAChangeRows(
+          *changes, id, entries + first, last - first,
+          context.nativeScheduleStaticStateIndex[id].bitWidth);
+  }
+  context.packedNBAChanges = std::move(changes);
+}
+
 // The first and last possibly overlapping table rows for each source bucket.
 // Bound memory by the number of existing waits. An externally supplied table
 // need not sort rows by bit position; it retains the original linear walk.
@@ -2355,6 +2453,451 @@ bool talos_rt_transition_unconsumed_unlocked(const talos_rt_context *context,
   return decodeNativeStatic(stableID, staticID, offset) &&
          staticOnlyPublicationEnvironment(context) &&
          !staticSignalObjectWatched(context, staticID);
+}
+
+// The scalar's two planes have just changed at this record's FIFO position
+// (IEEE 1800-2023 4.5, 4.6(b), 9.4.2). In a uniform word every wait covers
+// the entire root, so any changed bit qualifies. Only the geometry is cached.
+// A dormant, terminated or differently suspended receiver must not inherit
+// another receiver's wake, even when they share an ingress word.
+template <bool PackedFIFO>
+static bool publishPackedNBAChange(talos_rt_context *context, uint32_t id,
+                                   uint64_t stableID, uint64_t width,
+                                   const uint8_t *changed,
+                                   const uint8_t *posedge,
+                                   const uint8_t *negedge) {
+  auto [first, last] = context->nativeScheduleFanoutRanges[id];
+  uint64_t mask = context->scalarNBAFanoutMasks[id];
+  if (!mask && first != last) {
+    // Sliced, edge-sensitive or runtime-routed rows use the exact per-event
+    // masks. The observer queues and snapshots are empty for this source.
+    bool handled;
+    if constexpr (PackedFIFO)
+      handled = publishStaticAOTSignalTransitionUnlockedImpl<true, false, true>(
+          context, stableID, width, changed, posedge, negedge, nullptr, false);
+    else
+      handled = publishStaticAOTSignalTransitionUnlocked(
+          context, stableID, width, changed, posedge, negedge, nullptr);
+    if (!handled)
+      return false;
+    if (context->schedulerStatus != TALOS_RT_OK)
+      return true;
+  } else if (!PackedFIFO && !canUseStaticAOTFanout(context)) {
+    return false;
+  } else if (mask) {
+    const auto *entries = context->nativeScheduleFanoutEntries;
+    const auto &kernel =
+        context->nativeSchedulePlan->clock_kernels[entries[first].kernel];
+    uint32_t word = entries[first].merged_bit / 64;
+    uint64_t needed = mask;
+    if (context->nativeScheduleClockIngressPending)
+      needed &= ~kernel.ingress_mask[word];
+    uint64_t armed = 0;
+    if (needed) {
+      for (uint64_t i = first; i != last; ++i) {
+        const auto &entry = entries[i];
+        uint64_t bit = uint64_t{1} << (entry.merged_bit % 64);
+        if (!(needed & bit))
+          continue;
+        auto *actor = context->nativeScheduleActors[entry.actor_slot];
+        if (!actor)
+          continue;
+        size_t index = context->nativeScheduleActorIndices[entry.actor_slot];
+        if (index >= context->scheduledProcesses.size())
+          return false;
+        const auto &process = context->scheduledProcesses[index];
+        if (actor->continuation == entry.continuation &&
+            process.instance == actor && process.started &&
+            !process.signalTriggered &&
+            (process.suspendKind == TALOS_RT_SUSPEND_CHANGE ||
+             process.suspendKind == TALOS_RT_SUSPEND_EDGE))
+          armed |= bit;
+      }
+    }
+    context->signalDiagnostics.aotFanoutEntries += last - first;
+    if (armed) {
+      if (!context->nextSchedulerSequence) {
+        context->schedulerStatus = TALOS_RT_OUT_OF_RESOURCES;
+        return true;
+      }
+      ++context->nextSchedulerSequence;
+      if (context->signalDiagnosticsEnabled) {
+        ++context->signalDiagnostics.publications;
+        ++context->scalarNBAWordPublications;
+      }
+      talos::runtime::publishClockKernelReadyWord(kernel, word, armed);
+      context->nativeScheduleClockIngressPending = true;
+    }
+  }
+  if (!PackedFIFO && context->nativeStateSpecializationFast)
+    refreshNativeStaticSpecializationFastUnlocked(context);
+  if (++context->schedulerEpoch == 0)
+    context->schedulerEpoch = 1;
+  return true;
+}
+
+bool publishScalarNBAChangeUnlocked(talos_rt_context *context,
+                                    uint64_t stableID, uint64_t width,
+                                    uint64_t changed, uint64_t posedge,
+                                    uint64_t negedge) {
+  uint32_t id;
+  int64_t offset;
+  if (!decodeNativeStatic(stableID, id, offset) ||
+      id >= context->scalarNBAFanoutMasks.size() ||
+      context->activeLogicalProcessToken ||
+      !talos_rt_transition_unconsumed_unlocked(context, stableID))
+    return false;
+  return publishPackedNBAChange<false>(
+      context, id, stableID, width, reinterpret_cast<const uint8_t *>(&changed),
+      reinterpret_cast<const uint8_t *>(&posedge),
+      reinterpret_cast<const uint8_t *>(&negedge));
+}
+
+// Intersect one actual delta with the source's precomputed sensitivity
+// ranges. The record can start in the middle of a source word.
+static uint64_t matchPackedNBAChange(const PackedNBAChangeMap &map,
+                                     const PackedNBAChangeMap::Root &root,
+                                     uint64_t offset, uint64_t delta) {
+  if (!delta || !root.words)
+    return 0;
+  auto match = [&](size_t word, uint64_t bits) {
+    const auto &part = map.words[root.firstWord + word];
+    uint64_t rows = part.all;
+    for (size_t i = 0; i < part.masks; ++i) {
+      const auto &mask = map.masks[part.firstMask + i];
+      if (bits & mask.bits)
+        rows |= mask.rows;
+    }
+    return rows;
+  };
+  size_t word = offset / 64;
+  unsigned shift = offset % 64;
+  uint64_t low = delta << shift;
+  uint64_t rows = low ? match(word, low) : 0;
+  if (shift && (delta >> (64 - shift)))
+    rows |= match(word + 1, delta >> (64 - shift));
+  return rows;
+}
+
+static void publishMappedNBAChange(talos_rt_context *context, size_t first,
+                                   uint64_t rows) {
+  // The map contains only direct CHANGE rows. Their fixed ingress address
+  // says where a wake goes, while the live frame decides if it is armed.
+  bool published = false;
+  while (rows) {
+    unsigned bit = __builtin_ctzll(rows);
+    rows &= rows - 1;
+    const auto &row = context->nativeScheduleFanoutEntries[first + bit];
+    const auto &kernel = context->nativeSchedulePlan->clock_kernels[row.kernel];
+    ++context->signalDiagnostics.aotFanoutEntries;
+    if (context->nativeScheduleClockIngressPending &&
+        kernel.ingress_mask[row.merged_bit / 64] &
+            (uint64_t{1} << (row.merged_bit % 64)))
+      continue;
+    auto *actor = context->nativeScheduleActors[row.actor_slot];
+    if (!actor || actor->continuation != row.continuation)
+      continue;
+    size_t index = context->nativeScheduleActorIndices[row.actor_slot];
+    if (index >= context->scheduledProcesses.size()) {
+      context->schedulerStatus = TALOS_RT_INVALID_LIFECYCLE;
+      return;
+    }
+    const auto &process = context->scheduledProcesses[index];
+    if (process.instance != actor || !process.started ||
+        process.signalTriggered ||
+        (process.suspendKind != TALOS_RT_SUSPEND_CHANGE &&
+         process.suspendKind != TALOS_RT_SUSPEND_EDGE))
+      continue;
+    if (!published) {
+      if (!context->nextSchedulerSequence) {
+        context->schedulerStatus = TALOS_RT_OUT_OF_RESOURCES;
+        return;
+      }
+      ++context->nextSchedulerSequence;
+      if (context->signalDiagnosticsEnabled)
+        ++context->signalDiagnostics.publications;
+      published = true;
+    }
+    talos::runtime::publishClockKernelReady(kernel, row.merged_bit);
+    context->nativeScheduleClockIngressPending = true;
+  }
+  if (++context->schedulerEpoch == 0)
+    context->schedulerEpoch = 1;
+  if (context->signalDiagnosticsEnabled)
+    ++context->packedNBAChanges->publications;
+}
+
+static uint64_t matchPackedNBAImage(const PackedNBAChangeMap &map,
+                                    const PackedNBAChangeMap::Root &root,
+                                    uint64_t offset, uint64_t width,
+                                    const uint8_t *old, const uint8_t *next) {
+  uint64_t rows = root.all;
+  if (!root.words)
+    return rows;
+  uint64_t words = width / 64, i = 0;
+  while (i < words) {
+    if (!(offset % 64)) {
+      const auto &part = map.words[root.firstWord + offset / 64 + i];
+      if (!part.masks) {
+        uint64_t count = std::min<uint64_t>(words - i, part.run);
+        if ((part.all & ~rows) &&
+            std::memcmp(old + i * 8, next + i * 8, count * 8))
+          rows |= part.all;
+        i += count;
+        continue;
+      }
+    }
+    uint64_t delta = loadPackedWord<uint64_t>(old + i * 8) ^
+                     loadPackedWord<uint64_t>(next + i * 8);
+    rows |= matchPackedNBAChange(map, root, offset + i * 64, delta);
+    ++i;
+  }
+  if (uint64_t tail = width % 64) {
+    uint64_t delta = loadPackedBytes(old, words * 64, tail) ^
+                     loadPackedBytes(next, words * 64, tail);
+    rows |= matchPackedNBAChange(map, root, offset + words * 64, delta);
+  }
+  return rows;
+}
+
+// Replay one contiguous part of the ordinary queue under the barrier's
+// shared-image and static-fanout proof. No source process runs between NBA
+// records (1800-2023 4.5, 4.6(b), 10.4.2). A source with a synchronous
+// observer, a change in knownness, or an extended transaction hands the
+// still-unconsumed record back to canonical replay. In particular an UPF
+// retention decision is made at the original update (1801-2018 9.7.3).
+size_t replayPackedFIFOPrefixUnlocked(talos_rt_context *context,
+                                      uint32_t region, size_t start,
+                                      bool &changed, bool &knownnessChange) {
+  knownnessChange = false;
+  const auto *plan = context->nativeSchedulePlan;
+  if (context->scalarNBAFanoutMasks.empty() || !context->packedNBAChanges ||
+      !plan || !plan->state_value || context->activeLogicalProcessToken ||
+      context->vpiState || context->powerNBAs || !context->forceMask.empty() ||
+      !context->assignMask.empty() || !context->stateValue.shared() ||
+      plan->state_bit_count != context->nativeStateBitCount ||
+      plan->state_value != context->nativeStateValue ||
+      plan->state_unknown != context->nativeStateUnknown ||
+      plan->state_value !=
+          reinterpret_cast<const uint8_t *>(context->stateValue.data()) ||
+      plan->state_unknown !=
+          reinterpret_cast<const uint8_t *>(context->stateUnknown.data()) ||
+      !staticOnlyPublicationEnvironment(context) ||
+      !canUseStaticAOTFanout(context))
+    return start;
+
+  NativeNBAUpdateScope scope(*context);
+  CanonicalLimb *values = context->stateValue.data();
+  const CanonicalLimb *unknowns = context->stateUnknown.data();
+  const auto &changeMap = *context->packedNBAChanges;
+  std::vector<uint64_t> wideMasks;
+  bool published = false;
+  size_t index = start;
+  while (index < context->scheduledNBAs.size()) {
+    const auto &update = context->scheduledNBAs[index];
+    if (update.cancelled || update.execRegion != region ||
+        update.dueTime > context->schedulerTime)
+      break;
+    uint32_t id = update.packedStaticState;
+    bool boundScalar = id != 0;
+    uint64_t width = update.bitWidth, bit, offset;
+    if (boundScalar) {
+      // This capture checked the same immutable plan, bounds and plane
+      // pointers. Eligibility of its receivers still belongs to this barrier.
+      bit = update.packedPlaneBit;
+      offset = bit - context->nativeScheduleStaticStateIndex[id].bitOffset;
+    } else {
+      int64_t local;
+      if (update.planeBitCount != plan->state_bit_count ||
+          update.valuePlane != plan->state_value ||
+          (update.unknownPlane && update.unknownPlane != plan->state_unknown) ||
+          !decodeNativeStatic(update.bitOffset, id, local) || local < 0 ||
+          id >= context->scalarNBAFanoutMasks.size())
+        break;
+      offset = uint64_t(local);
+      const auto &state = context->nativeScheduleStaticStateIndex[id];
+      if (!width || offset > state.bitWidth ||
+          width > state.bitWidth - offset ||
+          state.bitOffset > plan->state_bit_count ||
+          state.bitWidth > plan->state_bit_count - state.bitOffset)
+        break;
+      bit = state.bitOffset + offset;
+    }
+    if (staticSignalObjectWatched(context, id))
+      break;
+    uint64_t scalarMasks[3];
+    uint64_t *masks = scalarMasks;
+    uint64_t words = 1 + (width - 1) / 64;
+    const auto &route = changeMap.roots[id];
+    bool mapped = route.all || route.words;
+    uint64_t readyRows = route.all;
+    if (boundScalar || update.inlinePacked) {
+      // Only enqueueGenericScalar sets packedPlaneBit. Richer captures,
+      // including clocking and inertial updates, keep the invalid address.
+      if (!boundScalar && (width > 64 || update.packedPlaneBit != bit))
+        break;
+      uint64_t mask = packedWidthMask(width);
+      uint64_t limb = bit / 64, shift = bit % 64;
+      bool oneWord = width <= 64 - shift;
+      uint64_t unknown =
+          oneWord ? (unknowns ? (unknowns[limb] >> shift) & mask : 0)
+                  : loadPackedBits(context->stateUnknown, bit, width);
+      if (unknown != update.inlineUnknown) {
+        knownnessChange = true;
+        break;
+      }
+      // A scalar contained in one native word needs just one load and a
+      // masked change of that same word. Preserve unrelated packed fields.
+      uint64_t old = oneWord ? (values[limb] >> shift) & mask
+                             : loadPackedBits(context->stateValue, bit, width);
+      uint64_t delta = old ^ update.inlineValue;
+      if (!delta) {
+        ++index;
+        continue;
+      }
+      if (mapped) {
+        readyRows |=
+            matchPackedNBAChange(changeMap, route, uint64_t(offset), delta);
+      } else {
+        scalarMasks[0] = delta;
+        scalarMasks[1] = delta & ~unknown & ~old;
+        scalarMasks[2] = delta & ~unknown & old;
+      }
+      if (oneWord)
+        values[limb] ^= delta << shift;
+      else
+        storePackedBits(context->stateValue, bit, width, update.inlineValue);
+    } else {
+      uint64_t bytes = 1 + (width - 1) / 8;
+      if (width <= 64 || update.retainedAutomaticID || update.stringValue ||
+          update.managedValue || update.realWidth || update.driver ||
+          update.commitGuard != NBACommitGuard::None ||
+          update.inertialNetBit != UINT64_MAX ||
+          update.inertialPathBit != UINT64_MAX ||
+          update.clockingOutput != UINT64_MAX || update.value.size() != bytes ||
+          (update.unknownPlane ? update.unknown.size() != bytes
+                               : !update.unknown.empty()) ||
+          words > wideMasks.max_size() / 3)
+        break;
+      const uint8_t *newUnknown =
+          update.unknown.empty() ? nullptr : update.unknown.data();
+      // An aligned byte image can be checked as a whole before its single
+      // FIFO publication. A short final word still reads exactly its bytes.
+      bool byteImage =
+          !(bit % 8) && !(width % 8) && (!plan->state_unknown || newUnknown);
+      uint8_t *oldBytes = plan->state_value + bit / 8;
+      const uint8_t *oldUnknownBytes =
+          plan->state_unknown ? plan->state_unknown + bit / 8 : nullptr;
+      if (byteImage) {
+        if (oldUnknownBytes &&
+            std::memcmp(oldUnknownBytes, newUnknown, bytes)) {
+          knownnessChange = true;
+          break;
+        }
+        if (!std::memcmp(oldBytes, update.value.data(), bytes)) {
+          ++index;
+          continue;
+        }
+        auto [first, last] = context->nativeScheduleFanoutRanges[id];
+        if (mapped || first == last) {
+          if (mapped)
+            readyRows = matchPackedNBAImage(changeMap, route, offset, width,
+                                            oldBytes, update.value.data());
+          std::memcpy(oldBytes, update.value.data(), bytes);
+          published = changed = true;
+          if (mapped)
+            publishMappedNBAChange(context, first, readyRows);
+          else if (++context->schedulerEpoch == 0)
+            context->schedulerEpoch = 1;
+          ++index;
+          if (context->schedulerStatus != TALOS_RT_OK)
+            break;
+          continue;
+        }
+      }
+      if (!mapped) {
+        TALOS_RT_TRY { wideMasks.resize(words * 3); }
+        TALOS_RT_CATCH(const std::bad_alloc &) {
+          // Replay this unconsumed record through the ordinary commit path.
+          break;
+        }
+        masks = wideMasks.data();
+      }
+      bool different = false;
+      for (uint64_t word = 0; word < words; ++word) {
+        uint64_t low = word * 64, n = std::min<uint64_t>(64, width - low);
+        auto record = [&](uint64_t old, uint64_t next, uint64_t unknown) {
+          uint64_t delta = old ^ next;
+          different |= delta != 0;
+          if (mapped) {
+            readyRows |= matchPackedNBAChange(changeMap, route,
+                                              uint64_t(offset) + low, delta);
+          } else {
+            masks[word] = delta;
+            masks[words + word] = delta & ~unknown & ~old;
+            masks[2 * words + word] = delta & ~unknown & old;
+          }
+        };
+        if (byteImage && n == 64) {
+          uint64_t byte = low / 8;
+          record(loadPackedWord<uint64_t>(oldBytes + byte),
+                 loadPackedWord<uint64_t>(update.value.data() + byte),
+                 oldUnknownBytes
+                     ? loadPackedWord<uint64_t>(oldUnknownBytes + byte)
+                     : 0);
+        } else {
+          uint64_t unknown =
+              loadPackedBits(context->stateUnknown, bit + low, n);
+          if (!byteImage && unknown != loadPackedBytes(newUnknown, low, n)) {
+            knownnessChange = true;
+            break;
+          }
+          record(loadPackedBits(context->stateValue, bit + low, n),
+                 loadPackedBytes(update.value.data(), low, n), unknown);
+        }
+      }
+      if (knownnessChange)
+        break;
+      if (!different) {
+        ++index;
+        continue;
+      }
+      // All lanes have been checked. No observer can see a partly applied
+      // packed assignment (1800-2023 4.6(b), 9.4.2, 10.4.2).
+      if (byteImage)
+        std::memcpy(oldBytes, update.value.data(), bytes);
+      else
+        for (uint64_t word = 0; word < words; ++word)
+          if (mapped || masks[word]) {
+            uint64_t low = word * 64, n = std::min<uint64_t>(64, width - low);
+            storePackedBits(context->stateValue, bit + low, n,
+                            loadPackedBytes(update.value.data(), low, n));
+          }
+    }
+    published = changed = true;
+    auto bytes = [](const uint64_t *p) {
+      return reinterpret_cast<const uint8_t *>(p);
+    };
+    if (mapped) {
+      publishMappedNBAChange(context, context->nativeScheduleFanoutRanges[id].first, readyRows);
+    } else if (!publishPackedNBAChange<true>(context, id, update.bitOffset, width,
+                                      bytes(masks), bytes(masks + words),
+                                      bytes(masks + 2 * words))) {
+      // An invalid live actor index takes the table's normal error path.
+      publishStaticAOTSignalTransitionUnlockedImpl<true, false, true>(
+          context, update.bitOffset, width, bytes(masks), bytes(masks + words),
+          bytes(masks + 2 * words), nullptr, false);
+    }
+    ++index;
+    if (context->schedulerStatus != TALOS_RT_OK)
+      break;
+  }
+  if (published && context->nativeStateSpecializationFast &&
+      context->schedulerStatus == TALOS_RT_OK)
+    refreshNativeStaticSpecializationFastUnlocked(context);
+  if (context->signalDiagnosticsEnabled)
+    context->packedFIFOReplays += index - start;
+  return index;
 }
 
 bool publishNativeSignalTransitionUnlocked(
