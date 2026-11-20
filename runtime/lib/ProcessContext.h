@@ -9,9 +9,11 @@
 
 struct talos_rt_context;
 
-// The context whose mutex the current thread's generated AOT schedule holds
-// (Process.cpp); runtime entries made from it skip the context lock.
-extern thread_local talos_rt_context *lockedNativeAOTContext;
+// Constant initialization is visible in every runtime translation unit.
+// A generated kernel can call out while its mutex is temporarily released,
+// so activity and lock ownership remain separate.
+inline thread_local talos_rt_context *activeNativeAOTContext = nullptr;
+inline thread_local talos_rt_context *lockedNativeAOTContext = nullptr;
 
 /// Locks `context`'s mutex and returns it. Out of line so that the common
 /// generated-schedule entry (lock already held) stays an inline compare.

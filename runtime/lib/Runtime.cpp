@@ -33,9 +33,6 @@ bool talos_rt_validate_dpi_exports(
 
 namespace {
 
-thread_local talos_rt_context *threadTransactionContext = nullptr;
-thread_local uint32_t threadTransactionDepth = 0;
-
 TalosContextMutex hostErrorMutex;
 
 struct ThreadError {
@@ -490,38 +487,22 @@ void destroyContextNow(talos_rt_context *context) noexcept {
 
 } // namespace
 
-ContextTransaction::ContextTransaction(talos_rt_context *context)
-    : context(context) {
-  if (!context)
-    return;
-  if (threadTransactionContext == context) {
-    ++threadTransactionDepth;
-    nested = true;
-    return;
-  }
-  previousThreadContext = threadTransactionContext;
-  previousThreadDepth = threadTransactionDepth;
-  transactionLock =
-      std::unique_lock<TalosContextMutex>(context->transactionMutex);
-  std::lock_guard<TalosContextMutex> lock(context->mutex);
-  if (context->transactionDepth++ == 0)
-    context->transactionOwner = std::this_thread::get_id();
-  threadTransactionContext = context;
-  threadTransactionDepth = 1;
+void ContextTransaction::enter(talos_rt_context *requested) {
+  std::unique_lock<TalosContextMutex> transactionLock(requested->transactionMutex);
+  std::lock_guard<TalosContextMutex> lock(requested->mutex);
+  if (requested->transactionDepth++ == 0)
+    requested->transactionOwner = std::this_thread::get_id();
+  previousThreadContext = current;
+  current = context = requested;
+  transactionLock.release(); // The owning scope releases this in leave().
 }
 
-ContextTransaction::~ContextTransaction() noexcept {
-  if (!context)
-    return;
-  if (nested) {
-    if (threadTransactionContext == context && threadTransactionDepth != 0)
-      --threadTransactionDepth;
-    return;
-  }
-  threadTransactionContext = previousThreadContext;
-  threadTransactionDepth = previousThreadDepth;
+void ContextTransaction::leave() noexcept {
+  current = previousThreadContext;
   bool destroy = false;
   TALOS_RT_TRY {
+    std::unique_lock<TalosContextMutex> transactionLock(
+        context->transactionMutex, std::adopt_lock);
     {
       std::lock_guard<TalosContextMutex> lock(context->mutex);
       if (context->transactionDepth != 0 && --context->transactionDepth == 0) {

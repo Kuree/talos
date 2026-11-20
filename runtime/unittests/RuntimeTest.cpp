@@ -730,6 +730,29 @@ TEST(RuntimeABI, ObserverEvaluatorFailurePropagatesThroughScheduler) {
   observerEvaluatorMode = ObserverEvaluatorMode::ConstantZero;
 }
 
+TEST(RuntimeABI, TransactionRestoresOwnerAcrossContexts) {
+  talos_rt_context *first = nullptr, *second = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&first), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_context_create(&second), TALOS_RT_OK);
+  std::weak_ptr<const uint8_t> lifetime = first->errorLifetime;
+  {
+    ContextTransaction outer(first);
+    {
+      ContextTransaction nested(first);
+      ContextTransaction other(second);
+      ContextTransaction reentered(first);
+      talos_rt_v1_context_destroy(first);
+      EXPECT_FALSE(lifetime.expired());
+    }
+    ContextTransaction again(first);
+    EXPECT_FALSE(lifetime.expired());
+    EXPECT_EQ(first->transactionDepth, 1u);
+    EXPECT_EQ(second->transactionDepth, 0u);
+  }
+  EXPECT_TRUE(lifetime.expired());
+  talos_rt_v1_context_destroy(second);
+}
+
 TEST(RuntimeABI, ObserverEvaluatorDefersContextDestructionUntilReturn) {
   ObserverWaitTestDescriptor descriptor;
   observerEvaluatorMode = ObserverEvaluatorMode::DestroyContext;

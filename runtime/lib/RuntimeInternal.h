@@ -4017,17 +4017,26 @@ inline void serveManagedRunHold() {
 // context, final cleanup is deferred until the outermost transaction returns.
 class ContextTransaction {
 public:
-  explicit ContextTransaction(talos_rt_context *context);
+  explicit ContextTransaction(talos_rt_context *requested) {
+    if (requested && current != requested)
+      enter(requested);
+  }
   ContextTransaction(const ContextTransaction &) = delete;
   ContextTransaction &operator=(const ContextTransaction &) = delete;
-  ~ContextTransaction() noexcept;
+  ~ContextTransaction() noexcept {
+    if (context)
+      leave();
+  }
 
 private:
+  // The owning scope already serializes every nested operation on this
+  // context. A callback entering a different context becomes a new owner and
+  // restores the previous one when it returns.
+  inline static thread_local talos_rt_context *current = nullptr;
+  void enter(talos_rt_context *requested);
+  void leave() noexcept;
   talos_rt_context *context = nullptr;
-  std::unique_lock<TalosContextMutex> transactionLock;
   talos_rt_context *previousThreadContext = nullptr;
-  uint32_t previousThreadDepth = 0;
-  bool nested = false;
 };
 
 class ContextCallbackUnlock {

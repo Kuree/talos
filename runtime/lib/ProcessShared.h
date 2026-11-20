@@ -11,6 +11,7 @@
 #define TALOS_RUNTIME_LIB_PROCESSSHARED_H
 
 #include "GeneratedNBAStorage.h"
+#include "ProcessContext.h"
 #include "RuntimeInternal.h"
 
 #include <cstdint>
@@ -25,16 +26,6 @@ constexpr uint64_t kNativeLogicalProcessTag =
 
 extern std::mutex nativeScheduleRegistryMutex;
 extern std::unordered_set<const void *> installedNativeScheduleStates;
-
-// Marks calls made from an installed native AOT kernel. This selects AOT-only
-// leaf operations, but does not waive the mutex contract of public runtime
-// entry points: observers may temporarily release that mutex while callbacks
-// run.
-extern thread_local talos_rt_context *activeNativeAOTContext;
-// A static AOT frame may retain the real context mutex across the generated
-// kernel. Nested runtime entry points then inherit that exclusion instead of
-// repeatedly acquiring the same recursive mutex.
-extern thread_local talos_rt_context *lockedNativeAOTContext;
 
 class NativeAOTMutexScope {
 public:

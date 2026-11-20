@@ -39,8 +39,6 @@ using namespace talos::runtime;
 // Definitions for the AOT context state declared in ProcessShared.h.
 std::mutex nativeScheduleRegistryMutex;
 std::unordered_set<const void *> installedNativeScheduleStates;
-thread_local talos_rt_context *activeNativeAOTContext = nullptr;
-thread_local talos_rt_context *lockedNativeAOTContext = nullptr;
 
 namespace {
 
