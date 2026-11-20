@@ -2087,17 +2087,21 @@ FailureOr<PreparedScopeDeclarations> materializeScopeDeclarations(
   if (llvm::none_of(units, needsScope))
     return result;
   // H.9.3 permits looking up the scope of any subroutine declaration,
-  // including an ordinary SV function never called by the design. Record
-  // its lexical scopes up to the physical instance. A replicated block of
-  // wires or a package of types needs no additional DPI records.
+  // including an ordinary SV function never called by the design. Keep its
+  // enclosing DPI scopes up to the first distinct declaration owner.
   llvm::SmallPtrSet<Operation *, 32> declarationScopes;
   for (Operation *unit : units) {
     if (!isa<semantic::SVSubroutineSymbolOp>(unit))
       continue;
-    for (Operation *owner = unit->getParentOp();
-         owner && !result.ids.count(owner); owner = owner->getParentOp()) {
-      if (isa<semantic::SVGenerateBlockSymbolOp, semantic::SVPackageSymbolOp,
-              semantic::SVCompilationUnitSymbolOp>(owner) &&
+    for (Operation *owner = unit->getParentOp(); owner;
+         owner = owner->getParentOp()) {
+      // Generate arrays group their elaborated blocks. Anonymous programs
+      // share their enclosing package or compilation-unit namespace (24.6).
+      if (isa<semantic::SVGenerateBlockArraySymbolOp,
+              semantic::SVAnonymousProgramSymbolOp>(owner))
+        continue;
+      if (!isa<semantic::SVGenerateBlockSymbolOp, semantic::SVPackageSymbolOp,
+               semantic::SVCompilationUnitSymbolOp>(owner) ||
           !declarationScopes.insert(owner).second)
         break;
     }
