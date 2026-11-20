@@ -612,6 +612,25 @@ std::optional<bool> foldConstantTruth(Value value) {
   return !integer.getValue().isZero();
 }
 
+/// A procedural event can subscribe to a fixed select, even if the runtime
+/// value of its constant index is folded later. The two-state importer keeps
+/// Slang's four-state value for elaboration uses only. Prove invariance from
+/// the operands and let ordinary expression lowering calculate the index in
+/// its execution domain (1800-2023 6.11.2, 9.4.2, 11.5.1).
+static bool isInvariantSelectIndex(Operation *index) {
+  if (index->hasAttr("sdf_annotated_specparam"))
+    return false;
+  if (getConstantSpelling(index))
+    return true;
+  if (!index->hasAttr(elaboratedConstantAttrName))
+    return false;
+  if (!isa<semantic::SVBinaryExpressionOp, semantic::SVConditionalExpressionOp,
+           semantic::SVConversionExpressionOp>(index))
+    return false;
+  auto children = getChildren(index);
+  return !children.empty() && llvm::all_of(children, isInvariantSelectIndex);
+}
+
 bool isAddressableExpression(Operation *operation) {
   if (operation->hasAttr(clockingBlockEventAttrName))
     return operation->hasAttr(clockingEventPathAttrName);
@@ -635,9 +654,8 @@ bool isAddressableExpression(Operation *operation) {
       isa<semantic::SVElementSelectExpressionOp>(operation) ? 2u : 3u;
   if (children.size() != expected || !isAddressableExpression(children.front()))
     return false;
-  return llvm::all_of(
-      ArrayRef<Operation *>(children).drop_front(),
-      [](Operation *index) { return getConstantSpelling(index).has_value(); });
+  return llvm::all_of(ArrayRef<Operation *>(children).drop_front(),
+                      isInvariantSelectIndex);
 }
 
 Operation *getTimingConditionOperand(Operation *operation, int32_t predicate) {
