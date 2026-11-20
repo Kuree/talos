@@ -67,6 +67,8 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Mem2Reg.h"
@@ -4557,6 +4559,12 @@ class MaterializeNativeEvalTransactionsPass final
     : public impl::MaterializeNativeEvalTransactionsPassBase<
           MaterializeNativeEvalTransactionsPass> {
 public:
+  void getDependentDialects(DialectRegistry &registry) const override {
+    Base::getDependentDialects(registry);
+    registerBuiltinDialectTranslation(registry);
+    registerLLVMDialectTranslation(registry);
+  }
+
   void runOnOperation() override {
     ModuleOp module = getOperation();
     NativeStepTiming timing(module);
@@ -4565,6 +4573,7 @@ public:
     detail::eliminateTwoStateUnknownPlane(module);
     timing.mark("native eval transaction materialization");
     schedule::specializeNativeValueFunctions(module);
+    detail::materializeSmallValueTables(module);
     schedule::cacheNativePureCones(module);
     timing.mark("pure cone caching");
   }

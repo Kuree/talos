@@ -37,6 +37,7 @@ add_mlir_library(TalosSimulationToLLVMCoroutine
   SimulationManagedReferenceLowering.cpp
   SimulationPrivateClassFields.cpp
   SimulationPrivateQueues.cpp
+  SimulationSmallValueTables.cpp
   SimulationManagedRootInstrumentation.cpp
   SimulationManagedRootSupport.cpp
   SimulationManagedStringLowering.cpp
@@ -82,6 +83,9 @@ add_mlir_library(TalosSimulationToLLVMCoroutine
   TalosConversionPassIncGen
   TalosSimulationOpsIncGen
 
+  LINK_COMPONENTS
+  TransformUtils
+
   LINK_LIBS PUBLIC
   TalosCoverage
   TalosSAIFIR
@@ -114,6 +118,8 @@ add_mlir_library(TalosSimulationToLLVMCoroutine
   MLIRTransforms
   MLIRTargetLLVMIRImport
   MLIRTargetLLVMIRExport
+  MLIRBuiltinToLLVMIRTranslation
+  MLIRLLVMToLLVMIRTranslation
 )
 
 target_include_directories(TalosSimulationToLLVMCoroutine PRIVATE
