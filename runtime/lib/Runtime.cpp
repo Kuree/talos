@@ -355,6 +355,17 @@ void talos_rt_report_signal_diagnostics_unlocked(talos_rt_context *context) {
           context->signalDiagnostics.periodicClocksHighWater),
       static_cast<unsigned long long>(
           context->signalDiagnostics.periodicSlotDrains));
+  if (context->signalDiagnostics.frameStoresShared ||
+      context->signalDiagnostics.frameStoreFallbacks)
+    std::fprintf(stderr, "talos-frame-store shared=%llu fallback=%llu\n",
+                 static_cast<unsigned long long>(
+                     context->signalDiagnostics.frameStoresShared),
+                 static_cast<unsigned long long>(
+                     context->signalDiagnostics.frameStoreFallbacks));
+  if (context->signalDiagnostics.observedBatchActivations)
+    std::fprintf(stderr, "talos-observed-batch activations=%llu\n",
+                 static_cast<unsigned long long>(
+                     context->signalDiagnostics.observedBatchActivations));
   if (const NativeUnknownSummary *summary =
           context->nativeUnknownSummary.get()) {
     uint64_t dirty = 0;

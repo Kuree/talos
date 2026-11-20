@@ -596,8 +596,18 @@ const talos_rt_wait_record_v1 *currentWait(const ScheduledProcess &process) {
   const talos_rt_frame_layout_v1 &layout =
       *process.instance->descriptor->frame_layout;
   if (process.waitSize != 0) {
-    const talos_rt_frame_field_v1 *field =
-        findWaitField(layout, process.waitOffset);
+    const talos_rt_frame_field_v1 *field = nullptr;
+    if (process.waitFieldIndex < layout.field_count) {
+      const auto &cached = layout.fields[process.waitFieldIndex];
+      if (cached.kind == TALOS_RT_FRAME_WAIT &&
+          cached.offset == process.waitOffset)
+        field = &cached;
+    }
+    if (!field) {
+      field = findWaitField(layout, process.waitOffset);
+      if (field)
+        process.waitFieldIndex = static_cast<uint32_t>(field - layout.fields);
+    }
     if (!field || field->size != process.waitSize ||
         process.waitOffset > process.instance->frame_size ||
         process.waitSize > process.instance->frame_size - process.waitOffset)

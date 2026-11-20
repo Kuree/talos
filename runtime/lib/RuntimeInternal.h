@@ -645,9 +645,7 @@ struct NativeReadyPublicationBatch {
   uint64_t generation = 0;
   bool valid = false;
   std::vector<uint64_t> tokens;
-  // MSVC's empty unordered_set allocates. Bytecode and dormant native runs
-  // never publish a batch, so construct membership only for a live cohort.
-  std::optional<std::unordered_set<uint64_t>> queued;
+  uint64_t ticket = 0;
 };
 
 struct ProcessCallerDepths {
@@ -665,6 +663,7 @@ struct ScheduledProcess {
   std::vector<ProcessCallerDepths> callerDepths;
   std::vector<uint64_t> controls;
   uint64_t token = 0;
+  uint64_t readyBatchTicket = 0;
   uint64_t parent = 0;
   uint64_t programOwner = 0;
   uint64_t initializationRandomScope = 0;
@@ -672,6 +671,9 @@ struct ScheduledProcess {
   uint64_t wakeTime = 0;
   uint64_t waitOffset = 0;
   uint64_t waitSize = 0;
+  // Consecutive activations usually suspend at the same wait. Revalidate this
+  // index in the current layout, including after returning from a task.
+  mutable uint32_t waitFieldIndex = UINT32_MAX;
   std::vector<uint64_t> waitGenerations;
   uint32_t waitOrderIndex = 0;
   std::vector<std::unique_ptr<SignalSubscription>> signalSubscriptions;
@@ -1600,6 +1602,8 @@ struct SignalSubscriptionDiagnostics {
   uint64_t aotNBAStages = 0;
   uint64_t aotNBACommits = 0;
   uint64_t aotNBABatches = 0;
+  uint64_t frameStoresShared = 0;
+  uint64_t frameStoreFallbacks = 0;
   uint64_t aotNBAPrivateCommits = 0;
   uint64_t aotStateFastPaths = 0;
   uint64_t aotStateSlowPaths = 0;
@@ -1610,6 +1614,7 @@ struct SignalSubscriptionDiagnostics {
   // Count actual insertions into the general NBA event queue. Generated
   // accumulators and eval's ordered captures do not use this queue.
   uint64_t nbaQueueEnqueues = 0;
+  uint64_t observedBatchActivations = 0;
 };
 
 // Three packed edge planes with allocation-free storage for common signals up
@@ -2641,6 +2646,7 @@ struct talos_rt_context {
   // Some merged fragment of the installed plan is executable. The fragment
   // table is immutable, so installation classifies it once.
   bool nativeScheduleExecutableFragments = false;
+  uint8_t nativeScheduleIngressMask = TALOS_RT_FANOUT_ROUTE_MASK;
   std::vector<talos::runtime::EvalNBAQueue *> nativeEvalNBAQueues;
   bool nativeStateInitialized = false;
   bool nativeStateSharingAllowed = false;
@@ -2689,11 +2695,14 @@ struct talos_rt_context {
       nativeScheduleActorNodes;
   talos::runtime::CursorReadySet nativeScheduleReadyNodes;
   std::vector<uint32_t> nativeScheduleFanoutNodes;
+  // A representative row for a fully indexed wait. Its route distinguishes
+  // generated ingress from a wake of the ranked process frame.
   std::vector<uint64_t> nativeScheduleNodeIngress;
   std::vector<std::pair<uint64_t, uint64_t>> nativeScheduleFanoutRanges;
   // Indices of the immutable fanout entries routed to the runtime. Periodic
   // handoff validation inspects only these instead of the whole table.
   std::vector<uint64_t> nativeScheduleRuntimeFanoutIndices;
+  std::vector<std::pair<uint64_t, uint64_t>> nativePeriodicRuntimeFanoutRanges;
   uint32_t nativeScheduleMinimumActivatedNode = UINT32_MAX;
   bool nativeScheduleClockIngressPending = false;
   uint32_t nativeScheduleDirectActorSlot = UINT32_MAX;
@@ -2707,7 +2716,10 @@ struct talos_rt_context {
   std::vector<talos_rt_aot_deopt_actor> nativeScheduleSnapshotActors;
   std::vector<talos_rt_aot_deopt_nba> nativeScheduleSnapshotNBAs;
   bool nativeScheduleRunning = false;
-  bool prioritySignalPending = false;
+  uint8_t prioritySignalPending = 0;
+  // Generated clock-occurrence waits can be armed without a subscription.
+  // Once a slot-final wait is armed, include it in native region arbitration.
+  bool nativeSlotFinalWaitArmed = false;
   bool nativeScheduleDeoptimized = false;
   bool nativeScheduleExternalWritePending = false;
   std::unordered_set<uint32_t> nativeScheduleTransientDirtyRoots;
@@ -2743,6 +2755,10 @@ struct talos_rt_context {
   uint64_t nativeScheduleForcedDesignTask = 0;
   uint64_t nativePeriodicRuntimeDeadline = UINT64_MAX;
   std::vector<uint32_t> nativePeriodicClockActorSlots;
+  // Forwarders executed by this prepared clock projection. Only the matching
+  // publication may subsume their ordinary runtime activation.
+  std::vector<uint32_t> nativePeriodicAliasContinuations;
+  uint64_t nativePeriodicPublicationHandle = 0;
   // Derived solely from immutable installed-plan tables. Live subscriptions
   // and external overrides are still checked at every periodic re-entry.
   std::unordered_set<uint32_t> nativePeriodicGeneratedWritableStates;
@@ -2752,7 +2768,17 @@ struct talos_rt_context {
   std::unordered_multimap<talos_rt_process_instance_v1 *, uint64_t>
       scheduledProcessTokens;
   talos::runtime::FlatU64Set nativePollCandidates;
+  // Final procedures become candidates on entry to the final phase (9.2.3).
+  talos::runtime::FlatU64Set dormantNativeFinals;
+  // A repeated cut on one edge can see exactly the same parked Observed
+  // waits. Execution, publication, time or a changed candidate set expires
+  // this proof; the stored tokens never refer into movable process storage.
+  struct ObservedWaitsAtNBACut {
+    uint64_t time = 0, progress = 0, epoch = 0, sequence = 0, generation = 0;
+    std::vector<uint64_t> tokens;
+  } observedWaitsAtNBACut;
   NativeReadyPublicationBatch *nativeReadyPublicationBatch = nullptr;
+  uint64_t nextReadyBatchTicket = 0;
   // Lazy min-heap of (wake time, process token). Stale entries are discarded
   // when queried after a process resumes, changes wait kind, or terminates.
   std::vector<std::pair<uint64_t, uint64_t>> scheduledProcessDelayHeap;
@@ -2785,6 +2811,7 @@ struct talos_rt_context {
   // Computed waits and custom Clause 31.5 descriptors share this already-hot
   // specialization guard instead of adding a transition-path feature probe.
   uint64_t nativeDynamicSignalSubscriptions = 0;
+  uint64_t nativeComputedSignalSubscriptions = 0;
   // Immutable observer descriptors are executable code inventory, not live
   // wakeups. Only a registered suspend.observe wait invalidates generated AOT
   // closure. Owner-local registration bits make this an allocation-free O(1)
@@ -3266,6 +3293,12 @@ struct talos_rt_context {
   uint32_t schedulerCohortRegion = TALOS_RT_REGION_ACTIVE;
   bool schedulerCohortEnabled = false;
 
+  struct NativeFanoutWindow {
+    uint64_t firstBucket = 0;
+    unsigned shift = 0;
+    std::vector<std::pair<uint64_t, uint64_t>> bounds;
+  };
+  std::vector<NativeFanoutWindow> nativeFanoutWindows;
   talos_rt_context();
   ~talos_rt_context();
 };
@@ -3320,9 +3353,14 @@ inline void talos_rt_record_native_ready_publication_unlocked(
   auto *batch = context->nativeReadyPublicationBatch;
   if (!batch || !batch->valid)
     return;
+  auto process = context->scheduledProcessIndices.find(token);
   if (!inserted || batch->generation != previous ||
       context->schedulerSelectionGeneration == 1 ||
-      batch->queued->count(token)) {
+      process == context->scheduledProcessIndices.end() ||
+      process->second >= context->scheduledProcesses.size() ||
+      context->scheduledProcesses[process->second].token != token ||
+      context->scheduledProcesses[process->second].readyBatchTicket ==
+          batch->ticket) {
     batch->valid = false;
     return;
   }
@@ -3572,6 +3610,13 @@ inline bool talos_rt_is_slot_final_clock_occurrence_wait(
     const talos_rt_wait_record_v1 *wait) {
   return wait &&
          talos_rt_is_slot_final_clock_occurrence_wait_flags(wait->flags);
+}
+
+inline void noteNativeSlotFinalWait(talos_rt_context *context,
+                                    const talos_rt_wait_record_v1 *wait) {
+  if (wait && wait->kind == TALOS_RT_SUSPEND_EDGE &&
+      talos_rt_is_slot_final_clock_occurrence_wait_flags(wait->flags))
+    context->nativeSlotFinalWaitArmed = true;
 }
 
 inline bool

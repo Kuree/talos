@@ -54,9 +54,40 @@ static uint32_t fanoutRoute(const talos_rt_static_fanout_entry &entry) {
 
 bool nativeStaticSpecializationEnvironmentClean(
     const talos_rt_context *context) {
-  return context && context->activeComputedObserverWaiterCount == 0 &&
+  if (!context || !context->scheduledDesignTasks.empty() ||
+      !context->nativeConditionalSignalWaiters.empty() ||
+      !context->designConditionalSignalWaiters.empty())
+    return false;
+  if (!context->activeComputedObserverWaiterCount &&
+      !context->nativeDynamicSignalSubscriptions)
+    return true;
+  // The only asynchronously observed roots on this shared image are written
+  // and published by individual port activations. No NBA can target them.
+  // Keep the observer's own evaluation on its publication-time read path.
+  return context->nativeSchedulePlan &&
+         (context->nativeSchedulePlan->flags &
+          TALOS_RT_NATIVE_SCHEDULE_FORWARDED_ASSERTION_INPUTS) &&
+         context->stateValue.shared() && !context->observerDepth &&
+         !context->observerForcesCanonicalPlane &&
+         context->nativeDynamicSignalSubscriptions ==
+             context->nativeComputedSignalSubscriptions;
+}
+
+// The calendar certificate covers the complete read sets of concurrent
+// disable predicates. Their active subscriptions can coexist with generated
+// fanout while the canonical publication image stays separate.
+static bool nativeFanoutEnvironmentClean(const talos_rt_context *context) {
+  if (nativeStaticSpecializationEnvironmentClean(context))
+    return true;
+  return context && context->nativeSchedulePlan &&
+         (context->nativeSchedulePlan->flags &
+          TALOS_RT_NATIVE_SCHEDULE_ASSERTION_OBSERVERS) &&
+         (!context->stateValue.shared() ||
+          (context->nativeSchedulePlan->flags &
+           TALOS_RT_NATIVE_SCHEDULE_FORWARDED_ASSERTION_INPUTS)) &&
          context->scheduledDesignTasks.empty() &&
-         context->nativeDynamicSignalSubscriptions == 0 &&
+         context->nativeDynamicSignalSubscriptions ==
+             context->nativeComputedSignalSubscriptions &&
          context->nativeConditionalSignalWaiters.empty() &&
          context->designConditionalSignalWaiters.empty();
 }
@@ -75,10 +106,20 @@ bool nativeAOTTransientBoundaryClean(const talos_rt_context *context) {
 }
 
 bool nativePeriodicAOTEnvironmentClean(const talos_rt_context *context) {
-  return nativeAOTTransientBoundaryClean(context) &&
-         context->activeComputedObserverWaiterCount == 0 &&
-         context->nativeConditionalSignalWaiters.empty() &&
-         context->designConditionalSignalWaiters.empty();
+  if (!nativeAOTTransientBoundaryClean(context) ||
+      !context->nativeConditionalSignalWaiters.empty() ||
+      !context->designConditionalSignalWaiters.empty())
+    return false;
+  if (!context->activeComputedObserverWaiterCount)
+    return true;
+  // Shared periodic execution enters Preponed before every edge and drains
+  // the runtime regions before advancing time. Its certified, individually
+  // published disable inputs therefore keep their ordinary subscriptions
+  // throughout the clock loop (1800-2023 4.4.2, 16.5.1, 16.12).
+  const auto *plan = context->nativeSchedulePlan;
+  return plan && (plan->flags & TALOS_RT_NATIVE_SCHEDULE_SHARED_PERIODIC) &&
+         (plan->flags & TALOS_RT_NATIVE_SCHEDULE_FORWARDED_ASSERTION_INPUTS) &&
+         nativeFanoutEnvironmentClean(context);
 }
 
 static bool canUseScopedGeneratedEval(const talos_rt_context *context) {
@@ -111,18 +152,14 @@ static bool canUseRuntimeCalendarEval(const talos_rt_context *context) {
 bool canUseStaticAOTFanout(const talos_rt_context *context) {
   const talos_rt_native_schedule_plan *plan =
       context ? context->nativeSchedulePlan : nullptr;
-  if (!plan ||
-      ((plan->flags & TALOS_RT_NATIVE_SCHEDULE_STATIC_FANOUT) == 0 &&
-       !context->nativeScheduleGuardedFanoutActive &&
-       !((plan->flags & TALOS_RT_NATIVE_SCHEDULE_GUARDED_FANOUT) &&
-         ((plan->specialization_fast && *plan->specialization_fast) ||
-          canUseRuntimeCalendarEval(context)))) ||
-      context->nativeScheduleDeoptimized || !context->execution)
+  if (!plan || context->nativeScheduleDeoptimized || !context->execution)
     return false;
-  if ((plan->flags & TALOS_RT_NATIVE_SCHEDULE_GUARDED_SPECIALIZATION) &&
-      (!plan->specialization_fast || !*plan->specialization_fast) &&
-      !nativeAOTTransientBoundaryClean(context) &&
-      !canUseScopedGeneratedEval(context))
+  bool specialized = plan->specialization_fast && *plan->specialization_fast;
+  bool guarded = (plan->flags & TALOS_RT_NATIVE_SCHEDULE_GUARDED_FANOUT) != 0;
+  bool fanoutOwned = (plan->flags & TALOS_RT_NATIVE_SCHEDULE_STATIC_FANOUT) ||
+                     context->nativeScheduleGuardedFanoutActive ||
+                     (guarded && specialized);
+  if (!fanoutOwned && !guarded)
     return false;
   // IEEE 1800-2017 Clause 31.7 requires a timing condition to be sampled only
   // after its primary publication. Before periodic preparation proves that no
@@ -131,17 +168,25 @@ bool canUseStaticAOTFanout(const talos_rt_context *context) {
   // instead checkpoints every runtime-observed writer (IEEE 1800-2023 4.6,
   // 9.4.2), so independent generated work need not wait for exclusive clock
   // ownership. FULLY_STATIC plans retain their existing path.
-  if ((plan->flags & TALOS_RT_NATIVE_SCHEDULE_STATIC_EVAL_ISLAND) != 0 &&
-      !context->nativeStaticEvalIslandCertified &&
-      !canUseRuntimeCalendarEval(context))
+  bool needsCalendar =
+      !fanoutOwned ||
+      ((plan->flags & TALOS_RT_NATIVE_SCHEDULE_STATIC_EVAL_ISLAND) &&
+       !context->nativeStaticEvalIslandCertified);
+  if (needsCalendar) {
+    // Calendar admission includes a clean boundary or a scoped write proof.
+    // One check supplies both the fanout and the island certificate.
+    if (!canUseRuntimeCalendarEval(context))
+      return false;
+  } else if ((plan->flags & TALOS_RT_NATIVE_SCHEDULE_GUARDED_SPECIALIZATION) &&
+             !specialized && !nativeAOTTransientBoundaryClean(context) &&
+             !canUseScopedGeneratedEval(context))
     return false;
   // The activation guard's fast flag already represents this same clean
   // environment and is invalidated synchronously on every writable-VPI
   // handover. Reuse it instead of rescanning empty runtime inventories at
   // every NBA root commit.
-  return (plan->specialization_fast && *plan->specialization_fast != 0) ||
-         (!context->vpiObservationDemand &&
-          nativeStaticSpecializationEnvironmentClean(context));
+  return specialized || (!context->vpiObservationDemand &&
+                         nativeFanoutEnvironmentClean(context));
 }
 
 bool nativeClockOccurrencePrimaryReadsGeneratedState(
@@ -181,7 +226,7 @@ bool canUseIndexedExternalAOTFanout(const talos_rt_context *context) {
           canUseScopedGeneratedEval(context)) &&
          !context->nativeScheduleNodes.empty() &&
          context->nativeScheduleReadyNodes.wordCount() != 0 &&
-         nativeStaticSpecializationEnvironmentClean(context);
+         nativeFanoutEnvironmentClean(context);
 }
 
 bool staticNBARootNeedsTransitions(const talos_rt_context *context,
@@ -820,9 +865,13 @@ talos_rt_status armStartedNativeAOTActorsUnlocked(talos_rt_context *context) {
         (plan->flags & TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL)) {
       uint32_t node = findNativeAOTNodeUnlocked(context, slot,
                                                 start->continuation);
-      ownsStaticWait = node < context->nativeScheduleNodeIngress.size() &&
-                       context->nativeScheduleNodeIngress[node] <
-                           context->nativeScheduleFanoutEntryCount;
+      uint64_t ingress = node < context->nativeScheduleNodeIngress.size()
+                             ? context->nativeScheduleNodeIngress[node]
+                             : UINT64_MAX;
+      ownsStaticWait =
+          ingress < context->nativeScheduleFanoutEntryCount &&
+          fanoutRoute(context->nativeScheduleFanoutEntries[ingress]) ==
+              TALOS_RT_FANOUT_DIRECT;
     }
     if (!ownsStaticWait &&
         !talos_rt_register_signal_wait_unlocked(
@@ -1105,7 +1154,9 @@ initializeNativeAOTNodesUnlocked(talos_rt_context *context,
         node.continuation != entry.continuation)
       return TALOS_RT_INVALID_CONTINUATION;
     fanoutNodes[index] = entry.compute_node;
-    if (fanoutRoute(entry) == TALOS_RT_FANOUT_DIRECT)
+    if (fanoutRoute(entry) == TALOS_RT_FANOUT_DIRECT ||
+        ((entry.reserved & TALOS_RT_FANOUT_RANKED_WAIT) &&
+         nodeIngress[entry.compute_node] == UINT64_MAX))
       nodeIngress[entry.compute_node] = index;
   }
   context->nativeScheduleNodes = std::move(installedNodes);
@@ -1463,14 +1514,16 @@ talos_rt_status executeAOTNode(talos_rt_context *context, uint32_t actorSlot,
           static_cast<const uint8_t *>(selected->frame) + action.payload);
       uint64_t delay =
           action.suspend_kind == TALOS_RT_SUSPEND_DELAY ? wait->payload : 1;
-      if (delay != 0 && canUseStaticAOTFanout(context) &&
-          (action.suspend_kind == TALOS_RT_SUSPEND_DELAY ||
-           ownsStaticSignalWait(action.continuation)) &&
+      if (delay != 0 &&
+          (action.suspend_kind == TALOS_RT_SUSPEND_DELAY
+               ? canUseStaticAOTFanout(context)
+               : ownsStaticSignalWait(action.continuation)) &&
           !context->nativeScheduleExternalWritePending &&
           scheduled.signalSubscriptions.empty() &&
           !scheduled.computedObserverWaitRegistered &&
           scheduled.waitGenerations.empty()) {
         scheduled.suspendKind = action.suspend_kind;
+        noteNativeSlotFinalWait(context, wait);
         scheduled.waitOffset = action.payload;
         scheduled.waitSize = action.auxiliary;
         updateNativeAOTContinuationRank(scheduled, action.continuation);
@@ -1661,6 +1714,7 @@ talos_rt_status executeAOTNode(talos_rt_context *context, uint32_t actorSlot,
       scheduled.urgent = false;
       const auto *wait = reinterpret_cast<const talos_rt_wait_record_v1 *>(
           static_cast<const uint8_t *>(selected->frame) + action.payload);
+      noteNativeSlotFinalWait(context, wait);
       uint64_t delayPayload =
           action.suspend_kind == TALOS_RT_SUSPEND_DELAY ? wait->payload : 1;
       if (!talos_rt_next_queued_region(
@@ -2594,6 +2648,19 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_prepare_periodic_aot(
     }
     // Validate the entire cohort and allocate its bookkeeping before detaching
     // any source, so an invalid later clock cannot partially claim the plan.
+    context->nativePeriodicAliasContinuations.clear();
+    if (sharedCalendar && aliasCount) {
+      context->nativePeriodicAliasContinuations.assign(
+          context->nativeScheduleActors.size(), UINT32_MAX);
+      for (uint32_t i = 0; i != aliasCount; ++i) {
+        const auto &alias = aliases[i];
+        if (alias.forwarding_actor_slot >=
+            context->nativePeriodicAliasContinuations.size())
+          return TALOS_RT_INVALID_ARGUMENT;
+        context->nativePeriodicAliasContinuations[alias.forwarding_actor_slot] =
+            alias.forwarding_continuation;
+      }
+    }
     context->nativePeriodicClockActorSlots.clear();
     context->nativePeriodicClockActorSlots.reserve(clockCount);
     for (uint32_t index = 0; index != clockCount; ++index) {
@@ -3389,8 +3456,16 @@ nativeCheckpoint:
               goto checkpointDone;
           }
         } else {
+          const bool resumeAfterSignal =
+              plan->timeslot_coordinator &&
+              talos_rt_v1_scheduler_priority_signal_pending(context);
           NativeScheduleStepScope step(context, UINT32_MAX, false);
           status = runScheduler(context);
+          // A priority signal interrupts the coordinator between owners. The
+          // remaining ready bits still belong to this slot even if the
+          // cancellation itself wakes no generated process (4.5, 16.12).
+          if (status == TALOS_RT_OK && resumeAfterSignal)
+            context->nativeScheduleClockIngressPending = true;
         }
         if (status == TALOS_RT_OK && plan->state_bit_count != 0) {
           ContextMutexLock lock(context);
@@ -3689,6 +3764,7 @@ void talos_rt_release_native_schedule_plan(talos_rt_context *context) noexcept {
   TALOS_RT_CATCH_ALL {}
   context->nativeSchedulePlan = nullptr;
   context->nativeScheduleExecutableFragments = false;
+  context->nativeScheduleIngressMask = TALOS_RT_FANOUT_ROUTE_MASK;
   context->nativeScheduleNBARoots = nullptr;
   context->nativeScheduleNBARootCount = 0;
   context->nativeScheduleNBASites = nullptr;
@@ -3713,7 +3789,9 @@ void talos_rt_release_native_schedule_plan(talos_rt_context *context) noexcept {
   context->nativeScheduleFanoutNodes.clear();
   context->nativeScheduleNodeIngress.clear();
   context->nativeScheduleFanoutRanges.clear();
+  context->nativeFanoutWindows.clear();
   context->nativeScheduleRuntimeFanoutIndices.clear();
+  context->nativePeriodicRuntimeFanoutRanges.clear();
   context->nativeScheduleReadyNodes.resize(0);
   context->nativeScheduleDeadlines.clear();
   context->nativeScheduleDeadlineHeap.clear();

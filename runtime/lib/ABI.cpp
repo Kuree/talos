@@ -1686,6 +1686,8 @@ ABI_FUNCTION(talos_rt_v1_scheduler_execute_aot_actor,
              talos_rt_status (*)(talos_rt_context *, uint32_t));
 ABI_FUNCTION(talos_rt_v1_scheduler_priority_signal_pending,
              uint32_t (*)(talos_rt_context *));
+ABI_FUNCTION(talos_rt_v1_scheduler_priority_signal_flag,
+             const uint8_t *(*)(const talos_rt_context *));
 ABI_FUNCTION(talos_rt_v1_scheduler_handoff_pending,
              uint32_t (*)(talos_rt_context *));
 ABI_FUNCTION(talos_rt_v1_scheduler_runtime_work_pending,
@@ -1921,6 +1923,23 @@ ABI_FUNCTION(talos_rt_v1_scheduler_static_transition,
 ABI_FUNCTION(talos_rt_v1_scheduler_static_transition_owned,
              void (*)(talos_rt_context *, uint32_t, uint32_t, uint64_t,
                       uint64_t, uint64_t, uint64_t, uint64_t, uint64_t));
+ABI_FUNCTION(talos_rt_v1_scheduler_static_transition_projected,
+             void (*)(talos_rt_context *, uint32_t, uint32_t, uint64_t,
+                      uint64_t, uint64_t, uint64_t, uint64_t, uint64_t));
+ABI_FUNCTION(talos_rt_v1_scheduler_wide_transition_owned,
+             void (*)(talos_rt_context *, uint32_t, uint64_t, uint64_t,
+                      const uint8_t *, const uint8_t *, const uint8_t *,
+                      const uint8_t *));
+ABI_FUNCTION(talos_rt_v1_scheduler_wide_transition_projected,
+             void (*)(talos_rt_context *, uint32_t, uint64_t, uint64_t,
+                      const uint8_t *, const uint8_t *, const uint8_t *,
+                      const uint8_t *));
+ABI_FUNCTION(talos_rt_v1_scheduler_periodic_transition,
+             void (*)(talos_rt_context *, uint32_t, uint64_t, uint64_t,
+                      uint64_t));
+ABI_FUNCTION(talos_rt_v1_scheduler_periodic_routed_transition,
+             void (*)(talos_rt_context *, uint32_t, uint64_t, uint64_t,
+                      uint64_t));
 ABI_FUNCTION(talos_rt_v1_scheduler_publication_batch_begin,
              talos_rt_status (*)(talos_rt_context *));
 ABI_FUNCTION(talos_rt_v1_scheduler_publication_batch_end,
@@ -1989,6 +2008,9 @@ ABI_FUNCTION(talos_rt_v1_native_state_store_plane,
              talos_rt_status (*)(talos_rt_context *, uint8_t *, uint64_t,
                                  uint64_t, uint64_t, uint32_t, const uint8_t *,
                                  uint8_t *));
+ABI_FUNCTION(talos_rt_v1_native_frame_store,
+             void (*)(talos_rt_context *, uint8_t *, uint8_t *, uint64_t,
+                      uint64_t, uint32_t, uint32_t, uint64_t, uint64_t));
 ABI_FUNCTION(talos_rt_v1_native_state_store_continuous_plane,
              talos_rt_status (*)(talos_rt_context *, uint8_t *, uint64_t,
                                  uint64_t, uint64_t, uint32_t, const uint8_t *,

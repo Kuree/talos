@@ -1328,6 +1328,36 @@ extern "C" talos_rt_status talos_rt_v1_native_state_load_plane(
       context->schedulerStatus = rangeStatus;
       return rangeStatus;
     }
+    // A bound canonical plane and its generated view can be the same storage.
+    // With no publication overlay, copy an in-bounds slice directly. Clipped
+    // ranges retain the configured fallback bits, and an observer of an
+    // intermediate publication keeps its source-order view (7.4.1, 9.4.2).
+    const auto &shared =
+        unknownPlane ? context->stateUnknown : context->stateValue;
+    if (shared.shared() &&
+        globalPlane == reinterpret_cast<const uint8_t *>(shared.data()) &&
+        context->execution &&
+        context->execution->state_bit_count == globalBitCount &&
+        shared.size() == (globalBitCount + 63) / 64 &&
+        !(context->observerForcesCanonicalPlane &&
+          context->conditionPublication) &&
+        globalOffset >= 0 && uint64_t(globalOffset) <= rootWidth &&
+        bitWidth <= rootWidth - uint64_t(globalOffset)) {
+      uint64_t source = rootOffset + uint64_t(globalOffset);
+      if (source % 8 == 0 && bitWidth % 8 == 0) {
+        std::memmove(outValue, globalPlane + source / 8,
+                     static_cast<size_t>(byteCount));
+        return TALOS_RT_OK;
+      }
+      if (bitWidth <= 64) {
+        uint64_t value = loadPackedBits(shared, source, bitWidth);
+        if (byteCount == 1)
+          *outValue = static_cast<uint8_t>(value);
+        else
+          storePackedSpan(outValue, byteCount, value);
+        return TALOS_RT_OK;
+      }
+    }
     // Native-only generic execution does not import generated initializers
     // into the canonical image. Bytecode, an explicit native-plane binding,
     // or an observer request makes that image authoritative for reads.

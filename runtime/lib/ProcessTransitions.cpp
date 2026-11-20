@@ -1331,6 +1331,15 @@ publishSignalOccurrenceUnlocked(talos_rt_context *context, uint64_t stableID,
         // into generated ingress; leave every other subscription below.
         ScheduledProcess *scheduled =
             findScheduledProcess(context, subscription->waiterToken);
+        if (!subscription->outsideStaticFanout &&
+            context->nativePeriodicPublicationHandle == stableID && scheduled &&
+            scheduled->instance &&
+            scheduled->aotActorSlot <
+                context->nativePeriodicAliasContinuations.size() &&
+            context->nativePeriodicAliasContinuations[scheduled
+                                                          ->aotActorSlot] ==
+                scheduled->instance->continuation)
+          continue;
         uint32_t node =
             scheduled && scheduled->instance
                 ? findNativeAOTNodeUnlocked(context, scheduled->aotActorSlot,
@@ -1338,7 +1347,9 @@ publishSignalOccurrenceUnlocked(talos_rt_context *context, uint64_t stableID,
                 : UINT32_MAX;
         if (node < context->nativeScheduleNodeIngress.size()) {
           uint64_t index = context->nativeScheduleNodeIngress[node];
-          if (index < context->nativeScheduleFanoutEntryCount) {
+          if (index < context->nativeScheduleFanoutEntryCount &&
+              (context->nativeScheduleFanoutEntries[index].reserved &
+               TALOS_RT_FANOUT_ROUTE_MASK) == TALOS_RT_FANOUT_DIRECT) {
             const auto &entry = context->nativeScheduleFanoutEntries[index];
             const auto &kernel =
                 context->nativeSchedulePlan->clock_kernels[entry.kernel];
@@ -1800,52 +1811,118 @@ bool recordStaticClockingOutputOccurrencesUnlocked(
   return true;
 }
 
-static bool staticAOTFanoutRangeHasConsumer(const talos_rt_context *context,
-                                            uint32_t staticID,
-                                            uint64_t staticOffset,
-                                            uint64_t bitWidth) {
-  if (context->nativeScheduleFanoutEntryCount == 0)
+static bool staticSignalObjectWatched(const talos_rt_context *context,
+                                      uint32_t state) {
+  constexpr auto kind = TALOS_RT_STABLE_HANDLE_STATIC;
+  if (!context
+           ->signalSubscriptionObjectFilter[signalSubscriptionObjectFilterIndex(
+               kind, state)])
     return false;
-  const talos_rt_static_fanout_entry *begin =
-      context->nativeScheduleFanoutEntries;
-  const talos_rt_static_fanout_entry *end =
-      begin + context->nativeScheduleFanoutEntryCount;
-  auto first = end;
-  auto last = end;
-  if (staticID < context->nativeScheduleFanoutRanges.size()) {
-    auto [firstIndex, lastIndex] =
-        context->nativeScheduleFanoutRanges[staticID];
-    if (firstIndex <= lastIndex &&
-        lastIndex <= context->nativeScheduleFanoutEntryCount) {
-      first = begin + firstIndex;
-      last = begin + lastIndex;
-    }
-  } else {
-    first =
-        std::lower_bound(begin, end, staticID,
-                         [](const talos_rt_static_fanout_entry &entry,
-                            uint32_t id) { return entry.static_state < id; });
-    last = first;
-    while (last != end && last->static_state == staticID)
-      ++last;
-  }
-  return std::any_of(
-      first, last, [&](const talos_rt_static_fanout_entry &entry) {
-        return static_cast<__int128>(staticOffset) <
-                   static_cast<__int128>(entry.low_bit) + entry.bit_width &&
-               static_cast<__int128>(entry.low_bit) <
-                   static_cast<__int128>(staticOffset) + bitWidth;
-      });
+  // Many static descriptors share a counting-filter bucket. The existing
+  // per-object page index covers every subscription to an indexed descriptor,
+  // including a watch spanning multiple pages (1800-2023 9.4.2).
+  const auto *pages = talos_rt_static_signal_bucket_pages(context, kind, state);
+  return !pages || !pages->empty();
 }
 
-template <bool UseClockIngress>
+// The first and last possibly overlapping table rows for each source bucket.
+// Bound memory by the number of existing waits. An externally supplied table
+// need not sort rows by bit position; it retains the original linear walk.
+void indexNativeFanoutWindows(talos_rt_context &context,
+                              const talos_rt_static_fanout_entry *entries) {
+  for (size_t id = 0; id < context.nativeScheduleFanoutRanges.size(); ++id) {
+    auto [first, last] = context.nativeScheduleFanoutRanges[id];
+    if (last - first < 8 || entries[first].low_bit == entries[last - 1].low_bit)
+      continue;
+    uint64_t previous = 0, high = 0;
+    for (uint64_t i = first; i < last; ++i) {
+      const auto &entry = entries[i];
+      if (entry.static_state != id || entry.low_bit < previous ||
+          !entry.bit_width || entry.bit_width > UINT64_MAX - entry.low_bit) {
+        high = 0;
+        break;
+      }
+      high = std::max(high, entry.low_bit + entry.bit_width);
+      previous = entry.low_bit;
+    }
+    if (!high)
+      continue;
+    uint64_t low = entries[first].low_bit;
+    unsigned shift = 0;
+    uint64_t budget = 2 * std::min<uint64_t>(512, last - first);
+    while (((high - 1) >> shift) - (low >> shift) >= budget)
+      ++shift;
+    if (context.nativeFanoutWindows.empty())
+      context.nativeFanoutWindows.resize(
+          context.nativeScheduleFanoutRanges.size());
+    auto &source = context.nativeFanoutWindows[id];
+    source.shift = shift;
+    source.firstBucket = low >> shift;
+    uint64_t finalBucket = (high - 1) >> shift;
+    source.bounds.reserve(finalBucket - source.firstBucket + 1);
+    uint64_t left = first, right = first;
+    for (uint64_t bucket = source.firstBucket;; ++bucket) {
+      uint64_t start = bucket << shift;
+      uint64_t end = bucket == finalBucket ? high : ((bucket + 1) << shift);
+      while (left < last &&
+             entries[left].low_bit + entries[left].bit_width <= start)
+        ++left;
+      while (right < last && entries[right].low_bit < end)
+        ++right;
+      source.bounds.emplace_back(left, right);
+      if (bucket == finalBucket)
+        break;
+    }
+  }
+}
+
+// Event masks supplied independently at the ABI all participate in this
+// bound. The actual edge test still uses the original publication's offset.
+static std::pair<uint64_t, uint64_t>
+transitionEnvelope(uint64_t width, const uint8_t *changed,
+                   const uint8_t *posedge, const uint8_t *negedge) {
+  auto word = [&](uint64_t start) {
+    uint64_t bits = width - start;
+    if (bits >= 64) {
+      uint64_t change =
+          changed ? loadPackedWord<uint64_t>(changed + start / 8) : 0;
+      uint64_t pos =
+          posedge ? loadPackedWord<uint64_t>(posedge + start / 8) : 0;
+      uint64_t neg =
+          negedge ? loadPackedWord<uint64_t>(negedge + start / 8) : 0;
+      return change | pos | neg;
+    }
+    return loadPackedBytes(changed, start, bits) |
+           loadPackedBytes(posedge, start, bits) |
+           loadPackedBytes(negedge, start, bits);
+  };
+  uint64_t low = 0, last = (width - 1) & ~uint64_t{63};
+  uint64_t firstWord = word(low);
+  while (!firstWord && low < last) {
+    low += 64;
+    firstWord = word(low);
+  }
+  if (!firstWord)
+    return {0, 0};
+  uint64_t lastWord = firstWord;
+  while (last > low && !(lastWord = word(last)))
+    last -= 64;
+  if (last == low)
+    lastWord = firstWord;
+  return {low + __builtin_ctzll(firstWord),
+          last + (64 - __builtin_clzll(lastWord))};
+}
+
+template <bool UseClockIngress, bool ProjectedClock = false,
+          bool PackedFIFO = false, bool ProjectedSignal = false>
 static bool publishStaticAOTSignalTransitionUnlockedImpl(
     talos_rt_context *context, uint64_t stableID, uint64_t bitWidth,
     const uint8_t *changed, const uint8_t *posedge, const uint8_t *negedge,
     uint64_t *outSequence, bool indexedExternalDeposit) {
   if (outSequence)
     *outSequence = 0;
-  if (!(indexedExternalDeposit ? canUseIndexedExternalAOTFanout(context)
+  if (!PackedFIFO &&
+      !(indexedExternalDeposit ? canUseIndexedExternalAOTFanout(context)
                                : canUseStaticAOTFanout(context)))
     return false;
   uint32_t staticID = 0;
@@ -1853,20 +1930,87 @@ static bool publishStaticAOTSignalTransitionUnlockedImpl(
   if (!decodeNativeStatic(stableID, staticID, staticOffset) || staticOffset < 0)
     return false;
   uint64_t publishedLow = static_cast<uint64_t>(staticOffset);
-  // Exact static fanout proves that no observer, conditional waiter, design
-  // task, or unlisted direct wait can consume this transition.  Keep the
-  // canonical state update but do not manufacture a scheduler publication.
-  if (!staticAOTFanoutRangeHasConsumer(context, staticID, publishedLow,
-                                       bitWidth))
+  if (!context->nativeScheduleFanoutEntryCount)
     return true;
-  // Metadata-only clock plans predate executable generated fragments.  Their
-  // coordinator is nevertheless the owner of external-deposit ingress, so
-  // retain that routing while using the ownership marker for hybrid plans.
-  // Installation classifies the immutable fragment table once.
-  bool metadataOnlyClockCoordinator =
-      UseClockIngress &&
-      context->nativeSchedulePlan->merged_fragment_count != 0 &&
-      !context->nativeScheduleExecutableFragments;
+  const talos_rt_static_fanout_entry *begin =
+      context->nativeScheduleFanoutEntries;
+  const talos_rt_static_fanout_entry *end =
+      begin + context->nativeScheduleFanoutEntryCount;
+  uint64_t lo = 0, hi = 0;
+  if constexpr (ProjectedClock || ProjectedSignal) {
+    // The generated edge already scheduled its direct readers and updated
+    // the complete forwarding tree. Only the remaining static runtime waits
+    // can require a frame activation (IEEE 1800-2023 4.4, 9.4.2).
+    if (staticID >= context->nativePeriodicRuntimeFanoutRanges.size())
+      return false;
+    std::tie(lo, hi) = context->nativePeriodicRuntimeFanoutRanges[staticID];
+  } else {
+    auto first = end;
+    auto last = end;
+    if (staticID < context->nativeScheduleFanoutRanges.size()) {
+      auto [firstIndex, lastIndex] =
+          context->nativeScheduleFanoutRanges[staticID];
+      if (firstIndex <= lastIndex &&
+          lastIndex <= context->nativeScheduleFanoutEntryCount) {
+        first = begin + firstIndex;
+        last = begin + lastIndex;
+      }
+    } else {
+      first =
+          std::lower_bound(begin, end, staticID,
+                           [](const talos_rt_static_fanout_entry &entry,
+                              uint32_t id) { return entry.static_state < id; });
+      last = first;
+      while (last != end && last->static_state == staticID)
+        ++last;
+    }
+    lo = first - begin;
+    hi = last - begin;
+    if (hi - lo >= 8 && staticID < context->nativeFanoutWindows.size() &&
+        bitWidth && bitWidth <= UINT64_MAX - publishedLow) {
+      const auto &source = context->nativeFanoutWindows[staticID];
+      if (!source.bounds.empty()) {
+        auto [low, high] =
+            bitWidth > 64
+                ? transitionEnvelope(bitWidth, changed, posedge, negedge)
+                : std::pair<uint64_t, uint64_t>{0, bitWidth};
+        if (low == high)
+          return true;
+        uint64_t firstBucket = (publishedLow + low) >> source.shift;
+        uint64_t lastBucket = (publishedLow + high - 1) >> source.shift;
+        if (lastBucket < source.firstBucket ||
+            (firstBucket >= source.firstBucket &&
+             firstBucket - source.firstBucket >= source.bounds.size()))
+          return true;
+        lo = source
+                 .bounds[std::max(firstBucket, source.firstBucket) -
+                         source.firstBucket]
+                 .first;
+        hi = source
+                 .bounds[std::min<uint64_t>(lastBucket - source.firstBucket,
+                                            source.bounds.size() - 1)]
+                 .second;
+      }
+    }
+  }
+  if (lo == hi)
+    return true;
+  // On a projected periodic clock the publication is one known bit. Match
+  // its direction once, before looking up the frame of each waiting process.
+  uint32_t projectedEdges = 0;
+  if constexpr (ProjectedClock) {
+    assert(bitWidth == 1 && changed && (*changed & 1));
+    projectedEdges = (1u << TALOS_RT_WAIT_EDGE_CHANGE) |
+                     (1u << TALOS_RT_WAIT_EDGE_BOTH) |
+                     (1u << ((*posedge & 1) ? TALOS_RT_WAIT_EDGE_POSEDGE
+                                            : TALOS_RT_WAIT_EDGE_NEGEDGE));
+  }
+  uint64_t publishedEnd =
+      publishedLow + std::min(bitWidth, UINT64_MAX - publishedLow);
+  // Installation selects the explicit route bits or the legacy metadata
+  // rule. Resolve that choice once for the entire publication.
+  uint32_t ingressMask = context->nativeScheduleIngressMask;
+  uint32_t ingressValue = ingressMask & TALOS_RT_FANOUT_DIRECT;
   // A pending generated activation is a set member, not an occurrence log
   // (LRM 4.3, 9.4.2). Repeated writes need no new static publication when its
   // ready bit is already present and no runtime observer watches this source.
@@ -1874,43 +2018,63 @@ static bool publishStaticAOTSignalTransitionUnlockedImpl(
   // ingress-pending flag must already be set; otherwise even a present bit
   // can require a new handoff notification to the calendar.
   bool coalescePending =
-      UseClockIngress && context->nativeScheduleClockIngressPending &&
-      !context->clockOccurrences && !context->exactEvents &&
-      !context->vpiObservationDemand &&
-      !talos_rt_has_conditional_signal_waiters(context) &&
-      context->signalSubscriptionObjectFilter
-              [signalSubscriptionObjectFilterIndex(
-                  TALOS_RT_STABLE_HANDLE_STATIC, staticID)] == 0;
+      UseClockIngress && !ProjectedSignal &&
+      context->nativeScheduleClockIngressPending &&
+      (PackedFIFO || (!context->clockOccurrences && !context->exactEvents &&
+                      !context->vpiObservationDemand &&
+                      !talos_rt_has_conditional_signal_waiters(context) &&
+                      !staticSignalObjectWatched(context, staticID)));
   bool published = false;
-  const talos_rt_static_fanout_entry *begin =
-      context->nativeScheduleFanoutEntries;
-  const talos_rt_static_fanout_entry *end =
-      begin + context->nativeScheduleFanoutEntryCount;
-  auto first = end;
-  auto last = end;
-  if (staticID < context->nativeScheduleFanoutRanges.size()) {
-    auto [firstIndex, lastIndex] =
-        context->nativeScheduleFanoutRanges[staticID];
-    if (firstIndex <= lastIndex &&
-        lastIndex <= context->nativeScheduleFanoutEntryCount) {
-      first = begin + firstIndex;
-      last = begin + lastIndex;
-    }
-  } else {
-    first =
-        std::lower_bound(begin, end, staticID,
-                         [](const talos_rt_static_fanout_entry &entry,
-                            uint32_t id) { return entry.static_state < id; });
-    last = first;
-    while (last != end && last->static_state == staticID)
-      ++last;
-  }
-  for (auto entry = first; entry != last; ++entry) {
+  for (uint64_t position = lo; position != hi; ++position) {
+    const auto *entry =
+        begin + ((ProjectedClock || ProjectedSignal)
+                     ? context->nativeScheduleRuntimeFanoutIndices[position]
+                     : position);
+    uint64_t overlapLow = std::max(publishedLow, entry->low_bit);
+    uint64_t overlapHigh =
+        std::min(publishedEnd, entry->low_bit + entry->bit_width);
+    if (overlapLow >= overlapHigh)
+      continue;
     ++context->signalDiagnostics.aotFanoutEntries;
+    if constexpr (ProjectedClock)
+      if (!(projectedEdges & (1u << entry->edge)))
+        continue;
     uint32_t slot = entry->actor_slot;
     if (slot >= context->nativeScheduleActors.size()) {
       context->schedulerStatus = TALOS_RT_INVALID_LIFECYCLE;
       return true;
+    }
+    if (context->nativePeriodicPublicationHandle == stableID &&
+        (entry->reserved & TALOS_RT_FANOUT_ROUTE_MASK) ==
+            TALOS_RT_FANOUT_PERIODIC_ALIAS &&
+        slot < context->nativePeriodicAliasContinuations.size() &&
+        context->nativePeriodicAliasContinuations[slot] == entry->continuation)
+      continue;
+    if constexpr (UseClockIngress) {
+      if (coalescePending &&
+          (entry->reserved & ingressMask) == ingressValue &&
+          entry->kernel < context->nativeSchedulePlan->clock_kernel_count) {
+        const auto &kernel =
+            context->nativeSchedulePlan->clock_kernels[entry->kernel];
+        if (entry->merged_bit / 64 < kernel.ingress_word_count &&
+            (kernel.ingress_mask[entry->merged_bit / 64] &
+             (uint64_t{1} << (entry->merged_bit % 64))))
+          continue;
+      }
+    }
+    if constexpr (!ProjectedClock) {
+      uint64_t offset = overlapLow - publishedLow;
+      uint64_t width = overlapHigh - overlapLow;
+      bool matched = entry->edge == TALOS_RT_WAIT_EDGE_CHANGE
+                         ? anyPackedBits(changed, offset, width)
+                     : entry->edge == TALOS_RT_WAIT_EDGE_POSEDGE
+                         ? anyPackedBits(posedge, offset, width)
+                     : entry->edge == TALOS_RT_WAIT_EDGE_NEGEDGE
+                         ? anyPackedBits(negedge, offset, width)
+                         : anyPackedBits(posedge, offset, width) ||
+                               anyPackedBits(negedge, offset, width);
+      if (!matched)
+        continue;
     }
     talos_rt_process_instance_v1 *actor = context->nativeScheduleActors[slot];
     if (!actor)
@@ -1932,37 +2096,6 @@ static bool publishStaticAOTSignalTransitionUnlockedImpl(
         (scheduled.suspendKind != TALOS_RT_SUSPEND_CHANGE &&
          scheduled.suspendKind != TALOS_RT_SUSPEND_EDGE))
       continue;
-    if constexpr (UseClockIngress) {
-      if (coalescePending &&
-          ((entry->reserved & TALOS_RT_FANOUT_ROUTE_MASK) ==
-               TALOS_RT_FANOUT_DIRECT ||
-           metadataOnlyClockCoordinator) &&
-          entry->kernel < context->nativeSchedulePlan->clock_kernel_count) {
-        const auto &kernel =
-            context->nativeSchedulePlan->clock_kernels[entry->kernel];
-        if (entry->merged_bit / 64 < kernel.ingress_word_count &&
-            (kernel.ingress_mask[entry->merged_bit / 64] &
-             (uint64_t{1} << (entry->merged_bit % 64))))
-          continue;
-      }
-    }
-    uint64_t overlapLow = std::max(publishedLow, entry->low_bit);
-    uint64_t overlapHigh =
-        std::min(publishedLow + bitWidth, entry->low_bit + entry->bit_width);
-    if (overlapLow >= overlapHigh)
-      continue;
-    uint64_t offset = overlapLow - publishedLow;
-    uint64_t width = overlapHigh - overlapLow;
-    bool matched = entry->edge == TALOS_RT_WAIT_EDGE_CHANGE
-                       ? anyPackedBits(changed, offset, width)
-                   : entry->edge == TALOS_RT_WAIT_EDGE_POSEDGE
-                       ? anyPackedBits(posedge, offset, width)
-                   : entry->edge == TALOS_RT_WAIT_EDGE_NEGEDGE
-                       ? anyPackedBits(negedge, offset, width)
-                       : anyPackedBits(posedge, offset, width) ||
-                             anyPackedBits(negedge, offset, width);
-    if (!matched)
-      continue;
     if (!published) {
       if (context->nextSchedulerSequence == 0) {
         context->schedulerStatus = TALOS_RT_OUT_OF_RESOURCES;
@@ -1976,9 +2109,7 @@ static bool publishStaticAOTSignalTransitionUnlockedImpl(
       published = true;
     }
     if constexpr (UseClockIngress) {
-      if ((entry->reserved & TALOS_RT_FANOUT_ROUTE_MASK) ==
-              TALOS_RT_FANOUT_DIRECT ||
-          metadataOnlyClockCoordinator) {
+      if ((entry->reserved & ingressMask) == ingressValue) {
         if (entry->kernel >= context->nativeSchedulePlan->clock_kernel_count ||
             entry->merged_bit / 64 >=
                 context->nativeSchedulePlan->clock_kernels[entry->kernel]
@@ -2093,17 +2224,15 @@ bool talos_rt_publish_signal_transition_batch_unlocked(
       // need that walk, but must not suppress the generated fanout.
       // Static fanout already delivered the generated consumers. A calendar
       // plan needs the generic walk only if this object has a live runtime
-      // subscription. The counting filter has false positives, never false
-      // negatives; registration and removal update it under the same lock.
+      // subscription. Registration and removal update the index under the
+      // same lock.
       // Keep independent clock/covergroup occurrence streams below (9.4.2,
       // 19.5, 31.5). No occurrence sequence is needed for an unwatched object.
       uint32_t staticID = 0;
       int64_t staticOffset = 0;
       bool runtimeWatched =
           !decodeNativeStatic(stableID, staticID, staticOffset) ||
-          context->signalSubscriptionObjectFilter
-                  [signalSubscriptionObjectFilterIndex(
-                      TALOS_RT_STABLE_HANDLE_STATIC, staticID)] != 0;
+          staticSignalObjectWatched(context, staticID);
       if (((context->nativeSchedulePlan->flags &
             TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL) != 0 &&
            runtimeWatched) ||
@@ -2208,28 +2337,32 @@ extern "C" void talos_rt_v1_scheduler_signal(talos_rt_context *context,
   }
 }
 
-bool talos_rt_transition_unconsumed_unlocked(const talos_rt_context *context,
-                                             uint64_t stableID) {
-  uint32_t staticID = 0;
-  int64_t offset = 0;
-  return decodeNativeStatic(stableID, staticID, offset) && !context->coverage &&
-         !context->saif && !context->clockOccurrences &&
+static inline __attribute__((always_inline)) bool
+staticOnlyPublicationEnvironment(const talos_rt_context *context) {
+  return !context->coverage && !context->saif && !context->clockOccurrences &&
          !context->exactEvents && !context->vpiObservationDemand &&
          !context->observerDepth && !context->observerForcesCanonicalPlane &&
          context->signalValueSnapshots.empty() &&
          context->pendingNativeComputedWaiters.empty() &&
          context->pendingDesignComputedWaiters.empty() &&
-         !talos_rt_has_conditional_signal_waiters(context) &&
-         context->signalSubscriptionObjectFilter
-                 [signalSubscriptionObjectFilterIndex(
-                     TALOS_RT_STABLE_HANDLE_STATIC, staticID)] == 0;
+         !talos_rt_has_conditional_signal_waiters(context);
+}
+
+bool talos_rt_transition_unconsumed_unlocked(const talos_rt_context *context,
+                                             uint64_t stableID) {
+  uint32_t staticID = 0;
+  int64_t offset = 0;
+  return decodeNativeStatic(stableID, staticID, offset) &&
+         staticOnlyPublicationEnvironment(context) &&
+         !staticSignalObjectWatched(context, staticID);
 }
 
 bool publishNativeSignalTransitionUnlocked(
     talos_rt_context *context, uint64_t bitOffset, uint64_t bitWidth,
     const uint8_t *changed, const uint8_t *posedge, const uint8_t *negedge,
     const uint8_t *oldValue, const uint8_t *oldUnknown, const uint8_t *newValue,
-    const uint8_t *newUnknown, bool establishesOverride) {
+    const uint8_t *newUnknown, bool establishesOverride,
+    bool generatedIngress) {
   // Generated native code may have committed later source stores to its
   // private plane before publishing this transition. Advance the canonical
   // plane one publication at a time so observer evaluators see source-order
@@ -2252,14 +2385,31 @@ bool publishNativeSignalTransitionUnlocked(
       (!context->nativeSchedulePlan || context->stateValue.shared()) &&
       talos_rt_transition_unconsumed_unlocked(context, bitOffset);
   if (unconsumed && context->forceMask.empty() && context->assignMask.empty() &&
-      context->stateValue.shared() && context->stateUnknown.shared() &&
-      publishStaticAOTSignalTransitionUnlocked(context, bitOffset, bitWidth,
-                                               changed, posedge, negedge,
-                                               nullptr, false)) {
-    // Readiness does not alter the clean-environment specialization proof.
-    if (++context->schedulerEpoch == 0)
-      context->schedulerEpoch = 1;
-    return context->schedulerStatus == TALOS_RT_OK;
+      context->stateValue.shared() && context->stateUnknown.shared()) {
+    // With an outstanding clock handoff, the full walk would ignore every
+    // matching direct bit already set by this generated publication. Walk
+    // the residual rows alone. An observer, override or a different
+    // calendar keeps the ordinary record-by-record path (4.5, 9.4.2).
+    bool projected =
+        generatedIngress && context->nativeScheduleClockIngressPending &&
+        !context->powerNBAs && !context->nativeScheduleExternalWritePending &&
+        activeNativeAOTContext == context &&
+        lockedNativeAOTContext == context &&
+        publishedStaticID < context->nativePeriodicRuntimeFanoutRanges.size();
+    bool delivered =
+        projected ? publishStaticAOTSignalTransitionUnlockedImpl<true, false,
+                                                                 false, true>(
+                        context, bitOffset, bitWidth, changed, posedge, negedge,
+                        nullptr, false)
+                  : publishStaticAOTSignalTransitionUnlocked(
+                        context, bitOffset, bitWidth, changed, posedge, negedge,
+                        nullptr, false);
+    if (delivered) {
+      // Readiness does not alter the clean-environment specialization proof.
+      if (++context->schedulerEpoch == 0)
+        context->schedulerEpoch = 1;
+      return context->schedulerStatus == TALOS_RT_OK;
+    }
   }
   const NativeStaticState *publishedState =
       publishedStatic ? findNativeStaticState(context, publishedStaticID)
@@ -2461,7 +2611,8 @@ void schedulerSignalTransition(talos_rt_context *context, uint64_t bitOffset,
                                const uint8_t *oldUnknown,
                                const uint8_t *newValue,
                                const uint8_t *newUnknown,
-                               bool establishesOverride) {
+                               bool establishesOverride,
+                               bool generatedIngress = false) {
   if (!context || bitOffset == UINT64_MAX || bitWidth == 0 ||
       bitWidth > UINT64_MAX - 7 || !oldValue || !newValue)
     return;
@@ -2518,7 +2669,7 @@ void schedulerSignalTransition(talos_rt_context *context, uint64_t bitOffset,
           reinterpret_cast<const uint8_t *>(&changedBits),
           reinterpret_cast<const uint8_t *>(&posedgeBits),
           reinterpret_cast<const uint8_t *>(&negedgeBits), oldValue, oldUnknown,
-          newValue, newUnknown, establishesOverride);
+          newValue, newUnknown, establishesOverride, generatedIngress);
       return;
     }
     PackedSignalTransitionBuffer transitions(bitWidth);
@@ -2553,7 +2704,7 @@ void schedulerSignalTransition(talos_rt_context *context, uint64_t bitOffset,
         (void)publishNativeSignalTransitionUnlocked(
             context, bitOffset, bitWidth, transitions.changed(),
             transitions.posedge(), transitions.negedge(), oldValue, oldUnknown,
-            newValue, newUnknown, establishesOverride);
+            newValue, newUnknown, establishesOverride, generatedIngress);
       return;
     }
     for (uint64_t bit = 0; bit != bitWidth; ++bit) {
@@ -2597,7 +2748,7 @@ void schedulerSignalTransition(talos_rt_context *context, uint64_t bitOffset,
       (void)publishNativeSignalTransitionUnlocked(
           context, bitOffset, bitWidth, transitions.changed(),
           transitions.posedge(), transitions.negedge(), oldValue, oldUnknown,
-          newValue, newUnknown, establishesOverride);
+          newValue, newUnknown, establishesOverride, generatedIngress);
   }
   TALOS_RT_CATCH(const std::bad_alloc &) {
     talos_rt_v1_scheduler_fail(context, TALOS_RT_OUT_OF_MEMORY);
@@ -2678,9 +2829,7 @@ BatchDeferral deferStaticTransitionUnlocked(
       context->schedulerStatus != TALOS_RT_OK ||
       context->activeLogicalProcessToken != batch.logicalProcessToken ||
       activeNativeAOTContext != batch.aotContext ||
-      context->signalSubscriptionObjectFilter
-              [signalSubscriptionObjectFilterIndex(
-                  TALOS_RT_STABLE_HANDLE_STATIC, staticState)] != 0)
+      staticSignalObjectWatched(context, staticState))
     return BatchDeferral::Publish;
   if (batch.staticID == 0) {
     const NativeStaticState *state =
@@ -2894,10 +3043,9 @@ void publishOverrideTransition(talos_rt_context *context, uint64_t bitOffset,
                             newValue, newUnknown, true);
 }
 
-extern "C" void talos_rt_v1_scheduler_static_transition_owned(
-    talos_rt_context *context, uint32_t actorSlot, uint32_t staticState,
-    uint64_t lowBit, uint64_t bitWidth, uint64_t oldValue, uint64_t oldUnknown,
-    uint64_t newValue, uint64_t newUnknown) {
+template <typename Publish>
+static void publishAsNativeActor(talos_rt_context *context, uint32_t actorSlot,
+                                 Publish publish) {
   if (!context)
     return;
   ContextMutexLock lock(context);
@@ -2926,15 +3074,381 @@ extern "C" void talos_rt_v1_scheduler_static_transition_owned(
       kNativeLogicalProcessTag | context->scheduledProcesses[index].token;
   context->activeLogicalProcessParent =
       context->scheduledProcesses[index].parent;
-  talos_rt_v1_scheduler_static_transition(context, staticState, lowBit,
-                                          bitWidth, oldValue, oldUnknown,
-                                          newValue, newUnknown);
+  publish();
 }
 
-extern "C" void talos_rt_v1_scheduler_static_transition(
-    talos_rt_context *context, uint32_t staticState, uint64_t lowBit,
-    uint64_t bitWidth, uint64_t oldValue, uint64_t oldUnknown,
+extern "C" void talos_rt_v1_scheduler_static_transition_owned(
+    talos_rt_context *context, uint32_t actorSlot, uint32_t staticState,
+    uint64_t lowBit, uint64_t bitWidth, uint64_t oldValue, uint64_t oldUnknown,
     uint64_t newValue, uint64_t newUnknown) {
+  publishAsNativeActor(context, actorSlot, [&] {
+    talos_rt_v1_scheduler_static_transition(context, staticState, lowBit,
+                                            bitWidth, oldValue, oldUnknown,
+                                            newValue, newUnknown);
+  });
+}
+
+extern "C" void talos_rt_v1_scheduler_wide_transition_owned(
+    talos_rt_context *context, uint32_t actorSlot, uint64_t handle,
+    uint64_t width, const uint8_t *oldValue, const uint8_t *oldUnknown,
+    const uint8_t *newValue, const uint8_t *newUnknown) {
+  publishAsNativeActor(context, actorSlot, [&] {
+    talos_rt_v1_scheduler_signal_transition(context, handle, width, oldValue,
+                                            oldUnknown, newValue, newUnknown);
+  });
+}
+
+// A framed writer and the generated eval owners share one publication
+// image. Resolve an in-bounds static destination once, retain a continuous
+// contribution and publish the change of the *complete* packed assignment
+// to the installed fanout. The original frame owns the logical process
+// throughout (1800-2023 4.6(a), 9.4.2, 10.6.2).
+static bool publishFrameStore(talos_rt_context *context, uint8_t *valuePlane,
+                              uint8_t *unknownPlane, uint64_t stateBits,
+                              uint64_t handle, uint32_t width, uint32_t flags,
+                              uint64_t value, uint64_t unknown) {
+  const auto *plan = context->nativeSchedulePlan;
+  bool fourState = flags & TALOS_RT_FRAME_STORE_UNKNOWN;
+  bool continuous = flags & TALOS_RT_FRAME_STORE_CONTINUOUS;
+  if (!plan || plan->state_bit_count != stateBits ||
+      plan->state_value != valuePlane || activeNativeAOTContext != context ||
+      lockedNativeAOTContext != context || !context->activeNativeProcess ||
+      context->activeExecRegion == TALOS_RT_REGION_POSTPONED ||
+      !(plan->flags & TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL) ||
+      context->schedulerStatus != TALOS_RT_OK || context->powerNBAs ||
+      context->observerDepth || context->observerForcesCanonicalPlane ||
+      context->nativeScheduleDirtyRootsPresent ||
+      context->nativeScheduleExternalWritePending ||
+      publicationBatchContext == context || !context->stateValue.shared() ||
+      valuePlane != reinterpret_cast<uint8_t *>(context->stateValue.data()) ||
+      (fourState && (!unknownPlane || unknownPlane != plan->state_unknown ||
+                     !context->stateUnknown.shared() ||
+                     unknownPlane != reinterpret_cast<uint8_t *>(
+                                         context->stateUnknown.data()))) ||
+      (continuous &&
+       (context->continuousMask.size() != context->stateValue.size() ||
+        context->continuousValue.size() != context->stateValue.size() ||
+        (fourState &&
+         context->continuousUnknown.size() != context->stateUnknown.size()))))
+    return false;
+  uint32_t id;
+  int64_t offset;
+  if (!decodeNativeStatic(handle, id, offset) || offset < 0)
+    return false;
+  const auto *state = findNativeStaticState(context, id);
+  if (!state || uint64_t(offset) > state->bitWidth ||
+      width > state->bitWidth - uint64_t(offset) ||
+      state->bitOffset > stateBits ||
+      state->bitWidth > stateBits - state->bitOffset)
+    return false;
+  uint64_t bit = state->bitOffset + uint64_t(offset);
+  uint64_t mask = packedWidthMask(width);
+  value &= mask;
+  unknown = fourState ? unknown & mask : 0;
+  uint64_t old = loadPackedBits(context->stateValue, bit, width);
+  if (!fourState && !context->twoState() && plan->state_unknown &&
+      loadPackedBits(context->stateUnknown, bit, width))
+    return false;
+  uint64_t oldUnknown =
+      fourState ? loadPackedBits(context->stateUnknown, bit, width) : 0;
+  if (continuous) {
+    storePackedBits(context->continuousValue, bit, width, value);
+    if (fourState)
+      storePackedBits(context->continuousUnknown, bit, width, unknown);
+    storePackedBits(context->continuousMask, bit, width, mask);
+  }
+  // A force or procedural assignment hides only its selected bits. The
+  // source driver contribution above still tracks the entire assignment.
+  uint64_t hidden = 0;
+  if (!context->forceMask.empty())
+    hidden |= loadPackedBits(context->forceMask, bit, width);
+  if (!context->assignMask.empty())
+    hidden |= loadPackedBits(context->assignMask, bit, width);
+  value = (old & hidden) | (value & ~hidden);
+  unknown = (oldUnknown & hidden) | (unknown & ~hidden);
+  if (fourState) {
+    markNativeUnknownBitsUnlocked(context, bit, width, unknown);
+    publishNativeKnownnessChangeUnlocked(plan, bit, width, oldUnknown, unknown);
+  }
+  uint64_t change = (old ^ value) | (oldUnknown ^ unknown);
+  if (!change)
+    return true;
+  storePackedBits(context->stateValue, bit, width, value);
+  if (fourState)
+    storePackedBits(context->stateUnknown, bit, width, unknown);
+  uint64_t oldZero = ~oldUnknown & ~old & mask;
+  uint64_t oldOne = ~oldUnknown & old & mask;
+  uint64_t newZero = ~unknown & ~value & mask;
+  uint64_t newOne = ~unknown & value & mask;
+  uint8_t changed[8], posedge[8], negedge[8];
+  storePackedWord<uint64_t>(changed, change);
+  storePackedWord<uint64_t>(posedge,
+                            (oldZero & ~newZero) | (oldUnknown & newOne));
+  storePackedWord<uint64_t>(negedge,
+                            (oldOne & ~newOne) | (oldUnknown & newZero));
+  uint8_t oldBytes[8], newBytes[8], oldUnknownBytes[8], newUnknownBytes[8];
+  storePackedWord<uint64_t>(oldBytes, old);
+  storePackedWord<uint64_t>(newBytes, value);
+  storePackedWord<uint64_t>(oldUnknownBytes, oldUnknown);
+  storePackedWord<uint64_t>(newUnknownBytes, unknown);
+  // Use the same source-ordered publication for direct eval owners, ranked
+  // continuations and ordinary subscribers. It selects the installed fanout
+  // or the full observer path at the actual update.
+  (void)publishNativeSignalTransitionUnlocked(
+      context, handle, width, changed, posedge, negedge, oldBytes,
+      fourState ? oldUnknownBytes : nullptr, newBytes,
+      fourState ? newUnknownBytes : nullptr);
+  return true;
+}
+
+extern "C" void
+talos_rt_v1_native_frame_store(talos_rt_context *context, uint8_t *valuePlane,
+                               uint8_t *unknownPlane, uint64_t stateBits,
+                               uint64_t handle, uint32_t width, uint32_t flags,
+                               uint64_t value, uint64_t unknown) {
+  if (!context)
+    return;
+  if (!width || width > 64 ||
+      (flags &
+       ~(TALOS_RT_FRAME_STORE_CONTINUOUS | TALOS_RT_FRAME_STORE_UNKNOWN))) {
+    talos_rt_v1_scheduler_fail(context, TALOS_RT_INVALID_ARGUMENT);
+    return;
+  }
+  if (handle == UINT64_MAX)
+    return;
+  ContextTransaction transaction(context);
+  TALOS_RT_TRY {
+    {
+      ContextMutexLock lock(context);
+      if (publishFrameStore(context, valuePlane, unknownPlane, stateBits,
+                            handle, width, flags, value, unknown)) {
+        if (context->signalDiagnosticsEnabled)
+          ++context->signalDiagnostics.frameStoresShared;
+        return;
+      }
+      if (context->signalDiagnosticsEnabled)
+        ++context->signalDiagnostics.frameStoreFallbacks;
+    }
+    // At an intervention, clipped selection or observer boundary, capture and
+    // reload the effective planes through the same services as any framed
+    // store. An UPF observer sees the transition in its original position.
+    bool fourState = flags & TALOS_RT_FRAME_STORE_UNKNOWN;
+    uint8_t old[8]{}, oldUnknown[8]{}, next[8]{}, nextUnknown[8]{};
+    auto read = [&](uint8_t *base, bool x, uint8_t *out) {
+      return talos_rt_v1_native_state_load_plane(context, base, stateBits,
+                                                 handle, width, x, x, out);
+    };
+    auto store = flags & TALOS_RT_FRAME_STORE_CONTINUOUS
+                     ? talos_rt_v1_native_state_store_continuous_plane
+                     : talos_rt_v1_native_state_store_plane;
+    uint8_t ignored = 0;
+    auto status = read(valuePlane, false, old);
+    if (status == TALOS_RT_OK && fourState)
+      status = read(unknownPlane, true, oldUnknown);
+    storePackedWord<uint64_t>(next, value);
+    storePackedWord<uint64_t>(nextUnknown, unknown);
+    if (status == TALOS_RT_OK)
+      status = store(context, valuePlane, stateBits, handle, width, 0, next,
+                     &ignored);
+    if (status == TALOS_RT_OK && fourState)
+      status = store(context, unknownPlane, stateBits, handle, width, 1,
+                     nextUnknown, &ignored);
+    if (status == TALOS_RT_OK)
+      status = read(valuePlane, false, next);
+    if (status == TALOS_RT_OK && fourState)
+      status = read(unknownPlane, true, nextUnknown);
+    if (status != TALOS_RT_OK) {
+      talos_rt_v1_scheduler_fail(context, status);
+      return;
+    }
+    talos_rt_v1_scheduler_signal_transition(
+        context, handle, width, old, fourState ? oldUnknown : nullptr, next,
+        fourState ? nextUnknown : nullptr);
+  }
+  TALOS_RT_CATCH(const std::bad_alloc &) {
+    talos_rt_v1_scheduler_fail(context, TALOS_RT_OUT_OF_MEMORY);
+  }
+  TALOS_RT_CATCH_ALL { talos_rt_v1_scheduler_fail(context, TALOS_RT_INVALID_ARGUMENT); }
+}
+
+// A periodic edge can have both generated readers and ordinary testbench
+// waits. When the live subscriptions cover exactly this one bit, the known
+// edge and the armed latches are the complete match (LRM 9.4.2). Validate
+// that before publishing anything: an iff, computed event, or other observer
+// must see the original publication through the ordinary path.
+static bool publishPeriodicDirectWaits(talos_rt_context *context,
+                                       uint32_t stateID, uint64_t lowBit,
+                                       uint64_t oldValue, uint64_t newValue) {
+  const auto *plan = context->nativeSchedulePlan;
+  constexpr uint32_t required = TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL |
+                                TALOS_RT_NATIVE_SCHEDULE_SHARED_PERIODIC;
+  if (!plan || (plan->flags & required) != required || oldValue > 1 ||
+      newValue > 1 || lockedNativeAOTContext != context ||
+      activeNativeAOTContext != context || context->activeLogicalProcessToken ||
+      context->powerNBAs || context->vpiState || context->destroyPending ||
+      context->schedulerStatus != TALOS_RT_OK ||
+      publicationBatchContext == context ||
+      !staticOnlyPublicationEnvironment(context) ||
+      !context->forceMask.empty() || !context->assignMask.empty() ||
+      !context->stateValue.shared() || !context->stateUnknown.shared() ||
+      plan->state_value !=
+          reinterpret_cast<const uint8_t *>(context->stateValue.data()) ||
+      (plan->state_unknown &&
+       plan->state_unknown !=
+           reinterpret_cast<const uint8_t *>(context->stateUnknown.data())))
+    return false;
+  const auto *state = findNativeStaticState(context, stateID);
+  const auto *pages = talos_rt_static_signal_bucket_pages(
+      context, TALOS_RT_STABLE_HANDLE_STATIC, stateID);
+  if (!state || lowBit >= state->bitWidth || !pages || pages->size() != 1 ||
+      pages->front().bucket->size() > 64)
+    return false;
+  uint64_t bit = state->bitOffset + lowBit;
+  if (bit >= plan->state_bit_count ||
+      loadPackedBits(context->stateValue, bit, 1) != newValue ||
+      loadPackedBits(context->stateUnknown, bit, 1) != 0)
+    return false;
+  uint64_t handle = context->nativePeriodicPublicationHandle;
+  const auto &bucket = *pages->front().bucket;
+  uint64_t wake = 0;
+  for (size_t index = 0; index < bucket.size(); ++index) {
+    const auto *sub = bucket[index].subscription;
+    if (!sub || sub->target != SignalSubscription::NativeDirectWait ||
+        !sub->latch || sub->stableID != handle || sub->bitWidth != 1 ||
+        sub->edge > TALOS_RT_WAIT_EDGE_BOTH)
+      return false;
+    if (!sub->latch->armed || sub->latch->triggered ||
+        (sub->edge == TALOS_RT_WAIT_EDGE_POSEDGE && !newValue) ||
+        (sub->edge == TALOS_RT_WAIT_EDGE_NEGEDGE && !oldValue))
+      continue;
+    const auto *process = findScheduledProcess(context, sub->waiterToken);
+    if (!process || !process->instance)
+      return false;
+    if (!sub->outsideStaticFanout &&
+        process->aotActorSlot <
+            context->nativePeriodicAliasContinuations.size() &&
+        context->nativePeriodicAliasContinuations[process->aotActorSlot] ==
+            process->instance->continuation)
+      continue;
+    if (process->aotActorSlot != UINT32_MAX ||
+        (!sub->outsideStaticFanout &&
+         (plan->flags & TALOS_RT_NATIVE_SCHEDULE_FULLY_STATIC)))
+      return false;
+    wake |= uint64_t{1} << index;
+  }
+
+  // Static fanout owns its sequence. The runtime subscriber walk then owns a
+  // separate occurrence, including when every matching latch is already set.
+  uint8_t change = 1, posedge = newValue, negedge = oldValue;
+  if (!publishStaticAOTSignalTransitionUnlocked(
+          context, handle, 1, &change, &posedge, &negedge, nullptr, false))
+    return false;
+  if (context->schedulerStatus != TALOS_RT_OK)
+    return true;
+  if (!context->nextSchedulerSequence) {
+    context->schedulerStatus = TALOS_RT_OUT_OF_RESOURCES;
+    return true;
+  }
+  uint64_t sequence = context->nextSchedulerSequence++;
+  if (context->signalDiagnosticsEnabled)
+    ++context->signalDiagnostics.publications;
+  for (size_t index = 0; index < bucket.size(); ++index) {
+    auto &sub = *bucket[index].subscription;
+    if (!sub.latch->armed || sub.lastExaminedSequence == sequence)
+      continue;
+    sub.lastExaminedSequence = sequence;
+    if (context->signalDiagnosticsEnabled)
+      ++context->signalDiagnostics.subscribersExamined;
+    if ((wake & (uint64_t{1} << index)) && !sub.latch->triggered) {
+      sub.latch->triggered = true;
+      bool inserted =
+          context->nativePollCandidates.insert(sub.waiterToken).second;
+      talos_rt_record_native_ready_publication_unlocked(
+          context, sub.waiterToken, inserted);
+    }
+  }
+  // Latching an existing wait changes readiness only. The shared planes,
+  // overrides, and registrations behind the specialization proof are intact.
+  if (++context->schedulerEpoch == 0)
+    context->schedulerEpoch = 1;
+  return true;
+}
+
+// A prepared periodic step stores all its proven scalar copies before its
+// Active consumers run (IEEE 1800-2023 4.4.2.2, 4.9.1). The runtime still
+// publishes the edge to every other sensitive process, including Observed.
+static void publishPeriodicTransition(talos_rt_context *context,
+                                      uint32_t staticState, uint64_t lowBit,
+                                      uint64_t oldValue, uint64_t newValue,
+                                      bool routedOnly) {
+  if (!context || oldValue == newValue)
+    return;
+  ContextMutexLock lock(context);
+  struct RestoreHandle {
+    uint64_t &handle;
+    uint64_t saved;
+    ~RestoreHandle() { handle = saved; }
+  } restore{context->nativePeriodicPublicationHandle,
+            context->nativePeriodicPublicationHandle};
+  context->nativePeriodicPublicationHandle = talos_rt_stable_handle_encode(
+      TALOS_RT_STABLE_HANDLE_STATIC, staticState, lowBit);
+  if (!routedOnly) {
+    TALOS_RT_TRY {
+      if (publishPeriodicDirectWaits(context, staticState, lowBit, oldValue,
+                                     newValue))
+        return;
+    }
+    TALOS_RT_CATCH(const std::bad_alloc &) {
+      context->schedulerStatus = TALOS_RT_OUT_OF_MEMORY;
+      return;
+    }
+    TALOS_RT_CATCH_ALL {
+      context->schedulerStatus = TALOS_RT_INVALID_ARGUMENT;
+      return;
+    }
+  }
+  bool delivered = false;
+  if (routedOnly && !context->vpiObservationDemand && !context->saif &&
+      !context->coverage && !context->clockOccurrences &&
+      !context->exactEvents && context->stateValue.shared() &&
+      context->signalValueSnapshots.empty() && context->forceMask.empty() &&
+      context->assignMask.empty() &&
+      nativeStaticSpecializationEnvironmentClean(context)) {
+    // This clock has only exact runtime fanout entries. The projected clock
+    // has already updated the shared image. No computed predicate observes
+    // its intermediate publication (1800-2023 4.4.2, 9.4.2).
+    uint8_t changed = 1, posedge = newValue != 0, negedge = oldValue != 0;
+    delivered = publishStaticAOTSignalTransitionUnlockedImpl<false, true>(
+        context, context->nativePeriodicPublicationHandle, 1, &changed,
+        &posedge, &negedge, nullptr, false);
+    if (delivered && ++context->schedulerEpoch == 0)
+      context->schedulerEpoch = 1;
+  }
+  if (!delivered)
+    talos_rt_v1_scheduler_static_transition(context, staticState, lowBit, 1,
+                                            oldValue, 0, newValue, 0);
+}
+
+extern "C" void talos_rt_v1_scheduler_periodic_transition(
+    talos_rt_context *context, uint32_t staticState, uint64_t lowBit,
+    uint64_t oldValue, uint64_t newValue) {
+  publishPeriodicTransition(context, staticState, lowBit, oldValue, newValue,
+                            false);
+}
+
+extern "C" void talos_rt_v1_scheduler_periodic_routed_transition(
+    talos_rt_context *context, uint32_t staticState, uint64_t lowBit,
+    uint64_t oldValue, uint64_t newValue) {
+  publishPeriodicTransition(context, staticState, lowBit, oldValue, newValue,
+                            true);
+}
+
+static void schedulerStaticTransition(talos_rt_context *context,
+                                      uint32_t staticState, uint64_t lowBit,
+                                      uint64_t bitWidth, uint64_t oldValue,
+                                      uint64_t oldUnknown, uint64_t newValue,
+                                      uint64_t newUnknown,
+                                      bool generatedIngress) {
   if (!context || staticState == 0 || bitWidth == 0 || bitWidth > 64)
     return;
   uint64_t widthMask = packedWidthMask(bitWidth);
@@ -2958,9 +3472,23 @@ extern "C" void talos_rt_v1_scheduler_static_transition(
     flushPublicationBatch(context);
   }
 
+  const auto *plan =
+      lockedNativeAOTContext == context && activeNativeAOTContext == context
+          ? context->nativeSchedulePlan
+          : nullptr;
+  bool lockedCalendar =
+      plan && lowBit <= INT32_MAX &&
+      (plan->flags & TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL) &&
+      !context->nativeStaticEvalIslandCertified && !context->destroyPending &&
+      context->schedulerStatus == TALOS_RT_OK &&
+      publicationBatchContext != context;
+  const NativeStaticState *state =
+      lockedCalendar ? findNativeStaticState(context, staticState) : nullptr;
+  lockedCalendar = state && lowBit <= state->bitWidth &&
+                   bitWidth <= state->bitWidth - lowBit;
   // A mid-slot handover remains correct by entering the ordinary transition
   // path with the same scalar planes.
-  if (staticTransitionTakesOrdinaryPath(context)) {
+  if (!lockedCalendar && staticTransitionTakesOrdinaryPath(context)) {
     uint64_t handle = talos_rt_stable_handle_encode(
         TALOS_RT_STABLE_HANDLE_STATIC, staticState,
         static_cast<int64_t>(lowBit));
@@ -2971,7 +3499,8 @@ extern "C" void talos_rt_v1_scheduler_static_transition(
         reinterpret_cast<const uint8_t *>(&newUnknown));
     return;
   }
-  const NativeStaticState *state = findNativeStaticState(context, staticState);
+  if (!state)
+    state = findNativeStaticState(context, staticState);
   if (!state || lowBit > state->bitWidth ||
       bitWidth > state->bitWidth - lowBit) {
     context->schedulerStatus = TALOS_RT_LAYOUT_MISMATCH;
@@ -2979,10 +3508,10 @@ extern "C" void talos_rt_v1_scheduler_static_transition(
   }
   uint64_t handle = talos_rt_stable_handle_encode(
       TALOS_RT_STABLE_HANDLE_STATIC, staticState, static_cast<int64_t>(lowBit));
-  if ((context->nativeSchedulePlan->flags &
-       TALOS_RT_NATIVE_SCHEDULE_STATIC_EVAL_ISLAND) != 0 &&
-      (context->nativeSchedulePlan->flags &
-       TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL) != 0) {
+  if (lockedCalendar || ((context->nativeSchedulePlan->flags &
+                          TALOS_RT_NATIVE_SCHEDULE_STATIC_EVAL_ISLAND) &&
+                         (context->nativeSchedulePlan->flags &
+                          TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL))) {
     // Generated ingress is already published, but retained transitions also
     // feed runtime-owned waiters. Preserve the source-order canonical image
     // and notify those subscribers before the calendar can advance (9.4.2,
@@ -2995,14 +3524,28 @@ extern "C" void talos_rt_v1_scheduler_static_transition(
         ((oldZero & ~newZero) | (oldUnknown & newOne)) & widthMask;
     uint64_t negedge =
         ((oldOne & ~newOne) | (oldUnknown & newZero)) & widthMask;
-    (void)publishNativeSignalTransitionUnlocked(
-        context, handle, bitWidth, reinterpret_cast<const uint8_t *>(&changed),
-        reinterpret_cast<const uint8_t *>(&posedge),
-        reinterpret_cast<const uint8_t *>(&negedge),
-        reinterpret_cast<const uint8_t *>(&oldValue),
-        reinterpret_cast<const uint8_t *>(&oldUnknown),
-        reinterpret_cast<const uint8_t *>(&newValue),
-        reinterpret_cast<const uint8_t *>(&newUnknown), false);
+    // The bounded values already are the scalar transition the ordinary ABI
+    // would reconstruct from byte arrays. Keep its complete publication,
+    // including occurrence callbacks, canonical-plane updates and overrides.
+    ContextTransaction transaction(context);
+    TALOS_RT_TRY {
+      (void)publishNativeSignalTransitionUnlocked(
+          context, handle, bitWidth,
+          reinterpret_cast<const uint8_t *>(&changed),
+          reinterpret_cast<const uint8_t *>(&posedge),
+          reinterpret_cast<const uint8_t *>(&negedge),
+          reinterpret_cast<const uint8_t *>(&oldValue),
+          reinterpret_cast<const uint8_t *>(&oldUnknown),
+          reinterpret_cast<const uint8_t *>(&newValue),
+          reinterpret_cast<const uint8_t *>(&newUnknown), false,
+          generatedIngress);
+    }
+    TALOS_RT_CATCH(const std::bad_alloc &) {
+      talos_rt_v1_scheduler_fail(context, TALOS_RT_OUT_OF_MEMORY);
+    }
+    TALOS_RT_CATCH_ALL {
+      talos_rt_v1_scheduler_fail(context, TALOS_RT_INVALID_ARGUMENT);
+    }
     return;
   }
   if (context->coverage)
@@ -3202,6 +3745,34 @@ extern "C" void talos_rt_v1_scheduler_static_transition(
   }
   if (++context->schedulerEpoch == 0)
     context->schedulerEpoch = 1;
+}
+
+extern "C" void talos_rt_v1_scheduler_static_transition(
+    talos_rt_context *context, uint32_t staticState, uint64_t lowBit,
+    uint64_t bitWidth, uint64_t oldValue, uint64_t oldUnknown,
+    uint64_t newValue, uint64_t newUnknown) {
+  schedulerStaticTransition(context, staticState, lowBit, bitWidth, oldValue,
+                            oldUnknown, newValue, newUnknown, false);
+}
+
+extern "C" void talos_rt_v1_scheduler_static_transition_projected(
+    talos_rt_context *context, uint32_t actorSlot, uint32_t staticState,
+    uint64_t lowBit, uint64_t bitWidth, uint64_t oldValue, uint64_t oldUnknown,
+    uint64_t newValue, uint64_t newUnknown) {
+  publishAsNativeActor(context, actorSlot, [&] {
+    schedulerStaticTransition(context, staticState, lowBit, bitWidth, oldValue,
+                              oldUnknown, newValue, newUnknown, true);
+  });
+}
+
+extern "C" void talos_rt_v1_scheduler_wide_transition_projected(
+    talos_rt_context *context, uint32_t actorSlot, uint64_t handle,
+    uint64_t width, const uint8_t *oldValue, const uint8_t *oldUnknown,
+    const uint8_t *newValue, const uint8_t *newUnknown) {
+  publishAsNativeActor(context, actorSlot, [&] {
+    schedulerSignalTransition(context, handle, width, oldValue, oldUnknown,
+                              newValue, newUnknown, false, true);
+  });
 }
 
 extern "C" void talos_rt_v1_scheduler_activate_static_nodes(

@@ -1372,6 +1372,64 @@ TEST(RuntimeInternals, SharedPackedByteAccessMatchesBitwiseReference) {
     }
 }
 
+TEST(RuntimeInternals, FramedStorePublishesEffectivePlanesAndRetainsDriver) {
+  talos_rt_execution_descriptor_v1 execution{};
+  execution.version = TALOS_RT_VERSION;
+  execution.state_bit_count = 64;
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+            TALOS_RT_OK);
+  alignas(uint64_t) uint8_t value[8]{}, unknown[8]{};
+  ASSERT_EQ(talos_rt_v1_native_state_bind_shared(context, value, unknown, 64),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 3, 8),
+            TALOS_RT_OK);
+  talos_rt_native_schedule_plan plan{};
+  plan.flags = TALOS_RT_NATIVE_SCHEDULE_STATIC_FANOUT |
+               TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL;
+  plan.state_value = value;
+  plan.state_unknown = unknown;
+  plan.state_bit_count = 64;
+  context->nativeSchedulePlan = &plan;
+  context->signalDiagnosticsEnabled = true;
+  talos_rt_process_instance_v1 instance{};
+  context->activeNativeProcess = &instance;
+  context->activeExecRegion = TALOS_RT_REGION_ACTIVE;
+  {
+    ContextTransaction transaction(context);
+    NativeAOTContextScope active(context);
+    NativeAOTMutexScope locked(context);
+    auto write = [&](int offset, unsigned width, uint64_t v, uint64_t x) {
+      uint64_t handle = talos_rt_stable_handle_encode(
+          TALOS_RT_STABLE_HANDLE_STATIC, 1, offset);
+      talos_rt_v1_native_frame_store(
+          context, value, unknown, 64, handle, width,
+          TALOS_RT_FRAME_STORE_CONTINUOUS | TALOS_RT_FRAME_STORE_UNKNOWN, v, x);
+      EXPECT_EQ(context->schedulerStatus, TALOS_RT_OK);
+    };
+    write(0, 8, 0x5a, 0);
+    write(0, 8, 0x5a, 0x44);
+    EXPECT_EQ(loadPackedBits(context->stateUnknown, 3, 8), 0x44u);
+    context->forceMask.assign(1, uint64_t{0x0c} << 3);
+    write(0, 8, 0xff, 0);
+    EXPECT_EQ(loadPackedBits(context->stateValue, 3, 8), 0xfbu);
+    EXPECT_EQ(loadPackedBits(context->stateUnknown, 3, 8), 4u);
+    uint64_t epoch = context->schedulerEpoch;
+    write(0, 8, 0xf3, 0);
+    EXPECT_EQ(context->schedulerEpoch, epoch);
+    EXPECT_EQ(loadPackedBits(context->continuousValue, 3, 8), 0xf3u);
+    EXPECT_EQ(loadPackedBits(context->continuousMask, 3, 8), 0xffu);
+    write(6, 4, 0, 1);
+    EXPECT_EQ(loadPackedBits(context->stateValue, 3, 8), 0x3bu);
+    EXPECT_EQ(loadPackedBits(context->stateUnknown, 3, 8), 0x44u);
+    EXPECT_GE(context->signalDiagnostics.frameStoresShared, 3u);
+    EXPECT_GE(context->signalDiagnostics.frameStoreFallbacks, 1u);
+  }
+  context->activeNativeProcess = nullptr;
+  context->nativeSchedulePlan = nullptr;
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(RuntimeInternals, PackedRangeExistenceMatchesIndividualBits) {
   EXPECT_FALSE(anyPackedBits(nullptr, 0, 0));
   EXPECT_FALSE(anyPackedBits(nullptr, 7, 100));
@@ -4694,15 +4752,20 @@ TEST(Scheduler, FinalProceduresPollOnlyTheirOwnTerminationRequests) {
   for (SchedulerFixture *fixture : {&initial, &first, &second})
     fixture->descriptor.native_execute = finalPollExecute;
   finalPollObservations.clear();
-  ASSERT_EQ(
-      talos_rt_v1_scheduler_add(context, makeSchedulerInstance(initial), 0),
-      TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_add(context, makeSchedulerInstance(first),
                                       TALOS_RT_SCHEDULE_FINAL),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_add(context, makeSchedulerInstance(second),
                                       TALOS_RT_SCHEDULE_FINAL),
             TALOS_RT_OK);
+  // Before the normal process is registered, both final procedures are
+  // dormant. A shared clock loop must be able to close this empty slot.
+  EXPECT_EQ(talos_rt_v1_scheduler_runtime_work_pending(
+                context, TALOS_RT_REGION_OBSERVED),
+            0u);
+  ASSERT_EQ(
+      talos_rt_v1_scheduler_add(context, makeSchedulerInstance(initial), 0),
+      TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
   ASSERT_EQ(finalPollObservations.size(), 4u);
   EXPECT_EQ(finalPollObservations[0], std::make_pair(uint64_t{1}, 0u));
@@ -7424,6 +7487,44 @@ TEST(Scheduler, NativeForceReleaseRestoresAssignedValueOnce) {
   talos_rt_v1_context_destroy(context);
 }
 
+TEST(Scheduler, IndexedFanoutWindowsKeepLongOverlapsAndUnsortedPlans) {
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  std::vector<talos_rt_static_fanout_entry> entries;
+  auto add = [&](uint32_t id, uint64_t low, uint64_t width) {
+    talos_rt_static_fanout_entry entry{};
+    entry.static_state = id;
+    entry.low_bit = low;
+    entry.bit_width = width;
+    entries.push_back(entry);
+  };
+  add(1, 0, 1);
+  add(1, 2, 140);
+  for (unsigned low : {16, 32, 64, 79, 128, 161, 192})
+    add(1, low, 1);
+  size_t count = entries.size();
+  for (unsigned low : {0, 16, 8, 32, 64, 79, 128, 192})
+    add(2, low, 1);
+  context->nativeScheduleFanoutRanges = {
+      {0, 0}, {0, count}, {count, entries.size()}};
+  indexNativeFanoutWindows(*context, entries.data());
+  ASSERT_EQ(context->nativeFanoutWindows.size(), 3u);
+  EXPECT_TRUE(context->nativeFanoutWindows[2].bounds.empty());
+  const auto &source = context->nativeFanoutWindows[1];
+  ASSERT_FALSE(source.bounds.empty());
+  EXPECT_GT(source.bounds.back().first, 1u);
+  for (size_t i = 0; i < count; ++i) {
+    const auto &entry = entries[i];
+    for (uint64_t bit = entry.low_bit; bit < entry.low_bit + entry.bit_width;
+         ++bit) {
+      auto range = source.bounds[(bit >> source.shift) - source.firstBucket];
+      EXPECT_LE(range.first, i);
+      EXPECT_GT(range.second, i);
+    }
+  }
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(Scheduler, AOTStaticFanoutMatchesRangeAndFourStateEdgeExactly) {
   AOTTestState state;
   const talos_rt_static_fanout_entry fanout[] = {
@@ -7897,12 +7998,14 @@ TEST(Scheduler, FutureDelaysLeavePollCandidatesUntilTheirTimeSlot) {
     return std::unordered_set<uint64_t>(context->nativePollCandidates.begin(),
                                         context->nativePollCandidates.end());
   };
-  // Final-phase delays are not in the calendar and stay polled.
+  // Final-phase work stays outside the ordinary delay calendar and is
+  // admitted only when simulation terminates (IEEE 1800-2023 9.2.3).
   context->scheduledProcesses[3].phase = 1;
   context->scheduledProcesses[3].wakeTime = 7;
   rebuildNativeSchedulerIndexUnlocked(context);
   ASSERT_EQ(enterSchedulerTimeSlotUnlocked(context), TALOS_RT_OK);
-  EXPECT_EQ(pollSet(context), (std::unordered_set<uint64_t>{4}));
+  EXPECT_TRUE(pollSet(context).empty());
+  EXPECT_TRUE(context->dormantNativeFinals.count(4));
 
   // Re-suspending replaces the calendar entry; the stale one admits nothing.
   auto &moved = context->scheduledProcesses[1];
@@ -7910,16 +8013,19 @@ TEST(Scheduler, FutureDelaysLeavePollCandidatesUntilTheirTimeSlot) {
   indexScheduledProcessDelayUnlocked(context, moved);
   context->schedulerTime = 5;
   ASSERT_EQ(enterSchedulerTimeSlotUnlocked(context), TALOS_RT_OK);
-  EXPECT_EQ(pollSet(context), (std::unordered_set<uint64_t>{1, 4}));
+  EXPECT_EQ(pollSet(context), (std::unordered_set<uint64_t>{1}));
   context->schedulerTime = 10;
   ASSERT_EQ(enterSchedulerTimeSlotUnlocked(context), TALOS_RT_OK);
-  EXPECT_EQ(pollSet(context), (std::unordered_set<uint64_t>{1, 4}));
+  EXPECT_EQ(pollSet(context), (std::unordered_set<uint64_t>{1}));
   // A slot past the wake time admits it as well.
   context->schedulerTime = 25;
   ASSERT_EQ(enterSchedulerTimeSlotUnlocked(context), TALOS_RT_OK);
-  EXPECT_EQ(pollSet(context), (std::unordered_set<uint64_t>{1, 2, 4}));
+  EXPECT_EQ(pollSet(context), (std::unordered_set<uint64_t>{1, 2}));
   EXPECT_EQ(nextScheduledProcessDelayUnlocked(context),
             std::optional<uint64_t>{1000});
+  enterFinalPhaseUnlocked(context);
+  EXPECT_EQ(pollSet(context), (std::unordered_set<uint64_t>{4}));
+  EXPECT_TRUE(context->dormantNativeFinals.empty());
   context->scheduledProcesses.clear();
   talos_rt_v1_context_destroy(context);
 }
@@ -9246,9 +9352,8 @@ TEST(Scheduler, ProcessTreeTakesScheduledParentsFromTheScheduler) {
 }
 
 TEST(Scheduler, FinishedParentLinksPruneOnlyWithProcessCompaction) {
-  // A prune scans every scheduled process. A dead slot below the compaction
-  // threshold keeps compaction pending on every scheduler iteration, so it
-  // must not repeat that scan.
+  // One death stays below the compaction threshold. Only the next death
+  // needs another threshold check, and only compaction prunes parent links.
   talos_rt_context *context = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
   constexpr uint64_t tag = TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG;
@@ -9276,6 +9381,7 @@ TEST(Scheduler, FinishedParentLinksPruneOnlyWithProcessCompaction) {
   EXPECT_EQ(schedulerResumeCount, 1u);
   EXPECT_EQ(context->scheduledProcesses.size(), 8u);
   EXPECT_EQ(context->finishedProcessParents.count(tag | 1000), 1u);
+  EXPECT_FALSE(context->schedulerCompactionPending);
 
   talos_rt_v1_scheduler_event(context, 43, 0);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
@@ -15999,7 +16105,13 @@ struct YieldTestDesign {
   talos_rt_process_spawn_plan_v1 spawn;
   talos_rt_status status = TALOS_RT_INVALID_LIFECYCLE;
 
-  explicit YieldTestDesign(bool timeZero) : plan(makeAOTPlan(state, 1)) {
+  explicit YieldTestDesign(bool timeZero, bool rankedMetadata = false)
+      : plan(makeAOTPlan(state, 1)) {
+    if (rankedMetadata) {
+      merged[0].execute = nullptr;
+      for (auto &entry : fanout)
+        entry.reserved = TALOS_RT_FANOUT_RANKED_WAIT;
+    }
     plan.clock_kernels = clocks;
     plan.clock_kernel_count = 1;
     plan.merged_fragments = merged;
@@ -16334,6 +16446,27 @@ TEST(Scheduler, RuntimeRoutedEntryStillWakesItsNode) {
     talos_rt_v1_scheduler_static_transition(context, 2, 0, 1, 0, 0, 1, 0);
   }
   EXPECT_EQ(design.ingress, 0u);
+  EXPECT_TRUE(context->scheduledProcesses.front().signalTriggered);
+  EXPECT_TRUE(context->nativeScheduleReadyNodes.test(1));
+  EXPECT_EQ(context->schedulerStatus, TALOS_RT_OK);
+}
+
+TEST(Scheduler, RankedWaitWakesItsFrameWithMetadataOnlyIngressPending) {
+  YieldTestDesign design(/*timeZero=*/false, /*rankedMetadata=*/true);
+  ASSERT_EQ(design.status, TALOS_RT_OK);
+  auto *context = design.context;
+  constexpr talos_rt_native_schedule_node nodes[] = {
+      {0, 0, UINT32_MAX}, {0, 1, UINT32_MAX}};
+  NativeAOTContextScope active(context);
+  NativeAOTMutexScope locked(context);
+  ASSERT_EQ(initializeNativeAOTNodesUnlocked(context, nodes, std::size(nodes)),
+            TALOS_RT_OK);
+  design.ingress = 1;
+  context->nativeScheduleClockIngressPending = true;
+  uint8_t before = 0, after = 1;
+  talos_rt_v1_scheduler_signal_transition(
+      context, talos_rt_v1_native_state_static_handle(1), 1, &before, nullptr,
+      &after, nullptr);
   EXPECT_TRUE(context->scheduledProcesses.front().signalTriggered);
   EXPECT_TRUE(context->nativeScheduleReadyNodes.test(1));
   EXPECT_EQ(context->schedulerStatus, TALOS_RT_OK);

@@ -3676,6 +3676,12 @@ talos_rt_status talos_rt_v1_vpi_frame_unwind(talos_rt_context *context,
 // to design state. Requires RUNTIME_CALENDAR_EVAL and EXECUTION_DPI_EXPORTS.
 // Context import instrumentation and live VPI guards remain mandatory.
 #define TALOS_RT_NATIVE_SCHEDULE_CONSTANT_QUERY_EXPORTS UINT32_C(32768)
+// All expression observers are assertion disable predicates whose complete
+// read sets use canonical, source-ordered runtime publications.
+#define TALOS_RT_NATIVE_SCHEDULE_ASSERTION_OBSERVERS UINT32_C(65536)
+// Each asynchronous assertion predicate reads only storage written by
+// single-store forwarding activations. Its inputs are current at publication.
+#define TALOS_RT_NATIVE_SCHEDULE_FORWARDED_ASSERTION_INPUTS UINT32_C(131072)
 
 typedef struct talos_rt_aot_deopt_actor {
   uint32_t slot;
@@ -3827,6 +3833,9 @@ typedef struct talos_rt_native_ordered_nba_bridge {
 // Suppress a publication from the same logical process when that write must
 // not satisfy the future wait, such as a nested control not reached yet.
 #define TALOS_RT_FANOUT_SUPPRESS_ACTIVE_SELF (UINT32_C(1) << 2)
+// All arms of this ranked Active wait have static publication rows. Its
+// canonical process and continuation still run through region arbitration.
+#define TALOS_RT_FANOUT_RANKED_WAIT (UINT32_C(1) << 3)
 
 typedef struct talos_rt_static_fanout_entry {
   uint32_t static_state;
@@ -4199,6 +4208,10 @@ talos_rt_v1_scheduler_execute_aot_actor(talos_rt_context *context,
 // generated coordinator executes another owner in the current event region.
 uint32_t
 talos_rt_v1_scheduler_priority_signal_pending(talos_rt_context *context);
+// Inside a locked generated activation, zero rules out a priority wake.
+// A set byte requires the ordinary live-wait query at the same boundary.
+const uint8_t *
+talos_rt_v1_scheduler_priority_signal_flag(const talos_rt_context *context);
 // Return nonzero when a generated native schedule must hand control back to
 // the runtime after closing the current Active/NBA step. This includes a
 // runtime error and pending Postponed coverage work.
@@ -4762,6 +4775,35 @@ void talos_rt_v1_scheduler_static_transition_owned(
     talos_rt_context *context, uint32_t actor_slot, uint32_t static_state,
     uint64_t low_bit, uint64_t bit_width, uint64_t old_value,
     uint64_t old_unknown, uint64_t new_value, uint64_t new_unknown);
+// Publish one wide packed assignment under its source actor's identity.
+// All post-write bits are visible together to a computed event expression.
+void talos_rt_v1_scheduler_wide_transition_owned(
+    talos_rt_context *context, uint32_t actor_slot, uint64_t handle,
+    uint64_t bit_width, const uint8_t *old_value, const uint8_t *old_unknown,
+    const uint8_t *new_value, const uint8_t *new_unknown);
+// The generated writer already published every direct receiver of this
+// assignment. Runtime-owned receivers retain their event-control semantics
+// and the callback falls back to complete delivery after a handover.
+void talos_rt_v1_scheduler_static_transition_projected(
+    talos_rt_context *context, uint32_t actor_slot, uint32_t static_state,
+    uint64_t low_bit, uint64_t bit_width, uint64_t old_value,
+    uint64_t old_unknown, uint64_t new_value, uint64_t new_unknown);
+void talos_rt_v1_scheduler_wide_transition_projected(
+    talos_rt_context *context, uint32_t actor_slot, uint64_t handle,
+    uint64_t bit_width, const uint8_t *old_value, const uint8_t *old_unknown,
+    const uint8_t *new_value, const uint8_t *new_unknown);
+// Publish one known clock bit whose exclusive forwarding actors are projected
+// by the prepared periodic loop in this Active region.
+void talos_rt_v1_scheduler_periodic_transition(talos_rt_context *context,
+                                               uint32_t static_state,
+                                               uint64_t low_bit,
+                                               uint64_t old_value,
+                                               uint64_t new_value);
+void talos_rt_v1_scheduler_periodic_routed_transition(talos_rt_context *context,
+                                                      uint32_t static_state,
+                                                      uint64_t low_bit,
+                                                      uint64_t old_value,
+                                                      uint64_t new_value);
 // Bracket one statement that the caller executes as one event (IEEE 1800-2023
 // 4.7): between begin and end there is no time control and no call that may
 // observe signal values or run another process. While no observer of
@@ -5001,6 +5043,16 @@ talos_rt_status talos_rt_v1_native_state_store_plane(
     talos_rt_context *context, uint8_t *global_plane, uint64_t global_bit_count,
     uint64_t handle, uint64_t bit_width, uint32_t unknown_plane,
     const uint8_t *value, uint8_t *out_changed);
+#define TALOS_RT_FRAME_STORE_CONTINUOUS UINT32_C(1)
+#define TALOS_RT_FRAME_STORE_UNKNOWN UINT32_C(2)
+// A complete packed blocking write by the currently executing process.
+// Both physical planes become visible before the single signal publication.
+void talos_rt_v1_native_frame_store(talos_rt_context *context,
+                                    uint8_t *value_plane,
+                                    uint8_t *unknown_plane, uint64_t state_bits,
+                                    uint64_t handle, uint32_t width,
+                                    uint32_t flags, uint64_t value,
+                                    uint64_t unknown);
 talos_rt_status talos_rt_v1_native_state_store_continuous_plane(
     talos_rt_context *context, uint8_t *global_plane, uint64_t global_bit_count,
     uint64_t handle, uint64_t bit_width, uint32_t unknown_plane,

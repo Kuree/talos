@@ -263,7 +263,8 @@ struct SchedulerRunOptions {
 };
 static_assert(sizeof(SchedulerRunOptions) <= 16);
 talos_rt_status runScheduler(talos_rt_context *context,
-                             SchedulerRunOptions options = {});
+                             SchedulerRunOptions options = {},
+                             bool *drainedIdle = nullptr);
 talos_rt_status executeNativeAOTNodeUnlocked(talos_rt_context *context,
                                              uint32_t actorSlot);
 talos_rt_status runPreponedHooks(talos_rt_context *context);
@@ -311,6 +312,8 @@ bool nativeAOTTransientBoundaryClean(const talos_rt_context *context);
 bool validNativeStatePlanesUnlocked(const talos_rt_context *context,
                                     const uint8_t *value,
                                     const uint8_t *unknown, uint64_t bitCount);
+void indexNativeFanoutWindows(talos_rt_context &context,
+                              const talos_rt_static_fanout_entry *entries);
 bool publishStaticAOTSignalTransitionUnlocked(
     talos_rt_context *context, uint64_t stableID, uint64_t bitWidth,
     const uint8_t *changed, const uint8_t *posedge, const uint8_t *negedge,
@@ -322,7 +325,8 @@ bool publishNativeSignalTransitionUnlocked(
     talos_rt_context *context, uint64_t bitOffset, uint64_t bitWidth,
     const uint8_t *changed, const uint8_t *posedge, const uint8_t *negedge,
     const uint8_t *oldValue, const uint8_t *oldUnknown, const uint8_t *newValue,
-    const uint8_t *newUnknown, bool establishesOverride = false);
+    const uint8_t *newUnknown, bool establishesOverride = false,
+    bool generatedIngress = false);
 // Notify an already committed packed update without replaying its state.
 bool publishCommittedSignalTransitionUnlocked(
     talos_rt_context *context, uint64_t bitOffset, uint64_t bitWidth,

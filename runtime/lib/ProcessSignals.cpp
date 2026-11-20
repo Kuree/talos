@@ -109,6 +109,8 @@ bool appendSignalSubscriptionUnlocked(
   if (target == SignalSubscription::NativeComputedWait ||
       stored.outsideStaticFanout)
     ++context->nativeDynamicSignalSubscriptions;
+  if (target == SignalSubscription::NativeComputedWait)
+    ++context->nativeComputedSignalSubscriptions;
   if (stored.outsideStaticFanout && context->nativeSchedulePlan &&
       context->nativeSchedulePlan->specialization_fast)
     *context->nativeSchedulePlan->specialization_fast = 0;
@@ -1509,6 +1511,8 @@ void talos_rt_unregister_signal_wait_unlocked(
          subscription.outsideStaticFanout) &&
         context->nativeDynamicSignalSubscriptions != 0)
       --context->nativeDynamicSignalSubscriptions;
+    if (subscription.target == SignalSubscription::NativeComputedWait)
+      --context->nativeComputedSignalSubscriptions;
     for (const SignalSubscriptionBucketSlot &slot : subscription.bucketSlots) {
       auto bucket = context->signalSubscriptionBuckets.find(slot.key);
       if (bucket == context->signalSubscriptionBuckets.end())
