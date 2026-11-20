@@ -88,6 +88,7 @@ struct NativeStaticNBAPlan {
   // provably stages one update per barrier per bit is exact for them: with no
   // bit written twice there is no intermediate value to lose.
   llvm::SmallVector<bool> changeWatchedRoots;
+  llvm::SmallVector<bool> wholeChangeBanks;
   llvm::SmallVector<std::string> generatedAccumulators;
   // Canonical state-plane bit offset for each root. This is revision-coupled
   // lowering metadata, not a second state allocation.

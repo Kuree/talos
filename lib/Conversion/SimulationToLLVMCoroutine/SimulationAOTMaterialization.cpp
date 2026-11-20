@@ -43,6 +43,147 @@ static uint32_t fanoutRoute(const talos_rt_static_fanout_entry &entry) {
   return entry.reserved & TALOS_RT_FANOUT_ROUTE_MASK;
 }
 
+static constexpr StringLiteral nbaDirtyRootsName =
+    "__talos_aot_nba_dirty_roots_v1";
+static constexpr StringLiteral nbaDirtySummaryName =
+    "__talos_aot_nba_dirty_summary_v1";
+
+// Generated and runtime captures share a summary and leaf bit for each NBA
+// root. The coordinator consults these at the Active/Inactive to NBA cut.
+static void markPendingNBARoot(OpBuilder &builder, Location loc,
+                               uint32_t root) {
+  Type pointer = LLVM::LLVMPointerType::get(builder.getContext());
+  Type i64 = builder.getI64Type();
+  auto mark = [&](StringRef name, uint32_t bit) {
+    Value plane = LLVM::AddressOfOp::create(builder, loc, pointer, name);
+    Value at = byteGEP(builder, loc, plane, (bit / 64) * uint64_t{8});
+    Value prior = LLVM::LoadOp::create(builder, loc, i64, at, 8);
+    Value mask = llvmConstant(builder, loc, i64, uint64_t{1} << (bit % 64));
+    auto update = LLVM::StoreOp::create(
+        builder, loc, arith::OrIOp::create(builder, loc, prior, mask), at, 8);
+    auto role = builder.getI32IntegerAttr(root);
+    schedule::set<schedule::Field::EvalPendingRuntimeRoot>(
+        prior.getDefiningOp(), role);
+    schedule::set<schedule::Field::EvalPendingRuntimeRoot>(update, role);
+  };
+  mark(nbaDirtyRootsName, root);
+  mark(nbaDirtySummaryName, root / 64);
+}
+
+static Value wholeNBAField(OpBuilder &builder, Location loc, StringRef bank,
+                           StringRef field) {
+  return LLVM::AddressOfOp::create(
+      builder, loc, LLVM::LLVMPointerType::get(builder.getContext()),
+      (Twine(bank) + "." + field).str());
+}
+
+static std::string makeWholeNBASlot(ModuleOp module, Location loc,
+                                    Type slotType, StringRef bank,
+                                    uint64_t width) {
+  Type storage = LLVM::LLVMArrayType::get(slotType, 1);
+  std::string name = (Twine(bank) + ".slot").str();
+  makeConstantGlobal(
+      module, loc, storage, name, LLVM::Linkage::Internal, 8,
+      [&](OpBuilder &init) {
+        Value entry = LLVM::ZeroOp::create(init, loc, slotType);
+        unsigned index = 0;
+        for (StringRef field :
+             {"offset", "value", "unknown", "valid", "transient"})
+          entry = insertValue(init, loc, entry,
+                              wholeNBAField(init, loc, bank, field), index++);
+        entry =
+            insertValue(init, loc, entry,
+                        llvmConstant(init, loc, init.getI64Type(),
+                                     TALOS_RT_NBA_SLOT_WHOLE_CHANGE | width),
+                        index);
+        return Value(LLVM::InsertValueOp::create(
+            init, loc, LLVM::ZeroOp::create(init, loc, storage), entry,
+            ArrayRef<int64_t>{0}));
+      });
+  return name;
+}
+
+// Preserve the current image until NBA. On the first write a stable source
+// can supply its exact comparison against CURRENT. After a second write the
+// stored mask instead describes transitions *between captures*, so both a
+// cold interposed writer and the barrier may compare against their own image.
+static void emitWholeNBACapture(OpBuilder &builder, LLVM::CallOp call,
+                                StringRef bank, uint32_t root, unsigned width,
+                                Value enabled, Value source,
+                                Value sourceUnknown,
+                                ArrayRef<Value> initialChanges) {
+  Location loc = call.getLoc();
+  Type scalar = IntegerType::get(builder.getContext(), width);
+  Type i32 = builder.getI32Type();
+  Block *before = call->getBlock();
+  Block *after = before->splitBlock(call->getIterator());
+  auto newBlock = [&] {
+    Block *next = new Block;
+    after->getParent()->getBlocks().insert(after->getIterator(), next);
+    return next;
+  };
+  Block *stage = newBlock(), *rewrite = newBlock(), *save = newBlock();
+  builder.setInsertionPointToEnd(before);
+  cf::CondBranchOp::create(builder, loc, enabled, stage, after);
+  builder.setInsertionPointToStart(stage);
+  Value values = wholeNBAField(builder, loc, bank, "value");
+  Value unknowns = wholeNBAField(builder, loc, bank, "unknown");
+  Value value = LLVM::LoadOp::create(builder, loc, scalar, source, 1);
+  Value unknown =
+      sourceUnknown
+          ? Value(LLVM::LoadOp::create(builder, loc, scalar, sourceUnknown, 1))
+          : Value(LLVM::ZeroOp::create(builder, loc, scalar));
+  Value validity = wholeNBAField(builder, loc, bank, "valid");
+  Value prior = LLVM::LoadOp::create(builder, loc, i32, validity, 4);
+  Value pending =
+      arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ne, prior,
+                            llvmConstant(builder, loc, i32, 0));
+  Block *first = initialChanges.empty() ? save : newBlock();
+  cf::CondBranchOp::create(builder, loc, pending, rewrite, first);
+  if (first != save) {
+    builder.setInsertionPointToStart(first);
+    Value changes = wholeNBAField(builder, loc, bank, "transient");
+    for (auto [i, delta] : llvm::enumerate(initialChanges))
+      LLVM::StoreOp::create(builder, loc, delta,
+                            byteGEP(builder, loc, changes, 8 * uint64_t(i)), 8);
+    cf::BranchOp::create(builder, loc, save);
+  }
+  builder.setInsertionPointToStart(rewrite);
+  auto difference = [&](Value next, Value address) {
+    return LLVM::XOrOp::create(
+        builder, loc, next,
+        LLVM::LoadOp::create(builder, loc, scalar, address, 8));
+  };
+  Value delta = LLVM::OrOp::create(builder, loc, difference(value, values),
+                                   difference(unknown, unknowns));
+  Value transients = wholeNBAField(builder, loc, bank, "transient");
+  Value rewritten = arith::CmpIOp::create(
+      builder, loc, arith::CmpIPredicate::eq, prior,
+      llvmConstant(builder, loc, i32, TALOS_RT_NBA_WHOLE_REWRITTEN));
+  Value previousChanges = LLVM::SelectOp::create(
+      builder, loc, rewritten,
+      LLVM::LoadOp::create(builder, loc, scalar, transients, 8),
+      LLVM::ZeroOp::create(builder, loc, scalar));
+  LLVM::StoreOp::create(
+      builder, loc, LLVM::OrOp::create(builder, loc, delta, previousChanges),
+      transients, 8);
+  cf::BranchOp::create(builder, loc, save);
+  builder.setInsertionPointToStart(save);
+  LLVM::StoreOp::create(builder, loc, value, values, 8);
+  LLVM::StoreOp::create(builder, loc, unknown, unknowns, 8);
+  uint32_t firstState = initialChanges.empty() ? TALOS_RT_NBA_WHOLE_PENDING
+                                               : TALOS_RT_NBA_WHOLE_COMPARED;
+  LLVM::StoreOp::create(
+      builder, loc,
+      LLVM::SelectOp::create(
+          builder, loc, pending,
+          llvmConstant(builder, loc, i32, TALOS_RT_NBA_WHOLE_REWRITTEN),
+          llvmConstant(builder, loc, i32, firstState)),
+      validity, 4);
+  markPendingNBARoot(builder, loc, root);
+  cf::BranchOp::create(builder, loc, after);
+}
+
 using GeneratedTransitionRange =
     std::tuple<uint32_t, uint64_t, uint64_t, unsigned>;
 
@@ -1273,6 +1414,19 @@ FailureOr<bool> makeNativeEvalPlan(
     std::string validName{};
     bool queued = false;
     std::optional<uint64_t> constantOffset{};
+    // Multiword assignments with publication-time observers are replayed as
+    // one update. Their FIFO records remain consecutive source-order chunks.
+    uint64_t atomicWidth = 0;
+  };
+  auto atomicOrderedWidth = [&](uint32_t root, uint64_t width) -> uint64_t {
+    if (width <= 64 ||
+        !schedule::has<schedule::Field::EvalRuntimeCalendar>(module))
+      return 0;
+    bool observed = staticFanoutPlan.runtimeTransitionStates.contains(
+                        staticNBAPlan.roots[root].static_state) ||
+                    vpi.getMode() != schedule::ComputeVPIMode::Off ||
+                    !native::has<native::ClosedExecutable>(module);
+    return observed ? width : 0;
   };
   SmallVector<DynamicEvalNBA> dynamicEvalNBAs;
   // All implementations of one source site must share a capture: a process
@@ -1309,6 +1463,61 @@ FailureOr<bool> makeNativeEvalPlan(
       orderedNBARoots.insert(staticNBAPlan.siteRoots.lookup(
           *constantU64(call.getArgOperands()[1])));
     }
+  // Every implementation and cold source site of a whole-value bank
+  // captures the same complete root. A dynamic selection or a different
+  // destination retains the ordered queue for that entire root.
+  SmallVector<std::string> changeBanks(nbaRoots.size());
+  llvm::SmallDenseSet<uint32_t, 8> bankCandidates;
+  for (uint32_t root : orderedNBARoots)
+    if (dataLayout.isLittleEndian() &&
+        root < staticNBAPlan.wholeChangeBanks.size() &&
+        staticNBAPlan.wholeChangeBanks[root] &&
+        staticNBAPlan.generatedAccumulators[root].empty())
+      bankCandidates.insert(root);
+  for (auto &[operation, proof] : dynamicNBAProofs) {
+    auto call = cast<LLVM::CallOp>(operation);
+    auto args = call.getArgOperands();
+    auto site = constantU64(args[1]);
+    auto root = site ? staticNBAPlan.siteRoots.find(*site)
+                     : staticNBAPlan.siteRoots.end();
+    if (root == staticNBAPlan.siteRoots.end() ||
+        !bankCandidates.contains(root->second))
+      continue;
+    const auto &target = nbaRoots[root->second];
+    auto handle = constantU64(args[5]);
+    if (!proof.eligible || constantU64(args[6]) != target.bit_width ||
+        handle != talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_STATIC,
+                                                target.static_state, 0))
+      bankCandidates.erase(root->second);
+  }
+  OpBuilder bankBuilder = OpBuilder::atBlockBegin(module.getBody());
+  for (unsigned root = 0; root < changeBanks.size(); ++root) {
+    if (!bankCandidates.contains(root))
+      continue;
+    orderedNBARoots.erase(root);
+    changeBanks[root] =
+        (Twine("__talos_eval_nba_change_bank_") + Twine(root)).str();
+    uint64_t words = (nbaRoots[root].bit_width + 63) / 64;
+    auto word = bankBuilder.getI64Type();
+    auto array = LLVM::LLVMArrayType::get(word, words);
+    for (StringRef suffix :
+         {"value", "unknown", "transient", "valid", "offset"}) {
+      Type type = suffix == "valid"    ? Type(bankBuilder.getI32Type())
+                  : suffix == "offset" ? Type(word)
+                                       : Type(array);
+      auto global = LLVM::GlobalOp::create(
+          bankBuilder, location, type, false, LLVM::Linkage::Internal,
+          (Twine(changeBanks[root]) + "." + suffix).str(), Attribute{}, 8);
+      Block *init = new Block;
+      global.getInitializerRegion().push_back(init);
+      OpBuilder b = OpBuilder::atBlockBegin(init);
+      LLVM::ReturnOp::create(b, location,
+                             LLVM::ZeroOp::create(b, location, type));
+    }
+  }
+  if (native::has<native::DebugTiming>(module))
+    llvm::errs() << "talos whole-value change banks: roots="
+                 << bankCandidates.size() << '\n';
   const bool hasOrderedNBA = !orderedNBARoots.empty();
   if (hasOrderedNBA) {
     OpBuilder globals = OpBuilder::atBlockBegin(module.getBody());
@@ -1326,6 +1535,8 @@ FailureOr<bool> makeNativeEvalPlan(
                                    context, {pointer, i32, i32, i32}));
     getOrDeclareLLVMFunction(module, "talos_rt_v1_eval_nba_reserve", i32,
                              {pointer, pointer});
+    getOrDeclareLLVMFunction(module, "talos_rt_v1_eval_nba_reserve_records",
+                             i32, {pointer, pointer, i32});
   }
   for (const NativeDirectFragment &direct : directFragments)
     if (direct.tier2Convergence)
@@ -1402,9 +1613,6 @@ FailureOr<bool> makeNativeEvalPlan(
   constexpr StringLiteral nodesName = "__talos_aot_schedule_nodes_v1";
   constexpr StringLiteral nbaRootsName = "__talos_aot_nba_roots_v1";
   constexpr StringLiteral nbaSitesName = "__talos_aot_nba_sites_v1";
-  constexpr StringLiteral nbaDirtyRootsName = "__talos_aot_nba_dirty_roots_v1";
-  constexpr StringLiteral nbaDirtySummaryName =
-      "__talos_aot_nba_dirty_summary_v1";
   constexpr StringLiteral fanoutName = "__talos_aot_static_fanout_v1";
   constexpr StringLiteral actorRootsName = "__talos_aot_static_actor_roots_v1";
   constexpr StringLiteral clockKernelsName = "__talos_aot_clock_kernels_v1";
@@ -2594,35 +2802,39 @@ FailureOr<bool> makeNativeEvalPlan(
                                   baseOffset));
         Value requestedStart = arith::AddIOp::create(nbaBuilder, call.getLoc(),
                                                      safeDynamic, baseOffset);
-        // A hold assignment is inert only when no earlier update to this root
-        // is pending and no immediate writer can intervene before NBA. The
-        // source plan certifies both the writer inventory and absence of an
-        // external observer influence; fixed target facts preserve sampling.
-        // Compare a complete wide source before setting any dirty bits, so a
-        // changed early chunk does not accidentally authorize later chunks.
-        // IEEE 1800-2023 4.3, 4.6(b), 4.9.4 and 10.4.2: an equal update is
-        // removable only with no intervening writer and no pending earlier
-        // assignment to overwrite. Both X/Z and value bits participate; the
-        // captured RHS/target are retained and are never recomputed at NBA.
+        // Compare the entire captured RHS (both planes) before staging its
+        // first chunk. In the shared calendar even a one-word ordered record
+        // marks its root dirty, so an equal second write still restores the
+        // value after an earlier pulse (1800-2023 4.6(b), 9.4.2, 10.4.2).
         auto fixedTarget = staticNBAPlan.siteFixedOffsets.find(*site);
         bool inertCandidate =
-            *width > 64 &&
-            root->second < staticNBAPlan.unchangedSafeRoots.size() &&
-            staticNBAPlan.unchangedSafeRoots[root->second] &&
+            (*width > 64 ||
+             (orderedWide &&
+              schedule::has<schedule::Field::EvalRuntimeCalendar>(module))) &&
             fixedTarget != staticNBAPlan.siteFixedOffsets.end() &&
+            staticNBAPlan.canDiscardUnchanged(root->second, *site,
+                                              fixedTarget->second, *width) &&
             fixedTarget->second <= rootWidth &&
             *width <= rootWidth - fixedTarget->second;
+        SmallVector<Value> orderedChunkDifferences;
+        Value pendingBeforeCapture;
         if (inertCandidate) {
           Value difference = zero64;
           uint64_t offset = staticNBAPlan.generatedOffsets[root->second] +
                             fixedTarget->second;
           for (uint64_t chunk = 0; chunk < (*width + 63) / 64; ++chunk) {
             unsigned bits = std::min<uint64_t>(64, *width - chunk * 64);
-            difference = arith::OrIOp::create(
-                nbaBuilder, call.getLoc(), difference,
-                buildNativeNBAChange(
-                    nbaBuilder, call.getLoc(), offset + chunk * 64, bits,
-                    loadChunk(arguments[7], chunk), loadUnknownChunk(chunk)));
+            Value delta = buildNativeNBAChange(
+                nbaBuilder, call.getLoc(), offset + chunk * 64, bits,
+                loadChunk(arguments[7], chunk), loadUnknownChunk(chunk));
+            difference = arith::OrIOp::create(nbaBuilder, call.getLoc(),
+                                              difference, delta);
+            if ((!changeBanks[root->second].empty() &&
+                 staticNBAPlan.unchangedSafeRoots[root->second]) ||
+                (orderedWide && *width > 64 &&
+                 !atomicOrderedWidth(root->second, *width) &&
+                 schedule::has<schedule::Field::EvalRuntimeCalendar>(module)))
+              orderedChunkDifferences.push_back(delta);
           }
           Value dirty = LLVM::LoadOp::create(
               nbaBuilder, call.getLoc(), i64,
@@ -2661,6 +2873,7 @@ FailureOr<bool> makeNativeEvalPlan(
                 nbaBuilder, call.getLoc(), pending,
                 arith::ExtUIOp::create(nbaBuilder, call.getLoc(), i64, valid));
           }
+          pendingBeforeCapture = pending;
           Value needed = arith::CmpIOp::create(
               nbaBuilder, call.getLoc(), arith::CmpIPredicate::ne,
               arith::OrIOp::create(nbaBuilder, call.getLoc(), difference,
@@ -2669,26 +2882,40 @@ FailureOr<bool> makeNativeEvalPlan(
           overlaps = arith::AndIOp::create(nbaBuilder, call.getLoc(), overlaps,
                                            needed);
         }
-        if (orderedWide) {
+        if (!changeBanks[root->second].empty()) {
+          emitWholeNBACapture(nbaBuilder, call, changeBanks[root->second],
+                              root->second, *width, overlaps, arguments[7],
+                              stagedHasUnknown ? arguments[8] : Value{},
+                              orderedChunkDifferences);
+        } else if (orderedWide) {
           uint64_t chunks = (*width + 63) / 64;
           auto chunkSite = [&](uint64_t index) {
             return chunks == 1 ? *site : evalNBAChunkSite(*site, index);
           };
-          for (uint64_t index = 0; index != chunks; ++index) {
-            uint64_t recordSite = chunkSite(index);
-            if (llvm::none_of(dynamicEvalNBAs,
-                              [&](const DynamicEvalNBA &entry) {
-                                return entry.site == recordSite;
-                              })) {
-              DynamicEvalNBA entry{root->second, recordSite,
-                                   std::min<uint64_t>(64, *width - index * 64)};
-              entry.queued = true;
-              entry.offsetName = "offset";
-              entry.valueName = "value";
-              entry.unknownName = "unknown";
-              dynamicEvalNBAs.push_back(std::move(entry));
-            }
-          }
+          uint64_t atomicWidth = atomicOrderedWidth(root->second, *width);
+          bool packed = atomicWidth != 0;
+          uint64_t fullRecords =
+              packed ? runtime::packedWideNBARecords(chunks) : chunks;
+          auto registerRecord = [&](uint64_t key, uint64_t bits) {
+            if (llvm::any_of(dynamicEvalNBAs, [&](const DynamicEvalNBA &entry) {
+                  return entry.site == key;
+                }))
+              return;
+            DynamicEvalNBA entry{root->second, key, bits};
+            entry.queued = true;
+            entry.atomicWidth = atomicWidth;
+            entry.offsetName = "offset";
+            entry.valueName = "value";
+            entry.unknownName = "unknown";
+            dynamicEvalNBAs.push_back(std::move(entry));
+          };
+          // Runtime initializers and cold actors can append legacy chunks
+          // to the same FIFO. Each layout has its own first-record key.
+          for (uint64_t index = 0; index != chunks; ++index)
+            registerRecord(chunkSite(index),
+                           std::min<uint64_t>(64, *width - index * 64));
+          if (packed)
+            registerRecord(runtime::packedWideNBATag | *site, *width);
           // Preserve each activation, including repeated writes to one lane.
           // The hot path is only direct record stores. Storage growth is cold
           // and cannot execute actors or re-enter the scheduler.
@@ -2700,122 +2927,158 @@ FailureOr<bool> makeNativeEvalPlan(
             region->getBlocks().insert(Region::iterator(continuation), result);
             return result;
           };
-          // Append one record per chunk, in bit order.
-          SmallVector<Block *> checks;
-          for (uint64_t index = 0; index != chunks; ++index)
-            checks.push_back(block());
+          // Capture one assignment as an ordered group. The earlier root
+          // membership decides every sparse lane before this group changes
+          // it. Reserve enough space before writing its first record, then
+          // publish the new tail and dirty bit once (1800-2023 4.6(b),
+          // 4.9.4, 10.4.2). An equal later assignment can still restore
+          // lanes overwritten by earlier records of this same root.
+          Location loc = call.getLoc();
+          Block *check = block(), *grow = block(), *stage = block();
+          Block *failed = block();
           nbaBuilder.setInsertionPointToEnd(before);
-          cf::CondBranchOp::create(nbaBuilder, call.getLoc(), overlaps,
-                                   checks.front(), ValueRange{}, continuation,
-                                   ValueRange{});
-          for (uint64_t index = 0; index != chunks; ++index) {
-            Block *check = checks[index];
-            Block *next =
-                index + 1 == chunks ? continuation : checks[index + 1];
-            Block *grow = block(), *stage = block(), *failed = block();
-            nbaBuilder.setInsertionPointToStart(check);
-            Value size = evalNBAQueueSize(nbaBuilder, call.getLoc());
-            Value capacity = LLVM::LoadOp::create(
-                nbaBuilder, call.getLoc(), i32,
-                evalNBAQueueField(nbaBuilder, call.getLoc(), 2), 4);
-            Value full =
-                arith::CmpIOp::create(nbaBuilder, call.getLoc(),
-                                      arith::CmpIPredicate::eq, size, capacity);
-            cf::CondBranchOp::create(nbaBuilder, call.getLoc(), full, grow,
-                                     ValueRange{}, stage, ValueRange{});
-            nbaBuilder.setInsertionPointToStart(grow);
-            Value status =
-                LLVM::CallOp::create(
-                    nbaBuilder, call.getLoc(), TypeRange{i32},
-                    SymbolRefAttr::get(context, "talos_rt_v1_eval_nba_reserve"),
-                    ValueRange{arguments[0], LLVM::AddressOfOp::create(
-                                                 nbaBuilder, call.getLoc(),
-                                                 pointer, evalNBAQueueName)})
-                    .getResult();
-            Value ok = arith::CmpIOp::create(
-                nbaBuilder, call.getLoc(), arith::CmpIPredicate::eq, status,
-                llvmConstant(nbaBuilder, call.getLoc(), i32, TALOS_RT_OK));
-            cf::CondBranchOp::create(nbaBuilder, call.getLoc(), ok, stage,
-                                     ValueRange{}, failed, ValueRange{});
-            nbaBuilder.setInsertionPointToStart(failed);
-            LLVM::StoreOp::create(
-                nbaBuilder, call.getLoc(), status,
-                evalNBAQueueField(nbaBuilder, call.getLoc(), 3), 4);
-            // The queue descriptor is only a cleanup owner. Report allocation
-            // failure through the scheduler so a truncated activation cannot
-            // appear to complete successfully.
-            LLVM::CallOp::create(
-                nbaBuilder, call.getLoc(), TypeRange{},
-                SymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"),
-                ValueRange{arguments[0], status});
-            cf::BranchOp::create(nbaBuilder, call.getLoc(), continuation);
-            nbaBuilder.setInsertionPointToStart(stage);
-            Value chunkValue =
-                chunks == 1 ? staged64 : loadChunk(arguments[7], index);
-            Value chunkUnknown =
-                chunks == 1 ? stagedUnknown64 : loadUnknownChunk(index);
-            Value chunkStart =
-                index == 0 ? requestedStart
-                           : arith::AddIOp::create(
-                                 nbaBuilder, call.getLoc(), requestedStart,
-                                 llvmConstant(nbaBuilder, call.getLoc(), i64,
-                                              index * 64))
-                                 .getResult();
-            Value data = LLVM::LoadOp::create(
-                nbaBuilder, call.getLoc(), pointer,
-                evalNBAQueueField(nbaBuilder, call.getLoc(), 0));
-            Value recordIndex =
-                arith::ExtUIOp::create(nbaBuilder, call.getLoc(), i64, size);
-            Value record =
-                LLVM::GEPOp::create(nbaBuilder, call.getLoc(), pointer,
-                                    LLVM::LLVMArrayType::get(i64, 4), data,
-                                    ValueRange{recordIndex});
-            for (auto [field, value] : llvm::enumerate(
-                     SmallVector<Value>{llvmConstant(nbaBuilder, call.getLoc(),
-                                                     i64, chunkSite(index)),
-                                        chunkStart, chunkValue, chunkUnknown}))
-              LLVM::StoreOp::create(
-                  nbaBuilder, call.getLoc(), value,
-                  byteGEP(nbaBuilder, call.getLoc(), record, field * 8), 8);
-            LLVM::StoreOp::create(
-                nbaBuilder, call.getLoc(),
-                arith::AddIOp::create(
-                    nbaBuilder, call.getLoc(), size,
-                    llvmConstant(nbaBuilder, call.getLoc(), i32, 1)),
-                evalNBAQueueField(nbaBuilder, call.getLoc(), 1), 4);
-            // The common calendar must see this generated batch before
-            // advancing past NBA (LRM 4.4.2.4, 4.5).
-            if (::talos::schedule::has<
-                    ::talos::schedule::Field::EvalRuntimeCalendar>(module)) {
-              uint32_t word = root->second / 64;
-              for (auto [name, index, mask] :
-                   {std::tuple<StringRef, uint32_t, uint64_t>{
-                        nbaDirtyRootsName, word,
-                        uint64_t{1} << (root->second % 64)},
-                    {nbaDirtySummaryName, word / 64,
-                     uint64_t{1} << (word % 64)}}) {
-                Value address =
-                    byteGEP(nbaBuilder, call.getLoc(),
-                            LLVM::AddressOfOp::create(nbaBuilder, call.getLoc(),
-                                                      pointer, name),
-                            uint64_t{index} * 8);
-                Value prior = LLVM::LoadOp::create(nbaBuilder, call.getLoc(),
-                                                   i64, address, 8);
-                auto marked = LLVM::StoreOp::create(
-                    nbaBuilder, call.getLoc(),
-                    arith::OrIOp::create(
-                        nbaBuilder, call.getLoc(), prior,
-                        llvmConstant(nbaBuilder, call.getLoc(), i64, mask)),
-                    address, 8);
-                auto rootRole = nbaBuilder.getI32IntegerAttr(root->second);
-                schedule::set<schedule::Field::EvalPendingRuntimeRoot>(
-                    prior.getDefiningOp(), rootRole);
-                schedule::set<schedule::Field::EvalPendingRuntimeRoot>(
-                    marked, rootRole);
+          cf::CondBranchOp::create(nbaBuilder, loc, overlaps, check,
+                                   ValueRange{}, continuation, ValueRange{});
+          nbaBuilder.setInsertionPointToStart(check);
+          Value size = evalNBAQueueSize(nbaBuilder, loc);
+          Value capacity = LLVM::LoadOp::create(
+              nbaBuilder, loc, i32, evalNBAQueueField(nbaBuilder, loc, 2), 4);
+          SmallVector<Value> selected;
+          for (Value difference : orderedChunkDifferences)
+            selected.push_back(arith::CmpIOp::create(
+                nbaBuilder, loc, arith::CmpIPredicate::ne,
+                arith::OrIOp::create(nbaBuilder, loc, difference,
+                                     pendingBeforeCapture),
+                zero64));
+          Value full;
+          if (chunks == 1) {
+            full = arith::CmpIOp::create(
+                nbaBuilder, loc, arith::CmpIPredicate::uge, size, capacity);
+          } else {
+            Value required = arith::AddIOp::create(
+                nbaBuilder, loc,
+                arith::ExtUIOp::create(nbaBuilder, loc, i64, size),
+                llvmConstant(nbaBuilder, loc, i64, fullRecords));
+            full = arith::CmpIOp::create(
+                nbaBuilder, loc, arith::CmpIPredicate::ugt, required,
+                arith::ExtUIOp::create(nbaBuilder, loc, i64, capacity));
+          }
+          cf::CondBranchOp::create(nbaBuilder, loc, full, grow, ValueRange{},
+                                   stage, ValueRange{});
+          nbaBuilder.setInsertionPointToStart(grow);
+          SmallVector<Value> growArgs{
+              arguments[0], LLVM::AddressOfOp::create(nbaBuilder, loc, pointer,
+                                                      evalNBAQueueName)};
+          StringRef growName = "talos_rt_v1_eval_nba_reserve";
+          if (fullRecords > 1) {
+            // A sparse capture need not allocate its worst-case size; in
+            // particular one live lane can fit at the capacity limit.
+            Value count = llvmConstant(nbaBuilder, loc, i32,
+                                       selected.empty() ? fullRecords : 0);
+            for (Value lane : selected)
+              count = arith::AddIOp::create(
+                  nbaBuilder, loc, count,
+                  arith::ExtUIOp::create(nbaBuilder, loc, i32, lane));
+            growArgs.push_back(count);
+            growName = "talos_rt_v1_eval_nba_reserve_records";
+          }
+          Value status = LLVM::CallOp::create(nbaBuilder, loc, TypeRange{i32},
+                                              growName, growArgs)
+                             .getResult();
+          Value ok = arith::CmpIOp::create(
+              nbaBuilder, loc, arith::CmpIPredicate::eq, status,
+              llvmConstant(nbaBuilder, loc, i32, TALOS_RT_OK));
+          cf::CondBranchOp::create(nbaBuilder, loc, ok, stage, ValueRange{},
+                                   failed, ValueRange{});
+          nbaBuilder.setInsertionPointToStart(failed);
+          LLVM::StoreOp::create(nbaBuilder, loc, status,
+                                evalNBAQueueField(nbaBuilder, loc, 3), 4);
+          // The queue descriptor is only a cleanup owner. Report allocation
+          // failure through the scheduler so a truncated activation cannot
+          // appear to complete successfully.
+          LLVM::CallOp::create(
+              nbaBuilder, loc, TypeRange{},
+              SymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"),
+              ValueRange{arguments[0], status});
+          cf::BranchOp::create(nbaBuilder, loc, continuation);
+          nbaBuilder.setInsertionPointToStart(stage);
+          Value data = LLVM::LoadOp::create(
+              nbaBuilder, loc, pointer, evalNBAQueueField(nbaBuilder, loc, 0));
+          auto recordType = LLVM::LLVMArrayType::get(i64, 4);
+          Value cursor = size;
+          if (packed) {
+            Value first = LLVM::GEPOp::create(
+                nbaBuilder, loc, pointer, recordType, data,
+                ValueRange{arith::ExtUIOp::create(nbaBuilder, loc, i64, size)});
+            auto field = [&](uint64_t word, Value value) {
+              LLVM::StoreOp::create(nbaBuilder, loc, value,
+                                    byteGEP(nbaBuilder, loc, first, word * 8),
+                                    8);
+            };
+            field(0, llvmConstant(nbaBuilder, loc, i64,
+                                  runtime::packedWideNBATag | *site));
+            field(1, requestedStart);
+            for (uint64_t lane = 0; lane != chunks; ++lane) {
+              field(2 + lane, loadChunk(arguments[7], lane));
+              field(2 + chunks + lane, loadUnknownChunk(lane));
+            }
+          } else {
+            for (uint64_t lane = 0; lane < chunks; ++lane) {
+              Block *next = nullptr;
+              Value recordIndex;
+              if (!selected.empty()) {
+                Block *store = block();
+                next = block();
+                next->addArgument(i32, loc);
+                cf::CondBranchOp::create(nbaBuilder, loc, selected[lane], store,
+                                         ValueRange{}, next,
+                                         ValueRange{cursor});
+                nbaBuilder.setInsertionPointToStart(store);
+                recordIndex =
+                    arith::ExtUIOp::create(nbaBuilder, loc, i64, cursor);
+              } else {
+                recordIndex = arith::AddIOp::create(
+                    nbaBuilder, loc,
+                    arith::ExtUIOp::create(nbaBuilder, loc, i64, size),
+                    llvmConstant(nbaBuilder, loc, i64, lane));
+              }
+              Value record =
+                  LLVM::GEPOp::create(nbaBuilder, loc, pointer, recordType,
+                                      data, ValueRange{recordIndex});
+              Value value =
+                  chunks == 1 ? staged64 : loadChunk(arguments[7], lane);
+              Value unknown =
+                  chunks == 1 ? stagedUnknown64 : loadUnknownChunk(lane);
+              Value start = arith::AddIOp::create(
+                  nbaBuilder, loc, requestedStart,
+                  llvmConstant(nbaBuilder, loc, i64, lane * 64));
+              for (auto [field, operand] : llvm::enumerate(SmallVector<Value>{
+                       llvmConstant(nbaBuilder, loc, i64, chunkSite(lane)),
+                       start, value, unknown}))
+                LLVM::StoreOp::create(
+                    nbaBuilder, loc, operand,
+                    byteGEP(nbaBuilder, loc, record, field * 8), 8);
+              if (next) {
+                Value incremented = arith::AddIOp::create(
+                    nbaBuilder, loc, cursor,
+                    llvmConstant(nbaBuilder, loc, i32, 1));
+                cf::BranchOp::create(nbaBuilder, loc, next,
+                                     ValueRange{incremented});
+                nbaBuilder.setInsertionPointToStart(next);
+                cursor = next->getArgument(0);
               }
             }
-            cf::BranchOp::create(nbaBuilder, call.getLoc(), next);
           }
+          if (selected.empty())
+            cursor = arith::AddIOp::create(
+                nbaBuilder, loc, size,
+                llvmConstant(nbaBuilder, loc, i32, fullRecords));
+          LLVM::StoreOp::create(nbaBuilder, loc, cursor,
+                                evalNBAQueueField(nbaBuilder, loc, 1), 4);
+          // The common calendar drains all pending roots in NBA (4.4.2.4).
+          if (schedule::has<schedule::Field::EvalRuntimeCalendar>(module))
+            markPendingNBARoot(nbaBuilder, loc, root->second);
+          cf::BranchOp::create(nbaBuilder, loc, continuation);
         } else if (wideSlots) {
           Block *inertContinuation = nullptr;
           if (inertCandidate) {
@@ -3715,6 +3978,7 @@ FailureOr<bool> makeNativeEvalPlan(
             site.root, recordSite,
             std::min<uint64_t>(64, width->second - index * 64)};
         entry.queued = true;
+        entry.atomicWidth = atomicOrderedWidth(site.root, width->second);
         entry.offsetName = "offset";
         entry.valueName = "value";
         entry.unknownName = "unknown";
@@ -3731,6 +3995,15 @@ FailureOr<bool> makeNativeEvalPlan(
     Type slotType = LLVM::LLVMStructType::getLiteral(
         context, {pointer, pointer, pointer, pointer, pointer, i64});
     for (auto [root, entries] : llvm::enumerate(rootSlots)) {
+      if (!changeBanks[root].empty()) {
+        if (!entries.empty())
+          return module.emitError(
+              "whole-value NBA bank overlaps a fixed capture slot");
+        rootSlotNames[root] =
+            makeWholeNBASlot(module, location, slotType, changeBanks[root],
+                             nbaRoots[root].bit_width);
+        continue;
+      }
       if (entries.empty())
         continue;
       rootSlotNames[root] =
@@ -3813,7 +4086,9 @@ FailureOr<bool> makeNativeEvalPlan(
             value = insertValue(initializerBuilder, location, value, slots, 4);
             value = insertValue(initializerBuilder, location, value,
                                 llvmConstant(initializerBuilder, location, i64,
-                                             rootSlots[index].size()),
+                                             changeBanks[index].empty()
+                                                 ? rootSlots[index].size()
+                                                 : 1),
                                 5);
             roots = LLVM::InsertValueOp::create(
                 initializerBuilder, location, roots, value,
@@ -6142,8 +6417,27 @@ FailureOr<bool> makeNativeEvalPlan(
     SmallVector<APInt> values;
     SmallVector<Block *> destinations;
     SmallVector<ValueRange> operands;
+    llvm::MapVector<std::tuple<uint32_t, uint64_t, unsigned>, Block *>
+        atomicCases;
+    bool adjacentChunkCases = false;
     for (const DynamicEvalNBA &entry : dynamicEvalNBAs)
       if (entry.queued) {
+        if (entry.atomicWidth) {
+          // Only the first chunk starts an assignment. Its executor
+          // consumes every consecutive chunk before any observer can run.
+          bool packed = runtime::isPackedWideNBASite(entry.site);
+          if (!packed && ((entry.site >> 48) & 0x7fff) != 0)
+            continue;
+          auto [it, added] = atomicCases.try_emplace(
+              std::tuple{entry.rootIndex, entry.atomicWidth, unsigned(packed)},
+              nullptr);
+          if (added)
+            it->second = block();
+          values.emplace_back(64, entry.site);
+          destinations.push_back(it->second);
+          operands.push_back(ValueRange{});
+          continue;
+        }
         // A record retains its site and position in the ordered queue. The
         // commit action depends only on the exact root and captured width;
         // offset and both RHS planes are loaded from that individual record.
@@ -6153,13 +6447,66 @@ FailureOr<bool> makeNativeEvalPlan(
         if (inserted)
           commit->second = block();
         Block *destination = commit->second;
+        constexpr uint64_t nextChunk = uint64_t{1} << 48;
+        if ((entry.site >> 63) && ((entry.site >> 48) & 0x7fff) &&
+            queueCases.lookup(entry.site - nextChunk) == destination)
+          adjacentChunkCases = true;
         queueCases[entry.site] = destination;
         values.emplace_back(64, entry.site);
         destinations.push_back(destination);
         operands.push_back(ValueRange{});
       }
-    LLVM::SwitchOp::create(builder, location, site, invalid, ValueRange{},
-                           values, destinations, operands);
+    Value dispatchKey = site;
+    if (adjacentChunkCases &&
+        schedule::has<schedule::Field::EvalRuntimeCalendar>(module)) {
+      // Put the chunk number next to the least significant bit so adjacent
+      // records of one source going to the same commit become one switch
+      // range. Rotation preserves all 64 bits and every invalid record.
+      dispatchKey = arith::OrIOp::create(
+          builder, location,
+          arith::ShLIOp::create(builder, location, site,
+                                llvmConstant(builder, location, i64, 16)),
+          arith::ShRUIOp::create(builder, location, site,
+                                 llvmConstant(builder, location, i64, 48)));
+      for (auto &key : values)
+        key = key.rotl(16);
+    }
+    LLVM::SwitchOp::create(builder, location, dispatchKey, invalid,
+                           ValueRange{}, values, destinations, operands);
+    if (!atomicCases.empty()) {
+      Block *failedPublication = block();
+      failedPublication->addArgument(i32, location);
+      for (auto [key, target] : atomicCases) {
+        auto [root, width, packed] = key;
+        uint64_t words = (width + 63) / 64;
+        uint64_t records =
+            packed ? runtime::packedWideNBARecords(words) : words;
+        builder.setInsertionPointToStart(target);
+        Value available = arith::SubIOp::create(builder, location, count,
+                                                head->getArgument(0));
+        Value status =
+            LLVM::CallOp::create(
+                builder, location, TypeRange{i32},
+                "talos_rt_v1_static_nba_commit_wide_ordered",
+                ValueRange{nbaCommitEntry->getArgument(1),
+                           llvmConstant(builder, location, i32, root),
+                           llvmConstant(builder, location, i64, width), record,
+                           available})
+                .getResult();
+        Value next = arith::AddIOp::create(
+            builder, location, head->getArgument(0),
+            llvmConstant(builder, location, i32, records));
+        cf::CondBranchOp::create(
+            builder, location,
+            arith::CmpIOp::create(
+                builder, location, arith::CmpIPredicate::eq, status,
+                llvmConstant(builder, location, i32, TALOS_RT_OK)),
+            head, ValueRange{next}, failedPublication, ValueRange{status});
+      }
+      builder.setInsertionPointToStart(failedPublication);
+      LLVM::ReturnOp::create(builder, location,
+                             failedPublication->getArgument(0));
+    }
     builder.setInsertionPointToStart(invalid);
     LLVM::ReturnOp::create(
         builder, location,
@@ -6177,6 +6524,8 @@ FailureOr<bool> makeNativeEvalPlan(
   builder.setInsertionPointToStart(publicationEntry);
   llvm::SmallPtrSet<Block *, 32> emittedCommitCases;
   for (const DynamicEvalNBA &entry : dynamicEvalNBAs) {
+    if (entry.atomicWidth)
+      continue;
     // Fixed latches belong to the canonical barrier in a shared calendar.
     // Only the ordered queue is drained by this generated callback.
     if (!entry.queued &&
@@ -6570,6 +6919,23 @@ FailureOr<bool> makeNativeEvalPlan(
             arith::XOrIOp::create(builder, location, oldPublishedUnknown,
                                   newPublishedUnknown)),
         widthMask);
+    const talos_rt_static_nba_root &dynamicRoot = nbaRoots[entry.rootIndex];
+    auto dynamicFanout = fanoutIndicesOf(dynamicRoot.static_state);
+    if (entry.queued && !dynamicFanout.empty() &&
+        schedule::has<schedule::Field::EvalRuntimeCalendar>(module)) {
+      // The record is committed. An unchanged four-state field cannot wake
+      // a reader (9.4.2), even when the record's target is dynamic. Preserve
+      // every wake collected by earlier records in the same NBA barrier.
+      Block *publish = new Block;
+      nbaCommit.getBody().getBlocks().insert(Region::iterator(nextDynamic),
+                                             publish);
+      cf::CondBranchOp::create(
+          builder, location,
+          arith::CmpIOp::create(builder, location, arith::CmpIPredicate::ne,
+                                changed, zero64),
+          publish, ValueRange{}, nextDynamic, ValueRange{});
+      builder.setInsertionPointToStart(publish);
+    }
     Value posedge = arith::AndIOp::create(
         builder, location,
         arith::OrIOp::create(builder, location,
@@ -6588,8 +6954,6 @@ FailureOr<bool> makeNativeEvalPlan(
                                                    oldPublishedUnknown,
                                                    newZero)),
         widthMask);
-    const talos_rt_static_nba_root &dynamicRoot =
-        staticNBAPlan.roots[entry.rootIndex];
     Value publishedStart =
         arith::AddIOp::create(builder, location, safeDynamicBit, highClip);
     Value publishedWidth = arith::SubIOp::create(
@@ -6598,7 +6962,7 @@ FailureOr<bool> makeNativeEvalPlan(
                               llvmConstant(builder, location, i64, entry.width),
                               lowClip),
         highClip);
-    for (uint32_t fanoutIndex : fanoutIndicesOf(dynamicRoot.static_state)) {
+    for (uint32_t fanoutIndex : dynamicFanout) {
       const talos_rt_static_fanout_entry &fanout = fanoutEntries[fanoutIndex];
       if (fanout.bit_width == 0)
         continue;
@@ -8212,6 +8576,8 @@ FailureOr<bool> makeNativeEvalPlan(
                            {pointer, i32, i32, pointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_commit_ordered", i32,
                            {pointer, i32, i64, i64, i64, i64});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_commit_wide_ordered",
+                           i32, {pointer, i32, i64, pointer, i32});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_direct_commit_guard",
                            i32, {pointer});
   getOrDeclareLLVMFunction(module,

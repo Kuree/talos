@@ -3789,6 +3789,19 @@ typedef struct talos_rt_generated_nba_accumulator_256 {
 // A certified clock activation writes each slot at most once per time slot.
 // The compiler owns its payload and validity flag; the common NBA barrier
 // consumes it directly. There is no enqueue operation or growable storage.
+// A single tagged slot represents a complete wide root with change-only
+// observers. Its fixed offset is zero. Value, unknown and transition are
+// arrays of ceil(width / 64) native words. Validity 1 holds one capture;
+// validity 2 also supplies the accumulated mask of overwritten transitions.
+// With validity 3 the first capture saved its exact delta against CURRENT
+// under the NBA-only writer proof. A cold or externally disturbed commit
+// recomputes that delta from the actual barrier-entry image.
+#define TALOS_RT_NBA_SLOT_WHOLE_CHANGE (UINT64_C(1) << 63)
+enum {
+  TALOS_RT_NBA_WHOLE_PENDING = 1,
+  TALOS_RT_NBA_WHOLE_REWRITTEN = 2,
+  TALOS_RT_NBA_WHOLE_COMPARED = 3
+};
 typedef struct talos_rt_generated_nba_slot {
   int64_t *offset;
   uint64_t *value;
@@ -4741,6 +4754,11 @@ talos_rt_status
 talos_rt_v1_static_nba_commit_ordered(talos_rt_context *context, uint32_t root,
                                       int64_t offset, uint64_t width,
                                       uint64_t value, uint64_t unknown);
+// Commit one packed assignment from consecutive generated FIFO records.
+// Publish its complete old and new values at its position in the NBA region.
+talos_rt_status talos_rt_v1_static_nba_commit_wide_ordered(
+    talos_rt_context *context, uint32_t root, uint64_t width,
+    const void *records, uint32_t available);
 // Generated clean-superstep NBA commit code checks this once per barrier.
 // A false result retains the validating generic commit path for VPI,
 // force/release, bytecode mutation, and transactional handoff.

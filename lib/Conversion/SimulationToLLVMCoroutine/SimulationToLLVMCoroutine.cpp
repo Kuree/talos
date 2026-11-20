@@ -1,8 +1,9 @@
 //===- SimulationToLLVMCoroutine.cpp - Native process coroutines ---------===//
 
-#include "NativeStateAccess.h"
 #include "talos/Conversion/SimulationToLLVMCoroutine.h"
 #include "../SimulationToSchedule/NativePipeline.h"
+#include "NativeStateAccess.h"
+#include "SimulationEvalNBAQueue.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
@@ -274,7 +275,7 @@ bool isEvalClosureRuntimeCall(LLVM::CallOp call, LLVM::LLVMFuncOp function,
       *callee == "talos_rt_v1_assertion_action_state" ||
       // Cold allocation of private generated NBA storage. This never
       // executes actors, changes design state or re-enters scheduling.
-      *callee == "talos_rt_v1_eval_nba_reserve" ||
+      ::talos::detail::isEvalNBAReserve(*callee) ||
       // The reserve failure block latches an error and returns from
       // the activation. It cannot schedule or execute an actor.
       *callee == "talos_rt_v1_scheduler_fail" ||

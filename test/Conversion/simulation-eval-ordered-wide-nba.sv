@@ -15,10 +15,10 @@
 // CHECK: %[[QUEUE:.*]] = llvm.mlir.addressof @__talos_eval_ordered_nba_queue_v1
 // CHECK: llvm.store %{{.*}}, %{{.*}} {alignment = 1 : i64} : i128, !llvm.ptr
 // CHECK-NEXT: llvm.store %{{.*}}, %{{.*}} {alignment = 1 : i64} : i128, !llvm.ptr
-// CHECK: llvm.call @talos_rt_v1_eval_nba_reserve(%{{.*}}, %[[QUEUE]])
+// CHECK: llvm.call @talos_rt_v1_eval_nba_reserve_records(%{{.*}}, %[[QUEUE]], %{{.*}})
 // CHECK: llvm.store %{{.*}}, %{{.*}} {alignment = 1 : i64} : i128, !llvm.ptr
 // CHECK-NEXT: llvm.store %{{.*}}, %{{.*}} {alignment = 1 : i64} : i128, !llvm.ptr
-// CHECK: llvm.call @talos_rt_v1_eval_nba_reserve(%{{.*}}, %[[QUEUE]])
+// CHECK: llvm.call @talos_rt_v1_eval_nba_reserve_records(%{{.*}}, %[[QUEUE]], %{{.*}})
 // CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1(
 // CHECK-LABEL: llvm.func internal @__talos_eval_ordered_nba_commit_v1(
 // CHECK: llvm.call @talos_rt_v1_static_nba_commit_ordered(

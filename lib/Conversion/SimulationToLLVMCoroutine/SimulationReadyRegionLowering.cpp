@@ -1,5 +1,6 @@
 #include "NativeStateAccess.h"
 #include "SimulationAOTPlanning.h"
+#include "SimulationEvalNBAQueue.h"
 #include "SimulationEvalReadySet.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/Interfaces/CallInterfaces.h"
@@ -26,7 +27,7 @@ bool isReadinessTransparentCallee(StringRef callee) {
   // observe an activation.
   return callee == "talos_rt_v1_eval_display" ||
          callee == "talos_rt_v1_scheduler_fail" ||
-         callee == "talos_rt_v1_eval_nba_reserve" ||
+         ::talos::detail::isEvalNBAReserve(callee) ||
          callee == "talos_rt_v1_scheduler_termination_requested" ||
          callee == "talos_rt_v1_scheduler_time" ||
          callee == "talos_rt_v1_coverage_point_hit" ||

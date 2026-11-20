@@ -4,6 +4,7 @@
 #include "Inputs/EventSnapshotSmoke.h"
 #include "TestEnvironment.h"
 #include "talos/Runtime/ClockKernelReadySet.h"
+#include "talos/Runtime/EvalNBAQueue.h"
 #include "talos/Runtime/Runtime.h"
 #include "talos/Runtime/StableHandle.h"
 
@@ -5492,7 +5493,17 @@ TEST(Scheduler, GeneratedNBAQueueRejectsMalformedOrExhaustedDescriptors) {
   queue = {&sentinel, UINT32_MAX, UINT32_MAX};
   EXPECT_EQ(talos_rt_v1_eval_nba_reserve(context, &queue),
             TALOS_RT_OUT_OF_RESOURCES);
+  queue = {&sentinel, UINT32_MAX - 1, UINT32_MAX};
+  EXPECT_EQ(talos_rt_v1_eval_nba_reserve_records(context, &queue, 2),
+            TALOS_RT_OUT_OF_RESOURCES);
+  EXPECT_EQ(queue.size, UINT32_MAX - 1);
+  EXPECT_EQ(queue.data, &sentinel);
   EXPECT_TRUE(context->nativeEvalNBAQueues.empty());
+  queue = {};
+  ASSERT_EQ(talos_rt_v1_eval_nba_reserve_records(context, &queue, 65),
+            TALOS_RT_OK);
+  EXPECT_GE(queue.capacity, 65u);
+  EXPECT_EQ(queue.size, 0u);
   talos_rt_v1_context_destroy(context);
 }
 
@@ -10191,6 +10202,180 @@ TEST(RuntimeInternals, PrivateNBABatchPreservesMasksTransientsAndFallback) {
   context->nativeStateValue = value.data();
   context->nativeStateUnknown = unknown.data();
   context->nativeSchedulePlan = nullptr;
+  talos_rt_v1_context_destroy(context);
+}
+
+TEST(Scheduler, WholeChangeBankPreservesOverwrittenLanesAndColdWriters) {
+  AOTTestState state;
+  std::array<uint64_t, 4> values{}, unknowns{};
+  std::array<uint64_t, 3> next{}, nextUnknown{}, transients{};
+  int64_t offset = 0;
+  uint32_t valid = 0;
+  talos_rt_generated_nba_slot slot{
+      &offset, next.data(),       nextUnknown.data(),
+      &valid,  transients.data(), TALOS_RT_NBA_SLOT_WHOLE_CHANGE | 130};
+  talos_rt_static_nba_root root{17, 2, 130, nullptr, &slot, 1};
+  uint64_t ready = 0, active = 1;
+  talos_rt_native_clock_kernel clock{
+      1, TALOS_RT_WAIT_EDGE_POSEDGE, 0, 1, &ready, 1, 0, &active};
+  talos_rt_native_merged_fragment member{
+      0, 1, 0, 0, 0, 0, generatedCheckpointCallback};
+  auto plan = makeAOTPlan(state, 1);
+  plan.flags = TALOS_RT_NATIVE_SCHEDULE_EVAL |
+               TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL |
+               TALOS_RT_NATIVE_SCHEDULE_STATIC_EVAL_ISLAND |
+               TALOS_RT_NATIVE_SCHEDULE_STATIC_FANOUT |
+               TALOS_RT_NATIVE_SCHEDULE_GENERATED_ACTIONS |
+               TALOS_RT_NATIVE_SCHEDULE_STATIC_CONTROL |
+               TALOS_RT_NATIVE_SCHEDULE_STATIC_NBA;
+  plan.state_value = reinterpret_cast<uint8_t *>(values.data());
+  plan.state_unknown = reinterpret_cast<uint8_t *>(unknowns.data());
+  plan.state_bit_count = 256;
+  plan.nba_commit = [](void *, talos_rt_context *c, uint32_t region,
+                       uint32_t *out) {
+    return talos_rt_v1_static_nba_commit_root(c, 0, region, out);
+  };
+  plan.nba_roots = &root;
+  plan.nba_root_count = 1;
+  plan.clock_kernels = &clock;
+  plan.clock_kernel_count = 1;
+  plan.merged_fragments = &member;
+  plan.merged_fragment_count = 1;
+  plan.timeslot_coordinator = clockCoordinator;
+  plan.promotion_invalidate = schedulerInvalidatePromotion;
+  plan.promotion_ready = schedulerPromotionReady;
+  talos_rt_execution_descriptor_v1 execution{};
+  execution.version = TALOS_RT_VERSION;
+  execution.state_bit_count = 256;
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_native_state_bind_shared(context, plan.state_value,
+                                                 plan.state_unknown, 256),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 192, 1),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 2, 0, 130),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
+  context->signalDiagnosticsEnabled = true;
+  {
+    NativeAOTContextScope executing(context);
+    NativeAOTMutexScope locked(context);
+    // The final planes equal the barrier-entry planes. Two observed words
+    // still have a transition. Padding in the final word is unrelated state.
+    values[2] = 0xf0;
+    next[2] = UINT64_MAX - 3;
+    transients = {1, UINT64_C(1) << 63, UINT64_MAX - 3};
+    valid = 2;
+    uint32_t changed = 0;
+    ASSERT_EQ(talos_rt_v1_static_nba_commit_root(context, 0,
+                                                 TALOS_RT_REGION_NBA, &changed),
+              TALOS_RT_OK);
+    EXPECT_TRUE(changed);
+    EXPECT_EQ(valid, 0u);
+    EXPECT_EQ(context->wholeChangeBankCommits, 1u);
+    EXPECT_EQ(context->wholeChangeBankRewrites, 1u);
+    EXPECT_EQ(values[2], 0xf0u);
+
+    // A cold partial capture follows a generated capture. Another whole
+    // capture follows the partial one. The last value and both sets of
+    // intermediate changes must survive the handover.
+    valid = 1;
+    next = {0, 2, 1};
+    ASSERT_EQ(talos_rt_v1_static_nba_claim(context, 0, plan.state_value,
+                                           plan.state_unknown, 256, 64, 2, 1,
+                                           0),
+              TALOS_RT_OK);
+    EXPECT_EQ(valid, 0u);
+    auto &accumulator = context->staticNBAAccumulators[0];
+    EXPECT_TRUE(accumulator.valid);
+    EXPECT_EQ(accumulator.value[1], 1u);
+    EXPECT_EQ(accumulator.transient[1], 3u);
+    valid = 2;
+    next = {4, 0, 0};
+    nextUnknown = {0, 0, 2};
+    transients = {8, 0, 3};
+    changed = 0;
+    ASSERT_EQ(talos_rt_v1_static_nba_commit_root(context, 0,
+                                                 TALOS_RT_REGION_NBA, &changed),
+              TALOS_RT_OK);
+    EXPECT_TRUE(changed);
+    EXPECT_EQ(valid, 0u);
+    EXPECT_EQ(values[0], 4u);
+    EXPECT_EQ(values[1], 0u);
+    EXPECT_EQ(values[2], 0xf0u);
+    EXPECT_EQ(unknowns[2], 2u);
+  }
+  talos_rt_v1_context_destroy(context);
+}
+
+TEST(Scheduler, OrderedWidePacketPreservesFourStateWordsAndPadding) {
+  AOTTestState state;
+  std::array<uint64_t, 3> values{}, unknowns{};
+  const talos_rt_static_nba_root root{17, 1, 130, nullptr, nullptr, 0};
+  auto plan = makeAOTPlan(state);
+  plan.flags = TALOS_RT_NATIVE_SCHEDULE_FULLY_STATIC |
+               TALOS_RT_NATIVE_SCHEDULE_STATIC_FANOUT;
+  plan.state_value = reinterpret_cast<uint8_t *>(values.data());
+  plan.state_unknown = reinterpret_cast<uint8_t *>(unknowns.data());
+  plan.state_bit_count = 192;
+  plan.nba_roots = &root;
+  plan.nba_root_count = 1;
+  talos_rt_execution_descriptor_v1 execution{};
+  execution.version = TALOS_RT_VERSION;
+  execution.state_bit_count = 192;
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_native_state_bind_shared(
+                context, plan.state_value, plan.state_unknown, 192),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 0, 130),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
+  context->signalDiagnosticsEnabled = true;
+  values = {0, 42, 0x80};
+  unknowns = {2, 0, 0};
+  constexpr uint64_t tag = UINT64_C(0x8000) << 48;
+  talos::runtime::EvalNBARecord packet[] = {
+      {tag, 0, 7, 2}, {tag | (UINT64_C(1) << 48), 64, 42, 0},
+      {tag | (UINT64_C(2) << 48), 128, UINT64_MAX, 0}};
+  {
+    NativeAOTContextScope executing(context);
+    NativeAOTMutexScope locked(context);
+    ASSERT_EQ(talos_rt_v1_static_nba_commit_wide_ordered(context, 0, 130,
+                                                         packet, 3),
+              TALOS_RT_OK);
+    EXPECT_EQ(values, (std::array<uint64_t, 3>{7, 42, 0x83}));
+    EXPECT_EQ(context->orderedSharedPackets, 1u);
+    // A change of knownness in the last word hands back the complete packet,
+    // including the earlier value change, at the same NBA position.
+    packet[0].value = 3;
+    packet[2].unknown = 1;
+    ASSERT_EQ(talos_rt_v1_static_nba_commit_wide_ordered(context, 0, 130,
+                                                         packet, 3),
+              TALOS_RT_OK);
+    EXPECT_EQ(values, (std::array<uint64_t, 3>{3, 42, 0x83}));
+    EXPECT_EQ(unknowns, (std::array<uint64_t, 3>{2, 0, 1}));
+    EXPECT_EQ(context->orderedSharedPackets, 1u);
+    EXPECT_EQ(context->signalDiagnostics.aotNBACommits, 6u);
+    // In the contiguous representation the header is followed by all
+    // three values, then all three X/Z words. A short FIFO cannot commit
+    // any part of the assignment.
+    talos::runtime::EvalNBARecord packed[] = {
+        {talos::runtime::packedWideNBATag | 7, 0, 9, 43}, {1, 8, 0, 2}};
+    EXPECT_EQ(
+        talos_rt_v1_static_nba_commit_wide_ordered(context, 0, 130, packed, 1),
+        TALOS_RT_INVALID_ARGUMENT);
+    EXPECT_EQ(values, (std::array<uint64_t, 3>{3, 42, 0x83}));
+    ASSERT_EQ(
+        talos_rt_v1_static_nba_commit_wide_ordered(context, 0, 130, packed, 2),
+        TALOS_RT_OK);
+    EXPECT_EQ(values, (std::array<uint64_t, 3>{9, 43, 0x81}));
+    EXPECT_EQ(unknowns, (std::array<uint64_t, 3>{8, 0, 2}));
+    EXPECT_EQ(context->signalDiagnostics.aotNBACommits, 9u);
+  }
   talos_rt_v1_context_destroy(context);
 }
 

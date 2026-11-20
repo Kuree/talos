@@ -1,6 +1,10 @@
 // RUN: talos -O3 --vpi=off --native-scheduler=eval %s -o %t
 // RUN: %t | FileCheck %s
 // RUN: talos -O3 --vpi=off --native-scheduler=eval -emit-llvm %s | FileCheck %s --check-prefix=IR
+// RUN: talos -O3 --vpi=off --native-scheduler=eval -DORDERED_NBA %s -o %t.nba
+// RUN: %t.nba | FileCheck %s
+// RUN: talos -O3 --vpi=off --native-scheduler=eval --nba-queue=generic -DORDERED_NBA %s -o %t.queue
+// RUN: %t.queue | FileCheck %s
 //
 // The two ends of this packed variable change in one blocking assignment.
 // A computed disable must never see the words disagree (1800-2023 4.6,

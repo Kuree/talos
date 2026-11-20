@@ -1,6 +1,7 @@
 //===- SimulationNativeEvalTransaction.cpp - Local NBA captures ---------===//
 
 #include "SimulationAOTPlanning.h"
+#include "SimulationEvalNBAQueue.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -445,7 +446,7 @@ bool pendingRuntimeTransparent(LLVM::CallOp call,
       // These leaves allocate only the separate ordered queue or update
       // proof/coverage metadata. None consumes generated NBA accumulators,
       // executes an actor or invokes foreign code (LRM 4.9.4, 10.4.2).
-      *callee == "talos_rt_v1_eval_nba_reserve" ||
+      ::talos::detail::isEvalNBAReserve(*callee) ||
       *callee == "talos_rt_v1_native_promotion_invalidate_ranges" ||
       *callee == "talos_rt_v1_native_promotion_recheck_ranges" ||
       *callee == "talos_rt_v1_native_promotion_invalidate_buckets" ||
@@ -469,6 +470,7 @@ bool pendingRuntimeTransparent(LLVM::CallOp call,
       // Keep its source-order publications, without exporting unrelated next
       // values before each prefix update (LRM 4.6(b), 10.4.2).
       *callee == "talos_rt_v1_static_nba_commit_ordered" ||
+      *callee == "talos_rt_v1_static_nba_commit_wide_ordered" ||
       *callee == "talos_rt_v1_static_specialization_guard" ||
       *callee == "talos_rt_v1_static_specialization_guard_roots" ||
       *callee == "talos_rt_v1_static_nba_specialization_guard" ||

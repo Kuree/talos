@@ -65,6 +65,14 @@ bool hasGeneratedNBAStages(const GeneratedNBAStorage &generated) {
   return generated.valid != 0;
 }
 
+static const talos_rt_generated_nba_slot *
+wholeChangeBank(const talos_rt_static_nba_root &root) {
+  return root.generated_slot_count == 1 && (root.generated_slots[0].bit_width &
+                                            TALOS_RT_NBA_SLOT_WHOLE_CHANGE)
+             ? root.generated_slots
+             : nullptr;
+}
+
 bool hasGeneratedNBASlots(const talos_rt_static_nba_root &root) {
   for (uint64_t index = 0; index != root.generated_slot_count; ++index)
     if (*root.generated_slots[index].valid)
@@ -406,23 +414,25 @@ static talos_rt_status schedulerNBA(
         if (chunks > 1 && (staticSite >= (uint64_t{1} << 48) ||
                            chunks >= (uint64_t{1} << 15)))
           return fail(TALOS_RT_INVALID_ARGUMENT);
+        auto status =
+            talos_rt_v1_eval_nba_reserve_records(context, queue, chunks);
+        if (status != TALOS_RT_OK) {
+          queue->error = status;
+          return fail(status);
+        }
         for (uint64_t chunk = 0; chunk != chunks; ++chunk) {
-          auto status = talos_rt_v1_eval_nba_reserve(context, queue);
-          if (status != TALOS_RT_OK) {
-            queue->error = status;
-            return fail(status);
-          }
           uint64_t width = std::min<uint64_t>(64, bitWidth - chunk * 64);
           uint64_t recordSite =
               chunks == 1 ? staticSite
                           : (uint64_t{1} << 63) | (chunk << 48) | staticSite;
-          queue->data[queue->size++] = {
+          queue->data[queue->size + chunk] = {
               recordSite, static_cast<uint64_t>(offset + int64_t(chunk * 64)),
               loadPackedBytes(value, sourceBitOffset + chunk * 64, width),
               unknownPlane ? loadPackedBytes(
                                  unknown, sourceBitOffset + chunk * 64, width)
                            : 0};
         }
+        queue->size += chunks;
         ++context->nextSchedulerSequence;
         uint32_t word = site->root / 64;
         if (plan->nba_dirty_roots && word < plan->nba_dirty_word_count) {
@@ -3106,15 +3116,23 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_clocking_driver_nba(
 extern "C" talos_rt_status
 talos_rt_v1_eval_nba_reserve(talos_rt_context *context,
                              talos::runtime::EvalNBAQueue *queue) {
+  return talos_rt_v1_eval_nba_reserve_records(context, queue, 1);
+}
+
+extern "C" talos_rt_status
+talos_rt_v1_eval_nba_reserve_records(talos_rt_context *context,
+                                     talos::runtime::EvalNBAQueue *queue,
+                                     uint32_t records) {
   using talos::runtime::EvalNBARecord;
   if (!context || !queue || queue->size > queue->capacity ||
       (queue->data == nullptr) != (queue->capacity == 0))
     return TALOS_RT_INVALID_ARGUMENT;
-  if (queue->size < queue->capacity)
+  uint64_t needed = uint64_t{queue->size} + records;
+  if (needed <= queue->capacity)
     return TALOS_RT_OK;
   uint64_t limit =
       std::min<uint64_t>(UINT32_MAX, SIZE_MAX / sizeof(EvalNBARecord));
-  if (queue->size >= limit)
+  if (needed > limit)
     return TALOS_RT_OUT_OF_RESOURCES;
   TALOS_RT_TRY {
     // Register before allocation so every successful allocation has a cleanup
@@ -3124,8 +3142,9 @@ talos_rt_v1_eval_nba_reserve(talos_rt_context *context,
                   context->nativeEvalNBAQueues.end(),
                   queue) == context->nativeEvalNBAQueues.end())
       context->nativeEvalNBAQueues.push_back(queue);
-    uint32_t capacity = static_cast<uint32_t>(
-        std::min(limit, std::max(uint64_t{32}, uint64_t{queue->capacity} * 2)));
+    uint32_t capacity = static_cast<uint32_t>(std::min(
+        limit,
+        std::max({uint64_t{32}, uint64_t{queue->capacity} * 2, needed})));
     void *grown =
         std::realloc(queue->data, size_t{capacity} * sizeof(EvalNBARecord));
     if (!grown)
@@ -3309,6 +3328,34 @@ talos_rt_status materializeGeneratedNBAAccumulatorUnlocked(
     accumulator.unknownPlane = plan->state_unknown;
     accumulator.planeBitCount = plan->state_bit_count;
     accumulator.execRegion = execRegion;
+    if (auto *bank = wholeChangeBank(root)) {
+      if (!context->nextSchedulerSequence ||
+          *bank->valid > TALOS_RT_NBA_WHOLE_COMPARED)
+        return *bank->valid > TALOS_RT_NBA_WHOLE_COMPARED
+                   ? TALOS_RT_INVALID_LIFECYCLE
+                   : TALOS_RT_OUT_OF_RESOURCES;
+      // A cold site may follow a generated whole capture. Merge in this
+      // order so a later partial write sees the captured pending value and
+      // earlier round trips survive (1800-2023 4.6(b), 9.4.2, 10.4.2).
+      for (uint64_t bit = 0; bit < root.bit_width; bit += 64) {
+        size_t word = bit / 64;
+        uint64_t mask =
+            packedWidthMask(std::min<uint64_t>(64, root.bit_width - bit));
+        uint64_t next = bank->value[word] & mask;
+        uint64_t unknown = bank->unknown ? bank->unknown[word] & mask : 0;
+        recordStaticNBATransient(accumulator, word, mask, next, unknown);
+        if (*bank->valid == TALOS_RT_NBA_WHOLE_REWRITTEN)
+          accumulator.transient[word] |= bank->transition[word] & mask;
+        accumulator.value[word] = next;
+        accumulator.unknown[word] = unknown;
+        accumulator.writeMask[word] = mask;
+      }
+      accumulator.sequence = context->nextSchedulerSequence++;
+      markStaticNBAAccumulatorPending(context, rootIndex, accumulator);
+      context->signalDiagnostics.aotNBAStages += (root.bit_width + 63) / 64;
+      *bank->valid = 0;
+      return TALOS_RT_OK;
+    }
     auto status = consumeGeneratedNBASlots(
         root, [&](uint64_t offset, uint64_t width, uint64_t value,
                   uint64_t unknown, const talos_rt_generated_nba_slot &) {
@@ -3826,6 +3873,18 @@ talos_rt_status tryCommitGeneratedNBA256Unlocked(talos_rt_context *context,
   return TALOS_RT_OK;
 }
 
+// A detached native image still needs the committed bits even when the
+// generated current value is unchanged (1800-2023 4.5, 10.4.2).
+static bool
+nativeImageMatchesNBAPlan(const talos_rt_context *context,
+                          const talos_rt_native_schedule_plan *plan) {
+  return (!context->nativeStateValue && !context->nativeStateUnknown &&
+          context->nativeStateBitCount == 0) ||
+         (context->nativeStateValue == plan->state_value &&
+          context->nativeStateUnknown == plan->state_unknown &&
+          context->nativeStateBitCount == plan->state_bit_count);
+}
+
 talos_rt_status tryCommitGeneratedNBAScalarUnlocked(
     talos_rt_context *context, uint32_t rootIndex, uint32_t barrierRegion,
     bool &changed, bool &handled, bool trustedStaticFanout = false) {
@@ -3880,10 +3939,11 @@ talos_rt_status tryCommitGeneratedNBAScalarUnlocked(
       (oldValue & ~writeMask) | (generated->value[0] & writeMask);
   uint64_t newUnknown =
       (oldUnknown & ~writeMask) | (generated->unknown[0] & writeMask);
-  if (!storeNativeScheduleStateUnlocked(context, stateOffset, root.bit_width,
+  bool rootChanged = oldValue != newValue || oldUnknown != newUnknown;
+  if ((rootChanged || !nativeImageMatchesNBAPlan(context, plan)) &&
+      !storeNativeScheduleStateUnlocked(context, stateOffset, root.bit_width,
                                         newValue, newUnknown, oldUnknown))
     return TALOS_RT_LAYOUT_MISMATCH;
-  bool rootChanged = ((oldValue ^ newValue) | (oldUnknown ^ newUnknown)) != 0;
   changed |= rootChanged;
   context->signalDiagnostics.aotNBAStages += stageCount;
   generated->write_mask[0] = 0;
@@ -3921,12 +3981,7 @@ commitGeneratedNBASlotsUnlocked(talos_rt_context *context, uint32_t rootIndex,
           plan->state_value &&
       reinterpret_cast<const uint8_t *>(context->stateUnknown.data()) ==
           plan->state_unknown;
-  const bool sharedNative =
-      (!context->nativeStateValue && !context->nativeStateUnknown &&
-       context->nativeStateBitCount == 0) ||
-      (context->nativeStateValue == plan->state_value &&
-       context->nativeStateUnknown == plan->state_unknown &&
-       context->nativeStateBitCount == plan->state_bit_count);
+  const bool sharedNative = nativeImageMatchesNBAPlan(context, plan);
   auto status = consumeGeneratedNBASlots(
       root,
       [&](uint64_t offset, uint64_t width, uint64_t value, uint64_t unknown,
@@ -4001,6 +4056,10 @@ commitGeneratedNBASlotsUnlocked(talos_rt_context *context, uint32_t rootIndex,
       });
 }
 
+static std::optional<talos_rt_status>
+commitWholeChangeBank(talos_rt_context *context, uint32_t index,
+                      const talos_rt_generated_nba_slot &bank, bool &changed);
+
 talos_rt_status commitStaticNBARootUnlocked(talos_rt_context *context,
                                             uint32_t rootIndex,
                                             uint32_t barrierRegion,
@@ -4017,8 +4076,14 @@ talos_rt_status commitStaticNBARootUnlocked(talos_rt_context *context,
   GeneratedNBAStorage generated(root.generated_accumulator,
                                 context->twoState());
   if (barrierRegion == TALOS_RT_REGION_NBA && hasGeneratedNBASlots(root)) {
-    if (!accumulator.valid)
-      return commitGeneratedNBASlotsUnlocked(context, rootIndex, changed);
+    if (!accumulator.valid) {
+      if (auto *bank = wholeChangeBank(root)) {
+        if (auto status =
+                commitWholeChangeBank(context, rootIndex, *bank, changed))
+          return *status;
+      } else
+        return commitGeneratedNBASlotsUnlocked(context, rootIndex, changed);
+    }
     if (auto status = materializeGeneratedNBAAccumulatorUnlocked(
             context, rootIndex, barrierRegion);
         status != TALOS_RT_OK)
@@ -4131,8 +4196,9 @@ talos_rt_status commitStaticNBARootUnlocked(talos_rt_context *context,
           (oldUnknown & ~writeMask) | (accumulator.unknown[word] & writeMask);
       uint64_t changedBits =
           ((oldValue ^ newValue) | (oldUnknown ^ newUnknown) |
-           (word < accumulator.transient.size() ? accumulator.transient[word]
-                                                : uint64_t{0})) &
+           (word < accumulator.transient.size()
+                ? (accumulator.transient[word] & writeMask)
+                : uint64_t{0})) &
           widthMask;
       if (trackTransitions) {
         uint64_t oldZero = ~oldUnknown & ~oldValue & widthMask;
@@ -4457,27 +4523,34 @@ talos_rt_status commitStaticNBAAccumulatorsUnlocked(talos_rt_context *context,
   return status;
 }
 
-extern "C" talos_rt_status talos_rt_v1_static_nba_commit_ordered(
-    talos_rt_context *context, uint32_t rootIndex, int64_t offset,
-    uint64_t width, uint64_t value, uint64_t unknown) {
-  if (!context || !context->nativeSchedulePlan || width == 0 || width > 64 ||
-      rootIndex >= context->nativeScheduleNBARootCount)
-    return TALOS_RT_INVALID_ARGUMENT;
-  const auto &root = context->nativeScheduleNBARoots[rootIndex];
+static const NativeStaticState *
+orderedNBAState(const talos_rt_context *context,
+                const talos_rt_static_nba_root &root) {
   const auto *plan = context->nativeSchedulePlan;
   const auto *state = findNativeStaticState(context, root.static_state);
   if (!state || state->bitWidth != root.bit_width ||
       state->bitOffset > plan->state_bit_count ||
       root.bit_width > plan->state_bit_count - state->bitOffset)
-    return TALOS_RT_LAYOUT_MISMATCH;
-  if (offset <= -int64_t(width) || offset >= int64_t(root.bit_width))
+    return nullptr;
+  return state;
+}
+
+template <typename Capture>
+static talos_rt_status
+commitOrderedNBAWord(talos_rt_context *context, uint32_t staticState,
+                     const NativeStaticState &state, int64_t offset,
+                     uint64_t width, uint64_t value, uint64_t unknown,
+                     Capture capture) {
+  const auto *plan = context->nativeSchedulePlan;
+  if (offset <= -int64_t(width) ||
+      (offset >= 0 && uint64_t(offset) >= state.bitWidth))
     return TALOS_RT_OK;
   uint64_t source = offset < 0 ? uint64_t(-offset) : 0;
   uint64_t destination = offset < 0 ? 0 : uint64_t(offset);
-  width = std::min(width - source, root.bit_width - destination);
+  width = std::min(width - source, state.bitWidth - destination);
   value >>= source;
   unknown >>= source;
-  uint64_t planeBit = state->bitOffset + destination;
+  uint64_t planeBit = state.bitOffset + destination;
   auto overrideMask = [&](const std::vector<uint64_t> &plane) {
     return plane.empty() ? uint64_t{0}
                          : loadPackedBytes(
@@ -4490,23 +4563,395 @@ extern "C" talos_rt_status talos_rt_v1_static_nba_commit_ordered(
   uint64_t oldUnknown = loadPackedBytes(plan->state_unknown, planeBit, width);
   uint64_t newValue = (oldValue & ~mask) | (value & mask);
   uint64_t newUnknown = (oldUnknown & ~mask) | (unknown & mask);
+  bool changed = oldValue != newValue || oldUnknown != newUnknown;
   if (context->execution &&
       context->execution->state_bit_count == plan->state_bit_count) {
-    storePackedBytes(reinterpret_cast<uint8_t *>(context->stateValue.data()),
-                     planeBit, width, newValue);
-    storePackedBytes(reinterpret_cast<uint8_t *>(context->stateUnknown.data()),
-                     planeBit, width, newUnknown);
+    auto *canonicalValue =
+        reinterpret_cast<uint8_t *>(context->stateValue.data());
+    auto *canonicalUnknown =
+        reinterpret_cast<uint8_t *>(context->stateUnknown.data());
+    if (canonicalValue != plan->state_value)
+      storePackedBytes(canonicalValue, planeBit, width, newValue);
+    if (canonicalUnknown != plan->state_unknown)
+      storePackedBytes(canonicalUnknown, planeBit, width, newUnknown);
   }
-  if (!storeNativeScheduleStateUnlocked(context, planeBit, width, newValue,
+  if ((changed || !nativeImageMatchesNBAPlan(context, plan)) &&
+      !storeNativeScheduleStateUnlocked(context, planeBit, width, newValue,
                                         newUnknown, oldUnknown))
     return TALOS_RT_LAYOUT_MISMATCH;
   ++context->signalDiagnostics.aotNBAStages;
   ++context->signalDiagnostics.aotNBACommits;
-  if (((oldValue ^ newValue) | (oldUnknown ^ newUnknown)) != 0)
-    talos_rt_v1_scheduler_static_transition(context, root.static_state,
-                                            destination, width, oldValue,
-                                            oldUnknown, newValue, newUnknown);
+  capture(staticState, destination, width, oldValue, oldUnknown, newValue,
+          newUnknown);
   return context->schedulerStatus;
+}
+
+extern "C" talos_rt_status talos_rt_v1_static_nba_commit_ordered(
+    talos_rt_context *context, uint32_t rootIndex, int64_t offset,
+    uint64_t width, uint64_t value, uint64_t unknown) {
+  if (!context || !context->nativeSchedulePlan || width == 0 || width > 64 ||
+      rootIndex >= context->nativeScheduleNBARootCount)
+    return TALOS_RT_INVALID_ARGUMENT;
+  const auto &root = context->nativeScheduleNBARoots[rootIndex];
+  const auto *state = orderedNBAState(context, root);
+  if (!state)
+    return TALOS_RT_LAYOUT_MISMATCH;
+  return commitOrderedNBAWord(
+      context, root.static_state, *state, offset, width, value, unknown,
+      [&](uint32_t state, uint64_t low, uint64_t bits, uint64_t oldV,
+          uint64_t oldU, uint64_t newV, uint64_t newU) {
+        if (oldV != newV || oldU != newU)
+          talos_rt_v1_scheduler_static_transition(context, state, low, bits,
+                                                  oldV, oldU, newV, newU);
+      });
+}
+
+// At this FIFO position all preceding updates have committed. A packet with
+// identical value and X/Z planes cannot produce an edge (4.6(b), 9.4.2).
+// Only the shared image can be compared once for the entire assignment.
+static bool sharedOrderedPacketImage(const talos_rt_context *context,
+                                     const talos_rt_native_schedule_plan *plan,
+                                     uint64_t bit) {
+  return bit % 8 == 0 && context->execution &&
+         context->execution->state_bit_count == plan->state_bit_count &&
+         nativeImageMatchesNBAPlan(context, plan) &&
+         context->stateValue.shared() &&
+         (context->stateUnknown.shared() ||
+          (context->twoState() && !plan->state_unknown)) &&
+         !context->powerNBAs && context->assignMask.empty() &&
+         context->forceMask.empty() &&
+         reinterpret_cast<const uint8_t *>(context->stateValue.data()) ==
+             plan->state_value &&
+         reinterpret_cast<const uint8_t *>(context->stateUnknown.data()) ==
+             plan->state_unknown;
+}
+
+// The captured shadow becomes CURRENT only in NBA. A change-only receiver
+// is sensitive to both planes and to an intermediate round trip. A writable
+// observer or a knownness transition uses the ordinary per-root commit.
+static std::optional<talos_rt_status>
+commitWholeChangeBank(talos_rt_context *context, uint32_t index,
+                      const talos_rt_generated_nba_slot &bank, bool &changed) {
+  const auto *plan = context->nativeSchedulePlan;
+  const auto &root = context->nativeScheduleNBARoots[index];
+  const auto *state = orderedNBAState(context, root);
+  uint64_t handle = talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_STATIC,
+                                                  root.static_state, 0);
+  if (!state || *bank.valid > TALOS_RT_NBA_WHOLE_COMPARED ||
+      activeNativeAOTContext != context || lockedNativeAOTContext != context ||
+      context->nativeScheduleDeoptimized ||
+      context->nativeScheduleExternalWritePending ||
+      !sharedOrderedPacketImage(context, plan, state->bitOffset) ||
+      root.static_state >=
+          context->nativeScheduleStaticStateFanoutEdges.size() ||
+      (context->nativeScheduleStaticStateFanoutEdges[root.static_state] &
+       ~(1U << TALOS_RT_WAIT_EDGE_CHANGE)) ||
+      !talos_rt_transition_unconsumed_unlocked(context, handle) ||
+      !canUseStaticAOTFanout(context))
+    return std::nullopt;
+  auto &delta = context->staticNBAAccumulators[index].changed;
+  size_t words = (state->bitWidth + 63) / 64;
+  if (delta.size() != words)
+    return TALOS_RT_LAYOUT_MISMATCH;
+  uint8_t *values = plan->state_value + state->bitOffset / 8;
+  uint8_t *unknowns = plan->state_unknown
+                          ? plan->state_unknown + state->bitOffset / 8
+                          : nullptr;
+  size_t whole = state->bitWidth / 64;
+  unsigned tail = state->bitWidth % 64;
+  uint64_t tailMask = tail ? packedWidthMask(tail) : 0;
+  // Unchanged X/Z lanes retain every promotion certificate. The general
+  // path also handles a nonzero unknown payload in a two-state image.
+  if (unknowns && bank.unknown) {
+    if (std::memcmp(unknowns, bank.unknown, whole * 8) ||
+        (tail && loadPackedBytes(unknowns, whole * 64, tail) !=
+                     (bank.unknown[whole] & tailMask)))
+      return std::nullopt;
+  } else if (bank.unknown) {
+    uint64_t any = 0;
+    for (size_t i = 0; i != whole; ++i)
+      any |= bank.unknown[i];
+    if (any || (tail && (bank.unknown[whole] & tailMask)))
+      return std::nullopt;
+  } else if (unknowns) {
+    return std::nullopt;
+  }
+  const uint64_t *mask = bank.transition;
+  bool captured = *bank.valid == TALOS_RT_NBA_WHOLE_COMPARED;
+  if (!captured) {
+    for (size_t w = 0; w < whole; ++w)
+      delta[w] = packedLittleEndian(loadPackedWord<uint64_t>(values + w * 8) ^
+                                    bank.value[w]);
+    if (tail)
+      delta[whole] = packedLittleEndian(
+          (loadPackedBytes(values, whole * 64, tail) ^ bank.value[whole]) &
+          tailMask);
+    if (*bank.valid == TALOS_RT_NBA_WHOLE_REWRITTEN)
+      for (size_t w = 0; w < words; ++w)
+        delta[w] |=
+            packedLittleEndian(bank.transition[w] &
+                               ((tail && w == whole) ? tailMask : UINT64_MAX));
+    mask = delta.data();
+  }
+  size_t first = 0, end = words;
+  while (first < end && !mask[first])
+    ++first;
+  if (first != end) {
+    while (!mask[end - 1])
+      --end;
+    size_t fullEnd = std::min(end, whole);
+    if (fullEnd > first)
+      std::memcpy(values + first * 8, bank.value + first,
+                  (fullEnd - first) * 8);
+    if (end > whole)
+      storePackedBytes(values, whole * 64, tail, bank.value[whole]);
+    changed = true;
+    uint64_t low = first * 64;
+    uint64_t bits = std::min<uint64_t>(end * 64, state->bitWidth) - low;
+    const uint8_t *changes = reinterpret_cast<const uint8_t *>(mask + first);
+    if (!publishStaticAOTSignalTransitionUnlocked(
+            context, nativeHandleOffset(handle, low), bits, changes, nullptr,
+            nullptr, nullptr))
+      return TALOS_RT_INVALID_LIFECYCLE;
+    if (++context->schedulerEpoch == 0)
+      context->schedulerEpoch = 1;
+  }
+  if (context->signalDiagnosticsEnabled) {
+    ++context->wholeChangeBankCommits;
+    context->wholeChangeBankRewrites +=
+        *bank.valid == TALOS_RT_NBA_WHOLE_REWRITTEN;
+  }
+  *bank.valid = 0;
+  context->signalDiagnostics.aotNBAStages += words;
+  context->signalDiagnostics.aotNBACommits += words;
+  return context->schedulerStatus;
+}
+
+// Both packet formats carry native i64 words. Consume a complete captured
+// assignment before delivering its change to any observer (1800-2023 9.4.2).
+struct OrderedNBAPlanes {
+  const uint8_t *values;
+  const uint8_t *unknowns;
+  size_t stride;
+
+  uint64_t word(const uint8_t *base, size_t i) const {
+    uint64_t result;
+    std::memcpy(&result, base + i * stride, sizeof(result));
+    return result;
+  }
+  uint64_t value(size_t i) const { return word(values, i); }
+  uint64_t unknown(size_t i) const { return word(unknowns, i); }
+};
+
+static bool unchangedOrderedPacket(const talos_rt_native_schedule_plan *plan,
+                                   uint64_t bit, uint64_t width,
+                                   const OrderedNBAPlanes &planes) {
+  const uint8_t *values = plan->state_value + bit / 8;
+  const uint8_t *unknowns =
+      plan->state_unknown ? plan->state_unknown + bit / 8 : nullptr;
+  uint64_t words = width / 64;
+  for (uint64_t i = 0; i < words; ++i) {
+    uint64_t x = unknowns ? loadPackedWord<uint64_t>(unknowns + i * 8) : 0;
+    if (planes.value(i) != loadPackedWord<uint64_t>(values + i * 8) ||
+        planes.unknown(i) != x)
+      return false;
+  }
+  unsigned tail = width % 64;
+  if (!tail)
+    return true;
+  uint64_t mask = packedWidthMask(tail);
+  return (planes.value(words) & mask) ==
+             loadPackedBytes(values, words * 64, tail) &&
+         (planes.unknown(words) & mask) ==
+             loadPackedBytes(unknowns, words * 64, tail);
+}
+
+// A changed packed assignment publishes once at its NBA position. When the
+// images coincide and nobody samples the source synchronously, only the edge
+// masks have to survive until publication. Changed knownness still uses the
+// normal promotion and observer bookkeeping (1800-2023 4.6(b), 9.4.2, 10.4.2).
+static std::optional<talos_rt_status>
+commitQuietOrderedPacket(talos_rt_context *context,
+                         const talos_rt_native_schedule_plan *plan,
+                         uint64_t handle, uint64_t absolute, uint64_t width,
+                         const OrderedNBAPlanes &planes) {
+  if (activeNativeAOTContext != context || lockedNativeAOTContext != context ||
+      context->schedulerStatus != TALOS_RT_OK ||
+      context->activeLogicalProcessToken || context->vpiState ||
+      context->schedulerCohortEnabled ||
+      !talos_rt_transition_unconsumed_unlocked(context, handle) ||
+      !canUseStaticAOTFanout(context))
+    return std::nullopt;
+  size_t words = (width + 63) / 64;
+  std::array<uint64_t, 3 * 32> local;
+  std::vector<uint64_t> overflow;
+  if (3 * words > local.size())
+    overflow.resize(3 * words);
+  uint64_t *change = overflow.empty() ? local.data() : overflow.data();
+  uint64_t *rise = change + words, *fall = rise + words;
+  uint8_t *values = plan->state_value + absolute / 8;
+  const uint8_t *unknowns =
+      plan->state_unknown ? plan->state_unknown + absolute / 8 : nullptr;
+  for (size_t i = 0; i < words; ++i) {
+    uint64_t low = i * 64, n = std::min<uint64_t>(64, width - low);
+    uint64_t mask = packedWidthMask(n);
+    auto load = [&](const uint8_t *plane) {
+      return n == 64 ? loadPackedWord<uint64_t>(plane + i * 8)
+                     : loadPackedBytes(plane, low, n);
+    };
+    uint64_t unknown = unknowns ? load(unknowns) : 0;
+    if (unknown != (planes.unknown(i) & mask))
+      return std::nullopt;
+    uint64_t old = load(values);
+    uint64_t delta = old ^ (planes.value(i) & mask);
+    change[i] = packedLittleEndian(delta);
+    rise[i] = packedLittleEndian(delta & ~unknown & ~old);
+    fall[i] = packedLittleEndian(delta & ~unknown & old);
+  }
+  // The caller already excluded an identical image. Check every word before
+  // altering the first, then write only the differing lanes.
+  for (size_t i = 0; i < words; ++i) {
+    if (!change[i])
+      continue;
+    uint64_t low = i * 64, n = std::min<uint64_t>(64, width - low);
+    if (n == 64)
+      storePackedWord(values + i * 8, planes.value(i));
+    else
+      storePackedBytes(values, low, n, planes.value(i));
+  }
+  auto bytes = [](const uint64_t *word) {
+    return reinterpret_cast<const uint8_t *>(word);
+  };
+  if (!publishStaticAOTSignalTransitionUnlocked(context, handle, width,
+                                                bytes(change), bytes(rise),
+                                                bytes(fall), nullptr) &&
+      !talos_rt_publish_signal_transition_batch_unlocked(
+          context, handle, width, bytes(change), bytes(rise), bytes(fall), 0,
+          nullptr))
+    return context->schedulerStatus;
+  if (++context->schedulerEpoch == 0)
+    context->schedulerEpoch = 1;
+  context->signalDiagnostics.aotNBAStages += words;
+  context->signalDiagnostics.aotNBACommits += words;
+  if (context->signalDiagnosticsEnabled)
+    ++context->orderedSharedPackets;
+  return context->schedulerStatus;
+}
+
+extern "C" talos_rt_status talos_rt_v1_static_nba_commit_wide_ordered(
+    talos_rt_context *context, uint32_t rootIndex, uint64_t width,
+    const void *data, uint32_t available) {
+  if (!context || !context->nativeSchedulePlan || !data ||
+      rootIndex >= context->nativeScheduleNBARootCount || width <= 64 ||
+      width > (uint64_t{1} << 15) * 64)
+    return TALOS_RT_INVALID_ARGUMENT;
+  const uint64_t chunks = (width + 63) / 64;
+  if (!available)
+    return TALOS_RT_INVALID_ARGUMENT;
+  const auto *records =
+      static_cast<const talos::runtime::EvalNBARecord *>(data);
+  const uint64_t first = records[0].site;
+  const int64_t offset = static_cast<int64_t>(records[0].offset);
+  if (offset > INT64_MAX - int64_t((chunks - 1) * 64))
+    return TALOS_RT_INVALID_ARGUMENT;
+  const auto *bytes = static_cast<const uint8_t *>(data);
+  OrderedNBAPlanes planes;
+  if (talos::runtime::isPackedWideNBASite(first)) {
+    if (talos::runtime::packedWideNBARecords(chunks) > available)
+      return TALOS_RT_INVALID_ARGUMENT;
+    planes = {bytes + 16, bytes + 16 + chunks * 8, 8};
+  } else {
+    if ((first >> 48) != 0x8000 || chunks > available)
+      return TALOS_RT_INVALID_ARGUMENT;
+    for (uint64_t i = 1; i < chunks; ++i)
+      if (records[i].site != (first | (i << 48)) ||
+          records[i].offset != uint64_t(offset + int64_t(i * 64)))
+        return TALOS_RT_INVALID_ARGUMENT;
+    planes = {bytes + 16, bytes + 24, sizeof(*records)};
+  }
+
+  const auto &root = context->nativeScheduleNBARoots[rootIndex];
+  const auto *state = orderedNBAState(context, root);
+  const auto *plan = context->nativeSchedulePlan;
+  if (!state || !plan->state_value ||
+      (!plan->state_unknown && !context->twoState()))
+    return TALOS_RT_LAYOUT_MISMATCH;
+  if (offset <= -int64_t(width) ||
+      (offset >= 0 && uint64_t(offset) >= root.bit_width))
+    return TALOS_RT_OK;
+  uint64_t low = offset < 0 ? 0 : uint64_t(offset);
+  uint64_t bits = std::min(width - (offset < 0 ? uint64_t(-offset) : 0),
+                           root.bit_width - low);
+  uint64_t absolute = state->bitOffset + low;
+  uint64_t handle = talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_STATIC,
+                                                  root.static_state, low);
+  if (handle == UINT64_MAX)
+    return TALOS_RT_INVALID_HANDLE;
+  // Check the mirror for the complete update before altering its first word.
+  if ((context->nativeStateValue || context->nativeStateUnknown ||
+       context->nativeStateBitCount) &&
+      (!context->nativeStateValue ||
+       (!context->nativeStateUnknown && !context->twoState()) ||
+       absolute > context->nativeStateBitCount ||
+       bits > context->nativeStateBitCount - absolute))
+    return TALOS_RT_LAYOUT_MISMATCH;
+  bool shared =
+      bits == width && sharedOrderedPacketImage(context, plan, absolute);
+  if (shared && unchangedOrderedPacket(plan, absolute, width, planes)) {
+    context->signalDiagnostics.aotNBAStages += chunks;
+    context->signalDiagnostics.aotNBACommits += chunks;
+    return context->schedulerStatus;
+  }
+  TALOS_RT_TRY {
+    if (shared)
+      if (auto status = commitQuietOrderedPacket(context, plan, handle,
+                                                 absolute, width, planes))
+        return *status;
+    const size_t words = (bits + 63) / 64;
+    std::array<uint64_t, 4 * 4> local{};
+    std::vector<uint64_t> overflow;
+    if (4 * words > local.size())
+      overflow.resize(4 * words);
+    uint64_t *oldV = overflow.empty() ? local.data() : overflow.data();
+    uint64_t *oldU = oldV + words, *newV = oldU + words, *newU = newV + words;
+    bool changed = false;
+    for (uint64_t i = 0; i < chunks; ++i) {
+      auto status = commitOrderedNBAWord(
+          context, root.static_state, *state, offset + int64_t(i * 64),
+          std::min<uint64_t>(64, width - i * 64), planes.value(i),
+          planes.unknown(i),
+          [&](uint32_t, uint64_t dest, uint64_t span, uint64_t before,
+              uint64_t beforeX, uint64_t after, uint64_t afterX) {
+            changed |= before != after || beforeX != afterX;
+            uint64_t bit = dest - low;
+            if (bit % 64 == 0) {
+              oldV[bit / 64] = before;
+              oldU[bit / 64] = beforeX;
+              newV[bit / 64] = after;
+              newU[bit / 64] = afterX;
+            } else {
+              storePackedBits(oldV, bit, span, before);
+              storePackedBits(oldU, bit, span, beforeX);
+              storePackedBits(newV, bit, span, after);
+              storePackedBits(newU, bit, span, afterX);
+            }
+          });
+      if (status != TALOS_RT_OK)
+        return status;
+    }
+    // 1800-2023 4.6(b), 9.4.2, 10.4.2: observers of a packed assignment
+    // sample its complete new value at this FIFO position. A callback may
+    // re-enter the scheduler or grow the queue; all record reads are done.
+    if (changed)
+      talos_rt_v1_scheduler_signal_transition(
+          context, handle, bits, reinterpret_cast<const uint8_t *>(oldV),
+          reinterpret_cast<const uint8_t *>(oldU),
+          reinterpret_cast<const uint8_t *>(newV),
+          reinterpret_cast<const uint8_t *>(newU));
+    return context->schedulerStatus;
+  }
+  TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
+  TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_ARGUMENT; }
 }
 
 extern "C" talos_rt_status
@@ -4558,12 +5003,7 @@ extern "C" talos_rt_status talos_rt_v1_static_nba_commit_batch(
       !plan->nba_dirty_roots || !plan->nba_dirty_summary)
     return TALOS_RT_OK;
   ++context->signalDiagnostics.aotNBABatches;
-  const bool sharedNative =
-      (!context->nativeStateValue && !context->nativeStateUnknown &&
-       context->nativeStateBitCount == 0) ||
-      (context->nativeStateValue == plan->state_value &&
-       context->nativeStateUnknown == plan->state_unknown &&
-       context->nativeStateBitCount == plan->state_bit_count);
+  const bool sharedNative = nativeImageMatchesNBAPlan(context, plan);
   for (uint32_t i = 0; i != count; ++i) {
     uint32_t index = roots[i];
     if ((i && index <= roots[i - 1]) ||

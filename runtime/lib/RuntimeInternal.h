@@ -3342,6 +3342,8 @@ struct talos_rt_context {
   uint64_t scalarNBAWordPublications = 0;
   uint64_t packedFIFOReplays = 0;
   std::unique_ptr<PackedNBAChangeMap> packedNBAChanges;
+  uint64_t orderedSharedPackets = 0;
+  uint64_t wholeChangeBankCommits = 0, wholeChangeBankRewrites = 0;
   talos_rt_context();
   ~talos_rt_context();
 };

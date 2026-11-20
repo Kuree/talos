@@ -1,5 +1,7 @@
-// RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o %t.llvm.mlir
-// RUN: FileCheck %s --check-prefix=PLAN < %t.llvm.mlir
+// RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off})' -o %t.scheduled.mlir
+// RUN: talos-opt %t.scheduled.mlir --convert-talos-sim-processes-to-llvm-coroutines | FileCheck %s --check-prefix=PLAN
+// RUN: talos-opt %t.scheduled.mlir '--test-talos-set-module-attributes=attrs="{schedule.force_generic_nba, native.closed_executable}"' --convert-talos-sim-processes-to-llvm-coroutines --materialize-runtime-byte-globals -o %t.generic.mlir
+// RUN: FileCheck %s --check-prefix=GENERIC --implicit-check-not=__talos_eval_ordered_nba_queue_v1 --implicit-check-not=__talos_aot_nba_accumulator_ < %t.generic.mlir
 
 // The writer runs twice before the NBA barrier: src=1 stages one, then a
 // different actor resets src and stages zero at the SAME semantic site.
@@ -17,11 +19,17 @@
 // PLAN: llvm.store %[[NEXT]], %{{.*}} : i32, !llvm.ptr
 // PLAN-LABEL: llvm.func @__talos_eval_dispatch_v1
 
+// Forcing the generic queue keeps the generated writer and dispatcher.
+// Each activation enqueues its captured value through the ordinary NBA ABI.
+// GENERIC-LABEL: llvm.func @writer.__talos_eval_body_0(
+// GENERIC: llvm.call @talos_rt_v1_scheduler_nba_scalar(
+// GENERIC-LABEL: llvm.func @__talos_eval_dispatch_v1(
+
 !bit = !simulation.logic<1>
 !ref = !simulation.ref<!bit>
 !wide = !simulation.logic<65>
 !wref = !simulation.ref<!wide>
-module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", schedule.native_scheduler = 3 : i32} {
+module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", schedule.native_scheduler = 3 : i32} {
   simulation.design @ordered {
     simulation.scope.decl 0
     simulation.storage.decl 0 in 0 : !bit design
@@ -36,6 +44,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     simulation.code_unit.decl 5 in 0 always hierarchy "ordered.reset"
     simulation.code_unit.decl 6 in 0 always hierarchy "ordered.edge"
     simulation.code_unit.decl 7 in 0 initial hierarchy "ordered.check"
+    simulation.code_unit.decl 8 in 0 initial hierarchy "ordered.peek"
     simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 1 : i64} {
       %clk = simulation.context.storage %ctx[0] : !ref
       %src = simulation.context.storage %ctx[1] : !ref
@@ -55,6 +64,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
       %d = simulation.spawn @reset(%ctx, %kick, %src) : !simulation.context, !ref, !ref -> !simulation.process
       %e = simulation.spawn @edge(%ctx, %data, %seen) : !simulation.context, !wref, !ref -> !simulation.process
       %f = simulation.spawn @check(%ctx, %data, %seen) : !simulation.context, !wref, !ref -> !simulation.process
+      %g = simulation.spawn @peek(%ctx, %clk, %data, %seen) : !simulation.context, !ref, !wref, !ref -> !simulation.process
       simulation.return
     }
     simulation.func @clock(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %clk: !ref {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}) attributes {entry_kind = 3 : i32, code_unit_id = 2 : i64} {
@@ -105,6 +115,22 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
       %one = simulation.logic.constant true, false : !bit
       simulation.ref.store %one to %seen : !bit, !ref
       cf.br ^wait
+    }
+    // The edge wakes an ordinary testbench process that resumes again at
+    // #0. It must still see pre-NBA storage and the unwoken edge observer.
+    simulation.func @peek(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %clk: !ref {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}, %data: !wref {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 3 : i64}, %seen: !ref {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 4 : i64}) attributes {entry_kind = 1 : i32, code_unit_id = 8 : i64} {
+      simulation.suspend.edge posedge %clk to ^active {site = #schedule.continuation<id = 7>} : !ref
+    ^active:
+      %zero = simulation.time.constant 0
+      simulation.suspend.delay %zero to ^inactive {site = #schedule.continuation<id = 8>, timing = #schedule.timing_site<id = 2, kind = calendar>}
+    ^inactive:
+      %lo = simulation.ref.extract %data from 0 : !wref -> !ref
+      %value = simulation.ref.load %lo : !ref -> !bit
+      %edge = simulation.ref.load %seen : !ref -> !bit
+      %fmt = simulation.bytes.constant "inactive=%b edge=%b"
+      %fd = arith.constant 1 : i32
+      simulation.display %ctx to %fd(%fmt, %value, %edge) newline = true radix = <binary> flags = [0, 0, 0] : !simulation.bytes, !bit, !bit
+      simulation.return
     }
     simulation.func @check(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %data: !wref {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 3 : i64}, %seen: !ref {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 4 : i64}) attributes {entry_kind = 1 : i32, code_unit_id = 7 : i64} {
       %delay = simulation.time.constant 3

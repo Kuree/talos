@@ -777,6 +777,70 @@ FailureOr<NativeStaticNBAPlan> buildNativeStaticNBAPlan(
                  << " disjoint-writer-sites=" << plan.unchangedSiteWidths.size()
                  << " closed-executable="
                  << native::has<native::ClosedExecutable>(module) << '\n';
+  // Wide slots can retain the complete next image and every overwritten
+  // change. Admit only an immediate whole-variable update at every source
+  // site, including startup and all execution-domain copies. The ordinary
+  // accumulator consumes the same change mask for runtime writers.
+  plan.wholeChangeBanks.assign(plan.roots.size(), false);
+  if (closedWriters && completeWriters &&
+      native::has<native::ClosedExecutable>(module) &&
+      !schedule::has<schedule::Field::ForceGenericNBA>(module) &&
+      !sim::has<sim::metadata::SnapshotPublications>(module)) {
+    for (unsigned i = 0; i != plan.roots.size(); ++i)
+      plan.wholeChangeBanks[i] =
+          plan.changeWatchedRoots[i] && seen[i] && immediateOnly[i] &&
+          !plan.mergeSafeRoots[i] &&
+          plan.roots[i].bit_width > TALOS_RT_SCALAR_NBA_MAX_BITS;
+    for (const auto &site : plan.sites) {
+      auto fixed = plan.siteFixedOffsets.find(site.site);
+      if (fixed == plan.siteFixedOffsets.end() || fixed->second ||
+          plan.siteWidths.lookup(site.site) != plan.roots[site.root].bit_width)
+        plan.wholeChangeBanks[site.root] = false;
+    }
+    // For a root already served by the packed accumulator, the change bank
+    // amortizes its publication when a producer can overwrite its capture.
+    // Two mutually exclusive assignment sites (e.g. reset and data) alone
+    // do not provide that reuse. A larger root otherwise needs chunk replay.
+    DenseMap<std::pair<Operation *, uint32_t>,
+             SmallVector<sim::SimNBAEnqueueOp>>
+        previousCaptures;
+    llvm::SmallDenseSet<uint32_t, 8> overwrites;
+    for (sim::SimNBAEnqueueOp enqueue : enqueues) {
+      auto site = enqueue.getSiteAttr();
+      auto target =
+          site ? plan.siteRoots.find(site.getId()) : plan.siteRoots.end();
+      if (target == plan.siteRoots.end())
+        continue;
+      uint32_t root = target->second;
+      if (!plan.wholeChangeBanks[root] || overwrites.contains(root) ||
+          plan.roots[root].bit_width > TALOS_RT_GENERATED_NBA_MAX_BITS)
+        continue;
+      auto function = enqueue->getParentOfType<sim::SimFuncOp>();
+      if (!function ||
+          !schedule::has<schedule::Field::EvalRawCaptures>(function))
+        continue;
+      auto &previous = previousCaptures[{function.getOperation(), root}];
+      if ((isCyclic(enqueue->getBlock()) &&
+           !writesFor(function).executesAtMostOnce(enqueue)) ||
+          llvm::any_of(previous, [&](sim::SimNBAEnqueueOp other) {
+            return !writesFor(function).mutuallyExclusive(other, enqueue);
+          }))
+        overwrites.insert(root);
+      previous.push_back(enqueue);
+    }
+    for (unsigned i = 0; i != plan.roots.size(); ++i) {
+      if (plan.roots[i].bit_width <= TALOS_RT_GENERATED_NBA_MAX_BITS &&
+          !overwrites.contains(i))
+        plan.wholeChangeBanks[i] = false;
+      if (!plan.wholeChangeBanks[i])
+        continue;
+      // A root has one pending representation. The fixed 256-bit
+      // accumulator does not preserve repeated wide captures. Select the
+      // whole-value slot here so all native variants and cold writers agree.
+      plan.generatedAccumulators[i].clear();
+      plan.mergeSafeRoots[i] = true;
+    }
+  }
   return plan;
 }
 

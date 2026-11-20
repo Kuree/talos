@@ -369,6 +369,14 @@ void talos_rt_report_signal_diagnostics_unlocked(talos_rt_context *context) {
   if (context->packedFIFOReplays)
     std::fprintf(stderr, "talos-nba-fifo packed_records=%llu\n",
                  static_cast<unsigned long long>(context->packedFIFOReplays));
+  if (context->wholeChangeBankCommits)
+    std::fprintf(
+        stderr, "talos-nba-bank commits=%llu rewrites=%llu\n",
+        static_cast<unsigned long long>(context->wholeChangeBankCommits),
+        static_cast<unsigned long long>(context->wholeChangeBankRewrites));
+  if (context->orderedSharedPackets)
+    std::fprintf(stderr, "talos-nba-ordered shared_packets=%llu\n",
+                 static_cast<unsigned long long>(context->orderedSharedPackets));
   if (context->packedNBAChanges && context->packedNBAChanges->publications)
     std::fprintf(stderr, "talos-nba-fifo mapped_changes=%llu\n",
                  static_cast<unsigned long long>(

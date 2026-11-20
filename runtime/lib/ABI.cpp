@@ -1904,6 +1904,9 @@ ABI_FUNCTION(talos_rt_v1_static_nba_batch_finish,
 ABI_FUNCTION(talos_rt_v1_static_nba_commit_ordered,
              talos_rt_status (*)(talos_rt_context *, uint32_t, int64_t,
                                  uint64_t, uint64_t, uint64_t));
+ABI_FUNCTION(talos_rt_v1_static_nba_commit_wide_ordered,
+             talos_rt_status (*)(talos_rt_context *, uint32_t, uint64_t,
+                                 const void *, uint32_t));
 ABI_FUNCTION(talos_rt_v1_scheduler_string_nba,
              talos_rt_status (*)(talos_rt_context *, uint8_t *, uint64_t,
                                  uint64_t, uint64_t, talos_rt_string_v1));

@@ -2568,10 +2568,17 @@ talos_rt_v1_scheduler_install_aot(talos_rt_context *context,
       return TALOS_RT_INVALID_ARGUMENT;
     for (uint64_t slot = 0; slot != root.generated_slot_count; ++slot) {
       const auto &entry = root.generated_slots[slot];
+      bool whole = (entry.bit_width & TALOS_RT_NBA_SLOT_WHOLE_CHANGE) != 0;
+      uint64_t width = entry.bit_width & ~TALOS_RT_NBA_SLOT_WHOLE_CHANGE;
       if (!entry.offset || !entry.value ||
           (!entry.unknown && !context->twoState()) || !entry.valid ||
-          !entry.transition || !entry.bit_width || entry.bit_width > 64 ||
-          entry.bit_width > root.bit_width)
+          !entry.transition || !width || width > root.bit_width ||
+          (whole ? (width != root.bit_width || width <= 64 || *entry.offset ||
+                    root.generated_slot_count != 1 ||
+                    root.generated_accumulator ||
+                    !(plan->flags &
+                      TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL))
+                 : width > 64))
         return TALOS_RT_INVALID_ARGUMENT;
     }
   }
