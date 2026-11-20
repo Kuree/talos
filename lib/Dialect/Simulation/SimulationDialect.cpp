@@ -6,6 +6,7 @@
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
 #include "talos/Dialect/Schedule/ScheduleOps.h"
+#include "talos/Dialect/Simulation/SimulationContextCache.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Runtime/StableHash.h"
@@ -33,6 +34,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <mutex>
 #include <optional>
 
 using namespace mlir;
@@ -987,8 +989,34 @@ LogicalResult TalosSimulationDialect::verifyRegionArgAttribute(
   return verifyDeclaredAttribute(operation, attribute);
 }
 
+namespace {
+/// Backs getOrCreateContextCache. A dialect owns its interfaces, and the
+/// context destroys its dialects with itself.
+struct ContextCacheStore : public DialectInterface::Base<ContextCacheStore> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ContextCacheStore)
+  explicit ContextCacheStore(Dialect *dialect) : Base(dialect) {}
+  std::mutex mutex;
+  llvm::DenseMap<const void *, std::shared_ptr<void>> caches;
+};
+} // namespace
+
+std::shared_ptr<void>
+getOrCreateContextCache(MLIRContext *context, const void *key,
+                        llvm::function_ref<std::shared_ptr<void>()> make) {
+  auto *dialect = context->getLoadedDialect<TalosSimulationDialect>();
+  auto *store =
+      dialect ? dialect->getRegisteredInterface<ContextCacheStore>() : nullptr;
+  if (!store)
+    return make();
+  std::lock_guard<std::mutex> lock(store->mutex);
+  std::shared_ptr<void> &cache = store->caches[key];
+  if (!cache)
+    cache = make();
+  return cache;
+}
+
 void TalosSimulationDialect::initialize() {
-  addInterfaces<TalosSimulationInlinerInterface>();
+  addInterfaces<TalosSimulationInlinerInterface, ContextCacheStore>();
   addAttributes<
 #define GET_ATTRDEF_LIST
 #include "talos/Dialect/Simulation/SimulationAttrs.cpp.inc"

@@ -463,6 +463,7 @@ set_target_properties(TalosNativePartitionTests PROPERTIES
 add_llvm_executable(TalosAnalysisOracleTests EXCLUDE_FROM_ALL
   Support/ActivationOracleTest.cpp
   Support/BoundedLoopOracleTest.cpp
+  Support/ContextCacheTest.cpp
   Support/OrderedDenseAnalysisTest.cpp
   Support/ParallelWalkTest.cpp
 )

@@ -3,6 +3,7 @@
 #include "talos/Analysis/NetConnectivityAnalysis.h"
 
 #include "talos/Analysis/SimulationAnalysis.h"
+#include "talos/Dialect/Simulation/SimulationContextCache.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 
 #include "llvm/ADT/DenseSet.h"
@@ -17,8 +18,9 @@ namespace talos::analysis {
 
 namespace {
 /// Content digest of the declarations the topology depends on. Attributes are
-/// uniqued, so the hash of their identities covers ids, offsets, widths,
-/// strengths, delays and types.
+/// uniqued, so within the design's context the hash of their identities covers
+/// ids, offsets, widths, strengths, delays and types. Only a cache living in
+/// that context may compare these digests.
 uint64_t inventoryDigest(sim::SimDesignOp design) {
   llvm::hash_code digest = llvm::hash_value(size_t{0});
   for (Operation &op : design.getBody().front())
@@ -36,9 +38,10 @@ struct TopologyCache {
       std::pair<uint64_t, std::shared_ptr<const IsolatedWireDriverTopology>>>
       entries;
 };
-TopologyCache &getTopologyCache() {
-  static TopologyCache cache;
-  return cache;
+/// Lives in the design's context, which owns the addresses the key and the
+/// digest stand for; see SimulationContextCache.h.
+std::shared_ptr<TopologyCache> getTopologyCache(sim::SimDesignOp design) {
+  return sim::getContextCache<TopologyCache>(design->getContext());
 }
 IsolatedWireDriverTopology
 computeIsolatedWireDriverTopology(sim::SimDesignOp design);
@@ -63,11 +66,11 @@ getIsolatedWireDriverTopology(sim::SimDesignOp design) {
     return empty;
   }
   uint64_t digest = inventoryDigest(design);
-  TopologyCache &cache = getTopologyCache();
+  std::shared_ptr<TopologyCache> cache = getTopologyCache(design);
   {
-    std::lock_guard<std::mutex> lock(cache.mutex);
-    auto found = cache.entries.find(design.getOperation());
-    if (found != cache.entries.end() && found->second.first == digest)
+    std::lock_guard<std::mutex> lock(cache->mutex);
+    auto found = cache->entries.find(design.getOperation());
+    if (found != cache->entries.end() && found->second.first == digest)
       return found->second.second;
   }
   IsolatedWireDriverTopology topology =
@@ -84,8 +87,8 @@ getIsolatedWireDriverTopology(sim::SimDesignOp design) {
       topology.driverRanges[driver.getId()] = {low, low + size};
   }
   auto result = finish(std::move(topology));
-  std::lock_guard<std::mutex> lock(cache.mutex);
-  cache.entries[design.getOperation()] = {digest, result};
+  std::lock_guard<std::mutex> lock(cache->mutex);
+  cache->entries[design.getOperation()] = {digest, result};
   return result;
 }
 

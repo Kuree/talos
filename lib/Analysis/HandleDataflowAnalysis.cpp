@@ -10,6 +10,7 @@
 #include "talos/Analysis/ParallelWalk.h"
 #include "talos/Analysis/ScopedIntegerRangeAnalysis.h"
 #include "talos/Dialect/Schedule/ScheduleOps.h"
+#include "talos/Dialect/Simulation/SimulationContextCache.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "llvm/ADT/Hashing.h"
@@ -472,7 +473,8 @@ struct HandleRevision {
 /// callees once per call site. Every function reuses its solved result while
 /// its revision is unchanged; any IR edit changes the key. Checking a revision
 /// walks the body once, far cheaper than solving it. Only the latest revision
-/// of each function is kept.
+/// of each function is kept. Revisions identify IR by addresses, so the cache
+/// lives in the function's context (see SimulationContextCache.h).
 class HandleResultCache {
 public:
   std::shared_ptr<const HandleDataflowResult>
@@ -500,9 +502,8 @@ private:
   std::mutex mutex;
   DenseMap<Operation *, Entry> entries;
 };
-HandleResultCache &getHandleResultCache() {
-  static HandleResultCache cache;
-  return cache;
+std::shared_ptr<HandleResultCache> getHandleResultCache(MLIRContext *context) {
+  return sim::getContextCache<HandleResultCache>(context);
 }
 } // namespace
 
@@ -621,12 +622,13 @@ HandleDataflowAnalysis::analyze(sim::SimFuncOp function) const {
   HandleRevision revision{OperationFingerPrint(function), shape,
                           driverHandles ? drivers->driverDigest
                                         : noDriverDigest};
-  HandleResultCache &cache = getHandleResultCache();
-  if (auto cached = cache.lookup(function, revision))
+  std::shared_ptr<HandleResultCache> cache =
+      getHandleResultCache(function->getContext());
+  if (auto cached = cache->lookup(function, revision))
     return *cached;
   auto solved = std::make_shared<const HandleDataflowResult>(
       solveHandles(function, drivers->driverNets, dynamicSelectors));
-  cache.insert(function, revision, solved);
+  cache->insert(function, revision, solved);
   return *solved;
 }
 void HandleDataflowAnalysis::prepare(sim::SimDesignOp design) const {
