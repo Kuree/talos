@@ -2284,9 +2284,40 @@ void TalosSimCoalesceContinuousDriversPass::runOnOperation() {
             return m->spawn->getBlock() != run.front()->spawn->getBlock();
           }))
         continue;
-      merge(design, run, facts, forwarding, symbols);
-      merged += run.size();
-      ++runs;
+      // A wide variable lane is already a separate store in the packed
+      // body. Joining it to an unrelated input would rerun that whole copy
+      // on either input's event. Leave those sensitivities independent;
+      // single-word stores can share the wake cheaply, and net resolution and
+      // forwarded reads still use their complete runs
+      // (1800-2023 6.5, 9.4.2, 10.3.2).
+      SmallVector<unsigned> ends;
+      if (variable &&
+          llvm::all_of(run, [](Member *m) { return m->ownReads.empty(); })) {
+        for (unsigned i = 1; i < run.size(); ++i) {
+          Member &left = *run[i - 1], &right = *run[i];
+          if (left.width <= kWordBits && right.width <= kWordBits)
+            continue;
+          bool shared = llvm::any_of(left.waits, [&](const auto &lhs) {
+            return llvm::any_of(right.waits, [&](const auto &rhs) {
+              return !lhs.second || !rhs.second ||
+                     lhs.second->overlaps(*rhs.second);
+            });
+          });
+          if (!shared)
+            ends.push_back(i);
+        }
+      }
+      ends.push_back(run.size());
+      unsigned first = 0;
+      for (unsigned end : ends) {
+        auto part = ArrayRef<Member *>(run).slice(first, end - first);
+        first = end;
+        if (part.size() >= 2) {
+          merge(design, part, facts, forwarding, symbols);
+          merged += part.size();
+          ++runs;
+        }
+      }
     }
   }
   compactDriverIds(design);
