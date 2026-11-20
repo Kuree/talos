@@ -3,6 +3,7 @@
 #include "talos/Runtime/Runtime.h"
 #include "svdpi.h"
 #include "talos/Runtime/DescriptorMap.h"
+#include "talos/Runtime/LiteralFormat.h"
 
 #include "gtest/gtest.h"
 
@@ -20,6 +21,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <iterator>
 #include <new>
 #include <string>
@@ -1927,6 +1929,23 @@ TEST_F(RuntimeTest, EmitsRawTwoAndFourStateChunks) {
   EXPECT_EQ(fourWords[1], 0u);
   EXPECT_EQ(fourWords[2], 1u);
   EXPECT_EQ(fourWords[3], 1u);
+}
+
+TEST_F(RuntimeTest, RejectsMalformedLiteralOutputFields) {
+  namespace fmt = talos::runtime::literal_format;
+  const uint64_t words[] = {0x1f, 0x0f};
+  auto reject = [&](std::initializer_list<uint8_t> fields, size_t wordCount) {
+    talos_rt_string_v1 result = 1;
+    EXPECT_EQ(talos_rt_v1_string_output_fields(
+                  context, fields.begin(), fields.size(), words, wordCount,
+                  &result),
+              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(result, 0u);
+  };
+  reject({2, 'a'}, 0); // Truncated literal.
+  reject({fmt::Field | fmt::Hex, 8}, 1); // Missing width.
+  reject({fmt::Field | fmt::Unknown | fmt::Hex, 8, 0}, 1); // Missing X/Z word.
+  reject({fmt::Field | fmt::Hex, 8, 0}, 2); // Extra operand.
 }
 
 TEST_F(RuntimeTest, RejectsMalformedFormatsAndArgumentMismatch) {

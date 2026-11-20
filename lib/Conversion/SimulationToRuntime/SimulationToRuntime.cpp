@@ -6,15 +6,18 @@
 #include "talos/Conversion/SimulationToStandard.h"
 #include "talos/Dialect/Runtime/RuntimeOps.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
+#include "talos/Runtime/LiteralFormat.h"
 #include "talos/Runtime/OutputItemFlags.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringExtras.h"
 
 using namespace mlir;
 
@@ -366,6 +369,168 @@ public:
   }
 };
 
+// IEEE 1800-2023 21.3.3 uses the designated format string for $sformatf.
+// Preserve the field widths and X/Z digits specified by 21.2.1.2-3.
+// When that literal accounts for the whole list, its field types and padding
+// are known at lowering time. Dynamic formats, environment conversions, extra
+// arguments and diagnostics continue through the complete output-list service.
+static Value lowerLiteralFormat(
+    sim::SimStringOutputFormatOp op,
+    OpConversionPattern<sim::SimStringOutputFormatOp>::OneToNOpAdaptor &adaptor,
+    ConversionPatternRewriter &rewriter) {
+  namespace fmt = runtime::literal_format;
+  ArrayRef<int32_t> flags = op.getItemFlags();
+  // Amortize the separate field program over multiple substitutions. This
+  // also keeps a single conversion (e.g. a file name) in its existing
+  // native code and constant-data partition.
+  if (flags.size() < 3 || flags.size() != op.getItems().size() ||
+      flags.front() != TALOS_RT_OUTPUT_ITEM_DESIGNATED_FORMAT)
+    return {};
+  auto bytesAt = [&](unsigned index) -> std::optional<StringRef> {
+    if (auto bytes =
+            op.getItems()[index].getDefiningOp<sim::SimBytesConstantOp>())
+      return bytes.getValue();
+    ValueRange values = adaptor.getItems()[index];
+    if (values.size() == 1)
+      if (auto bytes =
+              values.front().getDefiningOp<runtime::RTBytesConstantOp>())
+        return bytes.getValue();
+    return std::nullopt;
+  };
+  auto source = bytesAt(0);
+  if (!source)
+    return {};
+  StringRef remaining = *source;
+  SmallVector<Value> words;
+  std::string fields, literal;
+  auto flush = [&] {
+    StringRef bytes(literal);
+    while (!bytes.empty()) {
+      unsigned size = std::min<size_t>(bytes.size(), fmt::MaxLiteral);
+      fields.push_back(size);
+      fields.append(bytes.data(), size);
+      bytes = bytes.drop_front(size);
+    }
+    literal.clear();
+  };
+  unsigned index = 1;
+  while (!remaining.empty()) {
+    auto [text, conversion] = remaining.split('%');
+    literal.append(text.data(), text.size());
+    if (text.size() == remaining.size())
+      break;
+    remaining = conversion;
+    if (remaining.consume_front("%")) {
+      literal += '%';
+      continue;
+    }
+    if (index >= flags.size() ||
+        (flags[index] &
+         ~(TALOS_RT_OUTPUT_ITEM_SIGNED | TALOS_RT_OUTPUT_ITEM_STRING)))
+      return {};
+    bool left = remaining.consume_front("-");
+    bool zero = remaining.consume_front("0");
+    unsigned width = fmt::DefaultWidth;
+    if (!remaining.empty() && llvm::isDigit(remaining.front())) {
+      if (remaining.consumeInteger(10, width) || width >= fmt::DefaultWidth)
+        return {};
+    }
+    if (remaining.empty())
+      return {};
+    unsigned kind;
+    switch (llvm::toLower(remaining.front())) {
+    case 'b':
+      kind = fmt::Binary;
+      break;
+    case 'o':
+      kind = fmt::Octal;
+      break;
+    case 'd':
+      kind = fmt::Decimal;
+      break;
+    case 'x':
+    case 'h':
+      kind = fmt::Hex;
+      break;
+    case 's':
+      kind = fmt::String;
+      break;
+    default:
+      return {};
+    }
+    remaining = remaining.drop_front();
+    if (kind == fmt::String) {
+      if (auto bytes = bytesAt(index)) {
+        StringRef text = zero ? bytes->ltrim(StringRef("\0", 1)) : *bytes;
+        size_t padding = width != fmt::DefaultWidth && width > text.size()
+                             ? width - text.size()
+                             : 0;
+        if (!left)
+          literal.append(padding, ' ');
+        for (char byte : text)
+          literal.push_back(byte ? byte : ' ');
+        if (left)
+          literal.append(padding, ' ');
+        ++index;
+        continue;
+      }
+    } else if (zero && width == fmt::DefaultWidth) {
+      width = 0;
+    }
+    Type type = op.getItems()[index].getType();
+    ValueRange planes = adaptor.getItems()[index];
+    uint8_t tag = fmt::Field | kind;
+    if (left)
+      tag |= fmt::Left;
+    if (zero && kind == fmt::String)
+      tag |= fmt::TrimString;
+    unsigned bits = 0;
+    if (isa<sim::StringType>(type)) {
+      if (kind != fmt::String || planes.size() != 1 ||
+          !planes[0].getType().isInteger(64))
+        return {};
+      words.push_back(planes[0]);
+    } else {
+      if (!isa<sim::LogicType, IntegerType>(type) || planes.empty() ||
+          planes.size() > 2)
+        return {};
+      auto packed = dyn_cast<IntegerType>(planes[0].getType());
+      if (!packed || packed.getWidth() > 64 ||
+          (planes.size() == 2 && planes[1].getType() != packed))
+        return {};
+      bits = packed.getWidth();
+      if (flags[index] & TALOS_RT_OUTPUT_ITEM_SIGNED)
+        tag |= fmt::Signed;
+      words.push_back(planes[0]);
+      if (planes.size() == 2 && !matchPattern(planes[1], m_Zero())) {
+        tag |= fmt::Unknown;
+        words.push_back(planes[1]);
+      }
+    }
+    flush();
+    fields.push_back(tag);
+    fields.push_back(bits);
+    fields.push_back(width);
+    ++index;
+  }
+  if (index != flags.size())
+    return {};
+  flush();
+  Location loc = op.getLoc();
+  Type i64 = rewriter.getI64Type();
+  for (Value &word : words)
+    if (word.getType() != i64)
+      word = arith::ExtUIOp::create(rewriter, loc, i64, word);
+  auto fieldsValue = runtime::RTBytesConstantOp::create(
+      rewriter, loc, runtime::ByteSpanType::get(rewriter.getContext()), fields);
+  auto call = runtime::RTStringOutputFieldsOp::create(
+      rewriter, loc, runtime::StatusType::get(rewriter.getContext()), i64,
+      runtimeContext(rewriter, loc, adaptor.getContext().front()), fieldsValue,
+      words);
+  sim::SimStatusCheckOp::create(rewriter, loc, call.getStatus());
+  return call.getString();
+}
+
 class StringOutputFormatConversion final
     : public SimIOConversion<sim::SimStringOutputFormatOp> {
 public:
@@ -375,12 +540,17 @@ public:
   matchAndRewrite(sim::SimStringOutputFormatOp op, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
+    Type resultType = getTypeConverter()->convertType(op.getResult().getType());
+    if (!resultType)
+      return failure();
+    if (resultType.isInteger(64))
+      if (Value result = lowerLiteralFormat(op, adaptor, rewriter)) {
+        rewriter.replaceOp(op, result);
+        return success();
+      }
     FailureOr<std::pair<Value, Value>> output =
         buildOutputList(op, adaptor, rewriter);
     if (failed(output))
-      return failure();
-    Type resultType = getTypeConverter()->convertType(op.getResult().getType());
-    if (!resultType)
       return failure();
     auto call = runtime::RTStringOutputFormatOp::create(
         rewriter, loc,

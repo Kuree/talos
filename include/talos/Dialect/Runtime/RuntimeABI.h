@@ -31,6 +31,7 @@ enum class RuntimeSignature {
   SchedulerTime,
   Format,
   StringOutputFormat,
+  StringOutputFields,
   Display,
   TimeFormat,
   TimeScanScale,

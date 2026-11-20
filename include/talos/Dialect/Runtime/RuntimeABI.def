@@ -37,6 +37,8 @@ TALOS_RUNTIME_CALL(SchedulerCohort, RTSchedulerCohortOp,
 TALOS_RUNTIME_CALL(Format, RTFormatOp, talos_rt_v1_format, Format)
 TALOS_RUNTIME_CALL(StringOutputFormat, RTStringOutputFormatOp,
                      talos_rt_v1_string_output_format, StringOutputFormat)
+TALOS_RUNTIME_CALL(StringOutputFields, RTStringOutputFieldsOp,
+                     talos_rt_v1_string_output_fields, StringOutputFields)
 TALOS_RUNTIME_CALL(Display, RTDisplayOp, talos_rt_v1_display, Display)
 TALOS_RUNTIME_CALL(TimeFormat, RTTimeFormatOp, talos_rt_v1_time_format,
                      TimeFormat)

@@ -6141,6 +6141,9 @@ talos_rt_status talos_rt_v1_string_output_format(
     talos_rt_context *context, talos_rt_radix default_radix,
     const talos_rt_arg_v1 *items, uint64_t item_count,
     const talos_rt_format_env_v1 *environment, talos_rt_string_v1 *out_string);
+talos_rt_status talos_rt_v1_string_output_fields(
+    talos_rt_context *context, const uint8_t *fields, uint64_t field_size,
+    const uint64_t *words, uint64_t word_count, talos_rt_string_v1 *out_string);
 // $timeformat (IEEE 1800 20.4.2). `units` is the decimal exponent in seconds
 // of the unit %t reports in; `fraction_digits` and `width` are its precision
 // and minimum field width, the latter covering the suffix too. The override

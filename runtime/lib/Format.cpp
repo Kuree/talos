@@ -2,9 +2,11 @@
 
 #include "DesignBytecodeNets.h"
 #include "RuntimeInternal.h"
+#include "talos/Runtime/LiteralFormat.h"
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -160,7 +162,7 @@ bool unknownBit(const LogicView &view, uint64_t bit) {
   return view.unknown && ((view.unknown[bit / 64] >> (bit % 64)) & 1) != 0;
 }
 
-void applyPadding(std::string &output, std::string field, uint32_t width,
+void applyPadding(std::string &output, std::string_view field, uint32_t width,
                   bool left, char padding) {
   if (field.size() >= width) {
     output += field;
@@ -311,6 +313,22 @@ void multiplyWords(std::vector<uint64_t> &words, uint64_t multiplier) {
 }
 
 std::string knownDecimal(const LogicView &view, uint64_t multiplier = 1) {
+  if (view.width && view.width <= 64) {
+    uint64_t mask = finalWordMask(view.width);
+    uint64_t value = view.value[0] & mask;
+    bool negative = view.isSigned && (value >> (view.width - 1));
+    uint64_t magnitude = negative ? (-value & mask) : value;
+    if (multiplier == 1 || !magnitude || multiplier <= UINT64_MAX / magnitude) {
+      char digits[21];
+      bool sign = negative && multiplier;
+      if (sign)
+        digits[0] = '-';
+      auto end = std::to_chars(digits + sign, digits + sizeof(digits),
+                               magnitude * multiplier)
+                     .ptr;
+      return {digits, end};
+    }
+  }
   bool negative = false;
   std::vector<uint64_t> words = magnitudeWords(view, negative);
   multiplyWords(words, multiplier);
@@ -328,30 +346,20 @@ std::string knownDecimal(const LogicView &view, uint64_t multiplier = 1) {
 std::optional<char> decimalUnknown(const LogicView &view) {
   if (!view.unknown)
     return std::nullopt;
-  bool anyUnknown = false;
-  bool anyX = false;
-  bool allUnknown = true;
-  bool allUnknownValuesZero = true;
-  bool allUnknownValuesOne = true;
-  for (uint64_t bit = 0; bit < view.width; ++bit) {
-    bool unknown = unknownBit(view, bit);
-    bool value = valueBit(view, bit);
-    anyUnknown |= unknown;
-    allUnknown &= unknown;
-    if (unknown) {
-      anyX |= !value;
-      allUnknownValuesZero &= !value;
-      allUnknownValuesOne &= value;
-    } else {
-      allUnknownValuesZero = false;
-      allUnknownValuesOne = false;
-    }
+  uint64_t anyX = 0, anyZ = 0, anyKnown = 0;
+  uint64_t count = wordCount(view.width);
+  for (uint64_t i = 0; i < count; ++i) {
+    uint64_t mask = i + 1 == count ? finalWordMask(view.width) : UINT64_MAX;
+    uint64_t unknown = view.unknown[i] & mask;
+    anyX |= unknown & ~view.value[i];
+    anyZ |= unknown & view.value[i];
+    anyKnown |= ~unknown & mask;
   }
-  if (!anyUnknown)
+  if (!(anyX | anyZ))
     return std::nullopt;
-  if (allUnknown && allUnknownValuesZero)
+  if (!anyKnown && !anyZ)
     return 'x';
-  if (allUnknown && allUnknownValuesOne)
+  if (!anyKnown && !anyX)
     return 'z';
   return anyX ? 'X' : 'Z';
 }
@@ -379,7 +387,7 @@ talos_rt_status formatDecimal(std::string &output, const LogicView &view,
   else
     field = knownDecimal(view, multiplier);
   uint32_t width = options.width.value_or(defaultDecimalWidth(view));
-  applyPadding(output, std::move(field), width, options.left, ' ');
+  applyPadding(output, field, width, options.left, ' ');
   return TALOS_RT_OK;
 }
 
@@ -387,16 +395,38 @@ talos_rt_status formatInteger(std::string &output, const LogicView &view,
                               char specifier, const FormatOptions &options) {
   char spec =
       static_cast<char>(std::tolower(static_cast<unsigned char>(specifier)));
+  unsigned groupBits = spec == 'b' ? 1 : spec == 'o' ? 3 : 4;
+  if (view.width && view.width <= 64) {
+    uint64_t mask = finalWordMask(view.width);
+    if (!view.unknown || !(view.unknown[0] & mask)) {
+      uint64_t magnitude = view.value[0] & mask;
+      bool negative =
+          spec == 'd' && view.isSigned && (magnitude >> (view.width - 1));
+      char digits[64];
+      if (negative) {
+        digits[0] = '-';
+        magnitude = (-magnitude) & mask;
+      }
+      char *end = std::to_chars(digits + negative, digits + sizeof(digits),
+                                magnitude, spec == 'd' ? 10 : 1 << groupBits)
+                      .ptr;
+      uint32_t width = options.width ? *options.width
+                       : spec == 'd' ? defaultDecimalWidth(view)
+                                     : (view.width + groupBits - 1) / groupBits;
+      applyPadding(output, {digits, static_cast<size_t>(end - digits)}, width,
+                   options.left, spec == 'd' ? ' ' : '0');
+      return TALOS_RT_OK;
+    }
+  }
   if (spec == 'd')
     return formatDecimal(output, view, options);
 
-  unsigned groupBits = spec == 'b' ? 1 : spec == 'o' ? 3 : 4;
   std::string field = baseDigits(view, groupBits);
   uint64_t defaultWidth64 = (view.width + groupBits - 1) / groupBits;
   uint32_t width =
       options.width.value_or(static_cast<uint32_t>(std::min<uint64_t>(
           defaultWidth64, std::numeric_limits<uint32_t>::max())));
-  applyPadding(output, std::move(field), width, options.left, '0');
+  applyPadding(output, field, width, options.left, '0');
   return TALOS_RT_OK;
 }
 
@@ -426,11 +456,32 @@ std::string logicToString(const LogicView &view, bool trimLeadingNulls) {
   return result;
 }
 
-talos_rt_status formatStringValue(std::string &output, std::string field,
+talos_rt_status formatStringValue(std::string &output, std::string_view field,
                                   const FormatOptions &options) {
   uint32_t width = options.width.value_or(0);
-  applyPadding(output, std::move(field), width, options.left, ' ');
+  applyPadding(output, field, width, options.left, ' ');
   return TALOS_RT_OK;
+}
+
+// IEEE 1800-2023 21.2.1.7 treats %s as a sequence of 8-bit characters.
+// Apply field padding and translate embedded nulls in the final buffer.
+void appendStringBytes(std::string &output, std::string_view source,
+                       const FormatOptions &options) {
+  if (options.zero) {
+    size_t first = source.find_first_not_of('\0');
+    source.remove_prefix(first == std::string_view::npos ? source.size()
+                                                         : first);
+  }
+  size_t width = options.width.value_or(0);
+  size_t padding = width > source.size() ? width - source.size() : 0;
+  if (!options.left)
+    output.append(padding, ' ');
+  size_t offset = output.size();
+  output.append(source);
+  if (source.find('\0') != std::string_view::npos)
+    std::replace(output.begin() + offset, output.end(), '\0', ' ');
+  if (options.left)
+    output.append(padding, ' ');
 }
 
 talos_rt_status formatFloat(std::string &output, double value, char specifier,
@@ -728,7 +779,7 @@ talos_rt_status formatArgument(talos_rt_context *context, std::string &output,
         return TALOS_RT_INVALID_ARGUMENT;
       if (size != 0)
         return formatStringValue(
-            output, std::string(bytes, static_cast<size_t>(size)), options);
+            output, std::string_view(bytes, static_cast<size_t>(size)), options);
       if (!getLogicView(argument, view))
         return TALOS_RT_ARGUMENT_MISMATCH;
       std::string numeric;
@@ -736,7 +787,7 @@ talos_rt_status formatArgument(talos_rt_context *context, std::string &output,
         numeric.assign(1, *symbol);
       else
         numeric = knownDecimal(view);
-      return formatStringValue(output, std::move(numeric), options);
+      return formatStringValue(output, numeric, options);
     }
     // IEEE 1800-2023 21.2.1.7 also takes an unpacked array of byte, such as
     // a dynamic array or queue.
@@ -750,7 +801,7 @@ talos_rt_status formatArgument(talos_rt_context *context, std::string &output,
               talos_rt_container_byte_text(container, text);
           status != TALOS_RT_OK)
         return status;
-      return formatStringValue(output, std::move(text), options);
+      return formatStringValue(output, text, options);
     }
     if (argument.kind == TALOS_RT_ARG_STRING ||
         argument.kind == TALOS_RT_ARG_MANAGED_STRING) {
@@ -760,15 +811,8 @@ talos_rt_status formatArgument(talos_rt_context *context, std::string &output,
       if (!getStringBytes(argument, scratch, bytes, size) ||
           size > std::numeric_limits<size_t>::max())
         return TALOS_RT_INVALID_ARGUMENT;
-      std::string_view source(bytes, static_cast<size_t>(size));
-      if (options.zero) {
-        size_t first = source.find_first_not_of('\0');
-        source.remove_prefix(first == std::string_view::npos ? source.size()
-                                                             : first);
-      }
-      std::string field(source);
-      std::replace(field.begin(), field.end(), '\0', ' ');
-      return formatStringValue(output, std::move(field), options);
+      appendStringBytes(output, {bytes, static_cast<size_t>(size)}, options);
+      return TALOS_RT_OK;
     }
     if (!getLogicView(argument, view))
       return TALOS_RT_ARGUMENT_MISMATCH;
@@ -856,7 +900,7 @@ talos_rt_status formatArgument(talos_rt_context *context, std::string &output,
         return TALOS_RT_INVALID_ARGUMENT;
       if (size != 0)
         return formatStringValue(
-            output, std::string(bytes, static_cast<size_t>(size)), options);
+            output, std::string_view(bytes, static_cast<size_t>(size)), options);
     }
     if (argument.kind == TALOS_RT_ARG_MANAGED_CONTAINER) {
       talos_rt_object_v1 *container = nullptr;
@@ -867,7 +911,7 @@ talos_rt_status formatArgument(talos_rt_context *context, std::string &output,
       talos_rt_status status = talos_rt_container_pattern(container, value, 0);
       if (status != TALOS_RT_OK)
         return status;
-      return formatStringValue(output, std::move(value), options);
+      return formatStringValue(output, value, options);
     }
     if (argument.kind == TALOS_RT_ARG_MANAGED_OBJECT) {
       if (argument.size != 0 || !argument.data || argument.unknown)
@@ -888,7 +932,7 @@ talos_rt_status formatArgument(talos_rt_context *context, std::string &output,
       // dependent. Use the stable object identity, not a host address, so
       // output remains deterministic across native and bytecode execution.
       std::string value = "class@" + std::to_string(identity);
-      return formatStringValue(output, std::move(value), options);
+      return formatStringValue(output, value, options);
     }
     if (argument.kind == TALOS_RT_ARG_VIRTUAL_INTERFACE) {
       if (argument.size != 0 || !argument.data || argument.unknown)
@@ -901,7 +945,7 @@ talos_rt_status formatArgument(talos_rt_context *context, std::string &output,
       // elaborated interface scope. Avoid host addresses so native and
       // bytecode execution produce the same deterministic rendering.
       std::string value = "virtual_interface@" + std::to_string(identity);
-      return formatStringValue(output, std::move(value), options);
+      return formatStringValue(output, value, options);
     }
     if (argument.kind == TALOS_RT_ARG_PROCESS) {
       if (argument.size != 0 || !argument.data || argument.unknown)
@@ -913,13 +957,13 @@ talos_rt_status formatArgument(talos_rt_context *context, std::string &output,
       // A process handle is the scheduler's stable process identity. Keep it
       // out of host addresses so a run renders the same way every time.
       std::string value = "process@" + std::to_string(identity);
-      return formatStringValue(output, std::move(value), options);
+      return formatStringValue(output, value, options);
     }
     std::string value = scalarPattern(argument);
     if (value.empty() && argument.kind != TALOS_RT_ARG_STRING &&
         argument.kind != TALOS_RT_ARG_MANAGED_STRING)
       return TALOS_RT_ARGUMENT_MISMATCH;
-    return formatStringValue(output, std::move(value), options);
+    return formatStringValue(output, value, options);
   }
   default:
     return TALOS_RT_FORMAT_ERROR;
@@ -953,7 +997,11 @@ talos_rt_status formatSequence(talos_rt_context *context, std::string &output,
                                std::vector<std::string> *warnings = nullptr) {
   for (size_t position = 0; position < format.size();) {
     if (format[position] != '%') {
-      output.push_back(format[position++]);
+      size_t next = format.find('%', position);
+      if (next == std::string_view::npos)
+        next = format.size();
+      output.append(format.data() + position, next - position);
+      position = next;
       continue;
     }
     size_t formatOffset = position++;
@@ -1027,7 +1075,7 @@ talos_rt_status formatSequence(talos_rt_context *context, std::string &output,
       return TALOS_RT_FORMAT_ERROR;
     }
     if ((integer || spec == 't') && options.zero) {
-      // IEEE 1800-2017 21.2.1.3 spells a field width as a plain decimal
+      // IEEE 1800-2023 21.2.1.2 spells a field width as a plain decimal
       // constant, so a leading zero belongs to that constant rather than
       // selecting a pad character. `%0d` is its minimum-width form.
       if (!options.width)
@@ -1298,6 +1346,71 @@ extern "C" double talos_rt_v1_time_scan_scale(talos_rt_context *context,
                                     static_cast<long double>(timePrecision));
   return static_cast<double>(designTicks /
                              static_cast<long double>(timeMultiplier));
+}
+
+extern "C" talos_rt_status talos_rt_v1_string_output_fields(
+    talos_rt_context *context, const uint8_t *fields, uint64_t fieldSize,
+    const uint64_t *words, uint64_t wordCount, talos_rt_string_v1 *outString) {
+  namespace fmt = talos::runtime::literal_format;
+  if (!context || !outString || (fieldSize && !fields) || (wordCount && !words))
+    return TALOS_RT_INVALID_ARGUMENT;
+  *outString = 0;
+  return guarded(context, [&]() -> talos_rt_status {
+    std::string output;
+    uint64_t word = 0;
+    for (uint64_t offset = 0; offset < fieldSize;) {
+      uint8_t tag = fields[offset++];
+      if (!(tag & fmt::Field)) {
+        if (!tag || tag > fieldSize - offset)
+          return TALOS_RT_INVALID_DESIGN;
+        output.append(reinterpret_cast<const char *>(fields + offset), tag);
+        offset += tag;
+        continue;
+      }
+      if (fieldSize - offset < 2 || word == wordCount)
+        return TALOS_RT_INVALID_DESIGN;
+      uint8_t bits = fields[offset++], width = fields[offset++];
+      FormatOptions options;
+      if (width != fmt::DefaultWidth)
+        options.width = width;
+      options.left = tag & fmt::Left;
+      options.zero = tag & fmt::TrimString;
+      unsigned kind = tag & fmt::KindMask;
+      if (kind == fmt::String && !bits) {
+        if (tag & (fmt::Unknown | fmt::Signed))
+          return TALOS_RT_INVALID_DESIGN;
+        char scratch[8];
+        const char *bytes = nullptr;
+        uint64_t size = 0;
+        if (talos_rt_v1_string_view(words[word++], scratch, &bytes, &size) !=
+                TALOS_RT_OK ||
+            size > std::numeric_limits<size_t>::max()) {
+          setLastError(context, "failed to format argument");
+          return TALOS_RT_INVALID_ARGUMENT;
+        }
+        appendStringBytes(output, {bytes, static_cast<size_t>(size)}, options);
+        continue;
+      }
+      if (kind > fmt::String || !bits || bits > 64 ||
+          ((tag & fmt::Unknown) && wordCount - word < 2))
+        return TALOS_RT_INVALID_DESIGN;
+      const uint64_t *value = words + word++;
+      const uint64_t *unknown = (tag & fmt::Unknown) ? words + word++ : nullptr;
+      LogicView view{bits, bool(tag & fmt::Signed), value, unknown};
+      if (kind == fmt::String)
+        formatStringValue(output, logicToString(view, options.zero), options);
+      else {
+        constexpr char specifiers[] = {'b', 'o', 'd', 'h'};
+        formatInteger(output, view, specifiers[kind], options);
+      }
+    }
+    if (word != wordCount)
+      return TALOS_RT_INVALID_DESIGN;
+    talos_rt_gc_lane_v1 *lane = talos_rt_v1_gc_current_lane(context);
+    return lane ? talos_rt_v1_string_create(lane, output.data(), output.size(),
+                                            outString)
+                : TALOS_RT_INVALID_LIFECYCLE;
+  });
 }
 
 extern "C" talos_rt_status talos_rt_v1_string_output_format(

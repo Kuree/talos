@@ -421,6 +421,16 @@ def RTStringOutputFormatOp : RTOp<"string_output_format", [
   let results = (outs RTStatusType:$status, AnyType:$string);
 }
 
+def RTStringOutputFieldsOp : RTOp<"string_output_fields", [
+  MemoryEffects<[MemRead<RTRuntimeResource>, MemWrite<RTRuntimeResource>,
+                 MemAlloc<RTRuntimeResource>, MemRead, MemAlloc]>
+]> {
+  let summary = "render a compiled literal format and its scalar operands";
+  let arguments = (ins RTContextType:$context, RTByteSpanType:$fields,
+                       Variadic<I64>:$words);
+  let results = (outs RTStatusType:$status, I64:$string);
+}
+
 def RTDisplayOp : RTOp<"display", [
   MemoryEffects<[MemRead<RTRuntimeResource>, MemWrite<RTRuntimeResource>,
                  MemWrite<RTIOResource>, MemRead]>

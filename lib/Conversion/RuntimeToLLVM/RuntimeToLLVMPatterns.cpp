@@ -70,6 +70,10 @@ LLVM::LLVMFunctionType getFunctionType(runtime::RuntimeCall call,
     arguments = {abi.pointer, abi.i32,     abi.pointer,
                  abi.i64,     abi.pointer, abi.pointer};
     break;
+  case runtime::RuntimeSignature::StringOutputFields:
+    arguments = {abi.pointer, abi.pointer, abi.i64,
+                 abi.pointer, abi.i64,     abi.pointer};
+    break;
   case runtime::RuntimeSignature::Display:
     arguments = {abi.pointer, abi.i32, abi.i32,    abi.i32,
                  abi.pointer, abi.i64, abi.pointer};
@@ -1094,6 +1098,31 @@ public:
       return replaceStatusAndLoad(
           {operands[0], radix, itemData, itemCount, operands[2], output},
           output, abi.i64, abi.alignments.i64);
+    }
+    case runtime::RuntimeCall::StringOutputFields: {
+      auto [fields, size] = span(operands[1]);
+      ArrayRef<Value> words = operands.drop_front(2);
+      Value data = LLVM::ZeroOp::create(rewriter, location, abi.pointer);
+      if (!words.empty()) {
+        auto storage =
+            allocateAtFunctionEntry(operation, rewriter, abi, abi.i64,
+                                    words.size(), abi.alignments.i64);
+        if (failed(storage))
+          return failure();
+        data = *storage;
+        for (auto [index, word] : llvm::enumerate(words)) {
+          Value address = LLVM::GEPOp::create(
+              rewriter, location, abi.pointer, abi.i64, data,
+              ArrayRef<LLVM::GEPArg>{static_cast<int32_t>(index)});
+          store(word, address, abi.alignments.i64);
+        }
+      }
+      Value count =
+          llvmIntegerConstant(rewriter, location, abi.i64, words.size());
+      Value output = allocate(abi.i64, abi.alignments.i64);
+      return replaceStatusAndLoad(
+          {operands[0], fields, size, data, count, output}, output, abi.i64,
+          abi.alignments.i64);
     }
     case runtime::RuntimeCall::Display: {
       auto display = cast<runtime::RTDisplayOp>(operation);

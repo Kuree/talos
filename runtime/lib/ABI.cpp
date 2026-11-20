@@ -1344,6 +1344,10 @@ ABI_FUNCTION(talos_rt_v1_format,
                                  const talos_rt_arg_v1 *, uint64_t,
                                  const talos_rt_format_env_v1 *,
                                  talos_rt_buffer_v1 *));
+ABI_FUNCTION(talos_rt_v1_string_output_fields,
+             talos_rt_status (*)(talos_rt_context *, const uint8_t *, uint64_t,
+                                 const uint64_t *, uint64_t,
+                                 talos_rt_string_v1 *));
 ABI_FUNCTION(talos_rt_v1_string_output_format,
              talos_rt_status (*)(talos_rt_context *, talos_rt_radix,
                                  const talos_rt_arg_v1 *, uint64_t,
