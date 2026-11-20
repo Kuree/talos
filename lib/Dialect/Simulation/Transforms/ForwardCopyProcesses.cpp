@@ -2050,6 +2050,14 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
   DenseMap<uint64_t, SmallVector<Watcher, 1>> watchersOf;
   // Readers that wait on an expression sink: they must be quiet.
   SmallVector<std::pair<Summary *, Root>> expressionWaiters;
+  auto onlyCalleeReference = [](Operation *user, StringRef name) {
+    unsigned references = 0;
+    for (NamedAttribute named : user->getAttrs())
+      named.getValue().walk([&](SymbolRefAttr reference) {
+        references += reference.getRootReference().getValue() == name;
+      });
+    return references == 1;
+  };
   DenseMap<std::pair<Operation *, unsigned>, bool> coveredFormals;
   auto coveredAtCalls = [&](sim::SimFuncOp function, unsigned formal) {
     auto key = std::make_pair(function.getOperation(), formal);
@@ -2081,17 +2089,58 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
         covered &= actual && isHandle(actual);
         // The call must account for every reference on this operation:
         // another attribute may expose the helper as more than a callee.
-        unsigned references = 0;
-        for (NamedAttribute named : user->getAttrs())
-          named.getValue().walk([&](SymbolRefAttr reference) {
-            if (reference.getRootReference().getValue() ==
-                function.getSymName())
-              ++references;
-          });
-        covered &= references == 1;
+        covered &= onlyCalleeReference(user, function.getSymName());
       }
     coveredFormals[key] = covered;
     return covered;
+  };
+  // A fork's reference formal is bound at its spawn, and continues to
+  // designate that actual for the child's lifetime (1800-2023 6.21, 9.3.2,
+  // 13.5.2). A private automatic allocation can outlive its parent without
+  // becoming a design variable. Other known actuals pin their entire root.
+  using CaptureKey = std::pair<Operation *, unsigned>;
+  using CapturedRoots = std::optional<SmallVector<Root, 1>>;
+  DenseMap<CaptureKey, CapturedRoots> spawnCaptures;
+  DenseMap<Operation *, analysis::HandleFacts> captureFacts;
+  auto spawnRoots = [&](sim::SimFuncOp child,
+                        unsigned formal) -> const CapturedRoots & {
+    auto [entry, inserted] =
+        spawnCaptures.try_emplace({child.getOperation(), formal});
+    CapturedRoots &result = entry->second;
+    if (!inserted || !closedModel || !state.usesKnown || !child.isPrivate() ||
+        child.getEntryKind() != sim::EntryKind::Fork)
+      return result;
+    auto sites = usersOf.find(child.getSymName());
+    if (sites == usersOf.end() || sites->second.empty())
+      return result;
+    SmallVector<Root, 1> roots;
+    for (Operation *site : sites->second) {
+      auto spawn = getSpawnOf(site, child.getSymName());
+      auto parent = site->getParentOfType<sim::SimFuncOp>();
+      if (!spawn || !parent || formal >= spawn->getNumOperands() ||
+          !onlyCalleeReference(site, child.getSymName()))
+        return result;
+      auto [facts, fresh] = captureFacts.try_emplace(parent);
+      if (fresh)
+        facts->second = state.analysis->derive(parent);
+      auto found = facts->second.find(spawn->getOperand(formal));
+      if (found == facts->second.end())
+        return result;
+      const auto &actual = found->second;
+      if (actual.resource == schedule::ComputeResourceKind::Local)
+        continue;
+      bool net = actual.resource == schedule::ComputeResourceKind::Net;
+      if ((!net && actual.resource != schedule::ComputeResourceKind::Storage) ||
+          !actual.descriptor)
+        return result;
+      Root root{net, *actual.descriptor};
+      if (!types.count(root))
+        return result;
+      if (!llvm::is_contained(roots, root))
+        roots.push_back(root);
+    }
+    result = std::move(roots);
+    return result;
   };
   for (Summary *summary : all) {
     Operation *function = summary->function;
@@ -2104,12 +2153,10 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
       // origins: an opaque factory in the same body still needs fallback.
       if (access.formal && coveredAtCalls(summary->function, *access.formal))
         continue;
-      for (auto [root, type] : types) {
-        if (root.net != access.net)
-          continue;
+      auto pin = [&](Root root, Type type, StringRef reason) {
         auto width = sim::getProvenanceSpan(type);
         if (!width)
-          continue;
+          return;
         if (access.write)
           writersOf[keyOf(root)].push_back(
               {access.op, function, 0, *width, access.nonblocking, true});
@@ -2117,8 +2164,17 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
           watchersOf[keyOf(root)].push_back({function, 0, *width, false});
         auto found = sinks.find(root);
         if (found != sinks.end())
-          found->second.block("unknown handle origin");
-      }
+          found->second.block(reason);
+      };
+      if (access.formal)
+        if (const auto &roots = spawnRoots(summary->function, *access.formal)) {
+          for (Root root : *roots)
+            pin(root, types.at(root), "spawned reference access");
+          continue;
+        }
+      for (auto [root, type] : types)
+        if (root.net == access.net)
+          pin(root, type, "unknown handle origin");
     }
     if (summary->timing)
       for (Root root : summary->captured) {
