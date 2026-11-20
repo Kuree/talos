@@ -38,7 +38,7 @@ constexpr uint64_t kRootCookie = UINT64_C(0x524f4f545f56315a);
 constexpr uint64_t kProviderCookie = UINT64_C(0x50524f565f56315a);
 constexpr uint64_t kChunkSize = 2 * 1024 * 1024;
 constexpr uint64_t kSpanSize = 64 * 1024;
-constexpr uint64_t kChunkAlignment = 64;
+constexpr uint64_t kSmallObjectAlignment = 64;
 constexpr uint64_t kSpansPerChunk = kChunkSize / kSpanSize;
 constexpr uint64_t kMinimumCollectionBytes = 32 * 1024 * 1024;
 /// With designated collections, pressure that reaches this multiple of the
@@ -47,6 +47,7 @@ constexpr uint64_t kMinimumCollectionBytes = 32 * 1024 * 1024;
 /// activations), so a long activation stays bounded.
 constexpr uint64_t kDeferredCollectionFactor = 4;
 constexpr uint64_t kMaximumSmallSlot = 32 * 1024;
+constexpr unsigned kMinimumSlotShift = 5;
 constexpr unsigned kSizeClassCount = 11; // 32 bytes through 32 KiB.
 constexpr size_t kEmptyChunkCache = 2;
 constexpr uint32_t kRandomVariableFlags = TALOS_RT_RANDOM_VARIABLE_FOUR_STATE |
@@ -70,6 +71,7 @@ struct ObjectMetadata {
   class ManagedHeap *heap = nullptr;
   void *object = nullptr;
   const talos_rt_class_descriptor_v1 *descriptor = nullptr;
+  uint64_t traceBucketMask = UINT64_MAX;
   uint64_t identity = 0;
   uint64_t extent = 0;
   uint64_t allocationSize = 0;
@@ -79,7 +81,22 @@ struct ObjectMetadata {
   std::atomic<uint32_t> nextTicket{0};
   std::atomic<uint32_t> servingTicket{0};
   std::atomic<bool> allocated{false};
+  std::atomic<bool> hasManagedWatch{false};
   bool marked = false;
+  uint8_t traceBucketShift = 0;
+
+  // Caller has checked the object's extent. A bucket containing a managed
+  // word still needs the full layout and referent checks, including for a
+  // write overlapping only part of that word.
+  bool mayWriteHandle(uint64_t offset, uint64_t size) const {
+    if (traceBucketMask == UINT64_MAX || size == 0)
+      return true;
+    uint64_t last = (offset + size - 1) >> traceBucketShift;
+    if (last >= 64)
+      return true;
+    return (traceBucketMask & (UINT64_MAX << (offset >> traceBucketShift)) &
+            (UINT64_MAX >> (63 - last))) != 0;
+  }
 };
 
 static_assert(sizeof(ObjectMetadata) <= 96,
@@ -106,19 +123,26 @@ struct Span {
   bool hasSpace() const { return freeHead != UINT32_MAX || bump < capacity; }
 };
 
+// Drop the directory entry before releasing or reassigning its slot metadata.
+void releaseSpan(Span &span) noexcept;
+
 struct Chunk {
   uint8_t *memory = nullptr;
   std::array<Span, kSpansPerChunk> spans;
 
   Chunk() {
     memory = static_cast<uint8_t *>(
-        ::operator new(kChunkSize, std::align_val_t(kChunkAlignment)));
+        ::operator new(kChunkSize, std::align_val_t(kSpanSize)));
     std::memset(memory, 0, kChunkSize);
     for (size_t index = 0; index != spans.size(); ++index)
       spans[index].memory = memory + index * kSpanSize;
   }
 
-  ~Chunk() { ::operator delete(memory, std::align_val_t(kChunkAlignment)); }
+  ~Chunk() {
+    for (Span &span : spans)
+      releaseSpan(span);
+    ::operator delete(memory, std::align_val_t(kSpanSize));
+  }
 
   bool empty() const {
     for (const Span &span : spans)
@@ -154,7 +178,7 @@ bool validPowerOfTwo(uint64_t value) {
 }
 
 unsigned sizeClassFor(uint64_t size, uint32_t &classSize) {
-  classSize = 32;
+  classSize = 1u << kMinimumSlotShift;
   unsigned index = 0;
   while (classSize < size && index + 1 < kSizeClassCount) {
     classSize <<= 1;
@@ -163,66 +187,113 @@ unsigned sizeClassFor(uint64_t size, uint32_t &classSize) {
   return index;
 }
 
-std::shared_mutex metadataRegistryMutex;
-std::unordered_map<const talos_rt_object_v1 *, ObjectMetadata *>
-    metadataRegistry;
+// A small object is in one naturally aligned span of power-of-two slots.
+struct MetadataRange {
+  ManagedHeap *heap = nullptr;
+  ObjectMetadata *slots = nullptr;
+  unsigned shift = 0;
 
-// Advances whenever an object leaves the registry. Metadata storage (span
-// metadata arrays, large allocations) is released only after its objects are
-// unregistered, so a lookup cached in the current epoch names live metadata.
+  ObjectMetadata *slot(uintptr_t address) const {
+    return shift ? slots + ((address & (kSpanSize - 1)) >> shift) : slots;
+  }
+};
+
+std::shared_mutex metadataRegistryMutex;
+std::unordered_map<uintptr_t, MetadataRange> registeredSpans;
+std::unordered_map<const talos_rt_object_v1 *, ObjectMetadata *> largeObjects;
+// Changes when cached metadata storage can disappear. Reusing a slot in a
+// live span keeps its metadata, with a fresh allocation bit and exact address.
+// Reclaiming an unreachable object (IEEE 1800-2023 8.29) must invalidate
+// its cached lookup.
 std::atomic<uint64_t> metadataEpoch{1};
 
-void registerMetadata(ObjectMetadata *metadata) {
-  std::unique_lock<std::shared_mutex> lock(metadataRegistryMutex);
-  metadataRegistry.emplace(
-      static_cast<const talos_rt_object_v1 *>(metadata->object), metadata);
+void releaseSpan(Span &span) noexcept {
+  if (!span.metadata)
+    return;
+  {
+    std::unique_lock<std::shared_mutex> lock(metadataRegistryMutex);
+    registeredSpans.erase(reinterpret_cast<uintptr_t>(span.memory));
+    metadataEpoch.fetch_add(1, std::memory_order_release);
+  }
+  span.metadata.reset();
+  span.classIndex = UINT32_MAX;
+  span.slotSize = span.capacity = span.bump = span.live = 0;
+  span.freeHead = UINT32_MAX;
 }
 
-void unregisterMetadata(ObjectMetadata *metadata) {
+void unregisterLargeObject(const talos_rt_object_v1 *object) {
   std::unique_lock<std::shared_mutex> lock(metadataRegistryMutex);
-  metadataEpoch.fetch_add(1, std::memory_order_acq_rel);
-  metadataRegistry.erase(
-      static_cast<const talos_rt_object_v1 *>(metadata->object));
+  largeObjects.erase(object);
+  metadataEpoch.fetch_add(1, std::memory_order_release);
 }
 
-/// A per-thread direct-mapped cache of registry lookups (two-tier B5): every
-/// container, mailbox and object access resolves its handle here, and the
-/// registry's shared mutex costs two pthread mutex round trips per lookup.
-struct MetadataCacheEntry {
-  const talos_rt_object_v1 *object;
-  ObjectMetadata *metadata;
+ObjectMetadata *liveSlot(ObjectMetadata *metadata,
+                         const talos_rt_object_v1 *object) {
+  // Unallocated slots are visible in the directory before their first use.
+  // The allocation bit publishes the initialized metadata, including its
+  // exact payload address. Never dereference a supplied candidate handle.
+  return metadata && metadata->allocated.load(std::memory_order_acquire) &&
+                 metadata->object == object
+             ? metadata
+             : nullptr;
+}
+
+// Caller holds the directory lock. A foreign candidate can coincide with a
+// live address, so reject its heap before inspecting mutable object state.
+ObjectMetadata *registeredObject(const talos_rt_object_v1 *object,
+                                 const ManagedHeap *expected,
+                                 MetadataRange *location = nullptr) {
+  uintptr_t address = reinterpret_cast<uintptr_t>(object);
+  auto span = registeredSpans.find(address & ~uintptr_t(kSpanSize - 1));
+  if (span != registeredSpans.end()) {
+    if (expected && span->second.heap != expected)
+      return nullptr;
+    if (location)
+      *location = span->second;
+    return liveSlot(span->second.slot(address), object);
+  }
+  auto large = largeObjects.find(object);
+  if (large == largeObjects.end() ||
+      (expected && large->second->heap != expected))
+    return nullptr;
+  if (location)
+    *location = {large->second->heap, large->second, 0};
+  return liveSlot(large->second, object);
+}
+
+struct CachedMetadataRange {
+  MetadataRange range;
+  uintptr_t address;
   uint64_t epoch;
 };
-constexpr size_t kMetadataCacheEntries = 64;
 
-MetadataCacheEntry &metadataCacheEntry(const talos_rt_object_v1 *object) {
-  static thread_local MetadataCacheEntry cache[kMetadataCacheEntries];
-  uintptr_t address = reinterpret_cast<uintptr_t>(object);
-  return cache[((address >> 5) ^ (address >> 12)) &
-               (kMetadataCacheEntries - 1)];
-}
-
-ObjectMetadata *metadataFor(const talos_rt_object_v1 *object) {
+ObjectMetadata *metadataFor(const talos_rt_object_v1 *object,
+                            const ManagedHeap *expected = nullptr) {
   if (!object)
     return nullptr;
-  // Read the epoch before the registry: an unregistration racing with this
-  // lookup leaves the entry stale rather than current.
+  uintptr_t address = reinterpret_cast<uintptr_t>(object);
+  uintptr_t base = address & ~uintptr_t(kSpanSize - 1);
+  static thread_local CachedMetadataRange cache[32]{};
+  uintptr_t page = address / kSpanSize;
+  auto &entry = cache[(page ^ (page >> 6)) & 31];
   uint64_t epoch = metadataEpoch.load(std::memory_order_acquire);
-  MetadataCacheEntry &entry = metadataCacheEntry(object);
-  ObjectMetadata *metadata = nullptr;
-  if (entry.object == object && entry.epoch == epoch) {
-    metadata = entry.metadata;
-  } else {
-    std::shared_lock<std::shared_mutex> lock(metadataRegistryMutex);
-    auto found = metadataRegistry.find(object);
-    if (found == metadataRegistry.end())
+  // The scheduler's held lane keeps its heap alive until the next safepoint.
+  // Pausing for foreign code disarms the hold. Outside it, including public
+  // calls from other threads, resolve the handle under the directory lock.
+  ManagedRunHold *run = armedManagedRunHold();
+  ManagedHeap *heldHeap = run && run->lane ? run->heap : nullptr;
+  if (heldHeap && heldHeap == entry.range.heap && entry.epoch == epoch &&
+      entry.address == (entry.range.shift ? base : address)) {
+    if (expected && entry.range.heap != expected)
       return nullptr;
-    metadata = found->second;
-    entry = {object, metadata, epoch};
+    return liveSlot(entry.range.slot(address), object);
   }
-  if (metadata->object != object ||
-      !metadata->allocated.load(std::memory_order_acquire))
-    return nullptr;
+
+  std::shared_lock<std::shared_mutex> lock(metadataRegistryMutex);
+  MetadataRange range;
+  ObjectMetadata *metadata = registeredObject(object, expected, &range);
+  if (range.heap && range.heap == heldHeap)
+    entry = {range, range.shift ? base : address, epoch};
   return metadata;
 }
 
@@ -281,13 +352,8 @@ ObjectMetadata *candidateRootMetadata(ManagedHeap *heap,
   // classification. Same-heap objects remain stable after return because the
   // caller is either the owning stop-the-world collector or an active lane.
   std::shared_lock<std::shared_mutex> lock(metadataRegistryMutex);
-  auto found = metadataRegistry.find(object);
-  if (found == metadataRegistry.end())
-    return nullptr;
-  ObjectMetadata *metadata = found->second;
-  return metadata && metadata->object == object && metadata->heap == heap &&
-                 metadata->allocated.load(std::memory_order_acquire) &&
-                 (managedKindMask(metadata->kind) & allowedKinds) != 0
+  ObjectMetadata *metadata = registeredObject(object, heap);
+  return metadata && (managedKindMask(metadata->kind) & allowedKinds)
              ? metadata
              : nullptr;
 }
@@ -1120,7 +1186,12 @@ struct ThreadAllocationCache {
   uint64_t heapID = 0;
   uint64_t epoch = 0;
   std::array<Span *, kSizeClassCount> spans{};
-  std::array<const talos_rt_class_descriptor_v1 *, 8> validatedDescriptors{};
+  struct ValidatedClass {
+    const talos_rt_class_descriptor_v1 *descriptor = nullptr;
+    uint64_t traceBucketMask = UINT64_MAX;
+    uint8_t traceBucketShift = 0;
+  };
+  std::array<ValidatedClass, 8> validatedDescriptors{};
   uint32_t nextValidatedDescriptor = 0;
 };
 
@@ -1178,8 +1249,10 @@ public:
       : context(context), id(acquireHeapIdentity()) {}
 
   ~ManagedHeap() {
-    enumerateAllocated(
-        [](ObjectMetadata *metadata) { unregisterMetadata(metadata); });
+    for (const auto &large : largeAllocations)
+      unregisterLargeObject(
+          static_cast<const talos_rt_object_v1 *>(large->metadata.object));
+    chunks.clear();
     for (talos_rt_gc_lane_v1 *lane : lanes)
       delete lane;
   }
@@ -1361,8 +1434,7 @@ public:
     if (word == 0 || validImmediateManagedWord(word))
       return true;
     talos_rt_object_v1 *object = managedWordObject(word);
-    ObjectMetadata *metadata = metadataFor(object);
-    return metadata && metadata->heap == this;
+    return metadataFor(object, this) != nullptr;
   }
 
   talos_rt_status pushManagedRoot(talos_rt_gc_lane_v1 *lane,
@@ -1517,8 +1589,8 @@ public:
     std::unique_lock<std::mutex> worldLock(worldMutex, std::defer_lock);
     if (!activeCaller)
       worldLock.lock();
-    ObjectMetadata *metadata = metadataFor(object);
-    if (!metadata || metadata->heap != this)
+    ObjectMetadata *metadata = metadataFor(object, this);
+    if (!metadata)
       return TALOS_RT_INVALID_HANDLE;
     uint32_t current = metadata->pins.load(std::memory_order_relaxed);
     do {
@@ -1533,8 +1605,8 @@ public:
     std::unique_lock<std::mutex> worldLock(worldMutex, std::defer_lock);
     if (!activeCaller)
       worldLock.lock();
-    ObjectMetadata *metadata = metadataFor(object);
-    if (!metadata || metadata->heap != this)
+    ObjectMetadata *metadata = metadataFor(object, this);
+    if (!metadata)
       return TALOS_RT_INVALID_HANDLE;
     uint32_t current = metadata->pins.load(std::memory_order_relaxed);
     do {
@@ -1554,16 +1626,40 @@ public:
       uint64_t currentEpoch = allocatorEpoch.load(std::memory_order_acquire);
       ThreadAllocationCache &validationCache =
           allocationCache(this, id, currentEpoch);
-      if (std::find(validationCache.validatedDescriptors.begin(),
-                    validationCache.validatedDescriptors.end(),
-                    descriptor) == validationCache.validatedDescriptors.end()) {
+      auto &entries = validationCache.validatedDescriptors;
+      auto entry =
+          std::find_if(entries.begin(), entries.end(), [&](const auto &item) {
+            return item.descriptor == descriptor;
+          });
+      if (entry == entries.end()) {
         bool registered = false;
+        uint64_t traceBucketMask = UINT64_MAX;
+        uint8_t traceBucketShift = 0;
         {
           std::lock_guard<TalosContextMutex> lock(context->mutex);
           if (context->managedClassValidation) {
             const auto &classes = context->managedClassValidation->classes;
             auto found = classes.find(descriptor->class_id);
             registered = found != classes.end() && found->second == descriptor;
+            if (registered) {
+              auto *handles = context->managedClassValidation->layouts.get(
+                  descriptor->layout);
+              if (!handles)
+                return TALOS_RT_INVALID_DESIGN;
+              uint64_t lastByte = descriptor->instance_size - 1;
+              while ((lastByte >> traceBucketShift) >= 64)
+                ++traceBucketShift;
+              uint64_t bucketSize = uint64_t{1} << traceBucketShift;
+              traceBucketMask = 0;
+              for (uint64_t bucket = 0;
+                   bucket <= (lastByte >> traceBucketShift); ++bucket) {
+                uint64_t start = bucket << traceBucketShift;
+                if (handles->overlaps(
+                        start, std::min(bucketSize,
+                                        descriptor->instance_size - start)))
+                  traceBucketMask |= uint64_t{1} << bucket;
+              }
+            }
           }
         }
         if (!registered) {
@@ -1572,9 +1668,8 @@ public:
             return status == TALOS_RT_INVALID_DESIGN ? TALOS_RT_INVALID_ARGUMENT
                                                      : status;
         }
-        validationCache
-            .validatedDescriptors[validationCache.nextValidatedDescriptor] =
-            descriptor;
+        entry = entries.begin() + validationCache.nextValidatedDescriptor;
+        *entry = {descriptor, traceBucketMask, traceBucketShift};
         validationCache.nextValidatedDescriptor =
             (validationCache.nextValidatedDescriptor + 1) %
             validationCache.validatedDescriptors.size();
@@ -1582,9 +1677,10 @@ public:
       if ((descriptor->flags &
            (TALOS_RT_CLASS_ABSTRACT | TALOS_RT_CLASS_INTERFACE)) != 0)
         return TALOS_RT_INVALID_LIFECYCLE;
-      return allocateImpl(
-          lane, TALOS_RT_MANAGED_CLASS, descriptor->instance_size,
-          descriptor->instance_alignment, descriptor, outObject);
+      return allocateImpl(lane, TALOS_RT_MANAGED_CLASS,
+                          descriptor->instance_size,
+                          descriptor->instance_alignment, descriptor, outObject,
+                          entry->traceBucketMask, entry->traceBucketShift);
     });
   }
 
@@ -1621,7 +1717,9 @@ private:
                                talos_rt_managed_kind_v1 kind, uint64_t extent,
                                uint64_t alignment,
                                const void *runtimeDescriptor,
-                               talos_rt_object_v1 **outObject) {
+                               talos_rt_object_v1 **outObject,
+                               uint64_t traceBucketMask = UINT64_MAX,
+                               uint8_t traceBucketShift = 0) {
     if (!outObject)
       return TALOS_RT_INVALID_ARGUMENT;
     *outObject = nullptr;
@@ -1671,7 +1769,7 @@ private:
     ObjectMetadata *metadata = nullptr;
     uint8_t *slotMemory = nullptr;
     if (allocationSize <= kMaximumSmallSlot &&
-        allocationAlignment <= kChunkAlignment) {
+        allocationAlignment <= kSmallObjectAlignment) {
       uint32_t classSize = 0;
       unsigned classIndex = sizeClassFor(allocationSize, classSize);
       Span *span = cache.spans[classIndex];
@@ -1693,16 +1791,8 @@ private:
       metadata->heap = this;
       ++span->live;
     } else {
-      auto large = std::make_unique<LargeAllocation>(allocationSize,
-                                                     allocationAlignment);
-      slotMemory = large->storage;
-      metadata = &large->metadata;
-      metadata->heap = this;
-      {
-        std::lock_guard<std::mutex> lock(allocatorMutex);
-        largeAllocations.push_back(std::move(large));
-      }
-      largeAllocationCount.fetch_add(1, std::memory_order_relaxed);
+      metadata = acquireLargeSlot(allocationSize, allocationAlignment,
+                                  objectOffset, slotMemory);
     }
 
     std::memset(slotMemory, 0, allocationSize);
@@ -1713,6 +1803,8 @@ private:
     prefix->metadata = metadata;
     prefix->magic = kObjectMagic;
     metadata->object = object;
+    metadata->traceBucketMask = traceBucketMask;
+    metadata->traceBucketShift = traceBucketShift;
     metadata->descriptor =
         kind == TALOS_RT_MANAGED_CLASS
             ? static_cast<const talos_rt_class_descriptor_v1 *>(
@@ -1728,8 +1820,8 @@ private:
     metadata->servingTicket.store(0, std::memory_order_relaxed);
     metadata->marked = false;
     std::memcpy(object, &runtimeDescriptor, sizeof(runtimeDescriptor));
+    metadata->hasManagedWatch.store(false, std::memory_order_relaxed);
     metadata->allocated.store(true, std::memory_order_release);
-    registerMetadata(metadata);
 
     allocatedObjects.fetch_add(1, std::memory_order_relaxed);
     allocatedSinceCollection.fetch_add(allocationSize,
@@ -1900,8 +1992,8 @@ public:
     // held and therefore preserves the global GC/context lock order.
     if (!activeOwner(lane))
       return TALOS_RT_INVALID_LIFECYCLE;
-    ObjectMetadata *metadata = metadataFor(object);
-    if (!metadata || metadata->heap != this)
+    ObjectMetadata *metadata = metadataFor(object, this);
+    if (!metadata)
       return TALOS_RT_INVALID_HANDLE;
     uint32_t current = metadata->pins.load(std::memory_order_relaxed);
     do {
@@ -1914,8 +2006,8 @@ public:
   }
 
   talos_rt_status releaseScheduled(talos_rt_object_v1 *object) {
-    ObjectMetadata *metadata = metadataFor(object);
-    if (!metadata || metadata->heap != this)
+    ObjectMetadata *metadata = metadataFor(object, this);
+    if (!metadata)
       return TALOS_RT_INVALID_HANDLE;
     uint32_t current = metadata->pins.load(std::memory_order_relaxed);
     do {
@@ -1937,6 +2029,33 @@ public:
   }
 
 private:
+  ObjectMetadata *acquireLargeSlot(uint64_t allocationSize, uint64_t alignment,
+                                   uint64_t objectOffset,
+                                   uint8_t *&slotMemory) {
+    auto large = std::make_unique<LargeAllocation>(allocationSize, alignment);
+    slotMemory = large->storage;
+    auto *object =
+        reinterpret_cast<talos_rt_object_v1 *>(slotMemory + objectOffset);
+    auto *metadata = &large->metadata;
+    metadata->heap = this;
+    // The entry remains invisible to lookup until the caller publishes the
+    // initialized metadata. Roll back the directory on allocation failure.
+    {
+      std::unique_lock<std::shared_mutex> lock(metadataRegistryMutex);
+      largeObjects.emplace(object, metadata);
+    }
+    TALOS_RT_TRY {
+      std::lock_guard<std::mutex> lock(allocatorMutex);
+      largeAllocations.push_back(std::move(large));
+    }
+    TALOS_RT_CATCH_ALL {
+      unregisterLargeObject(object);
+      TALOS_RT_RETHROW;
+    }
+    largeAllocationCount.fetch_add(1, std::memory_order_relaxed);
+    return metadata;
+  }
+
   Span *acquireSpan(unsigned classIndex, uint32_t classSize) {
     std::lock_guard<std::mutex> lock(allocatorMutex);
     auto &available = availableSpans[classIndex];
@@ -1967,6 +2086,12 @@ private:
 
     uint32_t capacity = static_cast<uint32_t>(kSpanSize / classSize);
     auto metadata = std::make_unique<ObjectMetadata[]>(capacity);
+    {
+      std::unique_lock<std::shared_mutex> directory(metadataRegistryMutex);
+      registeredSpans.emplace(
+          reinterpret_cast<uintptr_t>(unassigned->memory),
+          MetadataRange{this, metadata.get(), kMinimumSlotShift + classIndex});
+    }
     unassigned->classIndex = classIndex;
     unassigned->slotSize = classSize;
     unassigned->capacity = capacity;
@@ -1997,7 +2122,7 @@ private:
 
   void markObject(talos_rt_object_v1 *object,
                   std::vector<ObjectMetadata *> &pending) {
-    mark(metadataFor(object), pending);
+    mark(metadataFor(object, this), pending);
   }
 
   struct WeakSlot {
@@ -2189,28 +2314,43 @@ private:
       for (Span &span : chunk->spans) {
         if (!span.assigned())
           continue;
-        for (uint32_t slot = 0; slot != span.bump; ++slot) {
-          ObjectMetadata &metadata = span.metadata[slot];
-          if (!metadata.allocated.load(std::memory_order_acquire))
-            continue;
-          if (metadata.marked) {
-            metadata.marked = false;
-            ++currentLiveObjects;
-            currentLiveBytes += metadata.allocationSize;
-            continue;
+        uint32_t oldFreeHead = span.freeHead;
+        {
+          std::unique_lock<std::shared_mutex> directory(metadataRegistryMutex,
+                                                        std::defer_lock);
+          for (uint32_t slot = 0; slot != span.bump; ++slot) {
+            ObjectMetadata &metadata = span.metadata[slot];
+            if (!metadata.allocated.load(std::memory_order_acquire))
+              continue;
+            if (metadata.marked) {
+              metadata.marked = false;
+              ++currentLiveObjects;
+              currentLiveBytes += metadata.allocationSize;
+              continue;
+            }
+            // An unowned probe holds the directory read lock while checking
+            // the slot. Retire all dead slots here before they can be reused.
+            if (!directory.owns_lock())
+              directory.lock();
+            metadata.allocated.store(false, std::memory_order_release);
+            auto *prefix = reinterpret_cast<SlotPrefix *>(
+                static_cast<uint8_t *>(metadata.object) - sizeof(SlotPrefix));
+            prefix->magic = 0;
+            std::memcpy(span.memory + uint64_t(slot) * span.slotSize,
+                        &span.freeHead, sizeof(span.freeHead));
+            span.freeHead = slot;
+            --span.live;
+            ++reclaimed;
           }
-          metadata.allocated.store(false, std::memory_order_release);
-          eraseManagedOverrides(metadata);
-          unregisterMetadata(&metadata);
-          auto *prefix = reinterpret_cast<SlotPrefix *>(
-              static_cast<uint8_t *>(metadata.object) - sizeof(SlotPrefix));
-          prefix->magic = 0;
-          uint32_t previous = span.freeHead;
-          std::memcpy(span.memory + uint64_t(slot) * span.slotSize, &previous,
-                      sizeof(previous));
-          span.freeHead = slot;
-          --span.live;
-          ++reclaimed;
+        }
+        if (context && span.freeHead != oldFreeHead) {
+          std::lock_guard<TalosContextMutex> lock(context->mutex);
+          if (!context->managedOverrides.empty())
+            for (uint32_t slot = span.freeHead; slot != oldFreeHead;) {
+              context->managedOverrides.erase(span.metadata[slot].identity);
+              std::memcpy(&slot, span.memory + uint64_t(slot) * span.slotSize,
+                          sizeof(slot));
+            }
         }
         if (span.hasSpace())
           availableSpans[span.classIndex].push_back(&span);
@@ -2228,7 +2368,8 @@ private:
       }
       metadata.allocated.store(false, std::memory_order_release);
       eraseManagedOverrides(metadata);
-      unregisterMetadata(&metadata);
+      unregisterLargeObject(
+          static_cast<const talos_rt_object_v1 *>(metadata.object));
       ++reclaimed;
       it = largeAllocations.erase(it);
     }
@@ -2253,14 +2394,8 @@ private:
       bool empty = chunk->empty();
       emptyChunks += empty ? 1 : 0;
       if (empty)
-        for (Span &span : chunk->spans) {
-          span.classIndex = UINT32_MAX;
-          span.slotSize = 0;
-          span.capacity = 0;
-          span.bump = 0;
-          span.freeHead = UINT32_MAX;
-          span.metadata.reset();
-        }
+        for (Span &span : chunk->spans)
+          releaseSpan(span);
       for (Span &span : chunk->spans)
         if (span.assigned() && span.hasSpace())
           availableSpans[span.classIndex].push_back(&span);
@@ -2357,7 +2492,7 @@ ManagedHeap::allocateManagedWithoutSafepoint(
     ObjectMetadata *metadata = nullptr;
     uint8_t *slotMemory = nullptr;
     if (allocationSize <= kMaximumSmallSlot &&
-        allocationAlignment <= kChunkAlignment) {
+        allocationAlignment <= kSmallObjectAlignment) {
       uint32_t classSize = 0;
       unsigned classIndex = sizeClassFor(allocationSize, classSize);
       Span *span = cache.spans[classIndex];
@@ -2379,16 +2514,8 @@ ManagedHeap::allocateManagedWithoutSafepoint(
       metadata->heap = this;
       ++span->live;
     } else {
-      auto large = std::make_unique<LargeAllocation>(allocationSize,
-                                                     allocationAlignment);
-      slotMemory = large->storage;
-      metadata = &large->metadata;
-      metadata->heap = this;
-      {
-        std::lock_guard<std::mutex> lock(allocatorMutex);
-        largeAllocations.push_back(std::move(large));
-      }
-      largeAllocationCount.fetch_add(1, std::memory_order_relaxed);
+      metadata = acquireLargeSlot(allocationSize, allocationAlignment,
+                                  objectOffset, slotMemory);
     }
 
     std::memset(slotMemory, 0, allocationSize);
@@ -2414,8 +2541,8 @@ ManagedHeap::allocateManagedWithoutSafepoint(
     metadata->servingTicket.store(0, std::memory_order_relaxed);
     metadata->marked = false;
     std::memcpy(object, &runtimeDescriptor, sizeof(runtimeDescriptor));
+    metadata->hasManagedWatch.store(false, std::memory_order_relaxed);
     metadata->allocated.store(true, std::memory_order_release);
-    registerMetadata(metadata);
 
     allocatedObjects.fetch_add(1, std::memory_order_relaxed);
     allocatedSinceCollection.fetch_add(allocationSize,
@@ -2642,8 +2769,7 @@ bool talos_rt_managed_object_belongs_to(talos_rt_context *context,
   if (!object)
     return true;
   ManagedHeap *heap = heapFor(context);
-  ObjectMetadata *metadata = metadataFor(object);
-  return heap && metadata && metadata->heap == heap;
+  return heap && metadataFor(object, heap);
 }
 
 talos_rt_context *
@@ -2711,14 +2837,9 @@ TALOS_RT_FEATURE_HELPER talos_rt_status talos_rt_managed_object_acquire(
   ObjectMetadata *metadata = nullptr;
   {
     std::shared_lock<std::shared_mutex> lock(metadataRegistryMutex);
-    auto found = metadataRegistry.find(object);
-    if (found == metadataRegistry.end())
-      return TALOS_RT_INVALID_HANDLE;
-    metadata = found->second;
-    if (metadata->object != object || metadata->heap != lane->heap ||
-        !metadata->allocated.load(std::memory_order_acquire) ||
-        (expectedKind != TALOS_RT_MANAGED_INVALID &&
-         metadata->kind != expectedKind))
+    metadata = registeredObject(object, lane->heap);
+    if (!metadata || (expectedKind != TALOS_RT_MANAGED_INVALID &&
+                      metadata->kind != expectedKind))
       return TALOS_RT_INVALID_HANDLE;
   }
   uint32_t ticket =
@@ -3875,9 +3996,10 @@ extern "C" talos_rt_status talos_rt_v1_object_write(talos_rt_object_v1 *object,
   if (!metadata || metadata->kind != TALOS_RT_MANAGED_CLASS ||
       (!data && size != 0) || offset < sizeof(void *) ||
       !checkedRange(offset, size, metadata->descriptor->instance_size) ||
-      !validateLayoutHandleWrite(metadata->descriptor->layout, 0, offset, size,
-                                 static_cast<const uint8_t *>(data),
-                                 metadata->heap))
+      (metadata->mayWriteHandle(offset, size) &&
+       !validateLayoutHandleWrite(metadata->descriptor->layout, 0, offset, size,
+                                  static_cast<const uint8_t *>(data),
+                                  metadata->heap)))
     return TALOS_RT_INVALID_ARGUMENT;
   if (managedOverrideActive(metadata, offset, size))
     return TALOS_RT_OK;
@@ -3888,7 +4010,7 @@ extern "C" talos_rt_status talos_rt_v1_object_write(talos_rt_object_v1 *object,
     changed = size != 0 && std::memcmp(destination, data, size) != 0;
     std::memcpy(destination, data, size);
   }
-  if (changed)
+  if (changed && metadata->hasManagedWatch.load(std::memory_order_acquire))
     talos_rt_notify_managed_watch(object, TALOS_RT_MANAGED_WATCH_FIELD, offset,
                                   size);
   return TALOS_RT_OK;
@@ -3932,7 +4054,7 @@ talos_rt_v1_object_bits_insert(talos_rt_object_v1 *object, uint64_t offset,
       byte = updated;
     }
   }
-  if (changed)
+  if (changed && metadata->hasManagedWatch.load(std::memory_order_acquire))
     talos_rt_notify_managed_watch(object, TALOS_RT_MANAGED_WATCH_FIELD, offset,
                                   (fieldBitWidth + 7) / 8);
   return TALOS_RT_OK;
@@ -3963,12 +4085,13 @@ talos_rt_v1_object_write_planes(talos_rt_object_v1 *object, uint64_t offset,
       planeSize > UINT64_MAX / 2 ||
       !checkedRange(offset, planeSize * 2,
                     metadata->descriptor->instance_size) ||
-      !validateLayoutHandleWrite(metadata->descriptor->layout, 0, offset,
-                                 planeSize, static_cast<const uint8_t *>(value),
-                                 metadata->heap) ||
-      !validateLayoutHandleWrite(
-          metadata->descriptor->layout, 0, offset + planeSize, planeSize,
-          static_cast<const uint8_t *>(unknown), metadata->heap))
+      (metadata->mayWriteHandle(offset, planeSize * 2) &&
+       (!validateLayoutHandleWrite(
+            metadata->descriptor->layout, 0, offset, planeSize,
+            static_cast<const uint8_t *>(value), metadata->heap) ||
+        !validateLayoutHandleWrite(
+            metadata->descriptor->layout, 0, offset + planeSize, planeSize,
+            static_cast<const uint8_t *>(unknown), metadata->heap))))
     return TALOS_RT_INVALID_ARGUMENT;
   if (managedOverrideActive(metadata, offset, planeSize * 2))
     return TALOS_RT_OK;
@@ -3981,7 +4104,7 @@ talos_rt_v1_object_write_planes(talos_rt_object_v1 *object, uint64_t offset,
     std::memcpy(destination, value, planeSize);
     std::memcpy(destination + planeSize, unknown, planeSize);
   }
-  if (changed)
+  if (changed && metadata->hasManagedWatch.load(std::memory_order_acquire))
     talos_rt_notify_managed_watch(object, TALOS_RT_MANAGED_WATCH_FIELD, offset,
                                   planeSize * 2);
   return TALOS_RT_OK;
@@ -4648,6 +4771,9 @@ extern "C" uint64_t talos_rt_v1_managed_watch(talos_rt_object_v1 *object,
       context->nextManagedWatchToken >= kClassWatchGroupBit)
     return 0;
   token = context->nextManagedWatchToken++;
+  // Range watches also register their base selector here. Publish the hint
+  // before returning the token. Writers test it after committing their bytes.
+  metadata->hasManagedWatch.store(true, std::memory_order_release);
   return token;
 }
 
@@ -4656,7 +4782,8 @@ void talos_rt_notify_managed_watch(talos_rt_object_v1 *object,
                                    uint64_t selector, uint64_t size) {
   ObjectMetadata *metadata = metadataFor(object);
   std::optional<uint64_t> key = managedWatchSelector(kind, selector);
-  if (!metadata || !metadata->heap || !key || metadata->identity == 0)
+  if (!metadata || !metadata->hasManagedWatch.load(std::memory_order_acquire) ||
+      !metadata->heap || !key || metadata->identity == 0)
     return;
   talos_rt_context *context = metadata->heap->ownerContext();
   if (!context)

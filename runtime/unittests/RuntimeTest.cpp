@@ -6119,6 +6119,40 @@ TEST_F(ManagedHeapTest, DispatchesOverridesAndShallowCopiesDynamicType) {
   EXPECT_EQ(castResult, nullptr);
 }
 
+TEST_F(ManagedHeapTest, RegisteredPackedFieldWritesPreserveHandleBoundaries) {
+  constexpr uint64_t handleOffset = 1024;
+  static const talos_rt_trace_entry_v1 entry{
+      handleOffset, 0, 1, TALOS_RT_TRACE_STRONG, TALOS_RT_MANAGED_SLOT_CLASS,
+      nullptr};
+  static const talos_rt_trace_layout_v1 layout{TALOS_RT_VERSION, 0,      2048,
+                                               kSlotAlign,       &entry, 1};
+  static const auto descriptor = [] {
+    talos_rt_class_descriptor_v1 type{};
+    type.version = TALOS_RT_VERSION;
+    type.class_id = 2191;
+    type.instance_size = layout.size;
+    type.instance_alignment = layout.alignment;
+    type.layout = &layout;
+    return type;
+  }();
+  ASSERT_EQ(talos_rt_v1_class_register(context, &descriptor), TALOS_RT_OK);
+  talos_rt_object_v1 *object = nullptr;
+  ASSERT_EQ(talos_rt_v1_object_allocate(lane, &descriptor, &object),
+            TALOS_RT_OK);
+  uint32_t value = 43, unknown = 7;
+  EXPECT_EQ(talos_rt_v1_object_write_planes(object, 128, &value, &unknown,
+                                            sizeof(value)),
+            TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_object_write(object, handleOffset - 1, &value, 2),
+            TALOS_RT_INVALID_ARGUMENT);
+  EXPECT_EQ(talos_rt_v1_object_write_planes(object, handleOffset - 4, &value,
+                                            &unknown, 4),
+            TALOS_RT_INVALID_ARGUMENT);
+  EXPECT_EQ(talos_rt_v1_object_write(object, handleOffset + kSlot, &value,
+                                     sizeof(value)),
+            TALOS_RT_OK);
+}
+
 TEST_F(ManagedHeapTest, ShallowCopiesContainerPropertiesAsValues) {
   // IEEE 1800-2023 8.12: a shallow copy shares object handles but copies
   // every property variable, so a container property gets its own value.
@@ -6745,6 +6779,41 @@ TEST(ManagedHeap, LookupsOfFreedObjectsMissAfterCollection) {
   EXPECT_GT(reused, 0u);
   talos_rt_managed_execution_leave(lane, entered);
   talos_rt_v1_context_destroy(context);
+}
+
+TEST_F(ManagedHeapTest, ResolvesOnlyExactLiveSlotsAndLargeHandles) {
+  ASSERT_EQ(talos_rt_v1_gc_set_threshold(context, UINT64_MAX), TALOS_RT_OK);
+  talos_rt_object_v1 *kept = nullptr, *dead = nullptr;
+  ASSERT_EQ(talos_rt_v1_object_allocate(lane, &nodeDescriptor, &kept),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_object_allocate(lane, &nodeDescriptor, &dead),
+            TALOS_RT_OK);
+  talos_rt_gc_root_v1 root{};
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &root, &kept), TALOS_RT_OK);
+  auto interior = [](talos_rt_object_v1 *object, size_t bytes) {
+    return reinterpret_cast<talos_rt_object_v1 *>(
+        reinterpret_cast<uint8_t *>(object) + bytes);
+  };
+  uint64_t keptID = talos_rt_v1_object_id(kept);
+  ASSERT_NE(keptID, 0u);
+  EXPECT_NE(talos_rt_v1_object_id(dead), 0u);
+  EXPECT_EQ(talos_rt_v1_object_id(interior(kept, sizeof(uint64_t))), 0u);
+
+  std::string bytes(96 * 1024, 'a');
+  talos_rt_string_v1 handle = 0;
+  ASSERT_EQ(
+      talos_rt_v1_string_create(lane, bytes.data(), bytes.size(), &handle),
+      TALOS_RT_OK);
+  auto *large = reinterpret_cast<talos_rt_object_v1 *>(uintptr_t(handle));
+  ASSERT_NE(talos_rt_v1_object_id(large), 0u);
+  EXPECT_EQ(talos_rt_v1_object_id(interior(large, sizeof(uint64_t))), 0u);
+  EXPECT_EQ(talos_rt_v1_object_id(interior(large, 64 * 1024)), 0u);
+
+  ASSERT_EQ(talos_rt_v1_gc_collect(lane), TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_object_id(kept), keptID);
+  EXPECT_EQ(talos_rt_v1_object_id(dead), 0u);
+  EXPECT_EQ(talos_rt_v1_object_id(large), 0u);
+  ASSERT_EQ(talos_rt_v1_gc_root_pop(lane, &root), TALOS_RT_OK);
 }
 
 TEST(ManagedHeap, PolledCollectionReclaimsOnlyAtPollsAndBetweenActivations) {
