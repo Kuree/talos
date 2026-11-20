@@ -697,28 +697,44 @@ jobs:
           command: deploy
           vars: SITE_RELEASE
 
+      # Right after a deploy, an edge can still run the previous Worker version
+      # and answer from its release's cache, so poll until every site serves
+      # this release. A wrong MIME type or a missing header fails at once.
       - name: Check public sites
         run: |
-          curl --fail --retry 8 --retry-delay 5 --retry-all-errors \
-            --dump-header "$RUNNER_TEMP/talos-landing-headers" \
-            --head https://talos-sv.org/
-          curl --fail --retry 8 --retry-delay 5 --retry-all-errors \
-            --dump-header "$RUNNER_TEMP/talos-landing-css-headers" \
-            --head https://talos-sv.org/landing.css
-          curl --fail --retry 8 --retry-delay 5 --retry-all-errors \
-            --dump-header "$RUNNER_TEMP/talos-docs-headers" \
-            --head https://docs.talos-sv.org/
-          curl --fail --retry 8 --retry-delay 5 --retry-all-errors \
-            --dump-header "$RUNNER_TEMP/talos-wasm-headers" \
-            --head https://playground.talos-sv.org/talos.wasm
-          python3 - <<'PY'
+          for attempt in $(seq 30); do
+            curl --fail --retry 8 --retry-delay 5 --retry-all-errors \
+              --dump-header "$RUNNER_TEMP/talos-landing-headers" \
+              --head https://talos-sv.org/
+            curl --fail --retry 8 --retry-delay 5 --retry-all-errors \
+              --dump-header "$RUNNER_TEMP/talos-landing-css-headers" \
+              --head https://talos-sv.org/landing.css
+            curl --fail --retry 8 --retry-delay 5 --retry-all-errors \
+              --dump-header "$RUNNER_TEMP/talos-docs-headers" \
+              --head https://docs.talos-sv.org/
+            curl --fail --retry 8 --retry-delay 5 --retry-all-errors \
+              --dump-header "$RUNNER_TEMP/talos-wasm-headers" \
+              --head https://playground.talos-sv.org/talos.wasm
+            status=0
+            python3 - <<'PY' || status=$?
           import os
+          import sys
           from pathlib import Path
+          stale = []
           for name, content_type in (("landing", "text/html"), ("landing-css", "text/css"),
                                      ("docs", "text/html"), ("wasm", "application/wasm")):
               path = Path(os.environ["RUNNER_TEMP"]) / f"talos-{name}-headers"
               headers = dict(line.lower().split(":", 1) for line in path.read_text().splitlines() if ":" in line)
-              assert headers["x-talos-release"].strip() == os.environ["SITE_RELEASE"]
               assert headers["content-type"].strip().startswith(content_type)
+              if headers["x-talos-release"].strip() != os.environ["SITE_RELEASE"]:
+                  stale.append(f"{name} serves {headers['x-talos-release'].strip()}")
+          if stale:
+              print("Waiting for the new release:", "; ".join(stale))
+              sys.exit(3)
           print("Landing page, documentation, and playground serve the expected release and MIME types")
           PY
+            if [ "$status" -eq 0 ]; then exit 0; fi
+            if [ "$status" -ne 3 ]; then exit "$status"; fi
+            sleep 10
+          done
+          exit 1
