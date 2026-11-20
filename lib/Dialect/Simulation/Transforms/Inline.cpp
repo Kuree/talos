@@ -532,6 +532,21 @@ void TalosSimInlinePass::runOnOperation() {
           break;
         }
       }
+      // Expose a conditional simulation exit to the caller's eval path
+      // probe. The canonical activation must still take the exit on that
+      // path (IEEE 1800-2023 20.2, 20.10), including when its argument is X.
+      // The ordinary caller and design growth budgets apply to this clone.
+      if (!tiny && !specializes && optLevel >= 3 && leaf &&
+          !callee.getBody().hasOneBlock())
+        specializes =
+            callee
+                .walk([](Operation *op) {
+                  return isa<sim::SimStopOp, sim::SimFinishOp, sim::SimFatalOp>(
+                             op)
+                             ? WalkResult::interrupt()
+                             : WalkResult::advance();
+                })
+                .wasInterrupted();
     }
     if (!tiny && !specializes) {
       ++unprofitable;
