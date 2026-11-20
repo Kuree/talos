@@ -21,7 +21,15 @@ namespace talos::analysis {
 /// separate whole-program observation/activation proof.
 class ActivationMemoryAnalysis {
 public:
-  enum class DependencyMode { Accesses, Inputs, ReachingValues };
+  /// OrderingAccesses describes incoming design storage and nets even when
+  /// the activation also reports already captured values. Such a footprint
+  /// can order an existing executor. It cannot certify fusion or repetition.
+  enum class DependencyMode {
+    Accesses,
+    Inputs,
+    ReachingValues,
+    OrderingAccesses
+  };
   /// Descriptor namespaces are disjoint in the activation graph. Bit 63 is
   /// reserved for private slots; bit 62 distinguishes nets from storage.
   static constexpr uint64_t netRootTag = uint64_t{1} << 62;

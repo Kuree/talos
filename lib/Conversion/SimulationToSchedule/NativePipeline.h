@@ -100,6 +100,8 @@ struct NativePipelineAnalysis {
       aotBytecodeContinuations;
   llvm::DenseSet<std::pair<uint64_t, uint32_t>> runtimeCheckpointContinuations;
   llvm::DenseSet<uint64_t> checkpointOnlyActors;
+  // These frames resume at the compiler-selected Active handoff ranks.
+  llvm::DenseSet<mlir::Operation *> rankedActiveActors;
   llvm::MapVector<mlir::Operation *,
                   std::unique_ptr<SimulationProcessFrameAnalysis>>
       analyses;
@@ -111,6 +113,7 @@ struct NativePipelineAnalysis {
   // Actor identity and the canonical frame remain owned by analyses above.
   llvm::DenseMap<mlir::Operation *, analysis::CaptureCopyProcess>
       copyActivations;
+  llvm::DenseSet<mlir::Operation *> constantPortInitializers;
   llvm::DenseMap<mlir::Operation *, NativeTableProcess> tableProcesses;
   // Canonical ABI snapshots for the explicit Schedule transfer kernels. They
   // are implementations, not actors: no spawn, owner or descriptor is created.
@@ -145,6 +148,9 @@ struct NativePipelineAnalysis {
   llvm::SmallVector<DeferredDirectFragmentWrapper> deferredDirectWrappers;
   llvm::DenseMap<std::pair<uint32_t, uint32_t>, uint32_t> aotFusionGroups;
   NativeEvalOwnershipPlan evalOwnership;
+  // Direct owner index and its first source-process settling SCC. Local
+  // procedural feedback is classified independently and never enters here.
+  llvm::MapVector<unsigned, unsigned> sourceConvergenceGroups;
   NativeActivationInputs activationInputs;
   llvm::SmallVector<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>>
       rankedAOTNodes;

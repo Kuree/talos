@@ -186,16 +186,17 @@ public:
   Option<unsigned> maximumPartitions{*this, "maximum-partitions",
                                      llvm::cl::init(65536)};
   Option<bool> values{*this, "values", llvm::cl::init(false)};
+  Option<bool> ordering{*this, "ordering", llvm::cl::init(false)};
   void runOnOperation() final {
+    using Mode = talos::analysis::ActivationMemoryAnalysis::DependencyMode;
+    Mode mode = ordering ? Mode::OrderingAccesses
+                : values ? Mode::ReachingValues
+                         : Mode::Accesses;
     getOperation().walk([&](talos::sim::SimDesignOp design) {
       talos::analysis::HandleDataflowAnalysis handles(design);
       for (auto function : design.getBody().getOps<talos::sim::SimFuncOp>()) {
         talos::analysis::ActivationMemoryAnalysis memory(
-            function, handles, maximumPartitions,
-            values ? talos::analysis::ActivationMemoryAnalysis::DependencyMode::
-                         ReachingValues
-                   : talos::analysis::ActivationMemoryAnalysis::DependencyMode::
-                         Accesses);
+            function, handles, maximumPartitions, mode);
         llvm::errs() << "activation @" << function.getSymName()
                      << " valid=" << memory.isValid()
                      << " complete=" << memory.hasCompleteWrites() << '\n';

@@ -445,6 +445,12 @@ bool pendingRuntimeTransparent(LLVM::CallOp call,
       *callee == "talos_rt_v1_static_nba_specialization_guard_write" ||
       callee->starts_with("llvm."))
     return true;
+  if (*callee == "talos_rt_v1_scheduler_wide_transition_owned" &&
+      call.getArgOperands().size() == 8 &&
+      call.getArgOperands()[1].getDefiningOp<LLVM::ConstantOp>() &&
+      call.getArgOperands()[2].getDefiningOp<LLVM::ConstantOp>() &&
+      call.getArgOperands()[3].getDefiningOp<LLVM::ConstantOp>())
+    return true;
   if (*callee == "talos_rt_v1_scheduler_static_transition_owned" &&
       call.getArgOperands().size() == 9 &&
       call.getArgOperands()[1].getDefiningOp<LLVM::ConstantOp>() &&

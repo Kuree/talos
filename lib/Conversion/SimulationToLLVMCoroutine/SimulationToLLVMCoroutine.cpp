@@ -310,7 +310,16 @@ bool isEvalClosureRuntimeCall(LLVM::CallOp call, LLVM::LLVMFuncOp function,
   // without executing actors or advancing time. Its actor/root are
   // fixed by the installed generated plan; scheduling stays outside
   // this non-suspending activation.
-  if (*callee == "talos_rt_v1_scheduler_static_transition_owned" &&
+  if ((*callee == "talos_rt_v1_scheduler_wide_transition_owned" ||
+       *callee == "talos_rt_v1_scheduler_wide_transition_projected") &&
+      call.getArgOperands().size() == 8 &&
+      call.getArgOperands()[1].getDefiningOp<LLVM::ConstantOp>() &&
+      call.getArgOperands()[2].getDefiningOp<LLVM::ConstantOp>() &&
+      call.getArgOperands()[3].getDefiningOp<LLVM::ConstantOp>() &&
+      schedule::has<schedule::Field::EvalRuntimeCalendar>(module))
+    return true;
+  if ((*callee == "talos_rt_v1_scheduler_static_transition_owned" ||
+       *callee == "talos_rt_v1_scheduler_static_transition_projected") &&
       ::talos::schedule::has<::talos::schedule::Field::EvalRuntimeCalendar>(
           module) &&
       call.getArgOperands().size() == 9 &&
@@ -325,6 +334,7 @@ bool isEvalClosureRuntimeCall(LLVM::CallOp call, LLVM::LLVMFuncOp function,
   // The NBA barrier hands the same runtime-routed waits to the runtime as
   // node activations (IEEE 1800-2023 4.5, 10.4.2).
   if ((*callee == "talos_rt_v1_scheduler_static_transition_owned" ||
+       *callee == "talos_rt_v1_scheduler_static_transition_projected" ||
        *callee == "talos_rt_v1_scheduler_static_transition" ||
        *callee == "talos_rt_v1_scheduler_activate_static_nodes") &&
       ::talos::schedule::has<
@@ -1546,6 +1556,8 @@ LogicalResult NativePipelineAnalysis::prepareFrameInputs() {
   // Freeze this source-shape proof before any function worker threads state.
   ::talos::detail::walkNativeFunctions<sim::SimFuncOp>(
       module, [&](sim::SimFuncOp function) {
+        if (analysis::isConstantPortInitializer(function))
+          constantPortInitializers.insert(function);
         if (auto copy = analysis::getCaptureCopyProcess(function))
           copyActivations.try_emplace(function, *copy);
         frameResults.insert(
@@ -1618,6 +1630,8 @@ LogicalResult NativePipelineAnalysis::restoreFrames() {
         (*frame)->getReplayInputs(function) != inputs)
       return function.emitError(
           "native frame replay rejected changed canonical ABI inputs");
+    if (analysis::isConstantPortInitializer(function))
+      constantPortInitializers.insert(function);
     if (auto copy = analysis::getCaptureCopyProcess(function))
       copyActivations.try_emplace(function, *copy);
     if (auto table = analyzeTableProcess(function, **frame))
@@ -2026,8 +2040,8 @@ LogicalResult NativePipelineAnalysis::materialize() {
           *directFragments, evalOwnership, threeTierPlan.sourceGraph,
           periodicClocks, periodicAliases, directStaticState, staticNBA,
           staticControl, staticFanout, cleanSuperstep,
-          aotEligibility.isFullyEligible(), staticEvalIsland, rootSlotZero,
-          constantDPIQueryExports, vpi);
+          aotEligibility.isFullyEligible() && !staticEvalIsland,
+          staticEvalIsland, rootSlotZero, constantDPIQueryExports, vpi);
       if (failed(evalPlan))
         return failure();
       if (!*evalPlan) {
@@ -4570,6 +4584,7 @@ public:
     NativeStepTiming timing(module);
     if (failed(detail::materializeNativeEvalTransactions(module)))
       return signalPassFailure();
+    detail::lowerNativePrioritySignalPolls(module);
     detail::eliminateTwoStateUnknownPlane(module);
     timing.mark("native eval transaction materialization");
     schedule::specializeNativeValueFunctions(module);

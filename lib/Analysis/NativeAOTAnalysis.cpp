@@ -680,6 +680,33 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
   }
 
   module.walk([&](sim::SimFuncOp function) {
+    // A compiler-selected Active handoff can resume in the middle of this
+    // activation (1800-2023 4.7). Its frame and re-arm check belong to the
+    // canonical process. The named peers must participate in the same
+    // ranked Active selection as the interrupted process.
+    function.walk([&](sim::SimSuspendDelayOp delay) {
+      ArrayAttr order =
+          schedule::get<schedule::Field::ActivePreemptionAfter>(delay);
+      if (!order)
+        order = schedule::get<schedule::Field::ActivePreemptionRuns>(delay);
+      if (!order)
+        return;
+      auto admitRankedProcess = [&](sim::SimFuncOp member) {
+        if (!member || !result.runtimeCheckpointActors.insert(member).second)
+          return;
+        result.runtimeCheckpointCauses[member] = {"active-preemption", delay};
+      };
+      admitRankedProcess(function);
+      for (Attribute attr : order) {
+        auto name = dyn_cast<FlatSymbolRefAttr>(attr);
+        auto peer = name ? lookupFunction(name.getValue()) : sim::SimFuncOp{};
+        if (!peer) {
+          rejectPlan("Active preemption has an invalid source actor");
+          return;
+        }
+        admitRankedProcess(peer);
+      }
+    });
     // IEEE 1800-2023 16.12: disable iff observes unsampled state, including
     // off-clock pulses. These detached compiler cancellation actors already
     // have priority runtime subscriptions. Keep those subscriptions on the

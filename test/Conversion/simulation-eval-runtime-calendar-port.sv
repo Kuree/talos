@@ -15,7 +15,7 @@
 // CHECK: %[[QUEUED:.*]] = llvm.load %[[INGRESS]]
 // CHECK-NEXT: %[[WOKEN:.*]] = llvm.or %[[QUEUED]], %{{.*}} : i64
 // CHECK-NEXT: llvm.store %[[WOKEN]], %[[INGRESS]]
-// CHECK-NEXT: llvm.call @talos_rt_v1_scheduler_static_transition_owned(
+// CHECK-NEXT: llvm.call @talos_rt_v1_scheduler_static_transition_projected(
 // CHECK: llvm.return
 // CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1(
 // An NBA-generated edge of `pulse` must reach its runtime waiter as well

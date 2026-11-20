@@ -904,6 +904,56 @@ public:
     if (isa<FloatType>(valueType))
       storedValue =
           arith::BitcastOp::create(rewriter, op.getLoc(), plane, storedValue);
+    // A ranked process keeps its original frame across the compiler-selected
+    // Active handoff. Publish its packed blocking write as one transaction.
+    // The runtime owns the actual armed waits, the retained driver value and
+    // any externally masked bits (1800-2023 4.6, 9.4.2, 10.6.2).
+    auto sourceOwner = schedule::get<schedule::metadata::evalSourceOwner>(op);
+    bool ownSource =
+        !sourceOwner ||
+        (sourceOwner.getCodeUnit() && function.getCodeUnitId() &&
+         sourceOwner.getCodeUnit().getUInt() == *function.getCodeUnitId());
+    if (native::has<native::RankedSignalWriter>(function) &&
+        function.getEntryKind() != sim::EntryKind::Function && ownSource &&
+        !nbaEquivalent && needsNotification &&
+        (!directRange || directRange->guarded) &&
+        schedule::has<schedule::Field::EvalRuntimeCalendar>(
+            op->getParentOfType<ModuleOp>()) &&
+        *width <= 64 && storedValue.getType() == plane &&
+        sim::getPackedScalarType(valueType)) {
+      auto loc = op.getLoc();
+      auto i64 = rewriter.getI64Type(), i32 = rewriter.getI32Type();
+      auto word = [&](Value bits) -> Value {
+        return bits.getType() == i64
+                   ? bits
+                   : arith::ExtUIOp::create(rewriter, loc, i64, bits)
+                         .getResult();
+      };
+      bool fourState = containsLogic(valueType) && !twoState;
+      Value valuePlane = detail::createStatePlaneAddress(
+          rewriter, loc, schedule::StatePlane::Value);
+      Value unknownPlane =
+          fourState ? detail::createStatePlaneAddress(
+                          rewriter, loc, schedule::StatePlane::Unknown)
+                    : LLVM::ZeroOp::create(rewriter, loc, valuePlane.getType())
+                          .getResult();
+      uint32_t flags = (continuous ? TALOS_RT_FRAME_STORE_CONTINUOUS : 0) |
+                       (fourState ? TALOS_RT_FRAME_STORE_UNKNOWN : 0);
+      Value unknown = fourState && adaptor.getValue().size() == 2
+                          ? word(adaptor.getValue()[1])
+                          : llvmConstant(rewriter, loc, i64, 0);
+      LLVM::CallOp::create(
+          rewriter, loc, TypeRange{}, "talos_rt_v1_native_frame_store",
+          ValueRange{loadCurrentRuntimeContext(rewriter, loc), valuePlane,
+                     unknownPlane,
+                     llvmConstant(rewriter, loc, i64, stateBitCount),
+                     adaptor.getReference().front(),
+                     llvmConstant(rewriter, loc, i32, *width),
+                     llvmConstant(rewriter, loc, i32, flags), word(storedValue),
+                     unknown});
+      rewriter.eraseOp(op);
+      return success();
+    }
     if (!directRange && !runtimePublication &&
         (isa_and_nonnull<IntegerType>(sim::getPackedScalarType(valueType)) ||
          containsLogic(valueType)) &&

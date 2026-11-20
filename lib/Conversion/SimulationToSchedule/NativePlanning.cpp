@@ -768,7 +768,9 @@ FailureOr<NativeStaticFanoutPlan> buildNativeStaticFanoutPlan(
     ModuleOp module, const NativeStateLayout &stateLayout,
     const DenseMap<Operation *, uint32_t> &actorSlots,
     const DenseMap<Operation *, SmallVector<Block *>> &bytecodeFragments,
-    const DenseSet<Operation *> &runtimeOwnedFanoutActors, bool enabled,
+    const DenseSet<Operation *> &runtimeOwnedFanoutActors,
+    const DenseSet<Operation *> &runtimeCheckpointActors,
+    const DenseSet<Operation *> &rankedActiveActors, bool enabled,
     bool certifiedStaticIsland,
     const NativeActivationInputs &activationInputs) {
   NativeStaticFanoutPlan plan;
@@ -853,12 +855,14 @@ FailureOr<NativeStaticFanoutPlan> buildNativeStaticFanoutPlan(
     auto bytecode = bytecodeFragments.find(function.getOperation());
     bool bytecodeBlock = bytecode != bytecodeFragments.end() &&
                          llvm::is_contained(bytecode->second, block);
+    bool rankedWait = false;
     // Every actor outside the admitted island retains its runtime watch.
     // Exact descriptor roots enter the transition bridge so direct stores
     // still wake those subscriptions in the same time slot. The generated
     // covergroup registration has abstract graph watches and needs its
     // separate operand-based root reconstruction below.
-    if ((actor == actorSlots.end() || bytecodeBlock) && certifiedStaticIsland) {
+    if (certifiedStaticIsland && (actor == actorSlots.end() || bytecodeBlock ||
+                                  runtimeCheckpointActors.contains(function))) {
       // IEEE 1800-2023 21.2.3: a $monitor's change test needs no conditional
       // scheduling of its own: the runtime compares its arguments at the end
       // of each time slot (through the generated loop's postponed hook) or on
@@ -964,8 +968,8 @@ FailureOr<NativeStaticFanoutPlan> buildNativeStaticFanoutPlan(
               function);
         continue;
       }
-      // Runtime waits on excluded actors have no generated fanout entry or
-      // actor slot, but their watched roots must still publish transitions.
+      // Every runtime-owned input still requires publication, including
+      // inputs of actors with no slot in the generated plan.
       for (schedule::ComputeEffectAttr effect : watches) {
         if (effect.getTarget() != schedule::ComputeTargetKind::Descriptor ||
             effect.getDynamic() || effect.getDeferred() ||
@@ -997,13 +1001,29 @@ FailureOr<NativeStaticFanoutPlan> buildNativeStaticFanoutPlan(
           return block->getTerminator()->emitError(
                      "runtime fanout range is out of bounds"),
                  failure();
-        // A runtime-owned observer has no generated fanout entry or actor
-        // slot. Keep the watched root on the v1 transition bridge so direct
-        // static and periodic publications still reach that observer before
-        // the generated scheduler advances beyond this time slot.
+        // Keep the watched root on the transition bridge so static and
+        // periodic writers publish at the original point in the slot.
         plan.runtimeTransitionStates.insert(decoded.id);
       }
-      continue;
+      // A source-ordered Active handoff keeps its canonical frame and rank.
+      // The Watch ranges cover every operand of a fixed change wait. The
+      // static publication table can wake that same frame while it actually
+      // waits here (1800-2023 4.6(a), 4.7, 9.4.2).
+      Operation *wait = block->getTerminator();
+      auto any = dyn_cast<sim::SimSuspendAnyOp>(wait);
+      rankedWait =
+          actor != actorSlots.end() && !bytecodeBlock &&
+          rankedActiveActors.contains(function) &&
+          function.getHomeRegion() == sim::EventRegion::Active &&
+          (isa<sim::SimSuspendChangeOp>(wait) ||
+           (any && llvm::all_of(any.getEdges(), [](int32_t edge) {
+             return edge == static_cast<int32_t>(sim::EdgeKind::Change);
+           }))) &&
+          llvm::all_of(watches, [](schedule::ComputeEffectAttr watch) {
+            return watch.getTrigger() == schedule::ComputeTriggerKind::Change;
+          });
+      if (!rankedWait)
+        continue;
     }
     if (actor == actorSlots.end()) {
       disableExactFanout("watched actor has no static slot", function);
@@ -1048,7 +1068,7 @@ FailureOr<NativeStaticFanoutPlan> buildNativeStaticFanoutPlan(
     // observable. Generated wakes cover only the live lanes. The source wait
     // keeps its sensitivity for the generic scheduler after deoptimization.
     const analysis::ActivationMemoryAnalysis::Ranges *liveLanes = nullptr;
-    if (activationInputs.sourceGraph == graph &&
+    if (!rankedWait && activationInputs.sourceGraph == graph &&
         activationInputs.repeatable.contains(function.getSymNameAttr()))
       if (auto found = activationInputs.liveIns.find(function.getSymNameAttr());
           found != activationInputs.liveIns.end())
@@ -1129,6 +1149,8 @@ FailureOr<NativeStaticFanoutPlan> buildNativeStaticFanoutPlan(
               terminator);
       uint32_t flags =
           suppressActiveSelf ? TALOS_RT_FANOUT_SUPPRESS_ACTIVE_SELF : 0;
+      if (rankedWait)
+        flags |= TALOS_RT_FANOUT_RANKED_WAIT;
       // IEEE 1800-2017 9.4.2 defines a vector edge event in terms of the
       // expression's least significant bit. Keep the full watched range for
       // ordinary change sensitivity, but encode edge-sensitive fanout as its
@@ -1364,6 +1386,11 @@ buildNativeEvalOwnershipPlan(ModuleOp module,
   }
 
   for (const talos_rt_static_fanout_entry &entry : fanoutPlan.entries) {
+    if (entry.reserved & TALOS_RT_FANOUT_RANKED_WAIT) {
+      result.fanoutOwners.emplace_back();
+      result.periodicFanoutOwners.emplace_back();
+      continue;
+    }
     if (isNativePeriodicAliasEntry(periodicAliases, entry)) {
       NativeEvalFanoutOwner owner{NativeEvalFanoutOwnerKind::PeriodicAlias,
                                   UINT32_MAX};

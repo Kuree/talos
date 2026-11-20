@@ -16,6 +16,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/Matchers.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/bit.h"
 #include <optional>
@@ -23,6 +24,58 @@
 using namespace mlir;
 
 namespace talos::detail {
+
+// Each Active group checks its pending members at entry. Use
+// producer/consumer edges to keep connected ranks together for SSA forwarding.
+// Missing or conservative order edges only affect profitability: publications
+// to another region still set its real ready bits (1800-2023 4.3--4.7).
+static SmallVector<unsigned>
+connectedRankEnds(ArrayRef<const NativeRankedEvalNode *> members) {
+  DenseMap<uint32_t, unsigned> position;
+  SmallVector<unsigned> through;
+  for (auto [i, member] : llvm::enumerate(members)) {
+    position.try_emplace(member->owner, i);
+    through.push_back(i);
+  }
+  for (auto [i, member] : llvm::enumerate(members))
+    for (uint32_t successor : member->successors)
+      if (auto found = position.find(successor); found != position.end()) {
+        unsigned from = std::min<unsigned>(i, found->second);
+        through[from] = std::max<unsigned>(
+            through[from], std::max<unsigned>(i, found->second));
+      }
+  SmallVector<unsigned> ends;
+  for (unsigned begin = 0; begin < members.size();) {
+    unsigned last = through[begin];
+    for (unsigned i = begin + 1; i <= last; ++i)
+      last = std::max(last, through[i]);
+    ends.push_back(last + 1);
+    begin = last + 1;
+  }
+  return ends;
+}
+
+// In a canonical two-state body there is no X/Z proof to amortize across
+// sibling producers. Start a new chain when no earlier member in this one
+// can wake the next rank. In particular, a common downstream consumer does
+// not make its independent inputs run together.
+static SmallVector<unsigned>
+forwardRankEnds(ArrayRef<const NativeRankedEvalNode *> members) {
+  SmallVector<unsigned> ends;
+  DenseMap<uint32_t, unsigned> predecessors;
+  unsigned begin = 0;
+  for (auto [i, member] : llvm::enumerate(members)) {
+    if (i && predecessors.lookup(member->owner) <= begin) {
+      ends.push_back(i);
+      begin = i;
+    }
+    for (uint32_t successor : member->successors)
+      predecessors[successor] = i + 1;
+  }
+  if (!members.empty())
+    ends.push_back(members.size());
+  return ends;
+}
 
 FailureOr<NativeRankedGroupPlan>
 planNativeRankedGroups(ModuleOp module, const NativeEvalCoordinatorPlan &plan,
@@ -61,12 +114,9 @@ planNativeRankedGroups(ModuleOp module, const NativeEvalCoordinatorPlan &plan,
   SmallVector<NativeRankedEvalNode> members;
   uint64_t cost = 0;
   bool invalidRange = false;
-  auto emit = [&]() {
-    if (members.empty())
-      return;
+  auto appendChunk = [&](ArrayRef<NativeRankedEvalNode> nodes) {
     NativeRankedGroupChunk chunk;
-    chunk.members.swap(members);
-    cost = 0;
+    llvm::append_range(chunk.members, nodes);
     // Profitability only: share a certificate for a substantial candidate
     // with a bounded scan table. These limits do not establish knownness.
     bool eligible = chunk.members.size() >= 8 &&
@@ -122,6 +172,50 @@ planNativeRankedGroups(ModuleOp module, const NativeEvalCoordinatorPlan &plan,
       }
     }
     result.chunks.push_back(std::move(chunk));
+  };
+  auto emit = [&]() {
+    if (members.empty())
+      return;
+    // A value-domain certificate covers every member it may execute. A
+    // permanently unknown operand in one independent chain otherwise forces
+    // unrelated, ready chains through member-by-member selection. Split at
+    // the existing rank boundaries and keep a single dispatch entry for the
+    // original group. The dependency graph chooses cuts only: the wrapper
+    // always rereads actual ingress before selecting a child (4.3, 6.3.1).
+    SmallVector<unsigned> ends;
+    if (!native::has<native::TwoState>(module) &&
+        llvm::all_of(members, [&](const auto &node) {
+          return !node.clocked && !node.twoStateBody.empty() &&
+                 !plan.twoStateExecutors[node.owner].empty();
+        })) {
+      auto pointers = llvm::map_to_vector(
+          members, [](const NativeRankedEvalNode &node) { return &node; });
+      unsigned begin = 0;
+      bool priorSingleton = false;
+      for (unsigned end : connectedRankEnds(pointers)) {
+        bool singleton = end == begin + 1;
+        // Independent singleton members already have their own readiness
+        // predicates. Put adjacent singletons behind one proof and call.
+        if (singleton && priorSingleton)
+          ends.back() = end;
+        else
+          ends.push_back(end);
+        begin = end;
+        priorSingleton = singleton;
+      }
+    }
+    if (ends.size() < 2) {
+      appendChunk(members);
+    } else {
+      unsigned begin = 0;
+      for (unsigned end : ends) {
+        appendChunk(ArrayRef(members).slice(begin, end - begin));
+        begin = end;
+      }
+      result.chunks.back().proofRegionCount = ends.size();
+    }
+    cost = 0;
+    members.clear();
   };
   auto finishSegment = [&]() {
     if (!result.chunks.empty())
@@ -262,14 +356,28 @@ materializeNativeRankedGroups(ModuleOp module,
     SmallVector<uint32_t> owners;
     SmallVector<std::pair<unsigned, uint64_t>> words;
   };
+  auto indexOwners = [](Chunk &chunk) {
+    llvm::sort(chunk.owners);
+    for (uint32_t owner : chunk.owners) {
+      unsigned word = owner / 64;
+      if (chunk.words.empty() || chunk.words.back().first != word)
+        chunk.words.push_back({word, 0});
+      chunk.words.back().second |= uint64_t{1} << (owner % 64);
+    }
+  };
   SmallVector<Chunk> chunks;
   unsigned segmentCount = 0;
-  auto finishSegment = [&]() {
+  auto finishSegment = [&](unsigned proofRegions = 0) {
     // A multi-word ready set is swept word by word by the coordinator, which
     // already calls each chunk at its first pending member in rank order. A
     // wrapper over several words would run their chunks early and leave
     // their dirty words to be revisited.
-    if (chunks.size() < 2 || readyLayout.hasSummaries()) {
+    // Only children of a single existing dispatch entry can be collected
+    // across ready words. Previous code-size chunks keep their executors.
+    ArrayRef<Chunk> siblings = chunks;
+    if (proofRegions)
+      siblings = siblings.take_back(proofRegions);
+    if (siblings.size() < 2 || (readyLayout.hasSummaries() && !proofRegions)) {
       chunks.clear();
       return;
     }
@@ -278,7 +386,7 @@ materializeNativeRankedGroups(ModuleOp module,
     // helper would execute. Each child consumes only its own pending work;
     // publications to an earlier child survive until the shared loop returns.
     builder.setInsertionPointToEnd(module.getBody());
-    std::string name = chunks.front().name + ".segment";
+    std::string name = siblings.front().name + ".segment";
     auto segment = LLVM::LLVMFuncOp::create(
         builder, loc, name,
         LLVM::LLVMFunctionType::get(
@@ -286,7 +394,7 @@ materializeNativeRankedGroups(ModuleOp module,
     ::talos::schedule::set<schedule::metadata::evalCallClosureRoot>(
         segment, builder.getUnitAttr());
     SmallVector<Attribute> helpers;
-    for (const Chunk &chunk : chunks)
+    for (const Chunk &chunk : siblings)
       helpers.push_back(
           FlatSymbolRefAttr::get(module.getContext(), chunk.name));
     ::talos::schedule::set<::talos::schedule::Field::EvalSegmentHelpers>(
@@ -323,14 +431,14 @@ materializeNativeRankedGroups(ModuleOp module,
     // Owners follow rank order, so a sweep skips the chunks of an idle ready
     // word with one test, and never fetches their branches. A chunk's own test
     // still reads the word after earlier chunks have published into it.
-    for (size_t index = 0; index < chunks.size();) {
+    for (size_t index = 0; index < siblings.size();) {
       size_t end = index + 1;
-      auto word = chunks[index].words.front().first;
+      auto word = siblings[index].words.front().first;
       auto inWord = [&](const Chunk &chunk) {
         return chunk.words.size() == 1 && chunk.words.front().first == word;
       };
-      if (inWord(chunks[index]))
-        while (end < chunks.size() && inWord(chunks[end]))
+      if (inWord(siblings[index]))
+        while (end < siblings.size() && inWord(siblings[end]))
           ++end;
       Block *after = nullptr;
       if (end - index > 1) {
@@ -348,7 +456,7 @@ materializeNativeRankedGroups(ModuleOp module,
         builder.setInsertionPointToStart(body);
       }
       for (; index < end; ++index)
-        emitChunk(chunks[index]);
+        emitChunk(siblings[index]);
       if (after) {
         cf::BranchOp::create(builder, loc, after);
         segment.getBody().push_back(after);
@@ -357,7 +465,18 @@ materializeNativeRankedGroups(ModuleOp module,
     }
     LLVM::ReturnOp::create(builder, loc, ValueRange{});
     ++segmentCount;
-    chunks.clear();
+    if (proofRegions && !readyLayout.hasSummaries()) {
+      // The outer small-model sweep still owns the original rank span. Keep
+      // its other code-size chunks in order and substitute this one child.
+      Chunk parent{name, {}, {}};
+      for (const Chunk &child : siblings)
+        llvm::append_range(parent.owners, child.owners);
+      indexOwners(parent);
+      chunks.resize(chunks.size() - proofRegions);
+      chunks.push_back(std::move(parent));
+    } else {
+      chunks.clear();
+    }
   };
   auto emit = [&](schedule::GroupProofDependencyAttr proof) {
     if (members.empty()) {
@@ -379,13 +498,7 @@ materializeNativeRankedGroups(ModuleOp module,
     Chunk chunk{name, {}, {}};
     for (auto *member : members)
       chunk.owners.push_back(member->owner);
-    llvm::sort(chunk.owners);
-    for (uint32_t owner : chunk.owners) {
-      unsigned word = owner / 64;
-      if (chunk.words.empty() || chunk.words.back().first != word)
-        chunk.words.push_back({word, 0});
-      chunk.words.back().second |= uint64_t{1} << (owner % 64);
-    }
+    indexOwners(chunk);
     chunks.push_back(std::move(chunk));
     ::talos::schedule::set<::talos::schedule::Field::EvalRankedMembers>(
         group, builder.getDenseI32ArrayAttr(identities));
@@ -424,6 +537,22 @@ materializeNativeRankedGroups(ModuleOp module,
       // lowering must not introduce a mutable function pointer here.
       ::talos::schedule::set<::talos::schedule::Field::EvalGroupDomainSelected>(
           call, builder.getUnitAttr());
+    };
+    auto markCanonicalNBA = [&](uint32_t owner) {
+      LLVM::StoreOp::create(
+          builder, loc, llvmConstant(builder, loc, builder.getI8Type(), 1),
+          LLVM::AddressOfOp::create(builder, loc, pointer,
+                                    "__talos_eval_step_four_state_fallback_v1"),
+          1);
+      for (unsigned word = 0; word < plan.nbaTaintWordCount; ++word) {
+        uint64_t mask = plan.nbaTaintMasks[owner][word];
+        if (!mask)
+          continue;
+        Value base = LLVM::AddressOfOp::create(
+            builder, loc, pointer, "__talos_eval_step_four_state_nba_roots_v1");
+        updateOwnerWord(builder, loc, base, word,
+                        llvmConstant(builder, loc, i64, mask));
+      }
     };
     for (const auto *node : members) {
       uint32_t owner = node->owner;
@@ -475,20 +604,7 @@ materializeNativeRankedGroups(ModuleOp module,
         cf::BranchOp::create(builder, loc, next);
         builder.setInsertionPointToStart(four);
       }
-      LLVM::StoreOp::create(
-          builder, loc, llvmConstant(builder, loc, builder.getI8Type(), 1),
-          LLVM::AddressOfOp::create(builder, loc, pointer,
-                                    "__talos_eval_step_four_state_fallback_v1"),
-          1);
-      for (unsigned word = 0; word < plan.nbaTaintWordCount; ++word) {
-        uint64_t mask = plan.nbaTaintMasks[owner][word];
-        if (!mask)
-          continue;
-        Value base = LLVM::AddressOfOp::create(
-            builder, loc, pointer, "__talos_eval_step_four_state_nba_roots_v1");
-        updateOwnerWord(builder, loc, base, word,
-                        llvmConstant(builder, loc, i64, mask));
-      }
+      markCanonicalNBA(owner);
       rawCall(node->body, owner);
       cf::BranchOp::create(builder, loc, next);
       builder.setInsertionPointToStart(next);
@@ -498,10 +614,24 @@ materializeNativeRankedGroups(ModuleOp module,
     // prove that its computation is finite. Until then the ordinary ranked
     // helper owns entry. A candidate forwards state and readiness between
     // members, so a lone member, even a repeatable one, gets none.
-    if (members.size() > 1 &&
+    bool canonicalTwoState = native::has<native::TwoState>(module);
+    SmallVector<unsigned> ends = canonicalTwoState ? forwardRankEnds(members)
+                                                   : connectedRankEnds(members);
+    // In a model already compiled in two-state, the original group already
+    // predicates and inlines independent members. Only build a second body
+    // when it can forward computation down an actual chain.
+    // A pair in one small ingress word already shares a predicated sweep and
+    // forwarded state. Making its producer unconditional on a consumer-only
+    // wake saves a single bit test and can repeat the entire producer.
+    bool canForward = !canonicalTwoState ||
+                      (ends.size() < members.size() &&
+                       (members.size() > 2 || readyLayout.hasSummaries()));
+    if (members.size() > 1 && canForward &&
         llvm::all_of(members, [&](const auto *node) {
-          return !node->clocked && !node->twoStateBody.empty() &&
-                 !plan.twoStateExecutors[node->owner].empty();
+          return !node->clocked &&
+                 (canonicalTwoState ||
+                  (!node->twoStateBody.empty() &&
+                   !plan.twoStateExecutors[node->owner].empty()));
         })) {
       builder.setInsertionPointToEnd(module.getBody());
       auto candidate = LLVM::LLVMFuncOp::create(
@@ -529,7 +659,7 @@ materializeNativeRankedGroups(ModuleOp module,
       ready = LLVM::AddressOfOp::create(builder, loc, pointer,
                                         evalModelIngressName);
       SmallVector<int32_t> unconditional;
-      for (const auto *node : members) {
+      auto emitMember = [&](const NativeRankedEvalNode *node, bool speculate) {
         uint32_t owner = node->owner;
         Value bit =
             llvmConstant(builder, loc, i64, uint64_t{1} << (owner % 64));
@@ -555,7 +685,11 @@ materializeNativeRankedGroups(ModuleOp module,
         // are therefore redundant and are removed after inlining (see
         // elideUnconditionalMemberPublications). Its pending bit is still
         // the ingress that selects this group and is consumed here.
-        if (node->repeatable) {
+        bool captureFree =
+            !canonicalTwoState || !plan.nbaTaintWordCount ||
+            llvm::none_of(plan.nbaTaintMasks[owner],
+                          [](uint64_t mask) { return mask != 0; });
+        if (node->repeatable && speculate && captureFree) {
           active = llvmConstant(builder, loc, builder.getI1Type(), 1);
           unconditional.push_back(owner);
           ++unconditionalMembers;
@@ -568,9 +702,52 @@ materializeNativeRankedGroups(ModuleOp module,
         builder.setInsertionPointToStart(execute);
         updateEvalReadyWord(builder, loc, ready, readyLayout, owner / 64, bit,
                             /*clear=*/true);
-        rawCall(node->twoStateBody, owner);
+        if (canonicalTwoState) {
+          // The canonical executor is already in the requested two-state
+          // domain. Retain its barrier bookkeeping on the selected path.
+          markCanonicalNBA(owner);
+          rawCall(node->body, owner);
+        } else {
+          rawCall(node->twoStateBody, owner);
+        }
         cf::BranchOp::create(builder, loc, next);
         builder.setInsertionPointToStart(next);
+      };
+      unsigned begin = 0;
+      for (unsigned end : ends) {
+        auto part = ArrayRef(members).slice(begin, end - begin);
+        Block *after = nullptr;
+        if (ends.size() > 1 && part.size() > 1) {
+          llvm::SmallMapVector<uint32_t, uint64_t, 4> masks;
+          for (const auto *node : part)
+            masks[node->owner / 64] |= uint64_t{1} << (node->owner % 64);
+          Value dirty;
+          for (auto [word, mask] : masks) {
+            Value readyWord = schedule::NativeReadyReadOp::create(
+                builder, loc, i64, ready, readyLayout.capacity, word);
+            Value bits = arith::AndIOp::create(
+                builder, loc, readyWord, llvmConstant(builder, loc, i64, mask));
+            dirty =
+                dirty ? arith::OrIOp::create(builder, loc, dirty, bits) : bits;
+          }
+          Value active =
+              arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ne,
+                                    dirty, llvmConstant(builder, loc, i64, 0));
+          Block *execute = new Block;
+          after = new Block;
+          candidate.getBody().push_back(execute);
+          cf::CondBranchOp::create(builder, loc, active, execute, ValueRange{},
+                                   after, ValueRange{});
+          builder.setInsertionPointToStart(execute);
+        }
+        for (const auto *node : part)
+          emitMember(node, part.size() > 1);
+        if (after) {
+          cf::BranchOp::create(builder, loc, after);
+          candidate.getBody().push_back(after);
+          builder.setInsertionPointToStart(after);
+        }
+        begin = end;
       }
       LLVM::ReturnOp::create(builder, loc, ValueRange{});
       if (!unconditional.empty())
@@ -584,6 +761,8 @@ materializeNativeRankedGroups(ModuleOp module,
     for (const auto &node : chunk.members)
       members.push_back(&node);
     emit(chunk.proof);
+    if (chunk.proofRegionCount)
+      finishSegment(chunk.proofRegionCount);
     if (chunk.endsSegment)
       finishSegment();
   }

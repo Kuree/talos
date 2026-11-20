@@ -16,6 +16,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/SymbolTable.h"
 
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringMap.h"
 
@@ -41,6 +42,60 @@ constexpr StringLiteral evalWriteRootsGuardName =
     "__talos_eval_write_guard_roots_v1";
 
 } // namespace
+
+// A priority wait must preempt the next generated owner at the same poll
+// point (1800-2023 4.5, 16.12). Keep the address across the sweep and reload
+// the latch at every poll. A set latch still takes the runtime's live check.
+void lowerNativePrioritySignalPolls(ModuleOp module) {
+  if (!schedule::has<schedule::Field::EvalRuntimeCalendar>(module) ||
+      !schedule::has<schedule::Field::EvalAssertionObservers>(module))
+    return;
+  constexpr StringLiteral pending =
+      "talos_rt_v1_scheduler_priority_signal_pending";
+  MLIRContext *ctx = module.getContext();
+  Type ptr = LLVM::LLVMPointerType::get(ctx);
+  for (auto fn : module.getOps<LLVM::LLVMFuncOp>()) {
+    if (fn.isExternal() ||
+        (fn.getSymName() != "__talos_aot_schedule_run_v1" &&
+         !fn.getSymName().starts_with("__talos_eval_dispatch_v1")))
+      continue;
+    llvm::MapVector<Value, SmallVector<LLVM::CallOp>> groups;
+    fn.walk([&](LLVM::CallOp call) {
+      if (call.getCallee() == pending && call.getArgOperands().size() == 1)
+        if (auto arg = dyn_cast<BlockArgument>(call.getArgOperands().front()))
+          if (arg.getOwner() == &fn.getBody().front())
+            groups[arg].push_back(call);
+    });
+    for (auto &[context, calls] : groups) {
+      if (calls.size() < 2)
+        continue;
+      auto address = getOrDeclareLLVMFunction(
+          module, "talos_rt_v1_scheduler_priority_signal_flag", ptr, {ptr});
+      OpBuilder b = OpBuilder::atBlockBegin(&fn.getBody().front());
+      Value flag =
+          LLVM::CallOp::create(b, fn.getLoc(), address, ValueRange{context})
+              .getResult();
+      for (auto call : calls) {
+        Location loc = call.getLoc();
+        Block *head = call->getBlock();
+        Block *check = head->splitBlock(Block::iterator(call));
+        Block *next = check->splitBlock(std::next(Block::iterator(call)));
+        Value result = next->addArgument(b.getI32Type(), loc);
+        call.getResult().replaceAllUsesWith(result);
+        b.setInsertionPointToEnd(head);
+        Value byte = LLVM::LoadOp::create(b, loc, b.getI8Type(), flag, 1);
+        Value latched =
+            LLVM::ICmpOp::create(b, loc, LLVM::ICmpPredicate::ne, byte,
+                                 llvmConstant(b, loc, b.getI8Type(), 0));
+        LLVM::CondBrOp::create(
+            b, loc, latched, check, ValueRange{}, next,
+            ValueRange{llvmConstant(b, loc, b.getI32Type(), 0)});
+        b.setInsertionPointToEnd(check);
+        LLVM::BrOp::create(b, loc, ValueRange{call.getResult()}, next);
+      }
+    }
+  }
+}
 
 // The held set's layout: a ready-set layout depends only on its leaf count,
 // and its storage size grows strictly with it.

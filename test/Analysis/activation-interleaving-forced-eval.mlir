@@ -1,18 +1,28 @@
-// RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph,talos-sim-materialize-compute-fusion{materialize-eval-bodies=false interleave-rearms=true},simulation.func(talos-sim-thread-suspension{active-preemptions-only=true}),talos-sim-build-compute-graph,talos-sim-verify-compute-graph))' | FileCheck %s --implicit-check-not=simulation.suspend.delay
+// RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph,talos-sim-materialize-compute-fusion{materialize-eval-bodies=false interleave-rearms=true},simulation.func(talos-sim-thread-suspension{active-preemptions-only=true}),talos-sim-build-compute-graph,talos-sim-verify-compute-graph))' | FileCheck %s
+// RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph,talos-sim-materialize-compute-fusion{materialize-eval-bodies=false interleave-rearms=true},simulation.func(talos-sim-thread-suspension{active-preemptions-only=true}),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),prepare-native-schedule-inputs,schedule-plan-native-state,prepare-native-process-frames,schedule-plan-native-actors)' | FileCheck %s --check-prefix=FRAME
 
-// The eval coordinator never executes an implementation Active preemption.
-// A design forced onto it keeps its source schedule rather than becoming a
-// compile error. With schedule.native_scheduler = 1 (generic) the same
-// cohort is realized as a whole-body re-arm.
+// Forced eval preserves the source handoff that breaks a cycle of transient
+// publications. The interrupted process resumes in Active after its peer and
+// rechecks its inputs before rearming (1800-2023 4.7, 9.4.2).
 // CHECK-LABEL: simulation.design @forced_eval
 // CHECK-LABEL: simulation.func @a(
+// CHECK: simulation.suspend.delay
+// CHECK-SAME: resume_region = 2
+// CHECK-SAME: schedule.active_preemption_after = [@b]
+// CHECK-SAME: schedule.active_preemption_rearm
 // CHECK: simulation.suspend.change
+// FRAME-LABEL: simulation.func @root(
+// FRAME-NOT: native.ranked_signal_writer
+// FRAME-LABEL: simulation.func @a(
+// FRAME-SAME: native.ranked_signal_writer
+// FRAME-LABEL: simulation.func @b(
+// FRAME-SAME: native.ranked_signal_writer
 // CHECK-LABEL: simulation.func @b(
 // CHECK: simulation.suspend.change
 
 !b = !simulation.logic<1>
 !r = !simulation.ref<!b>
-module attributes {schedule.native_scheduler = 3 : i32} {
+module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", schedule.native_scheduler = 3 : i32} {
   simulation.design @forced_eval {
     simulation.scope.decl 0
     simulation.storage.decl 0 in 0 : !b design

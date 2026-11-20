@@ -13,6 +13,7 @@
 #include "talos/Analysis/LocalStorageAnalysis.h"
 #include "talos/Analysis/NBAInfluenceAnalysis.h"
 #include "talos/Analysis/SSAValueAnalysis.h"
+#include "talos/Analysis/SimulationCopyProcessAnalysis.h"
 #include "talos/Analysis/SimulationScheduleAnalysis.h"
 #include "talos/Analysis/SourceMemoryAnalysis.h"
 #include "talos/Analysis/StorageWriteAnalysis.h"
@@ -4718,16 +4719,6 @@ mapPreemptionSites(ArrayRef<analysis::ActivationRegionStep> preemptions,
 }
 
 void materializeRearmInterleavings(sim::SimDesignOp design) {
-  // The eval coordinator never executes an implementation Active preemption;
-  // a design the user forced onto it keeps its source schedule instead of
-  // becoming a compile error. Auto requests fall back to the generic tier.
-  ModuleOp module = design->getParentOfType<ModuleOp>();
-  if (auto scheduler =
-          schedule::get<schedule::Field::NativeScheduler>(module);
-      scheduler &&
-      scheduler.getValue() == schedule::NativeSchedulerMode::Eval &&
-      !schedule::has<schedule::Field::NativeSchedulerAutoRequested>(module))
-    return;
   analysis::HandleDataflowAnalysis handles(design);
   handles.prepare(design);
   analysis::ControlActivationAnalysis controlActivations(design);
@@ -5435,6 +5426,44 @@ void TalosSimMaterializeComputeFusionPass::runOnOperation() {
   if (!fusions || !graph || graph.getWorkers() != 1)
     return;
 
+  // Keep an asynchronous assertion's forwarding store at its own Active
+  // publication boundary. A fused evaluator can write multiple inputs before
+  // publishing the first one (1800-2023 9.4.2, 16.12).
+  DenseSet<uint64_t> assertionInputs;
+  if (evalScheduler && graph.getVpi() == schedule::ComputeVPIMode::Off)
+    design.walk([&](sim::SimFuncOp function) {
+      if (!schedule::has<schedule::Field::ConcurrentCancelObserver>(function))
+        return;
+      if (auto effects = function.getEffectSummaryAttr())
+        for (auto effect : effects.getAsRange<schedule::ComputeEffectAttr>())
+          if (effect.getEffect() == schedule::ComputeEffectKind::Read &&
+              effect.getResource() == schedule::ComputeResourceKind::Storage &&
+              effect.getTarget() == schedule::ComputeTargetKind::Descriptor)
+            assertionInputs.insert(effect.getDescriptor());
+    });
+  DenseSet<int64_t> assertionForwards;
+  if (!assertionInputs.empty())
+    for (auto [index, node] : llvm::enumerate(graph.getNodes())) {
+      auto fragment = dyn_cast<schedule::ComputeFragmentAttr>(node);
+      if (!fragment ||
+          !llvm::any_of(
+              fragment.getEffects().getAsRange<schedule::ComputeEffectAttr>(),
+              [&](auto effect) {
+                return effect.getEffect() ==
+                           schedule::ComputeEffectKind::Write &&
+                       effect.getResource() ==
+                           schedule::ComputeResourceKind::Storage &&
+                       effect.getTarget() ==
+                           schedule::ComputeTargetKind::Descriptor &&
+                       assertionInputs.contains(effect.getDescriptor());
+              }))
+        continue;
+      auto owner =
+          symbols.lookup<sim::SimFuncOp>(fragment.getFunction().getValue());
+      if (owner && analysis::isCaptureCopyProcess(owner))
+        assertionForwards.insert(index);
+    }
+
   DenseMap<uint32_t, uint32_t> scheduleOrder;
   uint32_t nextOrder = 0;
   for (Attribute regionAttribute : graph.getRegions()) {
@@ -5501,6 +5530,10 @@ void TalosSimMaterializeComputeFusionPass::runOnOperation() {
   for (Attribute attribute : fusions) {
     auto fusion = dyn_cast<schedule::ComputeFusionAttr>(attribute);
     if (!fusion)
+      continue;
+    if (llvm::any_of(fusion.getFragments().asArrayRef(), [&](int64_t id) {
+          return assertionForwards.contains(id);
+        }))
       continue;
     bool primitiveContinuous =
         isPrimitiveContinuousFusion(symbols, fusion, graph);

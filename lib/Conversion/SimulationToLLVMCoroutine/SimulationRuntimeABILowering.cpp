@@ -38,6 +38,22 @@ void declareNativeRuntimeABI(ModuleOp module) {
        LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
        LLVM::LLVMPointerType::get(context)});
   getOrDeclareLLVMFunction(
+      module, "talos_rt_v1_scheduler_wide_transition_owned",
+      LLVM::LLVMVoidType::get(context),
+      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32),
+       IntegerType::get(context, 64), IntegerType::get(context, 64),
+       LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
+       LLVM::LLVMPointerType::get(context),
+       LLVM::LLVMPointerType::get(context)});
+  getOrDeclareLLVMFunction(
+      module, "talos_rt_v1_scheduler_wide_transition_projected",
+      LLVM::LLVMVoidType::get(context),
+      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32),
+       IntegerType::get(context, 64), IntegerType::get(context, 64),
+       LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
+       LLVM::LLVMPointerType::get(context),
+       LLVM::LLVMPointerType::get(context)});
+  getOrDeclareLLVMFunction(
       module, "talos_rt_v1_scheduler_static_transition",
       LLVM::LLVMVoidType::get(context),
       {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32),
@@ -46,6 +62,14 @@ void declareNativeRuntimeABI(ModuleOp module) {
        IntegerType::get(context, 64), IntegerType::get(context, 64)});
   getOrDeclareLLVMFunction(
       module, "talos_rt_v1_scheduler_static_transition_owned",
+      LLVM::LLVMVoidType::get(context),
+      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32),
+       IntegerType::get(context, 32), IntegerType::get(context, 64),
+       IntegerType::get(context, 64), IntegerType::get(context, 64),
+       IntegerType::get(context, 64), IntegerType::get(context, 64),
+       IntegerType::get(context, 64)});
+  getOrDeclareLLVMFunction(
+      module, "talos_rt_v1_scheduler_static_transition_projected",
       LLVM::LLVMVoidType::get(context),
       {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32),
        IntegerType::get(context, 32), IntegerType::get(context, 64),
@@ -470,6 +494,13 @@ void declareNativeRuntimeABI(ModuleOp module) {
        IntegerType::get(context, 64), IntegerType::get(context, 32),
        LLVM::LLVMPointerType::get(context),
        LLVM::LLVMPointerType::get(context)});
+  getOrDeclareLLVMFunction(
+      module, "talos_rt_v1_native_frame_store", LLVM::LLVMVoidType::get(context),
+      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
+       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
+       IntegerType::get(context, 64), IntegerType::get(context, 32),
+       IntegerType::get(context, 32), IntegerType::get(context, 64),
+       IntegerType::get(context, 64)});
   getOrDeclareLLVMFunction(
       module, "talos_rt_v1_native_state_store_continuous_plane",
       IntegerType::get(context, 32),

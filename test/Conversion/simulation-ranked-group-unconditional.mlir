@@ -1,6 +1,7 @@
 // RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-compute-fusion,talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o %t.mlir 2> %t.trace
 // RUN: FileCheck %s --check-prefix=TRACE < %t.trace
 // RUN: talos-opt %t.mlir --canonicalize --cse | FileCheck %s --check-prefix=GROUP
+// RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-set-module-attributes{attrs="{native.two_state, native.disable_two_state_specialization}"},test-talos-simulation-to-native)' | FileCheck %s --check-prefix=CANONICAL
 // RUN: talos-opt %s --mlir-disable-threading --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-compute-fusion,talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' | diff %t.mlir -
 
 // Eight repeatable continuous members (complete sensitivity, exclusive complete
@@ -46,6 +47,15 @@
 // GROUP: %[[PREDICATED:.*]] = llvm.mlir.constant(512 : i64)
 // GROUP: llvm.and %{{.*}}, %[[PREDICATED]]
 // GROUP: llvm.cond_br
+
+// In a two-state design the canonical bodies can forward the same chain
+// even when there are no separately specialized copies of its members.
+// CANONICAL-LABEL: llvm.func @__talos_eval_ranked_group_0(
+// CANONICAL-SAME: schedule.eval.control_flow_dataflow
+// CANONICAL-SAME: schedule.eval.unconditional_members = array<i32: 1, 2, 3, 4, 5, 6, 7, 8>
+// CANONICAL-NOT: llvm.call @__talos_eval_group_promotion_ready_v1
+// CANONICAL-NOT: @__talos_eval_ranked_group_0.fallback
+// CANONICAL-LABEL: llvm.func @__talos_eval_ranked_group_1(
 
 !ref = !simulation.ref<i1>
 !word = !simulation.logic<8>

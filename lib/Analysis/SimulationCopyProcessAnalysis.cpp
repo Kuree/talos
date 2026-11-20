@@ -77,4 +77,16 @@ bool isCaptureCopyProcess(sim::SimFuncOp function) {
   return getCaptureCopyProcess(function).has_value();
 }
 
+bool isConstantPortInitializer(sim::SimFuncOp function) {
+  if (function.isExternal() || !llvm::hasSingleElement(function.getBody()) ||
+      function.getEntryKind() != sim::EntryKind::PortInitialize)
+    return false;
+  Block &entry = function.getBody().front();
+  if (entry.getOperations().size() != 3 ||
+      !entry.front().hasTrait<OpTrait::ConstantLike>() ||
+      !isa<sim::SimReturnOp>(entry.getTerminator()))
+    return false;
+  auto store = dyn_cast<sim::SimRefStoreOp>(*std::next(entry.begin()));
+  return store && store.getValue().getDefiningOp() == &entry.front();
+}
 } // namespace talos::analysis

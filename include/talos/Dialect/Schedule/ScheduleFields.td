@@ -181,6 +181,8 @@ def EvalRouteProofDependencies : ScheduleField<"EvalRouteProofDependencies", "sc
     "::talos::schedule::RouteProofDependencyAttr">;
 def EvalRuntimeCalendar : ScheduleField<"EvalRuntimeCalendar", "schedule.eval.runtime_calendar",
     "::mlir::UnitAttr">;
+def EvalAssertionObservers : ScheduleField<"EvalAssertionObservers", "schedule.eval.assertion_observers",
+    "::mlir::BoolAttr">;
 def EvalRuntimeNbaFallback : ScheduleField<"EvalRuntimeNbaFallback", "schedule.eval.runtime_nba_fallback",
     "::mlir::UnitAttr">;
 def EvalRuntimeNbaRequired : ScheduleField<"EvalRuntimeNbaRequired", "schedule.eval.runtime_nba_required",

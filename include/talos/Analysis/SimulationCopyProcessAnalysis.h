@@ -22,6 +22,9 @@ struct CaptureCopyProcess {
 /// selector, carried value, or other effect is admitted. Call before state
 /// threading and packed lowering obscure this source shape.
 bool isCaptureCopyProcess(sim::SimFuncOp function);
+/// An independently scheduled port initialization assigning one packed
+/// constant.
+bool isConstantPortInitializer(sim::SimFuncOp function);
 std::optional<CaptureCopyProcess>
 getCaptureCopyProcess(sim::SimFuncOp function);
 

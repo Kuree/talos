@@ -20,6 +20,7 @@
 #include "talos/Dialect/Native/FallbackReport.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
+#include "talos/Dialect/SAIF/SAIFDialect.h"
 #include "talos/Dialect/Schedule/ScheduleDialect.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
@@ -32,6 +33,98 @@
 using namespace mlir;
 namespace talos::detail {
 namespace {
+void printEvalInventory(ArrayRef<NativeDirectFragment> owners) {
+  unsigned tier1 = 0, tier2 = 0, checkpoints = 0;
+  for (const auto &owner : owners) {
+    if (owner.runtimeCheckpoint)
+      ++checkpoints;
+    else if (owner.tier2Convergence)
+      ++tier2;
+    else
+      ++tier1;
+  }
+  llvm::errs() << "talos eval executor inventory: tier1=" << tier1
+               << " tier2=" << tier2 << " runtime_checkpoints=" << checkpoints
+               << '\n';
+}
+
+// A source observer can read the generated image if every input it can read
+// is published at its only store in an activation. A plain port-copy process
+// establishes this by construction. The effect graph includes writes through
+// callees and spawned processes; unresolved storage aliases retain the
+// separate canonical publication image (1800-2023 4.6(a), 9.4.2, 16.12).
+bool assertionInputsAreCopies(
+    sim::SimDesignOp design, const DenseSet<uint64_t> &inputs,
+    const analysis::HandleDataflowAnalysis &provenance,
+    const DenseMap<Operation *, analysis::CaptureCopyProcess> &copies,
+    const DenseSet<Operation *> &constantPorts) {
+  if (inputs.empty())
+    return false;
+  SymbolTable symbols(design);
+  analysis::FormalEffectResolver formals(design, provenance);
+  DenseSet<uint64_t> forwarded;
+  for (Attribute node : design.getComputeGraphAttr().getNodes()) {
+    auto fragment = dyn_cast<schedule::ComputeFragmentAttr>(node);
+    if (!fragment)
+      continue;
+    for (auto effect :
+         fragment.getEffects().getAsRange<schedule::ComputeEffectAttr>()) {
+      using Kind = schedule::ComputeEffectKind;
+      using Resource = schedule::ComputeResourceKind;
+      using Target = schedule::ComputeTargetKind;
+      if (effect.getEffect() != Kind::Write &&
+          effect.getEffect() != Kind::NBA && effect.getEffect() != Kind::Drive)
+        continue;
+      if (effect.getResource() == Resource::Unknown)
+        return false;
+      if (effect.getResource() != Resource::Storage)
+        continue;
+      bool valid = true;
+      auto check = [&](uint64_t id, schedule::ComputeEffectAttr actual) {
+        if (actual.getResource() != Resource::Storage || !inputs.contains(id))
+          return;
+        auto writer =
+            symbols.lookup<sim::SimFuncOp>(fragment.getFunction().getValue());
+        valid &= writer &&
+                 (copies.contains(writer) || constantPorts.contains(writer));
+        forwarded.insert(id);
+      };
+      if (effect.getTarget() == Target::Descriptor)
+        check(effect.getDescriptor(), effect);
+      else if (effect.getTarget() != Target::Formal ||
+               !formals.resolve(fragment.getFunction().getAttr(), effect, check,
+                                /*ignorePrivate=*/true))
+        return false;
+      if (!valid)
+        return false;
+    }
+  }
+  return forwarded.size() == inputs.size();
+}
+
+/// These waits are arbitrated after Active/Inactive/NBA by the runtime. In
+/// particular a concurrent assertion samples in Preponed, evaluates in
+/// Observed and schedules its action in Reactive (1800-2023 4.4.2, 16.5.1).
+/// Never count such a runtime route as an executor of the Active closure.
+bool hasRuntimeRegionWait(sim::SimFuncOp actor, uint32_t continuation) {
+  if (actor.getHomeRegion() == sim::EventRegion::Reactive)
+    return true;
+  if (actor.getHomeRegion() != sim::EventRegion::Observed)
+    return false;
+  bool matched = false;
+  for (Block &block : actor.getBody()) {
+    Operation *wait = block.getTerminator();
+    auto site = wait->getAttrOfType<schedule::ContinuationSiteAttr>("site");
+    if (!site || site.getId() != continuation)
+      continue;
+    auto region = wait->getAttrOfType<sim::EventRegionAttr>("resume_region");
+    if (region && region.getValue() != sim::EventRegion::Observed)
+      return false;
+    matched = true;
+  }
+  return matched;
+}
+
 /// How a wait of an initial procedure belongs to its finite bootstrap prefix
 /// (IEEE 1800-2023 9.2.1: an initial procedure executes once).
 enum class InitialBootstrap {
@@ -293,8 +386,19 @@ LogicalResult NativePipelineAnalysis::planActors() {
   // safe for the generic scheduler.
   module.walk([&](sim::SimFuncOp function) {
     native::remove<native::RuntimePublicationCertified>(function);
+    native::remove<native::RankedSignalWriter>(function);
   });
   aotEligibility = analysis::NativeAOTAnalysis::compute(module);
+  if (vpi.getMode() == schedule::ComputeVPIMode::Off &&
+      !hasLanguageOverride && !hasDynamicLanguageOverride &&
+      !sim::has<sim::metadata::SnapshotPublications>(module))
+    for (auto &[actor, cause] : aotEligibility.getRuntimeCheckpointCauses())
+      if (auto cut = dyn_cast_if_present<sim::SimSuspendDelayOp>(cause.blocker);
+          cut && (schedule::has<schedule::Field::ActivePreemptionAfter>(cut) ||
+                  schedule::has<schedule::Field::ActivePreemptionRuns>(cut)))
+        rankedActiveActors.insert(actor);
+  for (Operation *actor : rankedActiveActors)
+    native::mark<native::RankedSignalWriter>(actor);
   for (const auto &entry : analyses) {
     auto function = dyn_cast_if_present<sim::SimFuncOp>(entry.first);
     IntegerAttr codeUnit =
@@ -447,10 +551,13 @@ LogicalResult NativePipelineAnalysis::planActors() {
   // guard needed to execute the residual closure directly. Fully eligible
   // designs retain independent static capabilities even when a focused
   // conversion pipeline did not run the optional superstep planner.
+  // An interleaved frame still needs shared Active arbitration when every
+  // actor has a native executor (1800-2023 4.6(a), 4.7).
   staticEvalIsland = certifiedStaticSuperstep &&
                      (evalScheduler ||
                       nativeScheduler == schedule::NativeSchedulerMode::Auto) &&
-                     !aotEligibility.isFullyEligible();
+                     (!aotEligibility.isFullyEligible() ||
+                      !rankedActiveActors.empty());
   closedStaticIsland = aotEligibility.isFullyEligible() || staticEvalIsland;
   cleanSuperstep = certifiedStaticSuperstep && closedStaticIsland;
 
@@ -510,11 +617,19 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
     FailureOr<NativeStaticFanoutPlan> fanout = buildNativeStaticFanoutPlan(
         module, *stateLayout, aotEligibility.getActorSlots(),
         aotEligibility.getBytecodeFragments(),
-        aotEligibility.getRuntimeOwnedFanoutActors(), true, staticEvalIsland,
-        activationInputs);
+        aotEligibility.getRuntimeOwnedFanoutActors(),
+        aotEligibility.getRuntimeCheckpointActors(), rankedActiveActors, true,
+        staticEvalIsland, activationInputs);
     if (failed(fanout))
       return failure();
     staticFanoutPlan = std::move(*fanout);
+    if (detailedTiming && staticEvalIsland && staticFanoutPlan.exact &&
+        !rankedActiveActors.empty())
+      llvm::errs() << "talos ranked Active waits: actors="
+                   << rankedActiveActors.size() << " static-rows="
+                   << llvm::count_if(staticFanoutPlan.entries, [](auto &row) {
+                        return row.reserved & TALOS_RT_FANOUT_RANKED_WAIT;
+                      }) << '\n';
     staticFanoutMetadata &= staticFanoutPlan.exact;
     staticFanout &= staticFanoutPlan.exact;
     if (staticFanoutPlan.exact) {
@@ -575,11 +690,44 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
           runtimeObservedNets.insert(bit.net);
     }
     bool hasObserver = false;
+    bool assertionObservers = true;
+    DenseSet<uint64_t> assertionInputs;
     bool hasInactiveDelay = false;
     unsigned explainedObservers = 0, explainedDelays = 0;
     metadataDesign.walk([&](sim::SimFuncOp function) {
       if (function.getEntryKind() == sim::EntryKind::Observer) {
         hasObserver = true;
+        // A disable iff predicate reads the current publication image on
+        // every transition of its inputs (1800-2023 16.12). Only admit
+        // predicates whose complete read set uses the runtime publication
+        // bridge. The planes remain separate for these readers.
+        ArrayAttr effects = function.getEffectSummaryAttr();
+        assertionObservers &=
+            effects &&
+            schedule::has<schedule::Field::ConcurrentCancelObserver>(
+                function) &&
+            llvm::all_of(
+                effects.getAsRange<schedule::ComputeEffectAttr>(),
+                [&](schedule::ComputeEffectAttr effect) {
+                  if (effect.getEffect() != schedule::ComputeEffectKind::Read ||
+                      effect.getResource() !=
+                          schedule::ComputeResourceKind::Storage ||
+                      effect.getTarget() !=
+                          schedule::ComputeTargetKind::Descriptor ||
+                      effect.getDynamic() || effect.getDeferred() ||
+                      !effect.getWidth())
+                    return false;
+                  auto handle =
+                      stateLayout->storage.find(effect.getDescriptor());
+                  assertionInputs.insert(effect.getDescriptor());
+                  talos_rt_stable_handle_v1 decoded{};
+                  return handle != stateLayout->storage.end() &&
+                         talos_rt_stable_handle_decode(handle->second,
+                                                       &decoded) &&
+                         decoded.kind == TALOS_RT_STABLE_HANDLE_STATIC &&
+                         staticFanoutPlan.runtimeTransitionStates.contains(
+                             decoded.id);
+                });
         if (detailedTiming && explainedObservers++ < 3)
           llvm::errs() << "talos eval runtime-calendar observer: actor="
                        << function.getSymName()
@@ -589,11 +737,17 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
     metadataDesign.walk([&](sim::SimSuspendDelayOp delay) {
       auto constant = delay.getDelay().getDefiningOp<sim::SimTimeConstantOp>();
       if (!constant || constant.getValue() == 0) {
-        hasInactiveDelay = true;
+        auto actor = delay->getParentOfType<sim::SimFuncOp>();
         bool activeHandoff =
             constant && delay.getResumeRegion() == sim::EventRegion::Active &&
             (schedule::has<schedule::Field::ActivePreemptionAfter>(delay) ||
              schedule::has<schedule::Field::ActivePreemptionRuns>(delay));
+        // A ranked Active continuation returns to the runtime at its exact
+        // checkpoint. Its zero duration never enters Inactive.
+        bool ranked =
+            activeHandoff &&
+            aotEligibility.getRuntimeCheckpointActors().contains(actor);
+        hasInactiveDelay |= !ranked;
         if (detailedTiming && explainedDelays++ < 3)
           llvm::errs() << "talos eval runtime-calendar delay: actor="
                        << delay->getParentOfType<sim::SimFuncOp>().getSymName()
@@ -613,14 +767,13 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
     // The writer checkpoints below retain every required runtime publication;
     // final call-closure verification certifies the remaining generated work.
     // A coordinator currently drains its NBA queue as one transaction. A
-    // zero/dynamic delay could require an intervening Inactive region, so
-    // retain the original runtime path for those designs (LRM 4.4-4.5).
+    // zero/dynamic delay outside the supported runtime cases above could
+    // require an intervening Inactive region (LRM 4.4-4.5).
     bool runtimeCalendar =
-        staticEvalIsland && staticFanoutPlan.exact && !hasObserver &&
-        !hasInactiveDelay &&
-        (!hasDPIExports || constantDPIQueryExports) &&
+        staticEvalIsland && staticFanoutPlan.exact && assertionObservers &&
+        !hasInactiveDelay && (!hasDPIExports || constantDPIQueryExports) &&
         !runtime::bitEnumContainsAny(flags,
-                                    runtime::ExecutionFlags::CoverageSchema);
+                                     runtime::ExecutionFlags::CoverageSchema);
     if (detailedTiming)
       llvm::errs() << "talos eval runtime-calendar eligibility: island="
                    << staticEvalIsland << " exact=" << staticFanoutPlan.exact
@@ -743,8 +896,9 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
             // The publication only wakes the runtime waiter; the runtime must
             // also own the calendar so that waiter runs in this time slot
             // (4.5). A generated run-until loop could advance time first.
-            bool ownedPublication =
-                runtimeCalendar && current == function && width && *width <= 64;
+            bool ownedPublication = runtimeCalendar && current == function &&
+                                    width &&
+                                    (!found->second.dynamic || *width <= 64);
             return handle != handles.end() &&
                    talos_rt_stable_handle_decode(handle->second, &decoded) &&
                    decoded.kind == TALOS_RT_STABLE_HANDLE_STATIC &&
@@ -923,6 +1077,20 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
     if (runtimeCalendar)
       ::talos::schedule::set<::talos::schedule::Field::EvalRuntimeCalendar>(
           module, UnitAttr::get(module.getContext()));
+    if (runtimeCalendar && hasObserver) {
+      bool copies = metadataDesign.getComputeGraphAttr().getVpi() ==
+                        schedule::ComputeVPIMode::Off &&
+                    !saif::has<saif::Output>(module) &&
+                    assertionInputsAreCopies(
+                        metadataDesign, assertionInputs, provenanceAnalysis,
+                        copyActivations, constantPortInitializers);
+      schedule::set<schedule::Field::EvalAssertionObservers>(
+          module, BoolAttr::get(module.getContext(), copies));
+      if (detailedTiming)
+        llvm::errs() << "talos eval assertion inputs: roots="
+                     << assertionInputs.size() << " forwarded=" << copies
+                     << '\n';
+    }
   }
   if (staticNBA) {
     FailureOr<NativeStaticNBAPlan> plan =
@@ -1408,8 +1576,8 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
       }
       if (finiteInitialBootstrap(actor, entry))
         continue;
-      // IEEE 1800-2023 4.5: Reactive actors may remain runtime owners.
-      if (actor.getHomeRegion() != sim::EventRegion::Reactive)
+      bool runtimeRegion = hasRuntimeRegionWait(actor, entry.continuation);
+      if (!runtimeRegion)
         executorDemand = true;
       IntegerAttr codeUnit = actor.getCodeUnitIdAttr();
       // An admitted actor reaches the generated coordinator only through a
@@ -1423,7 +1591,7 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
           codeUnit &&
           runtimeCheckpointContinuations.contains(
               {codeUnit.getUInt(), entry.continuation});
-      if (!checkpoint && actor.getHomeRegion() != sim::EventRegion::Reactive &&
+      if (!checkpoint && !runtimeRegion &&
           !::talos::schedule::has<::talos::schedule::Field::EvalBody>(actor) &&
           !::talos::schedule::has<::talos::schedule::Field::EvalFusionGroup>(
               actor) &&
@@ -1447,7 +1615,9 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
         break;
       }
       auto bytecode = aotBytecodeContinuations.find(actor.getOperation());
-      if (bytecode == aotBytecodeContinuations.end() ||
+      if ((runtimeRegion &&
+           actor.getHomeRegion() == sim::EventRegion::Observed) ||
+          bytecode == aotBytecodeContinuations.end() ||
           !llvm::is_contained(bytecode->second, entry.continuation) ||
           (codeUnit && runtimeCheckpointContinuations.contains(
                            {codeUnit.getUInt(), entry.continuation})))
@@ -1833,17 +2003,24 @@ LogicalResult NativePipelineAnalysis::planOwnership() {
       }
     }
 
-    for (const NativeThreeTierKernelPlan &kernel : threeTierPlan.kernels) {
+    bool refineCalendar =
+        staticEvalIsland && staticFanoutPlan.exact &&
+        schedule::has<schedule::Field::EvalRuntimeCalendar>(module) &&
+        native::has<native::ClosedExecutable>(module) &&
+        vpi.getMode() == schedule::ComputeVPIMode::Off && !hasLanguageOverride;
+    for (auto [groupIndex, kernel] : llvm::enumerate(threeTierPlan.kernels)) {
       if (kernel.tier != schedule::SchedulerTierKind::Tier2 ||
           kernel.schedule != schedule::ComputeScheduleKind::Convergence)
         continue;
       bool hasDirectOwner = false;
-      for (NativeDirectFragment &direct : *directFragments) {
+      for (auto [ownerIndex, direct] : llvm::enumerate(*directFragments)) {
         auto ownsFragment = [&](uint32_t fragment) {
           return llvm::is_contained(direct.fragmentIDs, fragment);
         };
         if (llvm::any_of(kernel.memberIDs, ownsFragment)) {
-          if (reportTier2 && !direct.tier2Convergence)
+          if (refineCalendar && !direct.tier2Convergence)
+            sourceConvergenceGroups.insert({ownerIndex, groupIndex});
+          else if (reportTier2 && !direct.tier2Convergence)
             reportTier2(direct, "process-scc",
                         "kernel=" + std::to_string(kernel.id) +
                             " members=" +
@@ -1902,6 +2079,7 @@ LogicalResult NativePipelineAnalysis::planOwnership() {
                               {}, module.getLoc(), std::nullopt,
                               invalidConvergenceOwnership});
       evalScheduler = false;
+      sourceConvergenceGroups.clear();
       for (NativeDirectFragment &direct : *directFragments)
         direct.tier2Convergence = false;
     }
@@ -1943,15 +2121,20 @@ LogicalResult NativePipelineAnalysis::planOwnership() {
           evalOwnership.fanoutOwners[entryIndex];
       if (owner.kind == NativeEvalFanoutOwnerKind::PeriodicAlias)
         continue;
-      // IEEE 1800-2023 4.5: Reactive actors deliberately remain runtime
-      // owners. Their subscriptions arbitrate against Re-Inactive/Re-NBA;
-      // they are not missing executors in the generated Active closure.
       if (owner.kind == NativeEvalFanoutOwnerKind::Runtime &&
-          entry.actor_slot < actorsBySlot.size() &&
-          actorsBySlot[entry.actor_slot] &&
-          actorsBySlot[entry.actor_slot].getHomeRegion() ==
-              sim::EventRegion::Reactive)
-        continue;
+          entry.actor_slot < actorsBySlot.size()) {
+        sim::SimFuncOp actor = actorsBySlot[entry.actor_slot];
+        if (actor && hasRuntimeRegionWait(actor, entry.continuation))
+          continue;
+        // The shared calendar executes this specific ranked continuation.
+        // Its wake uses a static row; no generated body may consume it.
+        if (actor && actor.getCodeUnitIdAttr() &&
+            (entry.reserved & TALOS_RT_FANOUT_RANKED_WAIT) &&
+            schedule::has<schedule::Field::EvalRuntimeCalendar>(module) &&
+            runtimeCheckpointContinuations.contains(
+                {actor.getCodeUnitIdAttr().getUInt(), entry.continuation}))
+          continue;
+      }
       const NativeDirectFragment *direct =
           owner.kind == NativeEvalFanoutOwnerKind::Direct &&
                   owner.directFragment < directFragments->size()
@@ -2113,20 +2296,9 @@ LogicalResult NativePipelineAnalysis::planOwnership() {
         direct.fusionGroup = group->second;
       }
   }
-  if (detailedTiming && succeeded(directFragments)) {
-    unsigned tier1 = 0, tier2 = 0, checkpoints = 0;
-    for (const NativeDirectFragment &direct : *directFragments) {
-      if (direct.runtimeCheckpoint)
-        ++checkpoints;
-      else if (direct.tier2Convergence)
-        ++tier2;
-      else
-        ++tier1;
-    }
-    llvm::errs() << "talos eval executor inventory: tier1=" << tier1
-                 << " tier2=" << tier2 << " runtime_checkpoints=" << checkpoints
-                 << '\n';
-  }
+  if (detailedTiming && succeeded(directFragments) &&
+      sourceConvergenceGroups.empty())
+    printEvalInventory(*directFragments);
   markTiming("eval ownership and graph planning");
 
   return success();
@@ -2176,6 +2348,44 @@ LogicalResult NativePipelineAnalysis::resolveEval() {
           periodicAliases);
       if (failed(resolvedEval))
         return failure();
+      if (!sourceConvergenceGroups.empty()) {
+        // A broad source wait can close a process SCC through a lane this
+        // activation never consumes. The ranked graph includes runtime
+        // boundary paths and the actual physical fanout. A repeatable owner
+        // outside the cycle or a physically forward-only interior activation
+        // can use the ordinary Tier-1 wake on each pass (4.3, 4.6, 9.4.2).
+        // Nonrepeatable interiors keep their original ready predicate.
+        llvm::StringSet<> singlePass;
+        for (const auto &node : resolvedEval->rankedNodes)
+          if (node.owner < resolvedEval->mergedExecutors.size() &&
+              ((node.repeatable && !node.cyclic) || node.forwardPublications) &&
+              !node.clocked && !node.boundary)
+            singlePass.insert(resolvedEval->mergedExecutors[node.owner]);
+        SymbolTable symbols(metadataDesign);
+        unsigned promoted = 0;
+        for (auto [ownerIndex, groupIndex] : sourceConvergenceGroups) {
+          auto &owner = (*directFragments)[ownerIndex];
+          if (!owner.runtimeCheckpoint && singlePass.contains(owner.wrapper)) {
+            owner.tier2Convergence = false;
+            ++promoted;
+          } else if (native::isFallbackReportEnabled(module)) {
+            const auto &kernel = threeTierPlan.kernels[groupIndex];
+            auto body = symbols.lookup<sim::SimFuncOp>(owner.body);
+            native::reportFallback(
+                module,
+                {"tier2", "process-scc", owner.body,
+                 body ? std::optional<Location>(body.getLoc()) : std::nullopt,
+                 std::nullopt,
+                 "kernel=" + std::to_string(kernel.id) +
+                     " members=" + std::to_string(kernel.memberIDs.size())});
+          }
+        }
+        if (detailedTiming) {
+          llvm::errs() << "talos eval refined convergence: owners=" << promoted
+                       << '\n';
+          printEvalInventory(*directFragments);
+        }
+      }
       // Source observers/overrides retain their ordered lifetime. Writable
       // VPI instead uses the existing scoped guards and exports the captured
       // continuation before a foreign cut (LRM 38.15/38.34, 4.9.4). The

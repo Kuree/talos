@@ -13,6 +13,7 @@
 #include "talos/Analysis/SSAValueAnalysis.h"
 #include "talos/Analysis/SimulationAnalysis.h"
 #include "talos/Analysis/SimulationEffectAnalysis.h"
+#include "talos/Runtime/OutputItemFlags.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SetVector.h"
@@ -1351,12 +1352,16 @@ public:
                      const HandleDataflowResult &handleResult,
                      const HandleDataflowAnalysis &provenance,
                      unsigned maximumPartitions, ActivationValueGraph *values,
-                     Operation *symbols, bool inputsOnly,
+                     Operation *symbols,
+                     ActivationMemoryAnalysis::DependencyMode mode,
                      ValueLiveness &liveness)
       : DataFlowAnalysis(solver), function(function), liveness(liveness),
         handleResult(handleResult), handles(handleResult.facts),
         provenance(provenance), maximumPartitions(maximumPartitions),
-        values(values), symbols(symbols), inputsOnly(inputsOnly),
+        values(values), symbols(symbols),
+        inputsOnly(mode == ActivationMemoryAnalysis::DependencyMode::Inputs),
+        orderingOnly(
+            mode == ActivationMemoryAnalysis::DependencyMode::OrderingAccesses),
         loops(analyzeActivationBoundedLoops(function.getBody())) {
     // A fused activation can contain hundreds of proven loops. Index loop
     // membership and latch conditions once so each CFG edge only touches the
@@ -1932,6 +1937,30 @@ private:
       return success();
     }
     if (!load && !store) {
+      // These operations can affect the transcript, status and coverage.
+      // Their operands have already been evaluated, and none of them can
+      // run another process or read HDL storage by reference. Preserve the
+      // executor and all its effects when using this ordering-only footprint
+      // so procedural reports retain statement order (IEEE 1800-2023 4.6(a)).
+      if (orderingOnly) {
+        if (isa<sim::SimTimeNowOp, sim::SimAssertionEnabledOp, sim::SimErrorOp,
+                sim::SimCoveragePointHitOp>(op))
+          return success();
+        if (auto display = dyn_cast<sim::SimDisplayOp>(op)) {
+          constexpr uint32_t valueFlags =
+              TALOS_RT_OUTPUT_ITEM_SIGNED | TALOS_RT_OUTPUT_ITEM_OMITTED |
+              TALOS_RT_OUTPUT_ITEM_REAL | TALOS_RT_OUTPUT_ITEM_REAL_TIME;
+          if (llvm::all_of(display.getItemFlags(),
+                           [&](int32_t flags) {
+                             return !(uint32_t(flags) & ~valueFlags);
+                           }) &&
+              llvm::all_of(display.getItems().getTypes(), [](Type type) {
+                return isPlainValueType(type) ||
+                       isa<sim::BytesType, FloatType>(type);
+              }))
+            return success();
+        }
+      }
       if (values)
         values->pure(op, state.constants);
       return success(isMemoryEffectFree(op));
@@ -2193,6 +2222,7 @@ private:
   ActivationValueGraph *values;
   Operation *symbols;
   bool inputsOnly;
+  bool orderingOnly;
   SymbolTableCollection symbolTables;
   DenseMap<Operation *, ReadOnlyCallSummary> callSummaries;
   SmallVector<BoundedLoop, 0> loops;
@@ -2263,7 +2293,8 @@ ActivationMemoryAnalysis::ActivationMemoryAnalysis(
   // computes liveness per value on demand.
   std::optional<Liveness> blockLiveness;
   std::unique_ptr<ActivationValueGraph> values;
-  if (mode != DependencyMode::Accesses) {
+  if (mode == DependencyMode::Inputs ||
+      mode == DependencyMode::ReachingValues) {
     blockLiveness.emplace(function);
     values = std::make_unique<ActivationValueGraph>(function, rootLanes,
                                                     *blockLiveness);
@@ -2276,7 +2307,7 @@ ActivationMemoryAnalysis::ActivationMemoryAnalysis(
   auto solver = std::make_unique<DataFlowSolver>();
   auto *analysis = solver->load<ActivationDataflow>(
       function, handleResult, handleAnalysis, maximumPartitions, values.get(),
-      symbols, mode == DependencyMode::Inputs, valueLiveness);
+      symbols, mode, valueLiveness);
   if (failed(solver->initializeAndRun(function)) || !analysis->exit) {
     unsupported = analysis->unsupported;
     return;

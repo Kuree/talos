@@ -267,6 +267,8 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
         return false;
       node.plan.repeatable &=
           activationInputs.repeatable.contains(function.getSymNameAttr());
+      if (activationInputs.orderingOnly.contains(function.getSymNameAttr()))
+        return false;
       auto kind = function.getEntryKind();
       if (clocked ? kind != sim::EntryKind::Always &&
                         kind != sim::EntryKind::AlwaysFF
@@ -522,7 +524,12 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
           // every other actor. Sensitivity remains an independent constraint,
           // unless the activation is repeatable and is woken only by its live
           // inputs, which its summary already reads.
-          if (activation && kind != schedule::ComputeEffectKind::Watch)
+          auto resource = effect.getResource();
+          bool storageEffect =
+              resource == schedule::ComputeResourceKind::Storage ||
+              resource == schedule::ComputeResourceKind::Net;
+          if (activation && kind != schedule::ComputeEffectKind::Watch &&
+              (storageEffect || !activationInputs.orderingOnly.contains(owner)))
             continue;
           if (activation && activationInputs.repeatable.contains(owner))
             continue;
@@ -530,7 +537,6 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
                                  kind == schedule::ComputeEffectKind::Drive
                              ? node.opaqueWrites
                              : node.opaqueReads;
-          auto resource = effect.getResource();
           if ((resource != schedule::ComputeResourceKind::Storage &&
                resource != schedule::ComputeResourceKind::Net) ||
               effect.getTarget() != schedule::ComputeTargetKind::Descriptor ||
@@ -968,6 +974,74 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
       return result[a].island < result[b].island;
     return boundaryPhase(a) < boundaryPhase(b);
   });
+  if (fanout.exact && native::has<native::ClosedExecutable>(module) &&
+      schedule::has<schedule::Field::EvalRuntimeCalendar>(module)) {
+    // Cut the ranked SCC at its feedback edges. A predicated combinational
+    // activation can consume its wake at the end if every possible published
+    // range wakes only later owners. This proof concerns one real activation,
+    // including its intermediate writes. Its repeatability and full source
+    // sensitivity remain independent. A backward publisher retains its
+    // pre-execution consume and termination poll. A later publication can
+    // re-arm its receiver after that receiver has completed its forward
+    // activation. The ready set therefore revisits the chain on feedback
+    // (1800-2023 4.3, 4.5, 9.4.2).
+    SmallVector<unsigned> position(result.size());
+    for (auto [rank, id] : llvm::enumerate(order.nodes))
+      position[id] = rank;
+    llvm::BitVector keepConvergence(result.size());
+    for (auto [from, to] : order.feedback) {
+      keepConvergence.set(from);
+      // Keep the receiver's poll when the sender has no independently
+      // identified convergence executor. In particular, a projected runtime
+      // boundary does not prove where an oscillating cycle is interrupted.
+      uint32_t owner = result[from].owner;
+      const auto *sender =
+          owner < plan.mergedExecutors.size()
+              ? directByWrapper.lookup(plan.mergedExecutors[owner])
+              : nullptr;
+      if (!sender || !sender->tier2Convergence || sender->runtimeCheckpoint)
+        keepConvergence.set(to);
+    }
+    DenseSet<uint32_t> netStates;
+    for (const auto &net : stateLayout.netLayouts)
+      netStates.insert(net.handleID);
+    for (unsigned id = 0; id < realNodeCount; ++id) {
+      auto &node = result[id];
+      if (!node.cyclic || node.boundary || node.clocked ||
+          keepConvergence[id] ||
+          llvm::binary_search(plan.periodicEntryRecords, node.owner) ||
+          nodes[id].opaqueWrites || nodes[id].writes.empty())
+        continue;
+      node.forwardPublications =
+          llvm::all_of(nodes[id].writes, [&](const Range &write) {
+            // Resolved nets and dynamic/runtime observers keep their original
+            // convergence protocol, including synchronous conditional
+            // evaluation.
+            if (netStates.contains(write.state) ||
+                fanout.runtimeTransitionStates.contains(write.state))
+              return false;
+            auto it = llvm::lower_bound(
+                plan.fanoutEntries, write.state,
+                [](const talos_rt_static_fanout_entry &entry, uint32_t state) {
+                  return entry.static_state < state;
+                });
+            for (; it != plan.fanoutEntries.end() &&
+                   it->static_state == write.state;
+                 ++it) {
+              if (it->low_bit >= write.high ||
+                  it->low_bit + it->bit_width <= write.low)
+                continue;
+              auto target = dense.find(it->merged_bit);
+              if ((it->reserved & TALOS_RT_FANOUT_ROUTE_MASK) !=
+                      TALOS_RT_FANOUT_DIRECT ||
+                  target == dense.end() ||
+                  position[target->second] <= position[id])
+                return false;
+            }
+            return true;
+          });
+    }
+  }
   SmallVector<NativeRankedEvalNode> ranked;
   for (uint32_t id : order.nodes)
     ranked.push_back(std::move(result[id]));
@@ -1070,6 +1144,7 @@ NativeActivationInputs collectNativeActivationInputs(sim::SimDesignOp design,
   struct Facts {
     analysis::ActivationMemoryAnalysis::Ranges liveIns, mayWrites;
     bool usable = false;
+    bool orderingOnly = false;
     std::string trace;
   };
   SmallVector<Facts, 0> facts(requests.size());
@@ -1100,6 +1175,23 @@ NativeActivationInputs collectNativeActivationInputs(sim::SimDesignOp design,
                                            ? memory.getValueInputs()
                                            : memory.getLiveIns());
       llvm::append_range(fact.mayWrites, memory.getMayWrites());
+    } else if (activation.getFailureReason() ==
+                   analysis::ActivationRegionAnalysis::FailureReason::
+                       MemoryEffects &&
+               result.sourceGraph.getVpi() == schedule::ComputeVPIMode::Off) {
+      // Use the same finite initial/resume CFG. Intersect definitions at
+      // joins: a load is external if any path can reach it before a write
+      // to that lane. Reports and every source wait stay on the executor.
+      analysis::ActivationMemoryAnalysis accesses(
+          activation.getActivationFunction(), handles, 65536,
+          analysis::ActivationMemoryAnalysis::DependencyMode::OrderingAccesses,
+          activation.getSymbolTable());
+      if (accesses.isValid()) {
+        fact.usable = true;
+        fact.orderingOnly = true;
+        llvm::append_range(fact.liveIns, accesses.getLiveIns());
+        llvm::append_range(fact.mayWrites, accesses.getMayWrites());
+      }
     }
   };
   // A worker solves only a private clone of its own function. Call summaries
@@ -1121,6 +1213,13 @@ NativeActivationInputs collectNativeActivationInputs(sim::SimDesignOp design,
     if (!fact.usable)
       continue;
     StringAttr name = request.getSymNameAttr();
+    if (fact.orderingOnly) {
+      result.orderingOnly.insert(name);
+      if (explain)
+        llvm::errs() << "talos ranked boundary footprint: " << name.getValue()
+                     << " inputs=" << fact.liveIns.size()
+                     << " writes=" << fact.mayWrites.size() << '\n';
+    }
     result.liveIns[name] = std::move(fact.liveIns);
     result.mayWrites[name] = std::move(fact.mayWrites);
   }

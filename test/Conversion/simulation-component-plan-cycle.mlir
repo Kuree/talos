@@ -1,5 +1,6 @@
 // RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-replicate,simulation.design(talos-sim-build-compute-graph,schedule-plan-combinational-statements{component-sections=true},talos-sim-materialize-compute-fusion,talos-sim-build-compute-graph,talos-sim-verify-compute-graph))' | FileCheck %s
 // RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-replicate,test-talos-set-module-attributes{attrs="{native.fallback_report}"},simulation.design(talos-sim-build-compute-graph,schedule-plan-combinational-statements{component-sections=true}))' -o /dev/null 2>&1 | FileCheck %s --check-prefix=FALLBACK
+// RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-replicate,test-talos-simulation-to-native{component-sections=true})' | FileCheck %s --check-prefix=REGIONS
 // A small genuine cycle and an unrelated 33-owner DAG share a source executor.
 // The planner retains the cycle's actors and compiles the separate DAG.
 // CHECK-DAG: simulation.spawn @step2
@@ -10,7 +11,19 @@
 // CHECK-NOT: simulation.spawn @cone
 // CHECK: simulation.return
 // The fallback report names the rejected cycle cohort, its size and why.
-// FALLBACK: talos fallback: {"detail":"members=4 operations={{[0-9]+}}","kind":"cohort-rejected","loc":"{{.*}}.mlir:82:5","owner":"step2","reason":"data dependence cycle"}
+// FALLBACK: talos fallback: {"detail":"members=4 operations={{[0-9]+}}","kind":"cohort-rejected","loc":"{{.*}}.mlir:95:5","owner":"step2","reason":"data dependence cycle"}
+// Each child of the same rank group selects its own domain. Consume current
+// readiness again after the first child, which can publish into the second.
+// REGIONS-LABEL: llvm.func @__talos_eval_ranked_group_2(
+// REGIONS-SAME: schedule.eval.dataflow_fallback = @__talos_eval_ranked_group_2.fallback
+// REGIONS-LABEL: llvm.func @__talos_eval_ranked_group_1.segment(
+// REGIONS-SAME: schedule.eval.segment_helpers = [@__talos_eval_ranked_group_1, @__talos_eval_ranked_group_2]
+// REGIONS: %[[INGRESS:.*]] = llvm.mlir.addressof @__talos_aot_model_ingress_v1
+// REGIONS: llvm.cond_br
+// REGIONS: llvm.call @__talos_eval_ranked_group_1(
+// REGIONS: llvm.load %[[INGRESS]]
+// REGIONS: llvm.cond_br
+// REGIONS: llvm.call @__talos_eval_ranked_group_2(
 !ref = !simulation.ref<i1>
 !vref = !simulation.ref<i8>
 module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", schedule.native_scheduler = 3 : i32} {

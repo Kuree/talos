@@ -640,7 +640,17 @@ proveDynamicEvalNBA(LLVM::CallOp call,
 static void normalizeGeneratedWideTransitions(
     ModuleOp module, const llvm::DataLayout &dataLayout,
     const NativeStateLayout &layout, const NativeStaticFanoutPlan &fanout,
-    const llvm::StringSet<> *selectedRawBodies) {
+    ArrayRef<NativeDirectFragment> directFragments,
+    const llvm::StringSet<> *selectedRawBodies,
+    DenseMap<Operation *, LLVM::CallOp> &wholePublications) {
+  llvm::StringSet<> ownedBodies;
+  if (schedule::has<schedule::Field::EvalRuntimeCalendar>(module))
+    for (const auto &direct : directFragments)
+      if (!direct.instanceCoordinator && !direct.runtimeCheckpoint) {
+        ownedBodies.insert(direct.body);
+        if (!direct.twoStateBody.empty())
+          ownedBodies.insert(direct.twoStateBody);
+      }
   NativeStateLayout clean = makeCleanEvalStateLayout(layout);
   SmallVector<LLVM::CallOp> calls;
   for (auto function :
@@ -658,7 +668,11 @@ static void normalizeGeneratedWideTransitions(
     if (!width || *width <= 64 || *width > UINT_MAX)
       continue;
     auto range = resolveDirectStaticStateRange(args[1], *width, &clean);
-    if (!range || fanout.runtimeTransitionStates.contains(range->staticID))
+    if (!range)
+      continue;
+    bool whole = fanout.runtimeTransitionStates.contains(range->staticID);
+    if (whole && !ownedBodies.contains(
+                     call->getParentOfType<sim::SimFuncOp>().getSymName()))
       continue;
     OpBuilder builder(call);
     auto i64 = builder.getI64Type();
@@ -706,13 +720,16 @@ static void normalizeGeneratedWideTransitions(
           builder.getI64IntegerAttr(range->staticID),
           builder.getI64IntegerAttr(bits),
           ::talos::schedule::get<schedule::metadata::evalSourceOwner>(call));
+      if (whole)
+        wholePublications.try_emplace(transition, call);
       if (::talos::schedule::has<
               ::talos::schedule::Field::EvalNbaEquivalentStore>(call))
         ::talos::schedule::set<
             ::talos::schedule::Field::EvalNbaEquivalentStore>(
             transition, builder.getUnitAttr());
     }
-    call.erase();
+    if (!whole)
+      call.erase();
   }
 }
 
@@ -799,11 +816,13 @@ FailureOr<bool> makeNativeEvalPlan(
   SymbolTable executorSymbols(module);
   SmallVector<GeneratedTransitionRange> generatedTransitionRanges;
   llvm::DenseMap<Operation *, DynamicEvalNBAProof> dynamicNBAProofs;
+  DenseMap<Operation *, LLVM::CallOp> wholePublications;
   if (!resolved->clockKernels.empty()) {
     // Normalize before the ingress/NBA proof so wide clock disturbances are
     // visible to the same range analysis as ordinary narrow publications.
     normalizeGeneratedWideTransitions(module, dataLayout, stateLayout,
-                                      staticFanoutPlan, selectedRawBodies);
+                                      staticFanoutPlan, directFragments,
+                                      selectedRawBodies, wholePublications);
     FailureOr<SmallVector<GeneratedTransitionRange>> transitionRanges =
         collectGeneratedTransitionRanges(module, directFragments, stateLayout,
                                          selectedRawBodies);
@@ -1122,6 +1141,13 @@ FailureOr<bool> makeNativeEvalPlan(
       std::move(resolved->recordNBATaintMasks);
   llvm::BitVector nbaTaintedRecords = std::move(resolved->nbaTaintedRecords);
   bool prioritySignalHandoff = false;
+  uint32_t assertionPlanFlags = 0;
+  if (auto inputs =
+          schedule::get<schedule::Field::EvalAssertionObservers>(module)) {
+    assertionPlanFlags = TALOS_RT_NATIVE_SCHEDULE_ASSERTION_OBSERVERS;
+    if (inputs.getValue())
+      assertionPlanFlags |= TALOS_RT_NATIVE_SCHEDULE_FORWARDED_ASSERTION_INPUTS;
+  }
   ::talos::detail::walkNativeFunctions<sim::SimFuncOp>(
       module, [&](sim::SimFuncOp function) {
         prioritySignalHandoff |= ::talos::schedule::has<
@@ -1786,6 +1812,26 @@ FailureOr<bool> makeNativeEvalPlan(
             {call, activeOwnerMask, physicalSourceOwner, consumedOwnerMask});
       });
     }
+    DenseSet<Operation *> projectedSources;
+    DenseMap<Operation *, unsigned> wholeChunks, projectedChunks;
+    for (auto &entry : wholePublications)
+      ++wholeChunks[entry.second.getOperation()];
+    DenseSet<uint32_t> mixedRoutes;
+    if (native::has<native::ClosedExecutable>(module) &&
+        schedule::has<schedule::Field::EvalRuntimeCalendar>(module) &&
+        vpi.getMode() == schedule::ComputeVPIMode::Off) {
+      for (uint32_t state : staticFanoutPlan.runtimeTransitionStates) {
+        bool direct = false, alias = false;
+        for (unsigned index : fanoutIndicesOf(state)) {
+          uint32_t route = fanoutRoute(fanoutEntries[index]);
+          direct |= route == TALOS_RT_FANOUT_DIRECT;
+          alias |= route == TALOS_RT_FANOUT_PERIODIC_ALIAS;
+        }
+        if (direct && !alias)
+          mixedRoutes.insert(state);
+      }
+    }
+    llvm::MapVector<Operation *, uint32_t> wholeOwners;
     SmallVector<std::pair<schedule::NativeTransitionOp, uint32_t>>
         ownedPublications;
     // A clocked kernel's direct store performs an NBA update early. The
@@ -1856,8 +1902,18 @@ FailureOr<bool> makeNativeEvalPlan(
         ::talos::schedule::set<
             ::talos::schedule::Field::EvalRuntimeRoutedPublication>(
             call, UnitAttr::get(context));
-      if (hasRuntimeOwnedObserver && physicalSourceOwner)
+      if (auto whole = wholePublications.lookup(call)) {
+        // Word-level flags feed generated consumers. Computed predicates and
+        // runtime waits observe one complete packed assignment, including bits
+        // in different words (1800-2023 4.6, 9.4.2).
+        if (!physicalSourceOwner)
+          return whole.emitError("wide publication has no source actor"),
+                 failure();
+        wholeOwners.try_emplace(whole, physicalSourceOwner->first);
+        hasRuntimeOwnedObserver = false;
+      } else if (hasRuntimeOwnedObserver && physicalSourceOwner) {
         ownedPublications.emplace_back(call, physicalSourceOwner->first);
+      }
       OpBuilder transitionBuilder(call);
       Value oldValue = call.getOldValue();
       Value oldUnknown = call.getOldUnknown();
@@ -2059,6 +2115,12 @@ FailureOr<bool> makeNativeEvalPlan(
       }
       if (needsActiveSelfCheck)
         continue;
+      if (!held && physicalSourceOwner && mixedRoutes.contains(*staticState)) {
+        if (auto whole = wholePublications.lookup(call))
+          ++projectedChunks[whole.getOperation()];
+        else
+          projectedSources.insert(call);
+      }
       if (publications.empty()) {
         if (!hasRuntimeOwnedObserver)
           call.erase();
@@ -2171,8 +2233,10 @@ FailureOr<bool> makeNativeEvalPlan(
           call.getNewUnknown()};
       auto owned = LLVM::CallOp::create(
           publication, call.getLoc(), TypeRange{},
-          SymbolRefAttr::get(context,
-                             "talos_rt_v1_scheduler_static_transition_owned"),
+          SymbolRefAttr::get(
+              context, projectedSources.contains(call)
+                           ? "talos_rt_v1_scheduler_static_transition_projected"
+                           : "talos_rt_v1_scheduler_static_transition_owned"),
           arguments);
       if (auto routed = ::talos::schedule::get<
               ::talos::schedule::Field::EvalRuntimeRoutedPublication>(call))
@@ -2181,6 +2245,30 @@ FailureOr<bool> makeNativeEvalPlan(
                                                                     routed);
       call.erase();
     }
+
+    for (auto [op, actor] : wholeOwners) {
+      auto call = cast<LLVM::CallOp>(op);
+      ValueRange operands = call.getArgOperands();
+      OpBuilder publication(call);
+      SmallVector<Value> args{
+          operands.front(),
+          llvmConstant(publication, call.getLoc(), i32, actor)};
+      llvm::append_range(args, operands.drop_front());
+      LLVM::CallOp::create(
+          publication, call.getLoc(), TypeRange{},
+          SymbolRefAttr::get(
+              context, wholeChunks.lookup(op) && projectedChunks.lookup(op) ==
+                                                     wholeChunks.lookup(op)
+                           ? "talos_rt_v1_scheduler_wide_transition_projected"
+                           : "talos_rt_v1_scheduler_wide_transition_owned"),
+          args);
+      call.erase();
+    }
+
+    if (native::has<native::DebugTiming>(module))
+      llvm::errs() << "talos projected static publications: scalar="
+                   << projectedSources.size()
+                   << " wide=" << projectedChunks.size() << '\n';
 
     // Dynamic writes into a fixed packed root use a generated one-entry NBA
     // latch. This is the common register-file shape: the clock body records
@@ -4543,6 +4631,24 @@ FailureOr<bool> makeNativeEvalPlan(
             "runtime-owned periodic observer has an invalid static root");
       Value oldValue = arith::ExtUIOp::create(builder, location, i64, oldSet);
       Value newValue = arith::ExtUIOp::create(builder, location, i64, newSet);
+      if (sharedPeriodic && !periodicAliases.empty()) {
+        StringRef publication =
+            staticFanoutPlan.runtimeRoutedTransitionStates.contains(staticState)
+                ? "talos_rt_v1_scheduler_periodic_routed_transition"
+                : "talos_rt_v1_scheduler_periodic_transition";
+        getOrDeclareLLVMFunction(module, publication,
+                                 LLVM::LLVMVoidType::get(context),
+                                 {pointer, i32, i64, i64, i64});
+        LLVM::CallOp::create(
+            builder, location, TypeRange{},
+            SymbolRefAttr::get(context, publication),
+            ValueRange{runEntry->getArgument(1),
+                       llvmConstant(builder, location, i32, staticState),
+                       llvmConstant(builder, location, i64,
+                                    absoluteBit - bound->offset),
+                       oldValue, newValue});
+        return success();
+      }
       LLVM::CallOp::create(
           builder, location, TypeRange{},
           SymbolRefAttr::get(context,
@@ -7726,6 +7832,9 @@ FailureOr<bool> makeNativeEvalPlan(
                          : 0) |
                     (sharedPeriodic ? TALOS_RT_NATIVE_SCHEDULE_SHARED_PERIODIC
                                     : 0) |
+                    (cleanSuperstepEnabled && staticEvalIsland
+                         ? assertionPlanFlags
+                         : 0) |
                     (constantDPIQueryExports && cleanSuperstepEnabled &&
                              staticEvalIsland &&
                              ::talos::schedule::has<

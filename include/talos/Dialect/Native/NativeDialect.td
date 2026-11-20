@@ -90,6 +90,7 @@ def NativeDialect : Dialect {
     "::mlir::UnitAttr":$unmanaged,
     "::mlir::UnitAttr":$shared_callback,
     "::mlir::UnitAttr":$runtime_publication_certified,
+    "::mlir::UnitAttr":$ranked_signal_writer,
     "::mlir::UnitAttr":$owner_release_instrumented,
 
     // Driver lowering certificates.

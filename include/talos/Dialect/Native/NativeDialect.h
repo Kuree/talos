@@ -56,6 +56,7 @@ using Unmanaged = NativeDialect::UnmanagedAttrHelper;
 using SharedCallback = NativeDialect::SharedCallbackAttrHelper;
 using RuntimePublicationCertified =
     NativeDialect::RuntimePublicationCertifiedAttrHelper;
+using RankedSignalWriter = NativeDialect::RankedSignalWriterAttrHelper;
 using OwnerReleaseInstrumented =
     NativeDialect::OwnerReleaseInstrumentedAttrHelper;
 using DriverId = NativeDialect::DriverIdAttrHelper;

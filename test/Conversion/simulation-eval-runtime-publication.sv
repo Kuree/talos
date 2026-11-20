@@ -9,8 +9,8 @@
 // unit_3 is the `trips` writer, eval owner 1 (actor 8). It publishes its
 // blocking write under its own actor slot, so the runtime wakes the
 // `@(trips)` waiter but not the writer's own `@(posedge clk or trips)`.
-// unit_10 is the `clk` port copy, which publishes for the runtime waiters on
-// `clk`.
+// unit_10 is the `clk` port copy. Both writers publish direct receivers
+// locally and pass the source identity and transition to the runtime waiters.
 // TRACE: talos eval owner: bit=1 actor=8 continuation=11
 // TRACE: talos eval boundary: owner=0 island=0 body=unit_10.__talos_eval_body_0
 // TRACE-NEXT: talos eval boundary: owner=1 island=0 body=unit_3.__talos_eval_body_0
@@ -18,9 +18,9 @@
 // CHECK-DAG: %[[WIDTH:.*]] = llvm.mlir.constant(8 : i64) : i64
 // CHECK-DAG: %[[ACTOR:.*]] = llvm.mlir.constant(8 : i32) : i32
 // CHECK-DAG: %[[LOW:.*]] = llvm.mlir.constant(0 : i64) : i64
-// CHECK: llvm.call @talos_rt_v1_scheduler_static_transition_owned(%{{.*}}, %[[ACTOR]], %{{.*}}, %[[LOW]], %[[WIDTH]],
+// CHECK: llvm.call @talos_rt_v1_scheduler_static_transition_projected(%{{.*}}, %[[ACTOR]], %{{.*}}, %[[LOW]], %[[WIDTH]],
 // CHECK-LABEL: llvm.func @unit_10.__talos_eval_body_0(
-// CHECK: llvm.call @talos_rt_v1_scheduler_static_transition_owned(
+// CHECK: llvm.call @talos_rt_v1_scheduler_static_transition_projected(
 
 module publication_clock_source(output logic clk = 0, output integer cycles);
   initial begin

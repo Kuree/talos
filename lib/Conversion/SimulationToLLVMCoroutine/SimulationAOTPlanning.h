@@ -195,6 +195,9 @@ struct NativeRankedEvalNode {
   /// A source proof permits redundant evaluation after initialization when
   /// no watched input changed. Only the closed two-state dataflow consumes it.
   bool repeatable = false;
+  // Between convergence iterations this owner can wake only later generated
+  // owners. Every feedback edge retains its endpoints and their polling.
+  bool forwardPublications = false;
   // Revision-verified, activation-local proof for this exact body. These
   // records do not describe persistent knownness of any owner/group.
   mlir::FlatSymbolRefAttr conditionalPromotionProbe;
@@ -222,6 +225,9 @@ struct NativeRankedGroupChunk {
   llvm::SmallVector<NativeRankedEvalNode> members;
   schedule::GroupProofDependencyAttr proof;
   bool endsSegment = false;
+  // The last child of an original rank group records how many children share
+  // that group's dispatch entry. Each child has its own value-domain proof.
+  unsigned proofRegionCount = 0;
 };
 struct NativeRankedGroupPlan {
   llvm::SmallVector<NativeRankedGroupChunk> chunks;
@@ -234,6 +240,9 @@ struct NativeRankedGroupPlan {
 struct NativeActivationInputs {
   schedule::ComputeGraphAttr sourceGraph;
   llvm::DenseSet<mlir::StringAttr> repeatable;
+  /// These owners have an ordering footprint while their original executor
+  /// still owns every activation, side effect and source sensitivity.
+  llvm::DenseSet<mlir::StringAttr> orderingOnly;
   llvm::DenseMap<mlir::StringAttr, analysis::ActivationMemoryAnalysis::Ranges>
       liveIns;
   llvm::DenseMap<mlir::StringAttr, analysis::ActivationMemoryAnalysis::Ranges>
@@ -436,8 +445,9 @@ mlir::FailureOr<NativeStaticFanoutPlan> buildNativeStaticFanoutPlan(
     const llvm::DenseMap<mlir::Operation *, mlir::SmallVector<mlir::Block *>>
         &bytecodeFragments,
     const llvm::DenseSet<mlir::Operation *> &runtimeOwnedFanoutActors,
-    bool enabled, bool certifiedStaticIsland,
-    const NativeActivationInputs &activationInputs);
+    const llvm::DenseSet<mlir::Operation *> &runtimeCheckpointActors,
+    const llvm::DenseSet<mlir::Operation *> &rankedActiveActors, bool enabled,
+    bool certifiedStaticIsland, const NativeActivationInputs &activationInputs);
 mlir::FailureOr<NativeThreeTierPlan>
 buildNativeThreeTierPlan(mlir::ModuleOp module,
                          const NativeStateLayout &stateLayout);
@@ -471,6 +481,7 @@ mlir::FailureOr<std::shared_ptr<NativeGroupPromotionReport>>
 materializeNativeEvalGroupBodies(mlir::ModuleOp module,
                                  mlir::AnalysisManager manager);
 mlir::LogicalResult materializeNativeEvalTransactions(mlir::ModuleOp module);
+void lowerNativePrioritySignalPolls(mlir::ModuleOp module);
 std::unique_ptr<mlir::Pass> createPromoteNativeGroupFunctionPass();
 
 mlir::FailureOr<llvm::SmallVector<std::string>>
