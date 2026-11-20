@@ -1055,6 +1055,8 @@ TEST(RuntimeDPI, ImplementsDeprecatedPackedHandleAccess) {
   EXPECT_EQ(SV_CANONICAL_SIZE(33), 2);
   EXPECT_EQ(svSizeOfBitPackedArr(33), 8);
   EXPECT_EQ(svSizeOfLogicPackedArr(33), 16);
+  EXPECT_EQ(svSizeOfBitPackedArr(INT32_MAX), 1 << 28);
+  EXPECT_EQ(svSizeOfLogicPackedArr(INT32_MAX), 1 << 29);
 
   svBitVec32 canonical[2]{UINT32_C(0x80000001), UINT32_C(3)};
   svBitVecVal storage[2]{};
@@ -1424,7 +1426,7 @@ talos_rt_status observeDpiDisable(talos_rt_context *, uint32_t,
   }
   if (observation.acknowledge) {
     svAckDisabledState();
-    EXPECT_EQ(svIsDisabledState(), 0);
+    EXPECT_EQ(svIsDisabledState(), 1);
   }
   return observation.result;
 }
@@ -1459,10 +1461,12 @@ TEST(RuntimeDPI, EnforcesFunctionAndTaskDisableProtocol) {
   observation.acknowledge = true;
   observation.tryExportAfterDisable = true;
   EXPECT_EQ(talos_rt_v1_import_call(context, &site, nullptr, 0, nullptr, 0),
+            TALOS_RT_FATAL);
+  observation.tryExportAfterDisable = false;
+  EXPECT_EQ(talos_rt_v1_import_call(context, &site, nullptr, 0, nullptr, 0),
             TALOS_RT_DPI_DISABLE_UNSUPPORTED);
 
   observation.acknowledge = false;
-  observation.tryExportAfterDisable = false;
   EXPECT_EQ(talos_rt_v1_import_call(context, &site, nullptr, 0, nullptr, 0),
             TALOS_RT_FATAL);
 

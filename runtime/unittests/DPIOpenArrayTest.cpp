@@ -13,6 +13,47 @@
 
 namespace {
 
+TEST(DPIOpenArray, NonemptyAggregateTransfersRequireAnElementWidthAndSize) {
+  const std::array<int64_t, 8> leaf{0, 0, 0, 4, 32, 0, 1, 0};
+  uint32_t value = 17;
+  uint32_t data = 0;
+  for (auto sizes : {std::pair<uint32_t, uint64_t>{0, sizeof(data)}, {32, 0}}) {
+    uint32_t width = sizes.first;
+    uint64_t size = sizes.second;
+    EXPECT_EQ(talos_rt_v1_dpi_open_array_aggregate_pack(
+                  &value, nullptr, sizeof(value), width, 0, width, 1, 0,
+                  nullptr, 0, &data, size, size, size, 0, leaf.data(),
+                  leaf.size()),
+              TALOS_RT_INVALID_ARGUMENT);
+    EXPECT_EQ(talos_rt_v1_dpi_open_array_aggregate_unpack(
+                  nullptr, &data, size, size, leaf.data(), leaf.size(), 1, 0,
+                  nullptr, 0, &value, nullptr, sizeof(value), width, 0, width),
+              TALOS_RT_INVALID_ARGUMENT);
+  }
+}
+
+TEST(DPIOpenArray, CompactTransferSeparatesStorageDomainFromCElementType) {
+  // Internal value and unknown planes for 4'b1xz1.
+  uint8_t value = 0xb;
+  uint8_t unknown = 0x6;
+  svBitVecVal packed = 0;
+  ASSERT_EQ(talos_rt_v1_dpi_open_array_pack(&value, &unknown, 1, 4, 1, 6, 4, 1,
+                                            0, &packed, sizeof(packed)),
+            TALOS_RT_OK);
+  EXPECT_EQ(packed, 9U);
+  packed = 3;
+  EXPECT_EQ(talos_rt_v1_dpi_open_array_unpack(&packed, sizeof(packed), 6, 4, 1,
+                                              &value, &unknown, 1, 4, 1, 0),
+            TALOS_RT_OK);
+  EXPECT_EQ(value, 3);
+  EXPECT_EQ(unknown, 0);
+
+  uint16_t wide = 0x1234;
+  EXPECT_EQ(talos_rt_v1_dpi_open_array_pack(&wide, nullptr, sizeof(wide), 16, 0,
+                                            2, 16, 1, 0, &value, 1),
+            TALOS_RT_INVALID_ARGUMENT);
+}
+
 TEST(DPIOpenArray, RecursivePreparationHasNoDimensionDepthCap) {
   constexpr uint32_t dimensions = 1025;
   std::vector<int64_t> shapePlan;
@@ -82,43 +123,50 @@ TEST_F(DPIOpenArrayManagedTest,
             TALOS_RT_OK);
   talos_rt_gc_root_v1 root{};
   ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &root, &array), TALOS_RT_OK);
-  uint8_t first = 0x12;
-  uint8_t second = 0x34;
-  ASSERT_EQ(talos_rt_v1_container_write(lane, array, 0, &first, nullptr),
-            TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_container_write(lane, array, 1, &second, nullptr),
-            TALOS_RT_OK);
+  for (int64_t mode :
+       {TALOS_RT_DPI_SHAPE_OPEN, TALOS_RT_DPI_SHAPE_SIZED_REVERSE}) {
+    SCOPED_TRACE(mode);
+    bool reverse = mode == TALOS_RT_DPI_SHAPE_SIZED_REVERSE;
+    uint8_t first = 0x12;
+    uint8_t second = 0x34;
+    ASSERT_EQ(talos_rt_v1_container_write(lane, array, 0, &first, nullptr),
+              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_container_write(lane, array, 1, &second, nullptr),
+              TALOS_RT_OK);
 
-  const std::array<int64_t, 8> shapePlan{1, 0, -1, 0, 0, 8, 0, 0};
-  const std::array<int64_t, 8> elementPlan{0, 0, 0, 6, 8, 0, 0, 0};
-  talos_rt_managed_word_v1 transport =
-      static_cast<talos_rt_managed_word_v1>(reinterpret_cast<uintptr_t>(array));
-  talos_rt_dpi_open_array_storage_v1 storage{};
-  ASSERT_EQ(talos_rt_v1_dpi_open_array_prepare_recursive(
-                &transport, nullptr, sizeof(transport), 64, 0, 1, 6, 8, 0, 7, 0,
-                sizeof(svBitVecVal), alignof(svBitVecVal), 0,
-                elementPlan.data(), elementPlan.size(), shapePlan.data(), 1,
-                &storage),
-            TALOS_RT_OK);
-  ASSERT_EQ(storage.descriptor.data_size, 2 * sizeof(svBitVecVal));
-  auto *canonical = static_cast<svBitVecVal *>(storage.descriptor.data);
-  canonical[0] = 0xa5;
-  canonical[1] = 0x5a;
+    const std::array<int64_t, 8> shapePlan{1, 0, 1, 0, 0, 8, 0, mode};
+    const std::array<int64_t, 8> elementPlan{0, 0, 0, 6, 8, 0, 0, 0};
+    talos_rt_managed_word_v1 transport = static_cast<talos_rt_managed_word_v1>(
+        reinterpret_cast<uintptr_t>(array));
+    talos_rt_dpi_open_array_storage_v1 storage{};
+    ASSERT_EQ(talos_rt_v1_dpi_open_array_prepare_recursive(
+                  &transport, nullptr, sizeof(transport), 64, 0, 1, 6, 8, 0, 7,
+                  0, sizeof(svBitVecVal), alignof(svBitVecVal), 0,
+                  elementPlan.data(), elementPlan.size(), shapePlan.data(), 1,
+                  &storage),
+              TALOS_RT_OK);
+    ASSERT_EQ(storage.descriptor.data_size, 2 * sizeof(svBitVecVal));
+    auto *canonical = static_cast<svBitVecVal *>(storage.descriptor.data);
+    EXPECT_EQ(canonical[0], reverse ? second : first);
+    EXPECT_EQ(canonical[1], reverse ? first : second);
+    canonical[0] = 0xa5;
+    canonical[1] = 0x5a;
 
-  EXPECT_EQ(talos_rt_v1_dpi_open_array_finish_recursive(
-                TALOS_RT_OK, context, &storage, &transport, nullptr,
-                sizeof(transport), 64, 0, 8, 0, sizeof(svBitVecVal),
-                elementPlan.data(), elementPlan.size(), shapePlan.data(), 1),
-            TALOS_RT_OK);
-  uint8_t observed = 0;
-  EXPECT_EQ(talos_rt_v1_container_read(array, 0, &observed, nullptr),
-            TALOS_RT_OK);
-  EXPECT_EQ(observed, 0xa5);
-  EXPECT_EQ(talos_rt_v1_container_read(array, 1, &observed, nullptr),
-            TALOS_RT_OK);
-  EXPECT_EQ(observed, 0x5a);
+    EXPECT_EQ(talos_rt_v1_dpi_open_array_finish_recursive(
+                  TALOS_RT_OK, context, &storage, &transport, nullptr,
+                  sizeof(transport), 64, 0, 8, 0, sizeof(svBitVecVal),
+                  elementPlan.data(), elementPlan.size(), shapePlan.data(), 1),
+              TALOS_RT_OK);
+    uint8_t observed = 0;
+    EXPECT_EQ(talos_rt_v1_container_read(array, 0, &observed, nullptr),
+              TALOS_RT_OK);
+    EXPECT_EQ(observed, reverse ? 0x5a : 0xa5);
+    EXPECT_EQ(talos_rt_v1_container_read(array, 1, &observed, nullptr),
+              TALOS_RT_OK);
+    EXPECT_EQ(observed, reverse ? 0xa5 : 0x5a);
 
-  talos_rt_v1_dpi_open_array_release_recursive(&storage);
+    talos_rt_v1_dpi_open_array_release_recursive(&storage);
+  }
   EXPECT_EQ(talos_rt_v1_gc_root_pop(lane, &root), TALOS_RT_OK);
 }
 
@@ -137,6 +185,27 @@ makeArray(void *data, uint64_t size, const talos_rt_dpi_dimension_v1 *ranges,
           size,
           ranges,
           0};
+}
+
+TEST(DPIOpenArray, RaggedIndicesStayWithinTheDeclaredRowTable) {
+  struct {
+    talos_rt_dpi_dimension_v1 dims[2];
+    uint64_t rows[4];
+  } table = {
+      {{0, 1, 0, 0, 0},
+       {0, -1, 2 * sizeof(talos_rt_dpi_dimension_v1),
+        TALOS_RT_DPI_DIMENSION_RUNTIME | TALOS_RT_DPI_DIMENSION_RAGGED, 0}},
+      {2, 0, 1, 3}};
+  std::array<int, 3> values{2, 3, 5};
+  auto array = makeArray(values.data(), sizeof(values), table.dims, 2,
+                         sizeof(int), 32, TALOS_RT_DPI_OPEN_ARRAY_RAGGED);
+  array.reserved = sizeof(table);
+  EXPECT_EQ(svGetArrElemPtr2(&array, 1, 1), &values[2]);
+  array.reserved -= sizeof(uint64_t);
+  EXPECT_EQ(svGetArrElemPtr2(&array, 1, 1), nullptr);
+  array.reserved = sizeof(table);
+  table.dims[1].byte_stride += 1;
+  EXPECT_EQ(svGetArrElemPtr2(&array, 1, 1), nullptr);
 }
 
 TEST(DPIOpenArray, QueriesAndCLayoutPointersPreserveDeclaredRanges) {

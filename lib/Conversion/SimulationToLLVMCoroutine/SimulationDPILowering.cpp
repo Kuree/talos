@@ -48,10 +48,6 @@ bool isDPIAggregate(const DPIOperandABI &abi) {
   return abi.category == static_cast<uint32_t>(dpi::ABIKind::UnpackedAggregate);
 }
 
-uint64_t getDPIOpenArrayElementSize(dpi::OpenArrayABIAttr layout) {
-  return layout.getElementCSize();
-}
-
 Type getDPIRealType(MLIRContext *context, const DPIOperandABI &abi) {
   if (abi.category == static_cast<uint32_t>(dpi::ABIKind::ShortReal))
     return Float32Type::get(context);
@@ -127,19 +123,9 @@ LogicalResult lowerNativeDPICall(sim::SimDPICallOp operation,
     Value unpackedRanges;
     Value flatValue;
     Value flatUnknown;
-    Value managedHandle;
-    Value container;
-    Value elementCountValue;
-    Value dataSizeValue;
-    Value capacityValue;
-    Value planeSizeValue;
-    Value totalWidthValue;
     uint64_t elementCount = 0;
-    uint64_t elementSize = 0;
     uint64_t dataSize = 0;
     uint32_t unpackedDimensions = 0;
-    bool dynamic = false;
-    bool recursive = false;
     Value recursiveStorage;
     Value shape;
   };
@@ -185,66 +171,28 @@ LogicalResult lowerNativeDPICall(sim::SimDPICallOp operation,
       auto layout = openLayout;
       if (!layout)
         return operation.emitOpError("has malformed open-array metadata");
-      bool dynamic = layout.getStorage() == 1;
-      bool recursive = layout.getStorage() == 2;
-      if (dynamic && unknown)
-        return operation.emitOpError(
-            "has an unexpected dynamic open-array unknown plane");
-      Value managedHandle;
-      Value container;
-      Value valueStorage;
-      Value unknownStorage = null;
-      uint64_t elementCount = 1;
       ArrayRef<int64_t> ranges = layout.getRanges().asArrayRef();
       ArrayRef<int64_t> sourceRanges = layout.getSourceRanges().asArrayRef();
-      if (!dynamic) {
-        value = padDPIPlane(rewriter, location, value,
-                            static_cast<uint32_t>(layout.getTransportWidth()));
-        if (!value)
-          return operation.emitOpError("has malformed open-array value plane");
-        if (unknown) {
-          unknown =
-              padDPIPlane(rewriter, location, unknown,
-                          static_cast<uint32_t>(layout.getTransportWidth()));
-          if (!unknown)
-            return operation.emitOpError(
-                "has malformed open-array unknown plane");
-        }
-        valueStorage = makeDPIPlaneStorage(rewriter, location, value);
-        unknownStorage =
-            unknown ? makeDPIPlaneStorage(rewriter, location, unknown) : null;
-        for (size_t range = 0; !recursive && range != ranges.size();
-             range += 2) {
-          uint64_t extent = static_cast<uint64_t>(
-                                std::max(ranges[range], ranges[range + 1]) -
-                                std::min(ranges[range], ranges[range + 1])) +
-                            1;
-          if (extent == 0 || elementCount > UINT64_MAX / extent)
-            return operation.emitOpError("open-array extent overflows");
-          elementCount *= extent;
-        }
+      value =
+          padDPIPlane(rewriter, location, value, layout.getTransportWidth());
+      if (!value)
+        return operation.emitOpError("has malformed open-array value plane");
+      if (unknown) {
+        unknown = padDPIPlane(rewriter, location, unknown,
+                              layout.getTransportWidth());
+        if (!unknown)
+          return operation.emitOpError(
+              "has malformed open-array unknown plane");
       }
-      uint64_t elementSize = getDPIOpenArrayElementSize(layout);
-      if (elementSize == 0 ||
-          (!dynamic && !recursive && elementCount > UINT64_MAX / elementSize) ||
-          (!dynamic && !recursive && layout.getElementStringCount() != 0 &&
-           elementCount > UINT64_MAX / layout.getElementStringCount()))
-        return operation.emitOpError(
-            "open-array canonical storage is not representable");
+      Value valueStorage = makeDPIPlaneStorage(rewriter, location, value);
+      Value unknownStorage =
+          unknown ? makeDPIPlaneStorage(rewriter, location, unknown) : null;
       auto c32 = [&](uint32_t constant) {
         return llvmConstant(rewriter, location, i32, constant);
       };
       auto c64 = [&](uint64_t constant) {
         return llvmConstant(rewriter, location, i64, constant);
       };
-      uint64_t dataSize = dynamic || recursive ? 0 : elementCount * elementSize;
-      uint64_t stringCount =
-          dynamic || recursive ? 0
-                               : elementCount * layout.getElementStringCount();
-      if (!dynamic && !recursive && stringCount > (UINT64_MAX - dataSize) / 8)
-        return operation.emitOpError(
-            "open-array string scratch storage is not representable");
-      uint64_t capacity = dataSize + stringCount * 8;
       ArrayRef<int64_t> planWords = layout.getElementLeaves().asArrayRef();
       Value plan = entryAlloca(rewriter, location, i64, planWords.size(), 8);
       for (auto [word, constant] : llvm::enumerate(planWords))
@@ -253,13 +201,20 @@ LogicalResult lowerNativeDPICall(sim::SimDPICallOp operation,
             llvmConstant(rewriter, location, i64,
                          static_cast<uint64_t>(constant)),
             byteGEP(rewriter, location, plan, word * sizeof(uint64_t)), 8);
-      if (recursive) {
-        if (abi[index].direction ==
-                static_cast<uint32_t>(dpi::ArgumentDirection::Output) ||
-            layout.getShapePlan().empty())
+      if (layout.getStorage() != 0) {
+        // Keep runtime-sized buffers off the simulator's thread stack. A
+        // single unsized array or queue is the one-level case of this plan.
+        const int64_t singleDimension[] = {
+            1, 0, 0, 0, 0, layout.getElementWidth(), layout.getFourState(), 0};
+        ArrayRef<int64_t> shapeWords = layout.getStorage() == 1
+                                           ? ArrayRef<int64_t>(singleDimension)
+                                           : layout.getShapePlan().asArrayRef();
+        if (shapeWords.empty() ||
+            (abi[index].direction ==
+                 static_cast<uint32_t>(dpi::ArgumentDirection::Output) &&
+             shapeWords.front() != 0))
           return operation.emitOpError(
-              "recursive DPI open arrays cannot be output-only");
-        ArrayRef<int64_t> shapeWords = layout.getShapePlan().asArrayRef();
+              "recursive DPI output requires a fixed outer dimension");
         Value shape =
             entryAlloca(rewriter, location, i64, shapeWords.size(), 8);
         for (auto [word, constant] : llvm::enumerate(shapeWords))
@@ -310,115 +265,72 @@ LogicalResult lowerNativeDPICall(sim::SimDPICallOp operation,
         storage.shape = shape;
         storage.flatValue = valueStorage;
         storage.flatUnknown = unknownStorage;
-        storage.recursive = true;
         storage.recursiveStorage = prepared;
         openInputs[index] = storage;
         continue;
       }
-      uint32_t unpackedDimensions = dynamic ? 0 : ranges.size() / 2;
+      uint64_t elementCount = 1;
+      for (size_t dim = 0; dim != ranges.size(); dim += 2) {
+        uint64_t count = std::max(ranges[dim], ranges[dim + 1]) -
+                         std::min(ranges[dim], ranges[dim + 1]) + 1;
+        if (elementCount > UINT64_MAX / count)
+          return operation.emitOpError("open-array extent overflows");
+        elementCount *= count;
+      }
+      uint64_t elementSize = layout.getElementCSize();
+      if (!elementSize || elementCount > UINT64_MAX / elementSize ||
+          (layout.getElementStringCount() &&
+           elementCount > UINT64_MAX / layout.getElementStringCount()))
+        return operation.emitOpError(
+            "open-array canonical storage is not representable");
+      uint64_t dataSize = elementCount * elementSize;
+      uint64_t stringCount = elementCount * layout.getElementStringCount();
+      if (stringCount > (UINT64_MAX - dataSize) / 8)
+        return operation.emitOpError(
+            "open-array string scratch storage is not representable");
+      uint64_t capacity = dataSize + stringCount * 8;
+      uint32_t unpackedDimensions = ranges.size() / 2;
       Value unpackedRanges =
           unpackedDimensions
               ? entryAlloca(rewriter, location, i64, sourceRanges.size(), 8)
               : null;
-      if (!dynamic)
-        for (auto [word, constant] : llvm::enumerate(sourceRanges))
-          LLVM::StoreOp::create(rewriter, location,
-                                llvmConstant(rewriter, location, i64,
-                                             static_cast<uint64_t>(constant)),
-                                byteGEP(rewriter, location, unpackedRanges,
-                                        word * sizeof(uint64_t)),
-                                8);
-      Value elementCountValue;
-      Value totalWidthValue;
-      Value planeSizeValue;
-      Value dataSizeValue;
-      Value capacityValue;
-      Value data;
-      if (dynamic) {
-        managedHandle = value;
-        container = managedObjectPointer(rewriter, location, managedHandle);
-        elementCountValue =
-            LLVM::CallOp::create(
-                rewriter, location, TypeRange{i64},
-                SymbolRefAttr::get(context, "talos_rt_v1_container_size"),
-                container)
-                .getResult();
-        totalWidthValue =
-            arith::MulIOp::create(rewriter, location, elementCountValue,
-                                  c64(layout.getElementWidth()));
-        planeSizeValue = arith::DivUIOp::create(
-            rewriter, location,
-            arith::AddIOp::create(rewriter, location, totalWidthValue, c64(7)),
-            c64(8));
-        dataSizeValue = arith::MulIOp::create(
-            rewriter, location, elementCountValue, c64(elementSize));
-        capacityValue = arith::AddIOp::create(
-            rewriter, location, dataSizeValue,
-            arith::MulIOp::create(
-                rewriter, location, elementCountValue,
-                c64(layout.getElementStringCount() * uint64_t{8})));
-        valueStorage = LLVM::AllocaOp::create(
-            rewriter, location, pointer, i8,
-            arith::AddIOp::create(rewriter, location, planeSizeValue, c64(1)),
-            8);
-        if (layout.getFourState())
-          unknownStorage = LLVM::AllocaOp::create(
-              rewriter, location, pointer, i8,
-              arith::AddIOp::create(rewriter, location, planeSizeValue, c64(1)),
-              8);
-        data = LLVM::AllocaOp::create(
-            rewriter, location, pointer, i8,
-            arith::AddIOp::create(rewriter, location, capacityValue, c64(1)),
-            8);
-      } else {
-        elementCountValue = c64(elementCount);
-        totalWidthValue = c64(layout.getTransportWidth());
-        planeSizeValue = c64((layout.getTransportWidth() + 7) / 8);
-        dataSizeValue = c64(dataSize);
-        capacityValue = c64(capacity);
-        data =
-            entryAlloca(rewriter, location, i8, std::max<uint64_t>(capacity, 1),
-                        layout.getElementCAlignment());
-      }
+      for (auto [word, constant] : llvm::enumerate(sourceRanges))
+        LLVM::StoreOp::create(rewriter, location,
+                              llvmConstant(rewriter, location, i64,
+                                           static_cast<uint64_t>(constant)),
+                              byteGEP(rewriter, location, unpackedRanges,
+                                      word * sizeof(uint64_t)),
+                              8);
+      Value data =
+          entryAlloca(rewriter, location, i8, std::max<uint64_t>(capacity, 1),
+                      layout.getElementCAlignment());
       if (abi[index].direction !=
           static_cast<uint32_t>(dpi::ArgumentDirection::Output)) {
-        if (dynamic) {
-          Value exportStatus =
-              LLVM::CallOp::create(
-                  rewriter, location, TypeRange{i32},
-                  SymbolRefAttr::get(context,
-                                     "talos_rt_v1_container_export_fixed"),
-                  ValueRange{container, valueStorage, unknownStorage,
-                             planeSizeValue, totalWidthValue,
-                             c32(layout.getFourState()),
-                             c64(layout.getElementWidth()), elementCountValue})
-                  .getResult();
-          preserveFirstStatus(exportStatus);
-        }
         Value packStatus =
             LLVM::CallOp::create(
                 rewriter, location, TypeRange{i32},
                 SymbolRefAttr::get(context,
                                    "talos_rt_v1_dpi_open_array_aggregate_pack"),
-                ValueRange{valueStorage, unknownStorage, planeSizeValue,
-                           totalWidthValue, c32(layout.getFourState()),
-                           c32(layout.getElementWidth()), elementCountValue,
-                           c32(0), unpackedRanges, c32(unpackedDimensions),
-                           data, dataSizeValue, capacityValue,
-                           c64(layout.getElementCSize()),
-                           c64(layout.getElementStringCount()), plan,
-                           c64(planWords.size())})
+                ValueRange{
+                    valueStorage, unknownStorage,
+                    c64((layout.getTransportWidth() + 7) / 8),
+                    c64(layout.getTransportWidth()), c32(layout.getFourState()),
+                    c32(layout.getElementWidth()), c64(elementCount), c32(0),
+                    unpackedRanges, c32(unpackedDimensions), data,
+                    c64(dataSize), c64(capacity), c64(layout.getElementCSize()),
+                    c64(layout.getElementStringCount()), plan,
+                    c64(planWords.size())})
                 .getResult();
         preserveFirstStatus(packStatus);
       } else {
         LLVM::MemsetOp::create(rewriter, location, data,
                                llvmConstant(rewriter, location, i8, 0),
-                               capacityValue, false);
+                               c64(capacity), false);
       }
 
       Type rangeType =
           LLVM::LLVMStructType::getLiteral(context, {i32, i32, i64, i32, i32});
-      uint64_t dimensions = dynamic ? 1 : ranges.size() / 2;
+      uint32_t dimensions = unpackedDimensions;
       Value rangeStorage =
           dimensions ? entryAlloca(rewriter, location, rangeType, dimensions, 8)
                      : null;
@@ -427,47 +339,26 @@ LogicalResult lowerNativeDPICall(sim::SimDPICallOp operation,
         Value address =
             elementGEP(rewriter, location, rangeStorage, rangeType, dimension);
         LLVM::StoreOp::create(
-            rewriter, location,
-            dynamic ? c32(0)
-                    : c32(static_cast<uint32_t>(ranges[dimension * 2])),
+            rewriter, location, c32(ranges[dimension * 2]),
             fieldGEP(rewriter, location, address, rangeType, 0), 4);
-        Value right =
-            dynamic ? Value(arith::TruncIOp::create(
-                          rewriter, location, i32,
-                          arith::SubIOp::create(rewriter, location,
-                                                elementCountValue, c64(1))))
-                    : c32(static_cast<uint32_t>(ranges[dimension * 2 + 1]));
         LLVM::StoreOp::create(
-            rewriter, location, right,
+            rewriter, location, c32(ranges[dimension * 2 + 1]),
             fieldGEP(rewriter, location, address, rangeType, 1), 4);
         LLVM::StoreOp::create(
             rewriter, location, c64(stride),
             fieldGEP(rewriter, location, address, rangeType, 2), 8);
-        Value dimensionFlags = c32(0);
-        if (dynamic) {
-          Value empty = arith::CmpIOp::create(rewriter, location,
-                                              arith::CmpIPredicate::eq,
-                                              elementCountValue, c64(0));
-          dimensionFlags =
-              arith::SelectOp::create(rewriter, location, empty,
-                                      c32(TALOS_RT_DPI_DIMENSION_RUNTIME |
-                                          TALOS_RT_DPI_DIMENSION_EMPTY),
-                                      c32(TALOS_RT_DPI_DIMENSION_RUNTIME));
-        }
         LLVM::StoreOp::create(
-            rewriter, location, dimensionFlags,
+            rewriter, location, c32(0),
             fieldGEP(rewriter, location, address, rangeType, 3), 4);
         LLVM::StoreOp::create(
             rewriter, location, c32(0),
             fieldGEP(rewriter, location, address, rangeType, 4), 4);
-        if (!dynamic) {
-          uint64_t extent =
-              static_cast<uint64_t>(
-                  std::max(ranges[dimension * 2], ranges[dimension * 2 + 1]) -
-                  std::min(ranges[dimension * 2], ranges[dimension * 2 + 1])) +
-              1;
-          stride *= extent;
-        }
+        uint64_t extent =
+            static_cast<uint64_t>(
+                std::max(ranges[dimension * 2], ranges[dimension * 2 + 1]) -
+                std::min(ranges[dimension * 2], ranges[dimension * 2 + 1])) +
+            1;
+        stride *= extent;
       }
       Type openType = LLVM::LLVMStructType::getLiteral(
           context,
@@ -492,32 +383,15 @@ LogicalResult lowerNativeDPICall(sim::SimDPICallOp operation,
                    layout.getElementKind() == dpi::ABIKind::LogicVector
                ? TALOS_RT_DPI_OPEN_ARRAY_FOUR_STATE
                : 0);
-      Value flagValue = c32(flags);
-      if (dynamic) {
-        Value empty =
-            arith::CmpIOp::create(rewriter, location, arith::CmpIPredicate::eq,
-                                  elementCountValue, c64(0));
-        flagValue = arith::SelectOp::create(
-            rewriter, location, empty,
-            c32(flags | TALOS_RT_DPI_OPEN_ARRAY_EMPTY), flagValue);
-      }
       storeOpen(0, c32(TALOS_RT_DPI_OPEN_ARRAY_MAGIC), 4);
-      storeOpen(1, flagValue, 4);
+      storeOpen(1, c32(flags), 4);
       storeOpen(2, c32(dimensions), 4);
       storeOpen(3, c32(layout.getElementWidth()), 4);
       storeOpen(4, c32(static_cast<uint32_t>(layout.getPackedLeft())), 4);
       storeOpen(5, c32(static_cast<uint32_t>(layout.getPackedRight())), 4);
       storeOpen(6, c64(elementSize), 8);
-      Value descriptorData = data;
-      if (dynamic) {
-        Value empty =
-            arith::CmpIOp::create(rewriter, location, arith::CmpIPredicate::eq,
-                                  elementCountValue, c64(0));
-        descriptorData =
-            arith::SelectOp::create(rewriter, location, empty, null, data);
-      }
-      storeOpen(7, descriptorData, 8);
-      storeOpen(8, dataSizeValue, 8);
+      storeOpen(7, data, 8);
+      storeOpen(8, c64(dataSize), 8);
       storeOpen(9, rangeStorage, 8);
       storeOpen(10, c64(0), 8);
       inputPlanes.emplace_back(descriptor, null);
@@ -527,20 +401,9 @@ LogicalResult lowerNativeDPICall(sim::SimDPICallOp operation,
       storage.data = data;
       storage.plan = plan;
       storage.unpackedRanges = unpackedRanges;
-      storage.flatValue = valueStorage;
-      storage.flatUnknown = unknownStorage;
-      storage.managedHandle = managedHandle;
-      storage.container = container;
-      storage.elementCountValue = elementCountValue;
-      storage.dataSizeValue = dataSizeValue;
-      storage.capacityValue = capacityValue;
-      storage.planeSizeValue = planeSizeValue;
-      storage.totalWidthValue = totalWidthValue;
       storage.elementCount = elementCount;
-      storage.elementSize = elementSize;
       storage.dataSize = dataSize;
       storage.unpackedDimensions = unpackedDimensions;
-      storage.dynamic = dynamic;
       openInputs[index] = storage;
       continue;
     }
@@ -823,7 +686,7 @@ LogicalResult lowerNativeDPICall(sim::SimDPICallOp operation,
       auto c64 = [&](uint64_t constant) {
         return llvmConstant(rewriter, location, i64, constant);
       };
-      if (storage.recursive) {
+      if (storage.recursiveStorage) {
         marshallingStatus =
             LLVM::CallOp::create(
                 rewriter, location, TypeRange{i32},
@@ -860,85 +723,6 @@ LogicalResult lowerNativeDPICall(sim::SimDPICallOp operation,
         physicalOutputValues.push_back(loadPlane(storage.flatValue));
         if (storage.layout.getTransportFourState())
           physicalOutputValues.push_back(loadPlane(storage.flatUnknown));
-        continue;
-      }
-      if (storage.dynamic) {
-        Value unpackStatus =
-            LLVM::CallOp::create(
-                rewriter, location, TypeRange{i32},
-                SymbolRefAttr::get(
-                    context, "talos_rt_v1_dpi_open_array_aggregate_unpack"),
-                ValueRange{
-                    operation.getRuntimeContext(), storage.data,
-                    storage.dataSizeValue,
-                    c64(storage.layout.getElementCSize()), storage.plan,
-                    c64(storage.layout.getElementLeaves().size()),
-                    storage.elementCountValue, c32(0), storage.unpackedRanges,
-                    c32(storage.unpackedDimensions), storage.flatValue,
-                    storage.flatUnknown, storage.planeSizeValue,
-                    storage.totalWidthValue, c32(storage.layout.getFourState()),
-                    c32(storage.layout.getElementWidth())})
-                .getResult();
-        preserveFirstStatus(unpackStatus);
-        Value aggregateRootSlot;
-        if (storage.layout.getElementStringCount() != 0) {
-          aggregateRootSlot = entryAlloca(rewriter, location, pointer, 1, 8);
-          LLVM::StoreOp::create(rewriter, location, null, aggregateRootSlot, 8);
-          Value canRoot = arith::CmpIOp::create(rewriter, location,
-                                                arith::CmpIPredicate::eq,
-                                                marshallingStatus, c32(0));
-          Value guardedContext = arith::SelectOp::create(
-              rewriter, location, canRoot, operation.getRuntimeContext(), null);
-          Value rootStatus =
-              LLVM::CallOp::create(
-                  rewriter, location, TypeRange{i32},
-                  SymbolRefAttr::get(
-                      context,
-                      "talos_rt_v1_dpi_open_array_aggregate_roots_push"),
-                  ValueRange{
-                      guardedContext, storage.flatValue, storage.planeSizeValue,
-                      storage.totalWidthValue,
-                      c32(storage.layout.getElementWidth()),
-                      storage.elementCountValue, c32(0), storage.unpackedRanges,
-                      c32(storage.unpackedDimensions),
-                      c64(storage.layout.getElementCSize()), storage.plan,
-                      c64(storage.layout.getElementLeaves().size()),
-                      aggregateRootSlot})
-                  .getResult();
-          preserveFirstStatus(rootStatus);
-        }
-        Value canImport =
-            arith::CmpIOp::create(rewriter, location, arith::CmpIPredicate::eq,
-                                  marshallingStatus, c32(0));
-        Value guardedContainer = arith::SelectOp::create(
-            rewriter, location, canImport, storage.container, null);
-        Value lane = managedContextAndLane(rewriter, location).second;
-        Value importContainerStatus =
-            LLVM::CallOp::create(
-                rewriter, location, TypeRange{i32},
-                SymbolRefAttr::get(context,
-                                   "talos_rt_v1_container_import_fixed"),
-                ValueRange{lane, guardedContainer, storage.flatValue,
-                           storage.flatUnknown, storage.planeSizeValue,
-                           storage.totalWidthValue,
-                           c32(storage.layout.getFourState()),
-                           c64(storage.layout.getElementWidth()),
-                           storage.elementCountValue})
-                .getResult();
-        preserveFirstStatus(importContainerStatus);
-        if (aggregateRootSlot) {
-          Value rootHandle = LLVM::LoadOp::create(rewriter, location, pointer,
-                                                  aggregateRootSlot, 8);
-          Value popStatus =
-              LLVM::CallOp::create(
-                  rewriter, location, TypeRange{i32},
-                  SymbolRefAttr::get(context,
-                                     "talos_rt_v1_dpi_aggregate_roots_pop"),
-                  ValueRange{operation.getRuntimeContext(), rootHandle})
-                  .getResult();
-          preserveFirstStatus(popStatus);
-        }
-        physicalOutputValues.push_back(storage.managedHandle);
         continue;
       }
       uint64_t paddedWidth =
@@ -1052,7 +836,7 @@ LogicalResult lowerNativeDPICall(sim::SimDPICallOp operation,
       physicalOutputValues.push_back(loadPlane(outputPlanes[index].second));
   }
   for (const std::optional<OpenArrayStorage> &storage : openInputs)
-    if (storage && storage->recursive)
+    if (storage && storage->recursiveStorage)
       LLVM::CallOp::create(
           rewriter, location, TypeRange{},
           SymbolRefAttr::get(context,

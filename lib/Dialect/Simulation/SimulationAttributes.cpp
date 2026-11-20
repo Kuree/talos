@@ -113,6 +113,7 @@ VPIPropertySetAttr::verify(llvm::function_ref<InFlightDiagnostic()> emitError,
     return emitError() << "VPI property set requires an array";
   uint32_t previous = 0;
   bool first = true;
+  std::optional<int64_t> timeUnit, timePrecision;
   for (Attribute attribute : properties) {
     auto property = dyn_cast<VPIPropertyAttr>(attribute);
     if (!property)
@@ -121,9 +122,18 @@ VPIPropertySetAttr::verify(llvm::function_ref<InFlightDiagnostic()> emitError,
         static_cast<uint32_t>(property.getSelector().getValue().getZExtValue());
     if (!first && selector <= previous)
       return emitError() << "VPI property set must be sorted and unique";
+    if (selector == 11 || selector == 12) {
+      int64_t exponent = cast<IntegerAttr>(property.getValue()).getInt();
+      if (exponent < -15 || exponent > 2)
+        return emitError() << "VPI time exponent must be between -15 and 2";
+      (selector == 11 ? timeUnit : timePrecision) = exponent;
+    }
     first = false;
     previous = selector;
   }
+  if (timeUnit.has_value() != timePrecision.has_value() ||
+      (timeUnit && *timeUnit < *timePrecision))
+    return emitError() << "VPI time unit and precision must form a valid pair";
   return success();
 }
 

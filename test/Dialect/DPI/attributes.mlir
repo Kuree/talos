@@ -37,3 +37,12 @@ func.func private @open_array() attributes {
       elementStringCount = 0, elementLeaves = [0, 0, 0, 0, 1, 0, 0, 0],
       packedLeft = 0, packedRight = 0, ranges = [7, 0],
       sourceRanges = [7, 0], shapePlan = []>}
+
+// CHECK-LABEL: simulation.design @dpi_scopes
+// CHECK: dpi.lexical_scopes = [#dpi.scope<parent = 1, name = "top.g", unitFs = 1000000, precisionFs = 1000>, #dpi.scope<parent = 2, name = "top.g.child", unitFs = 1000000, precisionFs = 1000>]
+simulation.design @dpi_scopes attributes {time_precision_fs = 1000 : i64} {
+  simulation.scope.decl 0 {dpi.lexical_scopes = [
+    #dpi.scope<parent = 1, name = "top.g", unitFs = 1000000, precisionFs = 1000>,
+    #dpi.scope<parent = 2, name = "top.g.child", unitFs = 1000000, precisionFs = 1000>]}
+  simulation.scope.decl 1 parent 0 hierarchy "top"
+}

@@ -34,5 +34,6 @@ int inspect_dynamic(const svOpenArrayHandle values,
          svLow(empty, 1), svHigh(empty, 1), svIncrement(empty, 1),
          svGetArrayPtr(empty) ? "nonnull" : "null");
   raw[1] = 42;
+  ++raw[svHigh(values, 1)];
   return 0;
 }

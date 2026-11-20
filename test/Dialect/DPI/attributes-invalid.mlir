@@ -49,3 +49,73 @@ func.func private @abi() attributes {
   // expected-error @+1 {{DPI ABI category requires width 32}}
   layout = #dpi.abi<kind = int, direction = input, width = 8,
                     fourState = false, isSigned = true>}
+
+// -----
+
+// expected-error @+1 {{'dpi.lexical_scopes' belongs on the root scope of a simulation design}}
+func.func private @misplaced() attributes {dpi.lexical_scopes = []}
+
+// -----
+
+simulation.design @nonroot {
+  simulation.scope.decl 0
+  // expected-error @+1 {{'dpi.lexical_scopes' belongs on the root scope of a simulation design}}
+  simulation.scope.decl 1 parent 0 {dpi.lexical_scopes = []}
+}
+
+// -----
+
+simulation.design @wrong_entry {
+  // expected-error @+1 {{must contain only #dpi.scope entries}}
+  simulation.scope.decl 0 {dpi.lexical_scopes = ["pkg"]}
+}
+
+// -----
+
+// expected-error @+1 {{DPI scope requires a nonempty name without NUL bytes}}
+#empty = #dpi.scope<parent = 0, name = "", unitFs = 1000, precisionFs = 1>
+module {}
+
+// -----
+
+// expected-error @+1 {{DPI scope requires a nonempty name without NUL bytes}}
+#nul = #dpi.scope<parent = 0, name = "a\00b", unitFs = 1000, precisionFs = 1>
+module {}
+
+// -----
+
+// expected-error @+1 {{DPI time scales must be decimal powers from 1 fs to 100 s}}
+#invalid_unit = #dpi.scope<parent = 0, name = "pkg", unitFs = 12, precisionFs = 1>
+module {}
+
+// -----
+
+// expected-error @+1 {{DPI scope time unit is finer than its precision}}
+#invalid_precision = #dpi.scope<parent = 0, name = "pkg", unitFs = 1000, precisionFs = 1000000>
+module {}
+
+// -----
+
+simulation.design @global_precision attributes {time_precision_fs = 1000 : i64} {
+  // expected-error @+1 {{DPI scope precision is finer than the design precision}}
+  simulation.scope.decl 0 {dpi.lexical_scopes = [
+    #dpi.scope<parent = 0, name = "pkg", unitFs = 1000, precisionFs = 1>]}
+}
+
+// -----
+
+simulation.design @parent {
+  // expected-error @+1 {{DPI scope parent must precede its child}}
+  simulation.scope.decl 0 {dpi.lexical_scopes = [
+    #dpi.scope<parent = 2, name = "top.g", unitFs = 1000000, precisionFs = 1000000>]}
+  simulation.scope.decl 1 parent 0 hierarchy "top"
+}
+
+// -----
+
+simulation.design @duplicate {
+  // expected-error @+1 {{duplicate DPI scope name "top"}}
+  simulation.scope.decl 0 {dpi.lexical_scopes = [
+    #dpi.scope<parent = 1, name = "top", unitFs = 1000000, precisionFs = 1000000>]}
+  simulation.scope.decl 1 parent 0 hierarchy "top"
+}

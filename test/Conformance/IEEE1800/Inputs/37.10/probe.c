@@ -20,8 +20,14 @@ void probe(void) {
   owner("var in module", "top.u.s");
   owner("var in program", "top.p.pr");
   // Detail 5: a package's full name ends in "::" and its members start with that prefix.
-  vpiHandle it = vpi_iterate(vpiPackage, 0);
-  vpiHandle package = it ? vpi_scan(it) : 0;
+  vpiHandle it = vpi_iterate(vpiInstance, 0);
+  vpiHandle package = 0;
+  for (vpiHandle object; it && (object = vpi_scan(it));) {
+    if (vpi_get(vpiType, object) == vpiPackage && !vpi_get(vpiUnit, object))
+      package = object;
+    else
+      vpi_release_handle(object);
+  }
   if (package) {
     printf("package type=%s", vpi_get_str(vpiType, package));
     printf(" full=%s unit=%d\n", vpi_get_str(vpiFullName, package), vpi_get(vpiUnit, package));

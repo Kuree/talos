@@ -256,3 +256,15 @@ module {
     }
   }
 }
+
+// -----
+
+// expected-error @+1 {{VPI time exponent must be between -15 and 2}}
+#times = #simulation.vpi_properties<[#simulation.vpi_property<selector = 11 : i32, value = -20 : i32>]>
+module {}
+
+// -----
+
+// expected-error @+1 {{VPI time unit and precision must form a valid pair}}
+#times = #simulation.vpi_properties<[#simulation.vpi_property<selector = 12 : i32, value = -12 : i32>]>
+module {}

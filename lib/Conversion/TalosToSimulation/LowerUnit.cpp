@@ -2991,6 +2991,10 @@ FailureOr<Value> UnitLowering::lowerExpression(Operation *op, bool lvalue) {
   if (!lvalue) {
     if (Value captured = expressionCaptures.lookup(op))
       return captured;
+    if (!dpiShapeSelectors.empty())
+      for (const DPIShapeSelector &selector : dpiShapeSelectors)
+        if (selector.expression == op)
+          return lowerDPIShapeSelector(selector);
     if (sampleAssertionValues && sim::get<sim::metadata::Observer>(op) &&
         readsDynamicContainerValue(op))
       return lowerSampledDynamicValue(op);

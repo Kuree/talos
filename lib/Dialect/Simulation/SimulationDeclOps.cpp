@@ -31,6 +31,8 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringSet.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/ADT/bit.h"
 
@@ -251,6 +253,14 @@ static bool packedRangeContainsFourState(Type type, uint64_t low,
     return false;
   }
   return containsFourStateLeaf(type);
+}
+
+std::string getDPIScopeName(SimScopeDeclOp scope) {
+  if (!scope.getId())
+    return "$root";
+  if (auto name = scope.getHierarchicalName(); name && !name->empty())
+    return name->str();
+  return ("scope." + Twine(scope.getId())).str();
 }
 
 LogicalResult SimScopeDeclOp::verify() {
@@ -1028,6 +1038,8 @@ LogicalResult SimVPIObjectAnchorOp::verify() {
                                    reflectionProperties(*this),
                                    reflectionDefinitionLoc(*this))))
     return failure();
+  bool dataVariable = reflection::vpiObjectSetContains(
+      reflection::VPIObjectSetID::DataVariableObjects, getVpiKind());
   switch (anchorKind) {
   case Kind::Module:
   case Kind::Interface:
@@ -1068,6 +1080,9 @@ LogicalResult SimVPIObjectAnchorOp::verify() {
   case Kind::Restrict:
     break;
   default:
+    if (dataVariable && getBackingAttr() &&
+        getBackingAttr().getKind() == VPIObjectBackingKind::Storage)
+      break;
     return emitOpError("kind cannot be a persistent lexical source anchor");
   }
   bool primitive = anchorKind == Kind::Gate || anchorKind == Kind::Switch ||
@@ -1104,9 +1119,9 @@ LogicalResult SimVPIObjectAnchorOp::verify() {
             "code-unit backing requires a task or function anchor");
       break;
     case VPIObjectBackingKind::Storage:
-      if (anchorKind != Kind::NamedEvent)
+      if (anchorKind != Kind::NamedEvent && !dataVariable)
         return emitOpError(
-            "storage backing requires a scalar named-event anchor");
+            "storage backing requires a named event or package variable");
       break;
     case VPIObjectBackingKind::Net:
       if (anchorKind != Kind::InterconnectNet)
@@ -1512,7 +1527,15 @@ SimVPIObjectAnchorOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
       legal = parentKind == Kind::Package && target.getIsCompilationUnitAttr();
       break;
     default:
-      return emitOpError("kind cannot be a persistent lexical source anchor");
+      if (!reflection::vpiObjectSetContains(
+              reflection::VPIObjectSetID::DataVariableObjects, getVpiKind()))
+        return emitOpError("kind cannot be a persistent lexical source anchor");
+      if (parentKind != Kind::Package ||
+          getVPILexicalOwnerScope(owner) != getEnclosingScopeId())
+        return emitOpError("variable storage anchor requires a package owner "
+                           "in its enclosing scope");
+      legal = true;
+      break;
     }
     if (!legal)
       return emitOpError("has an illegal lexical parent kind: child ")
@@ -6568,13 +6591,26 @@ LogicalResult SimDesignOp::verifyRegions() {
           storagesById.lookup(backing.getId().getValue().getZExtValue());
       if (!storage)
         return anchor.emitOpError("references an unknown backing storage ID");
-      if (!isa<EventType>(storage.getType()) || !storage.getVpiTypeAttr() ||
-          storage.getVpiTypeAttr().getKind() != VPITypeKind::Event)
-        return anchor.emitOpError("backing named event requires exact event "
-                                  "storage and VPI semantics");
-      if (storage.getLifetime() == Lifetime::Automatic)
-        return anchor.emitOpError(
-            "backing named event requires static storage");
+      if (anchor.getVpiKind() ==
+          uint32_t(reflection::VPIObjectKind::NamedEvent)) {
+        if (!isa<EventType>(storage.getType()) || !storage.getVpiTypeAttr() ||
+            storage.getVpiTypeAttr().getKind() != VPITypeKind::Event)
+          return anchor.emitOpError("backing named event requires exact event "
+                                    "storage and VPI semantics");
+        if (storage.getLifetime() == Lifetime::Automatic)
+          return anchor.emitOpError(
+              "backing named event requires static storage");
+      } else {
+        if (storage.getLifetime() != Lifetime::Design ||
+            vpiKindForStorage(storage.getVpiTypeAttr()) !=
+                anchor.getVpiKind() ||
+            !storage.getDebugNameAttr() ||
+            storage.getDebugNameAttr().getValue().empty() ||
+            storage.getDebugNameAttr() != anchor.getDebugNameAttr())
+          return anchor.emitOpError(
+              "package variable anchor requires matching design storage, VPI "
+              "kind, and declaration name");
+      }
       if (storage.getScopeId() != anchor.getEnclosingScopeId())
         return anchor.emitOpError(
             "backing storage scope must equal the anchor's enclosing scope");
@@ -6796,6 +6832,29 @@ LogicalResult SimDesignOp::verifyRegions() {
       if (!entry.second.count(ordinal))
         return emitOpError() << "interface " << entry.first()
                              << " contains a non-dense method ordinal set";
+  if (auto root = scopes.lookup(0)) {
+    if (auto lexical = dpi::get<dpi::LexicalScopes>(root)) {
+      llvm::StringSet<> names;
+      for (uint64_t id = 0; id != scopes.size(); ++id) {
+        auto scope = scopes.lookup(id);
+        if (!scope)
+          return root.emitOpError("DPI scope IDs must be dense from zero");
+        if (!names.insert(getDPIScopeName(scope)).second)
+          return scope.emitOpError("duplicate DPI scope name");
+      }
+      uint64_t next = scopes.size();
+      for (auto scope : lexical.getAsRange<dpi::ScopeAttr>()) {
+        if (scope.getParent() >= next++)
+          return root.emitOpError("DPI scope parent must precede its child");
+        if (!names.insert(scope.getName().getValue()).second)
+          return root.emitOpError("duplicate DPI scope name ")
+                 << scope.getName();
+        if (scope.getPrecisionFs() < getTimePrecisionFs().value_or(1'000'000))
+          return root.emitOpError(
+              "DPI scope precision is finer than the design precision");
+      }
+    }
+  }
   for (Operation &op : getBody().front()) {
     if (auto scope = dyn_cast<SimScopeDeclOp>(op)) {
       if (scope.getParentAttr() && !scopeIds.count(*scope.getParent()))

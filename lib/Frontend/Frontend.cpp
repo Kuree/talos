@@ -38,6 +38,7 @@
 #include "slang/ast/symbols/SubroutineSymbols.h"
 #include "slang/ast/symbols/VariableSymbols.h"
 #include "slang/ast/types/TypePrinter.h"
+#include "slang/diagnostics/DeclarationsDiags.h"
 #include "slang/driver/Driver.h"
 #include "slang/numeric/Time.h"
 #include "slang/syntax/AllSyntax.h"
@@ -736,7 +737,7 @@ convertEnum(slang::ast::PredefinedIntegerType::Kind kind) {
   case slang::ast::PredefinedIntegerType::Integer:
     return slangir::IntegralFlavor::Integer;
   case slang::ast::PredefinedIntegerType::Time:
-    llvm_unreachable("time has a dedicated semantic type");
+    return slangir::IntegralFlavor::Time;
   }
   llvm_unreachable("unknown slang predefined integer type");
 }
@@ -825,11 +826,10 @@ public:
     switch (type.kind) {
     case SK::PredefinedIntegerType: {
       const auto &integer = type.as<slang::ast::PredefinedIntegerType>();
-      if (integer.integerKind == slang::ast::PredefinedIntegerType::Time) {
-        result = twoState ? Type(slangir::IntegralType::get(
-                                context, 64, false, false, 63, 0,
-                                slangir::IntegralFlavor::Time))
-                          : Type(slangir::TimeType::get(context));
+      // TimeType denotes the standard unsigned four-state time atom.
+      if (integer.integerKind == slang::ast::PredefinedIntegerType::Time &&
+          !twoState && !type.isSigned()) {
+        result = slangir::TimeType::get(context);
         break;
       }
       auto range = type.getFixedRange();
@@ -1139,6 +1139,8 @@ public:
 
   [[nodiscard]] bool succeeded() const { return !sawInvalidNode; }
 
+  LogicalResult checkDPIDeclarations() const;
+
   /// IEEE 1800-2023 Annex E: slang keeps the optional directives only as
   /// trivia of the token that follows them. Replay them over every syntax
   /// tree in compilation order, since a directive stays in force "for all
@@ -1252,7 +1254,7 @@ public:
   ArrayAttr getEnumDomains() const { return typeConverter.getEnumDomains(); }
 
   void markDPIExport(const slang::ast::SubroutineSymbol &subroutine,
-                     StringRef cIdentifier) {
+                     StringRef cIdentifier, bool legacy) {
     const slang::syntax::SyntaxNode *syntax = subroutine.getSyntax();
     if (syntax && !dpiExportSyntaxIndexBuilt) {
       for (auto [symbol, operation] : emittedSymbolOperations) {
@@ -1270,8 +1272,10 @@ public:
     // its own scope-specific export bridge downstream.
     bool found = false;
     auto mark = [&](Operation *operation) {
-      operation->setAttr("dpi_export_c_identifier",
-                         builder.getStringAttr(cIdentifier));
+      auto sub = cast<slangir::SubroutineSymbolOp>(operation);
+      sub.setDpiExportCIdentifierAttr(builder.getStringAttr(cIdentifier));
+      if (legacy)
+        sub.setDpiLegacyAttr(builder.getUnitAttr());
       found = true;
     };
     if (syntax) {
@@ -1310,14 +1314,15 @@ public:
       std::string_view cIdentifier =
           directive->c_identifier ? directive->c_identifier.valueText() : name;
       for (auto [symbol, operation] : emittedSymbolOperations) {
-        if (symbol->kind != slang::ast::SymbolKind::Subroutine ||
-            symbol->name != name ||
-            operation->hasAttr("dpi_export_c_identifier"))
+        auto sub = dyn_cast<slangir::SubroutineSymbolOp>(operation);
+        if (!sub || symbol->name != name || sub.getDpiExportCIdentifierAttr())
           continue;
         const slang::syntax::SyntaxNode *syntax = symbol->getSyntax();
-        if (syntax && syntax->parent == directive->parent)
-          operation->setAttr("dpi_export_c_identifier",
-                             builder.getStringAttr(cIdentifier));
+        if (syntax && syntax->parent == directive->parent) {
+          sub.setDpiExportCIdentifierAttr(builder.getStringAttr(cIdentifier));
+          if (directive->specString.valueText() == "DPI")
+            sub.setDpiLegacyAttr(builder.getUnitAttr());
+        }
       }
     }
   }
@@ -4041,6 +4046,16 @@ private:
                   builder.getI64IntegerAttr(*precision));
     }
 
+    if constexpr (std::same_as<T, slang::ast::PackageSymbol> ||
+                  std::same_as<T, slang::ast::CompilationUnitSymbol>) {
+      if (auto scale = node.getTimeScale()) {
+        attrs.set("time_unit_fs",
+                  builder.getI64IntegerAttr(getFemtoseconds(scale->base)));
+        attrs.set("time_precision_fs",
+                  builder.getI64IntegerAttr(getFemtoseconds(scale->precision)));
+      }
+    }
+
     if constexpr (std::same_as<T, slang::ast::InstanceBodySymbol>) {
       slang::TimeScale scale = node.getTimeScale().value_or(slang::TimeScale{});
       attrs.set("time_unit_fs",
@@ -5310,13 +5325,15 @@ private:
         SET_OP_ATTR(IsModportImport, builder.getUnitAttr());
       if (node.flags.has(MF::ModportExport))
         SET_OP_ATTR(IsModportExport, builder.getUnitAttr());
-      if (node.flags.has(MF::DPIImport))
-        SET_OP_ATTR(IsDpiImport, builder.getUnitAttr());
       if (node.flags.has(MF::DPIImport)) {
+        hasDPIImports = true;
+        SET_OP_ATTR(IsDpiImport, builder.getUnitAttr());
         StringRef cIdentifier = node.name;
         if (const auto *syntax = node.getSyntax()) {
           const auto &dpi =
               syntax->template as<slang::syntax::DPIImportSyntax>();
+          if (dpi.specString.valueText() == "DPI")
+            SET_OP_ATTR(DpiLegacy, builder.getUnitAttr());
           if (!dpi.c_identifier.valueText().empty())
             cIdentifier = dpi.c_identifier.valueText();
         }
@@ -8584,6 +8601,7 @@ private:
   llvm::DenseMap<const slang::syntax::SyntaxNode *, SmallVector<Operation *, 1>>
       dpiExportOperationsBySyntax;
   bool dpiExportSyntaxIndexBuilt = false;
+  bool hasDPIImports = false;
   SmallVector<std::string, 8> currentSymbolPath;
   SmallVector<const slang::ast::Scope *, 8> currentScopes;
   SmallVector<const slang::ast::Symbol *, 4> currentProcedures;
@@ -8746,6 +8764,120 @@ static bool cacheStandardInput(slang::driver::Driver &driver,
   return true;
 }
 
+// The DPI interprets an enum according to its base type (35.5.6).
+static const slang::ast::Type &dpiBaseType(const slang::ast::Type &type) {
+  const auto &canonical = type.getCanonicalType();
+  if (auto *enumeration = canonical.as_if<slang::ast::EnumType>())
+    return dpiBaseType(enumeration->baseType);
+  return canonical;
+}
+
+// 35.5.4 requires the bounds of every declared array dimension even when
+// Slang considers two types equivalent by width. H.7.3 and H.7.4 also
+// distinguish a packed vector from a scalar C integer of the same width.
+static bool sameDPIShape(const slang::ast::Type &lhs,
+                         const slang::ast::Type &rhs,
+                         bool insidePacked = false) {
+  using namespace slang::ast;
+  const auto &a = dpiBaseType(lhs);
+  const auto &b = dpiBaseType(rhs);
+  if (&a == &b)
+    return true;
+  if (a.kind != b.kind) {
+    // 6.22.1(e): a predefined integer and an explicitly ranged simple vector
+    // can be matching types. Integer and time already use a vector in C.
+    // A two-state atom has the same C representation only inside packed data.
+    auto *atom = a.as_if<PredefinedIntegerType>();
+    auto *packed = b.as_if<PackedArrayType>();
+    if (!atom) {
+      atom = b.as_if<PredefinedIntegerType>();
+      packed = a.as_if<PackedArrayType>();
+    }
+    return atom && packed && (atom->isFourState || insidePacked) &&
+           atom->isMatching(*packed);
+  }
+  if (auto *left = a.as_if<DPIOpenArrayType>()) {
+    auto &right = b.as<DPIOpenArrayType>();
+    return left->isPacked == right.isPacked &&
+           sameDPIShape(left->elementType, right.elementType, left->isPacked);
+  }
+  if (auto *left = a.as_if<FixedSizeUnpackedArrayType>()) {
+    auto &right = b.as<FixedSizeUnpackedArrayType>();
+    return left->range == right.range &&
+           sameDPIShape(left->elementType, right.elementType);
+  }
+  if (auto *left = a.as_if<PackedArrayType>()) {
+    auto &right = b.as<PackedArrayType>();
+    return left->range == right.range && a.isSigned() == b.isSigned() &&
+           sameDPIShape(left->elementType, right.elementType, true);
+  }
+  if (a.isStruct() || a.isUnion()) {
+    if (!a.isEquivalent(b))
+      return false;
+    auto fields = [](const slang::ast::Type &type) {
+      return type.as<Scope>().membersOfType<FieldSymbol>();
+    };
+    return llvm::equal(
+        fields(a), fields(b), [&](const FieldSymbol &l, const FieldSymbol &r) {
+          return sameDPIShape(l.getType(), r.getType(), a.isIntegral());
+        });
+  }
+  return a.isMatching(b);
+}
+
+LogicalResult SlangASTImporter::checkDPIDeclarations() const {
+  if (!hasDPIImports && compilation.getDPIExports().empty())
+    return success();
+  using Source = slang::ast::SubroutineSymbol;
+  struct Declaration {
+    slangir::SubroutineSymbolOp op;
+    const Source *source;
+    StringAttr name;
+  };
+  SmallVector<Declaration> declarations;
+  for (const auto &[symbol, operation] : emittedSymbolOperations) {
+    auto sub = dyn_cast<slangir::SubroutineSymbolOp>(operation);
+    if (!sub)
+      continue;
+    StringAttr name = sub.getDpiCIdentifierAttr();
+    if (!name)
+      name = sub.getDpiExportCIdentifierAttr();
+    if (name && !symbol->getParentScope()->isUninstantiated())
+      declarations.push_back({sub, &symbol->as<Source>(), name});
+  }
+  // Retain elaboration order in diagnostics across hash-table iteration and
+  // across the multiple declarations from parameterized instances.
+  llvm::sort(declarations, [](Declaration a, Declaration b) {
+    return a.op.getNodeId() < b.op.getNodeId();
+  });
+  llvm::DenseMap<StringAttr, Declaration *> first;
+  bool invalid = false;
+  for (auto &decl : declarations) {
+    auto [it, inserted] = first.try_emplace(decl.name, &decl);
+    if (inserted)
+      continue;
+    auto &previous = *it->second;
+    // Slang has already checked directions and subroutine properties. Use the
+    // declared source types before any --two-state projection changes them.
+    if (decl.op.getDpiLegacy() == previous.op.getDpiLegacy() &&
+        sameDPIShape(decl.source->getReturnType(),
+                     previous.source->getReturnType()) &&
+        llvm::equal(decl.source->getArguments(),
+                    previous.source->getArguments(), [](auto *l, auto *r) {
+                      return sameDPIShape(l->getType(), r->getType());
+                    }))
+      continue;
+    auto diagnostic = emitError(decl.op.getLoc())
+                      << "DPI declarations for C identifier '"
+                      << decl.name.getValue()
+                      << "' must have matching types, array dimensions and DPI "
+                         "version strings";
+    diagnostic.attachNote(previous.op.getLoc()) << "previous declaration here";
+    invalid = true;
+  }
+  return failure(invalid);
+}
+
 } // namespace
 
 FailureOr<std::string>
@@ -8789,6 +8921,10 @@ importSystemVerilog(ArrayRef<std::string> inputFilenames, MLIRContext &context,
                     const FrontendOptions &options, bool verifyIR) {
   slang::driver::Driver driver;
   driver.addStandardArgs();
+  driver.diagEngine.setMessage(
+      slang::diag::DPISpecDisallowed,
+      "'DPI' is deprecated and should be replaced with 'DPI-C', which may "
+      "require changes to the application's C code");
 
   std::vector<std::string> arguments =
       buildSlangArguments(inputFilenames, options);
@@ -8973,9 +9109,10 @@ endpackage
     return failure();
   for (const slang::ast::Compilation::DPIExport &entry :
        compilation->getDPIExports())
-    importer.markDPIExport(*entry.subroutine, entry.cIdentifier);
+    importer.markDPIExport(*entry.subroutine, entry.cIdentifier,
+                           entry.syntax->specString.valueText() == "DPI");
   importer.markSharedDPIExports(*compilation);
-  if (!importer.succeeded())
+  if (!importer.succeeded() || failed(importer.checkDPIDeclarations()))
     return failure();
 
   // Anonymous and typedef enums need not have an imported declaration node.

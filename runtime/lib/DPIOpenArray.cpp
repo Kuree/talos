@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <stdexcept>
 #include <vector>
 
 extern decltype(&talos_rt_v1_dpi_open_array_aggregate_pack)
@@ -37,20 +38,33 @@ extern decltype(&talos_rt_v1_dpi_aggregate_state_alloc)
 
 namespace {
 
+uint64_t planeBytes(uint64_t bits) { return bits / 8 + ((bits & 7) != 0); }
+
+bool containsBits(uint64_t bytes, uint64_t start, uint64_t width) {
+  return width <= UINT64_MAX - start && planeBytes(start + width) <= bytes;
+}
+
+bool validFormalSizing(int64_t kind, int64_t sizing) {
+  return sizing == TALOS_RT_DPI_SHAPE_OPEN ||
+         sizing == TALOS_RT_DPI_SHAPE_SIZED ||
+         (sizing == TALOS_RT_DPI_SHAPE_SIZED_REVERSE && kind != 0);
+}
+
 uint64_t canonicalElementSize(uint32_t category, uint32_t width) {
   switch (category) {
   case 0: // bit
   case 1: // logic
+    return width == 1 ? 1 : 0;
   case 2: // byte
-    return 1;
+    return width == 8 ? 1 : 0;
   case 3: // shortint
-    return 2;
+    return width == 16 ? 2 : 0;
   case 4:  // int
   case 10: // shortreal
-    return 4;
+    return width == 32 ? 4 : 0;
   case 5:  // longint
   case 11: // real
-    return 8;
+    return width == 64 ? 8 : 0;
   case 6: // packed bit
     return ((uint64_t{width} + 31) / 32) * sizeof(svBitVecVal);
   case 7: // packed logic
@@ -80,24 +94,32 @@ bool validCanonicalTransfer(uint64_t planeSize, uint64_t totalWidth,
   if (fourState > 1 || elementWidth == 0 || elementSize == 0 ||
       elementCount > UINT64_MAX / elementWidth ||
       elementCount * elementWidth != totalWidth ||
-      planeSize < (totalWidth + 7) / 8 ||
+      planeSize < planeBytes(totalWidth) ||
       elementCount > UINT64_MAX / elementSize ||
       elementCount * elementSize != dataSize)
     return false;
-  bool categoryFourState = category == 1 || category == 7;
-  return !fourState || categoryFourState;
+  return !fourState || category == 1 || category == 6 || category == 7;
 }
 
-const talos_rt_dpi_open_array_v1 *descriptor(svOpenArrayHandle handle) {
+const talos_rt_dpi_open_array_v1 *descriptor(const void *handle) {
   auto *value = static_cast<const talos_rt_dpi_open_array_v1 *>(handle);
   if (!value || value->magic != TALOS_RT_DPI_OPEN_ARRAY_MAGIC ||
-      value->reserved != 0 || (value->dimensions != 0 && !value->ranges) ||
+      (value->dimensions != 0 && !value->ranges) ||
       (value->data_size != 0 && !value->data) || value->element_size == 0)
+    return nullptr;
+  bool ragged = (value->flags & TALOS_RT_DPI_OPEN_ARRAY_RAGGED) != 0;
+  uint64_t rangeBytes = uint64_t{value->dimensions} * sizeof(*value->ranges);
+  if (ragged ? (value->reserved < rangeBytes || value->reserved > SIZE_MAX ||
+                (value->flags & TALOS_RT_DPI_OPEN_ARRAY_C_LAYOUT))
+             : value->reserved != 0)
     return nullptr;
   for (uint32_t dimension = 0; dimension != value->dimensions; ++dimension)
     if (value->ranges[dimension].reserved != 0 ||
+        (!ragged &&
+         (value->ranges[dimension].flags & TALOS_RT_DPI_DIMENSION_RAGGED)) ||
         (value->ranges[dimension].flags &
-         ~(TALOS_RT_DPI_DIMENSION_EMPTY | TALOS_RT_DPI_DIMENSION_RUNTIME)) != 0)
+         ~(TALOS_RT_DPI_DIMENSION_EMPTY | TALOS_RT_DPI_DIMENSION_RUNTIME |
+           TALOS_RT_DPI_DIMENSION_RAGGED)) != 0)
       return nullptr;
   return value;
 }
@@ -135,6 +157,8 @@ bool extent(int32_t left, int32_t right, uint64_t &result) {
 
 bool addIndex(const talos_rt_dpi_dimension_v1 &dimension, int index,
               uint64_t &offset) {
+  if (dimension.flags & TALOS_RT_DPI_DIMENSION_EMPTY)
+    return false;
   int64_t position =
       int64_t{index} - std::min<int64_t>(dimension.left, dimension.right);
   uint64_t count = 0;
@@ -153,32 +177,84 @@ bool addIndex(const talos_rt_dpi_dimension_v1 &dimension, int index,
   return true;
 }
 
-void *elementPointer(const talos_rt_dpi_open_array_v1 &array,
-                     uint32_t indexCount, int first, va_list arguments) {
+// Map a row ordinal at this depth to its children in the next dimension.
+bool rowBounds(const talos_rt_dpi_open_array_v1 &array, uint32_t depth,
+               uint64_t row, uint64_t &start, uint64_t &count) {
+  const auto &dim = array.ranges[depth];
+  if (dim.flags & TALOS_RT_DPI_DIMENSION_RAGGED) {
+    uint64_t rangeBytes = uint64_t{array.dimensions} * sizeof(*array.ranges);
+    if (dim.byte_stride < rangeBytes || dim.byte_stride > array.reserved ||
+        dim.byte_stride % alignof(uint64_t) != 0)
+      return false;
+    uint64_t words = (array.reserved - dim.byte_stride) / sizeof(uint64_t);
+    if (words < 2)
+      return false;
+    const auto *base = reinterpret_cast<const uint8_t *>(array.ranges);
+    const auto *table =
+        reinterpret_cast<const uint64_t *>(base + dim.byte_stride);
+    if (table[0] > words - 2 || row >= table[0])
+      return false;
+    start = table[row + 1];
+    if (table[row + 2] < start)
+      return false;
+    count = table[row + 2] - start;
+  } else {
+    count = 0;
+    if (!(dim.flags & TALOS_RT_DPI_DIMENSION_EMPTY))
+      extent(dim.left, dim.right, count);
+    if (count && row > UINT64_MAX / count)
+      return false;
+    start = row * count;
+  }
+  return true;
+}
+
+template <typename NextIndex>
+void *findElement(const talos_rt_dpi_open_array_v1 &array, uint32_t indexCount,
+                  NextIndex nextIndex) {
   if (indexCount != array.dimensions || indexCount == 0 || !array.data)
     return nullptr;
   uint64_t offset = 0;
-  for (uint32_t dimension = 0; dimension != indexCount; ++dimension) {
-    int index = dimension == 0 ? first : va_arg(arguments, int);
-    if (!addIndex(array.ranges[dimension], index, offset))
+  if (array.flags & TALOS_RT_DPI_OPEN_ARRAY_RAGGED) {
+    uint64_t row = 0;
+    for (uint32_t depth = 0; depth != indexCount; ++depth) {
+      const auto &dim = array.ranges[depth];
+      int64_t low = (dim.flags & TALOS_RT_DPI_DIMENSION_RAGGED)
+                        ? 0
+                        : std::min(dim.left, dim.right);
+      int64_t index = int64_t{nextIndex(depth)} - low;
+      uint64_t start, count;
+      if (index < 0 || !rowBounds(array, depth, row, start, count) ||
+          static_cast<uint64_t>(index) >= count ||
+          static_cast<uint64_t>(index) > UINT64_MAX - start)
+        return nullptr;
+      row = start + static_cast<uint64_t>(index);
+    }
+    if (row >= array.data_size / array.element_size)
+      return nullptr;
+    offset = row * array.element_size;
+  } else {
+    for (uint32_t depth = 0; depth != indexCount; ++depth)
+      if (!addIndex(array.ranges[depth], nextIndex(depth), offset))
+        return nullptr;
+    if (offset > array.data_size ||
+        array.element_size > array.data_size - offset)
       return nullptr;
   }
-  if (offset > array.data_size || array.element_size > array.data_size - offset)
-    return nullptr;
-  return static_cast<unsigned char *>(array.data) + offset;
+  return static_cast<uint8_t *>(array.data) + offset;
+}
+
+void *elementPointer(const talos_rt_dpi_open_array_v1 &array,
+                     uint32_t indexCount, int first, va_list arguments) {
+  return findElement(array, indexCount, [&](uint32_t depth) {
+    return depth == 0 ? first : va_arg(arguments, int);
+  });
 }
 
 void *elementPointer(const talos_rt_dpi_open_array_v1 &array,
                      uint32_t indexCount, const int *indices) {
-  if (indexCount != array.dimensions || indexCount == 0 || !array.data)
-    return nullptr;
-  uint64_t offset = 0;
-  for (uint32_t dimension = 0; dimension != indexCount; ++dimension)
-    if (!addIndex(array.ranges[dimension], indices[dimension], offset))
-      return nullptr;
-  if (offset > array.data_size || array.element_size > array.data_size - offset)
-    return nullptr;
-  return static_cast<unsigned char *>(array.data) + offset;
+  return findElement(array, indexCount,
+                     [&](uint32_t depth) { return indices[depth]; });
 }
 
 uint64_t canonicalSize(const talos_rt_dpi_open_array_v1 &array, bool logic) {
@@ -196,18 +272,24 @@ void copyVector(void *destination, const void *source,
   if (!destination || !source || size == 0 || size > array.element_size ||
       size > std::numeric_limits<size_t>::max())
     return;
-  std::memcpy(destination, source, static_cast<size_t>(size));
+  std::memmove(destination, source, static_cast<size_t>(size));
   unsigned tail = array.element_bit_width % 32;
   if (tail == 0)
     return;
   uint32_t mask = (uint32_t{1} << tail) - 1;
   uint64_t last = (uint64_t{array.element_bit_width} + 31) / 32 - 1;
-  if (logic) {
-    auto *words = static_cast<svLogicVecVal *>(destination);
-    words[last].aval &= mask;
-    words[last].bval &= mask;
-  } else {
-    static_cast<svBitVecVal *>(destination)[last] &= mask;
+  // The legacy Vec32 fields and the VecVal fields have the same word
+  // layout but distinct C types. Access the final chunk by representation.
+  static_assert(sizeof(svLogicVec32) == sizeof(svLogicVecVal));
+  unsigned planes = logic ? 2 : 1;
+  auto *bytes =
+      static_cast<uint8_t *>(destination) + last * planes * sizeof(uint32_t);
+  for (unsigned plane = 0; plane != planes; ++plane) {
+    uint32_t value;
+    std::memcpy(&value, bytes, sizeof(value));
+    value &= mask;
+    std::memcpy(bytes, &value, sizeof(value));
+    bytes += sizeof(value);
   }
 }
 
@@ -312,9 +394,10 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_pack(
         aval |= static_cast<uint32_t>(a) << bit;
         bval |= static_cast<uint32_t>(b) << bit;
       }
-      if (elementCategory == 6)
+      if (elementCategory == 6) {
+        aval &= ~bval;
         std::memcpy(current + word * 4, &aval, sizeof(aval));
-      else {
+      } else {
         std::memcpy(current + word * 8, &aval, sizeof(aval));
         std::memcpy(current + word * 8 + 4, &bval, sizeof(bval));
       }
@@ -415,7 +498,7 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_prepare_recursive(
       transportWidth == 0 || elementWidth == 0 || transportFourState > 1 ||
       writable > 1 || elementFourState > 1 ||
       (transportFourState && !unknown) ||
-      planeSize < (transportWidth + 7) / 8 || elementCSize == 0 ||
+      planeSize < planeBytes(transportWidth) || elementCSize == 0 ||
       elementCAlignment == 0 ||
       (elementCAlignment & (elementCAlignment - 1)) != 0 ||
       elementCAlignment > alignof(std::max_align_t) ||
@@ -430,8 +513,9 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_prepare_recursive(
     uint64_t base = 0;
     bool fourState = false;
   };
-  std::vector<talos_rt_dpi_dimension_v1> ranges(dimensions);
-  std::vector<uint8_t> runtimeKnown(dimensions, 0);
+  std::vector<talos_rt_dpi_dimension_v1> ranges;
+  std::vector<std::vector<uint64_t>> rowOffsets;
+  bool ragged = false;
   std::vector<uint8_t> flatValue;
   std::vector<uint8_t> flatUnknown;
   uint64_t elementCount = 0;
@@ -467,6 +551,8 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_prepare_recursive(
             0,
             transportFourState != 0};
   TALOS_RT_TRY {
+    ranges.resize(dimensions);
+    rowOffsets.resize(dimensions);
     struct Frame {
       uint32_t depth = 0;
       View view;
@@ -478,6 +564,7 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_prepare_recursive(
       uint64_t ordinal = 0;
       uint64_t childSpan = 0;
       bool childFourState = false;
+      bool reverseRuntime = false;
       std::vector<uint8_t> childValue{};
       std::vector<uint8_t> childUnknown{};
     };
@@ -487,13 +574,13 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_prepare_recursive(
       Frame &frame = stack.back();
       if (frame.depth == dimensions) {
         const View &view = frame.view;
-        if (view.span < elementWidth || view.base > view.planeSize * 8 ||
-            elementWidth > view.planeSize * 8 - view.base ||
+        if (view.span < elementWidth ||
+            !containsBits(view.planeSize, view.base, elementWidth) ||
             elementCount == UINT64_MAX ||
             elementCount + 1 > UINT64_MAX / elementWidth)
           return TALOS_RT_INVALID_ARGUMENT;
         uint64_t nextBits = (elementCount + 1) * elementWidth;
-        uint64_t bytes = (nextBits + 7) / 8;
+        uint64_t bytes = planeBytes(nextBits);
         if (bytes > SIZE_MAX)
           return TALOS_RT_INVALID_ARGUMENT;
         flatValue.resize(static_cast<size_t>(bytes), 0);
@@ -514,7 +601,7 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_prepare_recursive(
         int64_t descriptorRight = record[2];
         int64_t childSpanWord = record[5];
         int64_t childFourStateWord = record[6];
-        bool sizedFormal = record[7] != 0;
+        bool sizedFormal = record[7] != TALOS_RT_DPI_SHAPE_OPEN;
         frame.kind = record[0];
         frame.sourceStart = record[3];
         frame.sourceStride = record[4];
@@ -523,10 +610,11 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_prepare_recursive(
             descriptorRight > INT32_MAX || frame.sourceStart < 0 ||
             childSpanWord <= 0 ||
             (childFourStateWord != 0 && childFourStateWord != 1) ||
-            (record[7] != 0 && record[7] != 1))
+            !validFormalSizing(frame.kind, record[7]))
           return TALOS_RT_INVALID_ARGUMENT;
         frame.childSpan = static_cast<uint64_t>(childSpanWord);
         frame.childFourState = childFourStateWord != 0;
+        frame.reverseRuntime = record[7] == TALOS_RT_DPI_SHAPE_SIZED_REVERSE;
         auto &range = ranges[frame.depth];
         if (frame.kind == 0) {
           if (frame.sourceStride == 0 ||
@@ -537,8 +625,8 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_prepare_recursive(
         } else {
           const View &view = frame.view;
           if (frame.sourceStart != 0 || frame.sourceStride != 0 ||
-              view.span < 64 || view.base > view.planeSize * 8 ||
-              64 > view.planeSize * 8 - view.base || (view.base & 7) != 0)
+              view.span < 64 || !containsBits(view.planeSize, view.base, 64) ||
+              (view.base & 7) != 0)
             return TALOS_RT_INVALID_ARGUMENT;
           talos_rt_managed_word_v1 word = 0;
           std::memcpy(&word, view.value + view.base / 8, sizeof(word));
@@ -557,13 +645,27 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_prepare_recursive(
               return TALOS_RT_INVALID_ARGUMENT;
             int32_t right =
                 frame.count == 0 ? -1 : static_cast<int32_t>(frame.count - 1);
-            if (runtimeKnown[frame.depth] && range.right != right)
-              return TALOS_RT_ARGUMENT_MISMATCH;
-            range.left = 0;
-            range.right = right;
-            range.flags = TALOS_RT_DPI_DIMENSION_RUNTIME |
-                          (frame.count == 0 ? TALOS_RT_DPI_DIMENSION_EMPTY : 0);
-            runtimeKnown[frame.depth] = 1;
+            auto &offsets = rowOffsets[frame.depth];
+            if (offsets.empty())
+              offsets.push_back(0);
+            if (frame.count > UINT64_MAX - offsets.back())
+              return TALOS_RT_INVALID_ARGUMENT;
+            if (offsets.size() > 1 && range.right != right) {
+              range.flags |= TALOS_RT_DPI_DIMENSION_RAGGED;
+              ragged = true;
+            }
+            offsets.push_back(offsets.back() + frame.count);
+            if (range.flags & TALOS_RT_DPI_DIMENSION_RAGGED)
+              range = {0, -1, 0,
+                       TALOS_RT_DPI_DIMENSION_RUNTIME |
+                           TALOS_RT_DPI_DIMENSION_RAGGED,
+                       0};
+            else
+              range = {
+                  0, right, 0,
+                  TALOS_RT_DPI_DIMENSION_RUNTIME |
+                      (frame.count == 0 ? TALOS_RT_DPI_DIMENSION_EMPTY : 0),
+                  0};
           } else {
             range = {static_cast<int32_t>(descriptorLeft),
                      static_cast<int32_t>(descriptorRight), 0, 0, 0};
@@ -572,7 +674,7 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_prepare_recursive(
             if (frame.childSpan > UINT64_MAX / frame.count)
               return TALOS_RT_INVALID_ARGUMENT;
             uint64_t bits = frame.childSpan * frame.count;
-            uint64_t bytes = (bits + 7) / 8;
+            uint64_t bytes = planeBytes(bits);
             if (bytes > SIZE_MAX)
               return TALOS_RT_INVALID_ARGUMENT;
             frame.childValue.resize(static_cast<size_t>(bytes));
@@ -588,6 +690,16 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_prepare_recursive(
               return status;
           }
         }
+        // A one-dimensional container already exports the complete leaf
+        // stream. Hand the planes directly to the canonical C packer.
+        if (dimensions == 1 && frame.kind != 0 && !frame.reverseRuntime &&
+            frame.childSpan == elementWidth &&
+            frame.childFourState == bool(elementFourState)) {
+          elementCount = frame.count;
+          flatValue = std::move(frame.childValue);
+          flatUnknown = std::move(frame.childUnknown);
+          break;
+        }
         frame.initialized = true;
       }
       if (frame.ordinal == frame.count) {
@@ -595,6 +707,8 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_prepare_recursive(
         continue;
       }
       uint64_t ordinal = frame.ordinal++;
+      if (frame.reverseRuntime)
+        ordinal = frame.count - 1 - ordinal;
       View child;
       if (frame.kind == 0) {
         __int128 offset = static_cast<__int128>(frame.sourceStart) +
@@ -623,9 +737,18 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_prepare_recursive(
     }
   }
   TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
+  TALOS_RT_CATCH(const std::length_error &) {
+    return TALOS_RT_OUT_OF_RESOURCES;
+  }
   for (uint32_t depth = 0; depth != dimensions; ++depth) {
     const int64_t *record = shapePlan + uint64_t{depth} * shapeWords;
-    if (record[0] != 0 && record[7] == 0 && !runtimeKnown[depth])
+    if (record[0] == 0 || record[7] != TALOS_RT_DPI_SHAPE_OPEN) {
+      if (record[1] < INT32_MIN || record[1] > INT32_MAX ||
+          record[2] < INT32_MIN || record[2] > INT32_MAX)
+        return TALOS_RT_INVALID_ARGUMENT;
+      ranges[depth] = {static_cast<int32_t>(record[1]),
+                       static_cast<int32_t>(record[2]), 0, 0, 0};
+    } else if (rowOffsets[depth].empty())
       ranges[depth] = {
           0, -1, 0,
           TALOS_RT_DPI_DIMENSION_RUNTIME | TALOS_RT_DPI_DIMENSION_EMPTY, 0};
@@ -634,7 +757,7 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_prepare_recursive(
   uint64_t elementSize = canonicalElementSize(elementCategory, elementWidth);
   if (elementCategory == 8 || elementCategory == 9 || elementCategory == 13)
     elementSize = elementCSize;
-  if (elementSize == 0 || elementCount > UINT64_MAX / elementSize ||
+  if (elementSize != elementCSize || elementCount > UINT64_MAX / elementSize ||
       elementCount > UINT64_MAX / elementWidth)
     return TALOS_RT_INVALID_ARGUMENT;
   uint64_t dataSize = elementCount * elementSize;
@@ -642,8 +765,21 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_prepare_recursive(
       elementStringCount > (UINT64_MAX - dataSize) / 8 / elementCount)
     return TALOS_RT_INVALID_ARGUMENT;
   uint64_t capacity = dataSize + elementCount * elementStringCount * 8;
+  uint64_t rangeBytes = uint64_t{dimensions} * sizeof(ranges[0]);
+  if (rangeBytes > SIZE_MAX)
+    return TALOS_RT_OUT_OF_RESOURCES;
   uint64_t stride = elementSize;
   for (uint32_t depth = dimensions; depth-- != 0;) {
+    if (ragged) {
+      if (ranges[depth].flags & TALOS_RT_DPI_DIMENSION_RAGGED) {
+        ranges[depth].byte_stride = rangeBytes;
+        uint64_t words = 1 + rowOffsets[depth].size();
+        if (words > (SIZE_MAX - rangeBytes) / sizeof(uint64_t))
+          return TALOS_RT_OUT_OF_RESOURCES;
+        rangeBytes += words * sizeof(uint64_t);
+      }
+      continue;
+    }
     ranges[depth].byte_stride = stride;
     uint64_t count = 0;
     if ((ranges[depth].flags & TALOS_RT_DPI_DIMENSION_EMPTY) != 0)
@@ -654,17 +790,23 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_prepare_recursive(
       return TALOS_RT_INVALID_ARGUMENT;
     stride *= count;
   }
-  uint64_t rangeBytes = uint64_t{dimensions} * sizeof(ranges[0]);
-  if (rangeBytes > SIZE_MAX ||
-      elementCAlignment - 1 > UINT64_MAX - rangeBytes ||
-      capacity > UINT64_MAX - rangeBytes - (elementCAlignment - 1))
+  if (elementCAlignment - 1 > SIZE_MAX - rangeBytes ||
+      capacity > SIZE_MAX - rangeBytes - (elementCAlignment - 1))
     return TALOS_RT_OUT_OF_RESOURCES;
   uint64_t allocationSize = rangeBytes + (elementCAlignment - 1) + capacity;
   void *allocation = std::malloc(static_cast<size_t>(allocationSize));
   if (!allocation)
     return TALOS_RT_OUT_OF_MEMORY;
   auto *storedRanges = static_cast<talos_rt_dpi_dimension_v1 *>(allocation);
-  std::memcpy(storedRanges, ranges.data(), static_cast<size_t>(rangeBytes));
+  std::memcpy(storedRanges, ranges.data(), ranges.size() * sizeof(ranges[0]));
+  for (uint32_t depth = 0; ragged && depth < dimensions; ++depth) {
+    if (!(ranges[depth].flags & TALOS_RT_DPI_DIMENSION_RAGGED))
+      continue;
+    auto *table = reinterpret_cast<uint64_t *>(
+        static_cast<uint8_t *>(allocation) + ranges[depth].byte_stride);
+    table[0] = rowOffsets[depth].size() - 1;
+    std::copy(rowOffsets[depth].begin(), rowOffsets[depth].end(), table + 1);
+  }
   uintptr_t dataAddress = reinterpret_cast<uintptr_t>(allocation) + rangeBytes;
   dataAddress = (dataAddress + elementCAlignment - 1) &
                 ~(uintptr_t{elementCAlignment} - 1);
@@ -672,7 +814,7 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_prepare_recursive(
   if (elementCount != 0) {
     status = talos_rt_v1_dpi_open_array_aggregate_pack(
         flatValue.data(), flatUnknown.empty() ? nullptr : flatUnknown.data(),
-        (elementCount * elementWidth + 7) / 8, elementCount * elementWidth,
+        planeBytes(elementCount * elementWidth), elementCount * elementWidth,
         elementFourState, elementWidth, elementCount, 0, nullptr, 0, data,
         dataSize, capacity, elementCSize, elementStringCount, elementPlan,
         elementPlanWords);
@@ -681,7 +823,8 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_prepare_recursive(
       return status;
     }
   }
-  uint32_t flags = TALOS_RT_DPI_OPEN_ARRAY_C_LAYOUT;
+  uint32_t flags = ragged ? TALOS_RT_DPI_OPEN_ARRAY_RAGGED
+                          : TALOS_RT_DPI_OPEN_ARRAY_C_LAYOUT;
   if (writable)
     flags |= TALOS_RT_DPI_OPEN_ARRAY_WRITABLE;
   if (elementCategory <= 7)
@@ -700,7 +843,7 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_prepare_recursive(
                             data,
                             dataSize,
                             storedRanges,
-                            0};
+                            ragged ? rangeBytes : 0};
   outStorage->allocation = allocation;
   return TALOS_RT_OK;
 }
@@ -716,37 +859,38 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_finish_recursive(
   constexpr uint64_t shapeWords = 8;
   if (callStatus != TALOS_RT_OK)
     return callStatus;
-  if (!context || !storage || !value || !shapePlan || !elementPlan ||
-      dimensions == 0 || storage->descriptor.dimensions != dimensions ||
-      transportWidth == 0 || elementWidth == 0 || transportFourState > 1 ||
-      elementFourState > 1 || (transportFourState && !unknown) ||
-      planeSize < (transportWidth + 7) / 8 || elementCSize == 0 ||
+  if (!context || !storage || !descriptor(&storage->descriptor) || !value ||
+      !shapePlan || !elementPlan || dimensions == 0 ||
+      storage->descriptor.dimensions != dimensions || transportWidth == 0 ||
+      elementWidth == 0 || transportFourState > 1 || elementFourState > 1 ||
+      (transportFourState && !unknown) ||
+      planeSize < planeBytes(transportWidth) || elementCSize == 0 ||
       elementPlanWords == 0 || elementPlanWords % 8 != 0)
     return TALOS_RT_INVALID_ARGUMENT;
 
-  uint64_t elementCount = 1;
-  for (uint32_t depth = 0; depth != dimensions; ++depth) {
-    const auto &range = storage->descriptor.ranges[depth];
-    if ((range.flags & TALOS_RT_DPI_DIMENSION_EMPTY) != 0) {
-      elementCount = 0;
-      break;
-    }
-    uint64_t count = 0;
-    if (!extent(range.left, range.right, count) ||
-        (count != 0 && elementCount > UINT64_MAX / count))
-      return TALOS_RT_INVALID_ARGUMENT;
-    elementCount *= count;
-  }
+  if (storage->descriptor.element_size != elementCSize ||
+      storage->descriptor.data_size % elementCSize != 0)
+    return TALOS_RT_INVALID_ARGUMENT;
+  uint64_t elementCount = storage->descriptor.data_size / elementCSize;
+  std::vector<uint64_t> nextRow;
   if (elementCount > UINT64_MAX / elementWidth)
     return TALOS_RT_INVALID_ARGUMENT;
   uint64_t flatWidth = elementCount * elementWidth;
-  uint64_t flatBytes = (flatWidth + 7) / 8;
+  uint64_t flatBytes = planeBytes(flatWidth);
   if (flatBytes > SIZE_MAX)
     return TALOS_RT_OUT_OF_RESOURCES;
-  std::vector<uint8_t> flatValue(static_cast<size_t>(flatBytes));
+  std::vector<uint8_t> flatValue;
   std::vector<uint8_t> flatUnknown;
-  if (elementFourState)
-    flatUnknown.resize(static_cast<size_t>(flatBytes));
+  TALOS_RT_TRY {
+    nextRow.resize(dimensions);
+    flatValue.resize(static_cast<size_t>(flatBytes));
+    if (elementFourState)
+      flatUnknown.resize(static_cast<size_t>(flatBytes));
+  }
+  TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
+  TALOS_RT_CATCH(const std::length_error &) {
+    return TALOS_RT_OUT_OF_RESOURCES;
+  }
   if (elementCount != 0) {
     talos_rt_status status = talos_rt_v1_dpi_open_array_aggregate_unpack(
         context, storage->descriptor.data, storage->descriptor.data_size,
@@ -822,6 +966,7 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_finish_recursive(
       uint64_t ordinal = 0;
       uint64_t childSpan = 0;
       bool childFourState = false;
+      bool reverseRuntime = false;
       talos_rt_object_v1 *container = nullptr;
       std::vector<uint8_t> childValue{};
       std::vector<uint8_t> childUnknown{};
@@ -833,8 +978,7 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_finish_recursive(
       if (frame.depth == dimensions) {
         MutableView view = frame.view;
         if (leaf >= elementCount || view.span < elementWidth ||
-            view.base > view.planeSize * 8 ||
-            elementWidth > view.planeSize * 8 - view.base ||
+            !containsBits(view.planeSize, view.base, elementWidth) ||
             (elementFourState && !view.unknown))
           return TALOS_RT_INVALID_ARGUMENT;
         copyBits(view.value, view.base, flatValue.data(), leaf * elementWidth,
@@ -855,16 +999,16 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_finish_recursive(
         int64_t childFourStateWord = record[6];
         if (frame.kind < 0 || frame.kind > 2 || frame.sourceStart < 0 ||
             childSpanWord <= 0 ||
-            (childFourStateWord != 0 && childFourStateWord != 1))
+            (childFourStateWord != 0 && childFourStateWord != 1) ||
+            !validFormalSizing(frame.kind, record[7]))
           return TALOS_RT_INVALID_ARGUMENT;
         frame.childSpan = static_cast<uint64_t>(childSpanWord);
         frame.childFourState = childFourStateWord != 0;
-        const auto &range = storage->descriptor.ranges[frame.depth];
-        if ((range.flags & TALOS_RT_DPI_DIMENSION_EMPTY) == 0 &&
-            !extent(range.left, range.right, frame.count))
+        frame.reverseRuntime = record[7] == TALOS_RT_DPI_SHAPE_SIZED_REVERSE;
+        uint64_t firstChild;
+        if (!rowBounds(storage->descriptor, frame.depth, nextRow[frame.depth]++,
+                       firstChild, frame.count))
           return TALOS_RT_INVALID_ARGUMENT;
-        if ((range.flags & TALOS_RT_DPI_DIMENSION_EMPTY) != 0)
-          frame.count = 0;
         if (frame.kind == 0) {
           if (frame.sourceStride == 0)
             return TALOS_RT_INVALID_ARGUMENT;
@@ -872,8 +1016,7 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_finish_recursive(
           MutableView view = frame.view;
           if (frame.sourceStart != 0 || frame.sourceStride != 0 ||
               view.span < 64 || (view.base & 7) != 0 ||
-              view.base > view.planeSize * 8 ||
-              64 > view.planeSize * 8 - view.base)
+              !containsBits(view.planeSize, view.base, 64))
             return TALOS_RT_INVALID_ARGUMENT;
           talos_rt_managed_word_v1 word = 0;
           std::memcpy(&word, view.value + view.base / 8, sizeof(word));
@@ -882,9 +1025,20 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_finish_recursive(
               talos_rt_v1_container_size(frame.container) != frame.count ||
               (frame.count != 0 && frame.childSpan > UINT64_MAX / frame.count))
             return TALOS_RT_INVALID_ARGUMENT;
-          if (frame.count != 0) {
+          if (dimensions == 1 && !frame.reverseRuntime &&
+              frame.childSpan == elementWidth &&
+              frame.childFourState == bool(elementFourState)) {
+            if (frame.count != elementCount)
+              return TALOS_RT_ARGUMENT_MISMATCH;
+            if (elementCount)
+              status = talos_rt_v1_container_import_fixed(
+                  lane, frame.container, flatValue.data(),
+                  elementFourState ? flatUnknown.data() : nullptr, flatBytes,
+                  flatWidth, elementFourState, elementWidth, elementCount);
+            return status == TALOS_RT_OK ? rootGuard.pop() : status;
+          } else if (frame.count != 0) {
             uint64_t bits = frame.childSpan * frame.count;
-            uint64_t bytes = (bits + 7) / 8;
+            uint64_t bytes = planeBytes(bits);
             if (bytes > SIZE_MAX)
               return TALOS_RT_INVALID_ARGUMENT;
             frame.childValue.resize(static_cast<size_t>(bytes));
@@ -917,6 +1071,8 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_finish_recursive(
         continue;
       }
       uint64_t ordinal = frame.ordinal++;
+      if (frame.reverseRuntime)
+        ordinal = frame.count - 1 - ordinal;
       MutableView child;
       if (frame.kind == 0) {
         __int128 offset = static_cast<__int128>(frame.sourceStart) +
@@ -947,6 +1103,9 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_finish_recursive(
       return TALOS_RT_INVALID_ARGUMENT;
   }
   TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
+  TALOS_RT_CATCH(const std::length_error &) {
+    return TALOS_RT_OUT_OF_RESOURCES;
+  }
   return rootGuard.pop();
 }
 
@@ -1004,7 +1163,8 @@ extern "C" int svSize(const svOpenArrayHandle handle, int dimension) {
       !extent(left, right, size) || size > INT32_MAX)
     return 0;
   if (const auto *record = dimensionRecord(*array, dimension);
-      record && (record->flags & TALOS_RT_DPI_DIMENSION_EMPTY) != 0)
+      record && (record->flags & (TALOS_RT_DPI_DIMENSION_EMPTY |
+                                  TALOS_RT_DPI_DIMENSION_RAGGED)) != 0)
     return 0;
   return static_cast<int>(size);
 }
@@ -1031,10 +1191,15 @@ extern "C" int svSizeOfArray(const svOpenArrayHandle handle) {
              : 0;
 }
 
+static bool hasElementPointers(const talos_rt_dpi_open_array_v1 *array) {
+  return array && (array->flags & (TALOS_RT_DPI_OPEN_ARRAY_C_LAYOUT |
+                                   TALOS_RT_DPI_OPEN_ARRAY_RAGGED));
+}
+
 extern "C" void *svGetArrElemPtr(const svOpenArrayHandle handle, int index,
                                  ...) {
   const auto *array = descriptor(handle);
-  if (!array || (array->flags & TALOS_RT_DPI_OPEN_ARRAY_C_LAYOUT) == 0)
+  if (!hasElementPointers(array))
     return nullptr;
   va_list arguments;
   va_start(arguments, index);
@@ -1046,31 +1211,28 @@ extern "C" void *svGetArrElemPtr(const svOpenArrayHandle handle, int index,
 extern "C" void *svGetArrElemPtr1(const svOpenArrayHandle handle, int index) {
   int indices[] = {index};
   const auto *array = descriptor(handle);
-  return array && (array->flags & TALOS_RT_DPI_OPEN_ARRAY_C_LAYOUT) != 0
-             ? elementPointer(*array, 1, indices)
-             : nullptr;
+  return hasElementPointers(array) ? elementPointer(*array, 1, indices)
+                                   : nullptr;
 }
 
 extern "C" void *svGetArrElemPtr2(const svOpenArrayHandle handle, int first,
                                   int second) {
   int indices[] = {first, second};
   const auto *array = descriptor(handle);
-  return array && (array->flags & TALOS_RT_DPI_OPEN_ARRAY_C_LAYOUT) != 0
-             ? elementPointer(*array, 2, indices)
-             : nullptr;
+  return hasElementPointers(array) ? elementPointer(*array, 2, indices)
+                                   : nullptr;
 }
 
 extern "C" void *svGetArrElemPtr3(const svOpenArrayHandle handle, int first,
                                   int second, int third) {
   int indices[] = {first, second, third};
   const auto *array = descriptor(handle);
-  return array && (array->flags & TALOS_RT_DPI_OPEN_ARRAY_C_LAYOUT) != 0
-             ? elementPointer(*array, 3, indices)
-             : nullptr;
+  return hasElementPointers(array) ? elementPointer(*array, 3, indices)
+                                   : nullptr;
 }
 
-#define TALOS_DEFINE_VECTOR_ACCESS(Name, Logic, Type)                          \
-  extern "C" void svPut##Name##ArrElemVecVal(                                  \
+#define TALOS_DEFINE_VECTOR_ACCESS(Name, Logic, Type, Suffix)                  \
+  extern "C" void svPut##Name##ArrElem##Suffix(                                \
       const svOpenArrayHandle handle, const Type *source, int index, ...) {    \
     va_list arguments;                                                         \
     va_start(arguments, index);                                                \
@@ -1081,33 +1243,33 @@ extern "C" void *svGetArrElemPtr3(const svOpenArrayHandle handle, int first,
         });                                                                    \
     va_end(arguments);                                                         \
   }                                                                            \
-  extern "C" void svPut##Name##ArrElem1VecVal(const svOpenArrayHandle handle,  \
-                                              const Type *source, int first) { \
+  extern "C" void svPut##Name##ArrElem1##Suffix(                               \
+      const svOpenArrayHandle handle, const Type *source, int first) {         \
     int indices[] = {first};                                                   \
     withFixedElement(handle, 1, indices, [&](const auto &array, void *elem) {  \
       if ((array.flags & TALOS_RT_DPI_OPEN_ARRAY_WRITABLE) != 0)               \
         copyVector(elem, source, array, Logic);                                \
     });                                                                        \
   }                                                                            \
-  extern "C" void svPut##Name##ArrElem2VecVal(const svOpenArrayHandle handle,  \
-                                              const Type *source, int first,   \
-                                              int second) {                    \
+  extern "C" void svPut##Name##ArrElem2##Suffix(                               \
+      const svOpenArrayHandle handle, const Type *source, int first,           \
+      int second) {                                                            \
     int indices[] = {first, second};                                           \
     withFixedElement(handle, 2, indices, [&](const auto &array, void *elem) {  \
       if ((array.flags & TALOS_RT_DPI_OPEN_ARRAY_WRITABLE) != 0)               \
         copyVector(elem, source, array, Logic);                                \
     });                                                                        \
   }                                                                            \
-  extern "C" void svPut##Name##ArrElem3VecVal(const svOpenArrayHandle handle,  \
-                                              const Type *source, int first,   \
-                                              int second, int third) {         \
+  extern "C" void svPut##Name##ArrElem3##Suffix(                               \
+      const svOpenArrayHandle handle, const Type *source, int first,           \
+      int second, int third) {                                                 \
     int indices[] = {first, second, third};                                    \
     withFixedElement(handle, 3, indices, [&](const auto &array, void *elem) {  \
       if ((array.flags & TALOS_RT_DPI_OPEN_ARRAY_WRITABLE) != 0)               \
         copyVector(elem, source, array, Logic);                                \
     });                                                                        \
   }                                                                            \
-  extern "C" void svGet##Name##ArrElemVecVal(                                  \
+  extern "C" void svGet##Name##ArrElem##Suffix(                                \
       Type *destination, const svOpenArrayHandle handle, int index, ...) {     \
     va_list arguments;                                                         \
     va_start(arguments, index);                                                \
@@ -1117,22 +1279,22 @@ extern "C" void *svGetArrElemPtr3(const svOpenArrayHandle handle, int first,
                         });                                                    \
     va_end(arguments);                                                         \
   }                                                                            \
-  extern "C" void svGet##Name##ArrElem1VecVal(                                 \
+  extern "C" void svGet##Name##ArrElem1##Suffix(                               \
       Type *destination, const svOpenArrayHandle handle, int first) {          \
     int indices[] = {first};                                                   \
     withFixedElement(handle, 1, indices, [&](const auto &array, void *elem) {  \
       copyVector(destination, elem, array, Logic);                             \
     });                                                                        \
   }                                                                            \
-  extern "C" void svGet##Name##ArrElem2VecVal(Type *destination,               \
-                                              const svOpenArrayHandle handle,  \
-                                              int first, int second) {         \
+  extern "C" void svGet##Name##ArrElem2##Suffix(                               \
+      Type *destination, const svOpenArrayHandle handle, int first,            \
+      int second) {                                                            \
     int indices[] = {first, second};                                           \
     withFixedElement(handle, 2, indices, [&](const auto &array, void *elem) {  \
       copyVector(destination, elem, array, Logic);                             \
     });                                                                        \
   }                                                                            \
-  extern "C" void svGet##Name##ArrElem3VecVal(                                 \
+  extern "C" void svGet##Name##ArrElem3##Suffix(                               \
       Type *destination, const svOpenArrayHandle handle, int first,            \
       int second, int third) {                                                 \
     int indices[] = {first, second, third};                                    \
@@ -1141,8 +1303,11 @@ extern "C" void *svGetArrElemPtr3(const svOpenArrayHandle handle, int first,
     });                                                                        \
   }
 
-TALOS_DEFINE_VECTOR_ACCESS(Bit, false, svBitVecVal)
-TALOS_DEFINE_VECTOR_ACCESS(Logic, true, svLogicVecVal)
+TALOS_DEFINE_VECTOR_ACCESS(Bit, false, svBitVecVal, VecVal)
+TALOS_DEFINE_VECTOR_ACCESS(Logic, true, svLogicVecVal, VecVal)
+
+TALOS_DEFINE_VECTOR_ACCESS(Bit, false, svBitVec32, Vec32)
+TALOS_DEFINE_VECTOR_ACCESS(Logic, true, svLogicVec32, Vec32)
 
 #undef TALOS_DEFINE_VECTOR_ACCESS
 

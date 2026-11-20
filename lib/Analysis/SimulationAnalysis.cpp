@@ -35,11 +35,14 @@ std::optional<unsigned> getSimulationStorageBitWidth(Type type) {
 }
 
 bool containsFourStateLogic(Type type) {
-  if (sim::isManagedHandleType(type))
-    return false;
-  bool result = false;
-  type.walk([&](sim::LogicType) { result = true; });
-  return result;
+  return type
+      .walk<WalkOrder::PreOrder>([](Type nested) {
+        if (sim::isManagedHandleType(nested))
+          return WalkResult::skip();
+        return isa<sim::LogicType>(nested) ? WalkResult::interrupt()
+                                           : WalkResult::advance();
+      })
+      .wasInterrupted();
 }
 
 uint64_t getSimulationOperationCost(Operation &operation) {

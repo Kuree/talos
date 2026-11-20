@@ -14,6 +14,8 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/ADT/StringSwitch.h"
+#include "llvm/Support/SaveAndRestore.h"
 
 #include <functional>
 #include <limits>
@@ -38,6 +40,22 @@ bool isMailboxCall(semantic::SVCallExpressionOp op) {
 bool isSemaphoreCall(semantic::SVCallExpressionOp op) {
   auto path = op->getAttrOfType<StringAttr>("referenced_path");
   return path && path.getValue().starts_with("std::semaphore::");
+}
+
+bool isReadOnlySelectorCall(semantic::SVCallExpressionOp call) {
+  if (!call.getIsSystemCall())
+    return dpi::has<dpi::Pure>(call);
+  if (call.getIsBuiltinMethod())
+    return llvm::StringSwitch<bool>(call.getCalleeName())
+        .Cases({"size", "num", "exists", "len", "getc"}, true)
+        .Default(false);
+  return llvm::StringSwitch<bool>(call.getCalleeName())
+      .Cases({"$dimensions", "$unpacked_dimensions", "$left", "$right", "$low",
+              "$high", "$increment", "$size", "$signed", "$unsigned", "$bits",
+              "$clog2", "$countones", "$countbits", "$onehot", "$onehot0",
+              "$isunknown"},
+             true)
+      .Default(false);
 }
 
 } // namespace
@@ -72,10 +90,86 @@ FailureOr<Value> UnitLowering::copyInFromActual(Operation *actual,
                  formalSigned);
 }
 
+LogicalResult UnitLowering::prepareDPIShapeSelectors(
+    Operation *actual, SmallVectorImpl<DPIShapeSelector> &selectors,
+    Location location) {
+  // Opaque calls and assignments can supply a selector or an object containing
+  // the output array. Allocate their slots here and fill each only if its
+  // branch executes. Read-only queries can read the live state again on return.
+  auto walked = actual->walk<WalkOrder::PreOrder>([&](Operation *expr) {
+    if (expressionCaptures.count(expr))
+      return WalkResult::skip();
+    if (auto call = dyn_cast<semantic::SVCallExpressionOp>(expr)) {
+      if (isReadOnlySelectorCall(call))
+        return WalkResult::advance();
+    } else if (!isa<semantic::SVAssignmentExpressionOp,
+                    semantic::SVNewClassExpressionOp,
+                    semantic::SVNewArrayExpressionOp,
+                    semantic::SVNewCovergroupExpressionOp>(expr))
+      return WalkResult::advance();
+    auto type = getNormalizedSemanticType(expr);
+    if (failed(type))
+      return WalkResult::interrupt();
+    Value initial = createDefaultValue(builder, location, *type);
+    if (!initial)
+      return WalkResult::interrupt();
+    auto slot = [&](Value initial) {
+      return sim::SimRefAllocOp::create(
+                 builder, location,
+                 sim::RefType::get(builder.getContext(), initial.getType()),
+                 initial)
+          .getResult();
+    };
+    auto no = arith::ConstantOp::create(builder, location,
+                                        builder.getBoolAttr(false));
+    selectors.push_back({expr, slot(no), slot(initial)});
+    return WalkResult::skip();
+  });
+  return failure(walked.wasInterrupted());
+}
+
+FailureOr<Value>
+UnitLowering::lowerDPIShapeSelector(const DPIShapeSelector &selector) {
+  bool atEntry = projectingDPIOutputShape;
+  llvm::SaveAndRestore project(projectingDPIOutputShape, false);
+  llvm::SaveAndRestore capture(dpiShapeSelectors, ArrayRef<DPIShapeSelector>{});
+  Location location = getSemanticLocation(selector.expression);
+  if (atEntry) {
+    auto value = lowerExpression(selector.expression);
+    if (failed(value) ||
+        failed(storeReference(selector.result, *value, location)))
+      return failure();
+    auto yes =
+        arith::ConstantOp::create(builder, location, builder.getBoolAttr(true));
+    if (failed(storeReference(selector.evaluated, yes, location)))
+      return failure();
+    return *value;
+  }
+  // An export can change a conditional selector. Reuse an opaque value when
+  // the entry evaluation reached it, and evaluate a newly selected arm here.
+  auto seen = loadReference(selector.evaluated, location);
+  auto saved = loadReference(selector.result, location);
+  if (failed(seen) || failed(saved))
+    return failure();
+  Block *evaluate = addBlock();
+  Block *merge = addBlock();
+  Value result = merge->addArgument((*saved).getType(), location);
+  cf::CondBranchOp::create(builder, location, *seen, merge, ValueRange{*saved},
+                           evaluate, ValueRange{});
+  setCurrent(evaluate);
+  auto value = lowerExpression(selector.expression);
+  if (failed(value))
+    return failure();
+  cf::BranchOp::create(builder, location, merge, ValueRange{*value});
+  setCurrent(merge);
+  return result;
+}
+
 LogicalResult UnitLowering::copyOutToActual(Operation *actual,
                                             Value scopeObject, Value value,
                                             bool formalSigned,
-                                            Location location) {
+                                            Location location,
+                                            bool unpackDPIArray) {
   // IEEE 1800-2023 4.9.7: copy-out on return behaves as a blocking
   // assignment, so the actual is addressed on return. A subroutine that
   // changes an index of its own actual writes the element it selects then.
@@ -91,8 +185,12 @@ LogicalResult UnitLowering::copyOutToActual(Operation *actual,
     return emitError(location)
                << "output and inout actuals must be variable references",
            failure();
-  FailureOr<Value> converted = convert(value, destinationType, formalSigned,
-                                       location, isSignedNode(actual));
+  FailureOr<Value> converted =
+      unpackDPIArray && sim::getDPIAggregateBitStreamImportPlan(destinationType)
+          ? convertFixedBitstreamTarget(value, destinationType, location, false,
+                                        true)
+          : convert(value, destinationType, formalSigned, location,
+                    isSignedNode(actual));
   if (failed(converted))
     return failure();
   return storeReference(*destination, *converted, location);
@@ -2298,18 +2396,15 @@ FailureOr<Value> UnitLowering::lowerCall(semantic::SVCallExpressionOp op) {
   }
   struct CopyOut {
     Operation *actual;
-    /// The actual addressed when the call began, for transports it shapes.
-    Value destination;
     Value taskDestination;
-    Type formalType;
     Type resultType;
     bool formalSigned;
-    bool destinationSigned;
     uint32_t dpiCategory;
     uint32_t dpiWidth;
     bool dpiFourState;
     dpi::OpenArrayABIAttr openArray;
     dpi::AggregateABIAttr aggregate;
+    SmallVector<DPIShapeSelector, 0> shapeSelectors;
   };
   auto getDPITransportWidth = [](Type type) -> std::optional<unsigned> {
     if (isa<sim::StringType, sim::ChandleType, sim::DynamicArrayType,
@@ -2354,30 +2449,39 @@ FailureOr<Value> UnitLowering::lowerCall(semantic::SVCallExpressionOp op) {
   auto makeOpenArrayLayout =
       [&](Type formalSemantic, Type actualSemantic,
           Type transportType) -> FailureOr<dpi::OpenArrayABIAttr> {
-    // The actual supplies the concrete width of unsized packed dimensions.
-    // Remove only its unpacked dimensions; the remaining packed shape is one
-    // canonical C element and is normalized to [width-1:0] by the DPI ABI.
-    Type element = actualSemantic;
-    while (true) {
-      if (auto array = dyn_cast<semantic::RangedUnpackedArrayType>(element)) {
-        element = array.getElementType();
-        continue;
-      }
-      if (auto array = dyn_cast<semantic::UnpackedArrayType>(element)) {
-        element = array.getElementType();
-        continue;
-      }
-      if (auto array = dyn_cast<semantic::DynArrayType>(element)) {
-        element = array.getElementType();
-        continue;
-      }
-      break;
+    auto unpackedElement = [](Type type) {
+      while (Type child =
+                 llvm::TypeSwitch<Type, Type>(type)
+                     .Case<semantic::RangedUnpackedArrayType,
+                           semantic::UnpackedArrayType, semantic::DynArrayType,
+                           semantic::QueueType>(
+                         [](auto array) { return array.getElementType(); })
+                     .Case<semantic::OpenArrayType>([](auto array) {
+                       return array.getIsPacked() ? Type{}
+                                                  : array.getElementType();
+                     })
+                     .Default([](Type) { return Type{}; }))
+        type = child;
+      return type;
+    };
+    // The import selects the canonical C element type. Only the width of a
+    // solitary unsized packed dimension comes from the actual (35.6.1.1).
+    Type actualElement = unpackedElement(actualSemantic);
+    Type element = unpackedElement(formalSemantic);
+    if (auto packed = dyn_cast<semantic::OpenArrayType>(element)) {
+      auto width = getSemanticBitstreamWidth(actualElement);
+      if (!width || !*width || *width > UINT32_MAX)
+        return emitError(location,
+                         "DPI packed open-array width is not representable"),
+               failure();
+      element = semantic::RangedPackedArrayType::get(
+          builder.getContext(), packed.getElementType(), *width - 1, 0);
     }
     FailureOr<DPIABIType> elementABI = classifyDPIABIType(element, location);
     if (failed(elementABI))
       return failure();
     FailureOr<Type> normalizedElement =
-        normalizeSemanticType(element, location, function);
+        normalizeSemanticType(actualElement, location, function);
     if (failed(normalizedElement))
       return failure();
     FailureOr<dpi::AggregateABIAttr> elementLayout =
@@ -2432,6 +2536,10 @@ FailureOr<Value> UnitLowering::lowerCall(semantic::SVCallExpressionOp op) {
       bool runtime =
           actualDimension.kind == SemanticDimensionKind::DynamicArray ||
           actualDimension.kind == SemanticDimensionKind::Queue;
+      if (index != 0 && runtime && !formalUnsized)
+        return emitError(location, "a sized inner DPI dimension requires a "
+                                   "fixed-size actual dimension"),
+               failure();
       if (!runtime && !actualDimension.isFixed())
         return emitError(location)
                    << "DPI open-array actual has an unsupported runtime "
@@ -2467,14 +2575,18 @@ FailureOr<Value> UnitLowering::lowerCall(semantic::SVCallExpressionOp op) {
         descriptorRight = static_cast<int64_t>(*formalExtent - 1);
       }
       ranges.append({descriptorLeft, descriptorRight});
-      if (runtime)
-        sourceRanges.append({0, 0});
-      else
-        sourceRanges.append({actualDimension.left, actualDimension.right});
+      // Array assignment pairs elements left-to-left (7.6). C indexes the
+      // resulting formal from its lowest SV index (H.7.6). An open dimension
+      // takes its bounds and direction from the actual.
+      const auto &boundDimension =
+          formalUnsized ? actualDimension : formalDimension;
+      sourceRanges.append({boundDimension.left, boundDimension.right});
+      bool descending = boundDimension.left > boundDimension.right;
 
       Type child = childType(sourceType);
-      std::optional<uint64_t> childSpan = sim::getProvenanceSpan(child);
-      if (!child || !childSpan || *childSpan == 0 || *childSpan > INT64_MAX)
+      std::optional<uint64_t> childSpan =
+          child ? sim::getProvenanceSpan(child) : std::nullopt;
+      if (!childSpan || *childSpan == 0 || *childSpan > INT64_MAX)
         return emitError(location)
                    << "DPI open-array dimension has no bounded element layout",
                failure();
@@ -2485,10 +2597,13 @@ FailureOr<Value> UnitLowering::lowerCall(semantic::SVCallExpressionOp op) {
       if (runtime) {
         uint32_t kind =
             actualDimension.kind == SemanticDimensionKind::Queue ? 2u : 1u;
-        shapePlan.append({static_cast<int64_t>(kind), descriptorLeft,
-                          descriptorRight, 0, 0,
-                          static_cast<int64_t>(*childSpan),
-                          childFourState ? 1 : 0, formalUnsized ? 0 : 1});
+        int64_t mode = TALOS_RT_DPI_SHAPE_OPEN;
+        if (!formalUnsized)
+          mode = descending ? TALOS_RT_DPI_SHAPE_SIZED_REVERSE
+                            : TALOS_RT_DPI_SHAPE_SIZED;
+        shapePlan.append(
+            {static_cast<int64_t>(kind), descriptorLeft, descriptorRight, 0, 0,
+             static_cast<int64_t>(*childSpan), childFourState ? 1 : 0, mode});
         hasRuntimeShape = true;
         simpleRootRuntime &= formalUnsized;
       } else {
@@ -2499,20 +2614,19 @@ FailureOr<Value> UnitLowering::lowerCall(semantic::SVCallExpressionOp op) {
                  failure();
         uint64_t stride = *storageStride;
         if (stride == 0 || stride > INT64_MAX ||
-            (*actualExtent - 1) > UINT64_MAX / stride)
+            (*actualExtent - 1) > INT64_MAX / stride)
           return emitError(location)
                      << "DPI open-array fixed dimension stride overflows",
                  failure();
-        uint64_t start = actualDimension.left <= actualDimension.right
-                             ? 0
-                             : (*actualExtent - 1) * stride;
-        int64_t signedStride = actualDimension.left <= actualDimension.right
-                                   ? static_cast<int64_t>(stride)
-                                   : -static_cast<int64_t>(stride);
+        uint64_t start = descending ? (*actualExtent - 1) * stride : 0;
+        int64_t signedStride = descending ? -static_cast<int64_t>(stride)
+                                          : static_cast<int64_t>(stride);
         shapePlan.append({0, descriptorLeft, descriptorRight,
                           static_cast<int64_t>(start), signedStride,
                           static_cast<int64_t>(*childSpan),
-                          childFourState ? 1 : 0, formalUnsized ? 0 : 1});
+                          childFourState ? 1 : 0,
+                          formalUnsized ? TALOS_RT_DPI_SHAPE_OPEN
+                                        : TALOS_RT_DPI_SHAPE_SIZED});
       }
       sourceType = child;
     }
@@ -2552,17 +2666,16 @@ FailureOr<Value> UnitLowering::lowerCall(semantic::SVCallExpressionOp op) {
                  << "DPI open-array actual has no bounded transport for "
                  << transportType,
              failure();
-    int64_t packedLeft = static_cast<int64_t>(elementWidth) - 1;
-    bool transportFourState = storage == 0
-                                  ? elementABI->fourState
-                                  : sim::containsFourStateLeaf(transportType);
+    int64_t packedLeft = static_cast<int64_t>(elementABI->width) - 1;
+    bool elementFourState = sim::containsFourStateLeaf(*normalizedElement);
     return dpi::OpenArrayABIAttr::get(
         builder.getContext(), storage,
         static_cast<dpi::ABIKind>(elementABI->kind), elementWidth,
-        *transportWidth, transportFourState, elementABI->fourState,
-        elementLayout->getCSize(), elementLayout->getCAlignment(),
-        elementLayout->getStringCount(), elementLayout->getLeaves(), packedLeft,
-        0, builder.getDenseI64ArrayAttr(ranges),
+        *transportWidth, sim::containsFourStateLeaf(transportType),
+        elementFourState, elementLayout->getCSize(),
+        elementLayout->getCAlignment(), elementLayout->getStringCount(),
+        elementLayout->getLeaves(), packedLeft, 0,
+        builder.getDenseI64ArrayAttr(ranges),
         builder.getDenseI64ArrayAttr(sourceRanges),
         builder.getDenseI64ArrayAttr(storage == 2 ? shapePlan
                                                   : ArrayRef<int64_t>{}));
@@ -2588,14 +2701,94 @@ FailureOr<Value> UnitLowering::lowerCall(semantic::SVCallExpressionOp op) {
       dpiCategory = static_cast<uint32_t>(*category);
     }
     bool dpiImport = dpi::has<dpi::ImportId>(op);
-    bool openFormal = dpiImport && formalSemantic &&
-                      llvm::any_of(getSemanticDimensions(formalSemantic),
-                                   [](const SemanticDimension &dimension) {
-                                     return dimension.kind ==
-                                            SemanticDimensionKind::OpenArray;
-                                   });
+    bool openFormal = dpiImport && dpiCategory == static_cast<uint32_t>(
+                                                      DPIABIKind::OpenArray);
+    if (openFormal) {
+      // Slang may wrap a dynamic actual in an implicit conversion to a sized
+      // outer formal containing open dimensions. Bind the descriptor to the
+      // original value so it can check the extent and retain the inner bounds.
+      if (auto cast = dyn_cast<semantic::SVConversionExpressionOp>(actual);
+          cast && cast.getSemanticType() == formalSemantic) {
+        auto implicit = cast->getAttrOfType<BoolAttr>("is_implicit");
+        if (implicit && implicit.getValue()) {
+          auto children = getChildren(cast);
+          if (children.size() != 1)
+            return cast.emitOpError("requires one DPI argument to convert"),
+                   failure();
+          actual = children.front();
+        }
+      }
+      auto semanticType = actual->getAttrOfType<TypeAttr>("semantic_type");
+      if (!semanticType)
+        return emitError(location,
+                         "DPI open-array binding has no semantic shape"),
+               failure();
+
+      auto actualType = getNormalizedSemanticType(actual);
+      if (failed(actualType))
+        return failure();
+      bool outputOnly = direction == sim::FormalDirection::Out;
+      if (outputOnly && isa<sim::DynamicArrayType, sim::QueueType>(*actualType))
+        return emitError(location)
+                   << "dynamic-array and queue actuals cannot be passed to "
+                      "an output DPI open-array formal with unsized dimensions",
+               failure();
+      auto layout = makeOpenArrayLayout(formalSemantic, semanticType.getValue(),
+                                        *actualType);
+      if (failed(layout))
+        return failure();
+
+      Value value;
+      SmallVector<DPIShapeSelector, 0> shapeSelectors;
+      // A static output needs only its type on entry. Evaluate the lvalue
+      // (including any subscript side effects) when copying back on return.
+      if (outputOnly && layout->getStorage() == 0) {
+        unsigned width = static_cast<unsigned>(layout->getTransportWidth());
+        Type plane =
+            layout->getTransportFourState()
+                ? Type(sim::LogicType::get(builder.getContext(), width))
+                : Type(builder.getIntegerType(width));
+        value = createDefaultValue(builder, location, plane);
+      } else {
+        llvm::SaveAndRestore project(projectingDPIOutputShape);
+        llvm::SaveAndRestore capture(dpiShapeSelectors);
+        if (outputOnly) {
+          if (failed(prepareDPIShapeSelectors(actual, shapeSelectors, location)))
+            return failure();
+          projectingDPIOutputShape = true;
+          dpiShapeSelectors = shapeSelectors;
+        }
+        auto loaded = lowerExpression(actual);
+        if (failed(loaded))
+          return failure();
+        auto transport =
+            layout->getStorage() == 0 ? packOpenArrayActual(*loaded) : loaded;
+        if (failed(transport))
+          return failure();
+        value = *transport;
+      }
+      dpiOperandABI.push_back(dpi::ABIAttr::get(
+          builder.getContext(), dpi::ABIKind::OpenArray,
+          static_cast<dpi::ArgumentDirection>(direction),
+          layout->getElementWidth(), layout->getFourState(), false));
+      dpiOpenArrayLayouts.push_back(*layout);
+      dpiAggregateLayouts.push_back(builder.getUnitAttr());
+      operands.push_back(cloneSequentialValue(value, location));
+      if (!isInput)
+        copyOuts.push_back({actual,
+                            {},
+                            value.getType(),
+                            false,
+                            static_cast<uint32_t>(dpi::ABIKind::OpenArray),
+                            layout->getElementWidth(),
+                            layout->getFourState(),
+                            *layout,
+                            {},
+                            std::move(shapeSelectors)});
+      continue;
+    }
     dpi::AggregateABIAttr formalAggregateLayout;
-    if (dpiImport && !openFormal) {
+    if (dpiImport) {
       if (isa<semantic::DynArrayType, semantic::QueueType,
               semantic::AssocArrayType, sim::DynamicArrayType, sim::QueueType,
               sim::AssocArrayType>(formalType)) {
@@ -2640,30 +2833,6 @@ FailureOr<Value> UnitLowering::lowerCall(semantic::SVCallExpressionOp op) {
       FailureOr<Value> argument = lowerExpression(actual);
       if (failed(argument))
         return failure();
-      if (dpiImport && openFormal) {
-        auto semanticType = actual->getAttrOfType<TypeAttr>("semantic_type");
-        if (!semanticType || !formalSemantic)
-          return emitError(location)
-                     << "DPI open-array binding has no semantic shape",
-                 failure();
-        FailureOr<dpi::OpenArrayABIAttr> layout = makeOpenArrayLayout(
-            formalSemantic, semanticType.getValue(), (*argument).getType());
-        if (failed(layout))
-          return failure();
-        FailureOr<Value> transport = layout->getStorage() == 0
-                                         ? packOpenArrayActual(*argument)
-                                         : FailureOr<Value>(*argument);
-        if (failed(transport))
-          return failure();
-        dpiOperandABI.push_back(dpi::ABIAttr::get(
-            builder.getContext(), dpi::ABIKind::OpenArray,
-            dpi::ArgumentDirection::Input, layout->getElementWidth(),
-            layout->getFourState(), false));
-        dpiOpenArrayLayouts.push_back(*layout);
-        dpiAggregateLayouts.push_back(builder.getUnitAttr());
-        operands.push_back(cloneSequentialValue(*transport, location));
-        continue;
-      }
       FailureOr<Value> converted = convert(
           *argument, formalType, isSignedNode(actual), location, formalSigned);
       if (failed(converted))
@@ -2672,22 +2841,10 @@ FailureOr<Value> UnitLowering::lowerCall(semantic::SVCallExpressionOp op) {
       continue;
     }
 
-    // Only a ref formal and a DPI open array, whose transport is shaped by
-    // the actual itself, address the actual when the call begins.
-    FailureOr<Value> destination = Value();
-    Type destinationType;
-    if (direction == sim::FormalDirection::Ref || (dpiImport && openFormal)) {
-      destination = lowerExpression(actual, true);
+    if (direction == sim::FormalDirection::Ref) {
+      FailureOr<Value> destination = lowerExpression(actual, true);
       if (failed(destination))
         return failure();
-      destinationType = getReferenceElementType(*destination);
-      if (!destinationType) {
-        emitError(location)
-            << "output, inout, and ref actuals must be variable references";
-        return failure();
-      }
-    }
-    if (direction == sim::FormalDirection::Ref) {
       bool argumentRef = formal.getArgumentRef();
       if (directTask && !argumentRef) {
         if (!isa<sim::RefType>((*destination).getType())) {
@@ -2705,52 +2862,6 @@ FailureOr<Value> UnitLowering::lowerCall(semantic::SVCallExpressionOp op) {
         return failure();
       }
       operands.push_back(*argument);
-      continue;
-    }
-
-    if (dpiImport && openFormal) {
-      FailureOr<Value> loaded = loadReference(*destination, location);
-      if (failed(loaded))
-        return failure();
-      auto semanticType = actual->getAttrOfType<TypeAttr>("semantic_type");
-      if (!semanticType || !formalSemantic)
-        return emitError(location)
-                   << "DPI open-array binding has no semantic shape",
-               failure();
-      FailureOr<dpi::OpenArrayABIAttr> layout = makeOpenArrayLayout(
-          formalSemantic, semanticType.getValue(), (*loaded).getType());
-      if (failed(layout))
-        return failure();
-      if (layout->getStorage() != 0 && direction == sim::FormalDirection::Out)
-        return emitError(location)
-                   << "dynamic-array and queue actuals cannot be passed to "
-                      "an output DPI open-array formal with unsized "
-                      "dimensions",
-               failure();
-      FailureOr<Value> transport = layout->getStorage() == 0
-                                       ? packOpenArrayActual(*loaded)
-                                       : FailureOr<Value>(*loaded);
-      if (failed(transport))
-        return failure();
-      dpiOperandABI.push_back(dpi::ABIAttr::get(
-          builder.getContext(), dpi::ABIKind::OpenArray,
-          static_cast<dpi::ArgumentDirection>(direction),
-          layout->getElementWidth(), layout->getFourState(), false));
-      dpiOpenArrayLayouts.push_back(*layout);
-      dpiAggregateLayouts.push_back(builder.getUnitAttr());
-      operands.push_back(cloneSequentialValue(*transport, location));
-      copyOuts.push_back({actual,
-                          *destination,
-                          {},
-                          destinationType,
-                          (*transport).getType(),
-                          false,
-                          isSignedNode(actual),
-                          static_cast<uint32_t>(dpi::ABIKind::OpenArray),
-                          layout->getElementWidth(),
-                          layout->getFourState(),
-                          *layout,
-                          {}});
       continue;
     }
 
@@ -2786,12 +2897,9 @@ FailureOr<Value> UnitLowering::lowerCall(semantic::SVCallExpressionOp op) {
     }
     copyOuts.push_back(
         {actual,
-         Value(),
          taskDestination,
          formalType,
-         formalType,
          formalSigned,
-         isSignedNode(actual),
          dpiCategory,
          formalAggregateLayout
              ? static_cast<uint32_t>(
@@ -2800,7 +2908,8 @@ FailureOr<Value> UnitLowering::lowerCall(semantic::SVCallExpressionOp op) {
          formalAggregateLayout ? streamContainsFourState(formalType)
                                : isDPIFourState(formalType),
          {},
-         formalAggregateLayout});
+         formalAggregateLayout,
+         {}});
   }
 
   llvm::StringSet<> readCaptures;
@@ -2861,6 +2970,38 @@ FailureOr<Value> UnitLowering::lowerCall(semantic::SVCallExpressionOp op) {
     for (const CopyOut &copyOut : copyOuts)
       callResultTypes.push_back(copyOut.resultType);
   SmallVector<Value> callResults;
+  auto selectVirtualCandidate = [&](sim::VirtualInterfaceCalleeAttr candidate) {
+    Block *matched = addBlock();
+    Block *next = addBlock();
+    Value expected = arith::ConstantOp::create(
+        builder, location, builder.getI64IntegerAttr(candidate.getScope()));
+    Value equal = arith::CmpIOp::create(
+        builder, location, arith::CmpIPredicate::eq, virtualScope, expected);
+    cf::CondBranchOp::create(builder, location, equal, matched, ValueRange{},
+                             next, ValueRange{});
+    setCurrent(matched);
+    return next;
+  };
+  auto dispatchVirtualCall = [&](auto emitCall) -> LogicalResult {
+    Block *merge = addBlock();
+    for (Type type : callResultTypes)
+      merge->addArgument(type, location);
+    for (auto candidate :
+         virtualCallees.getAsRange<sim::VirtualInterfaceCalleeAttr>()) {
+      Block *next = selectVirtualCandidate(candidate);
+      FailureOr<ResultRange> results = emitCall(candidate);
+      if (failed(results))
+        return failure();
+      cf::BranchOp::create(builder, location, merge, *results);
+      setCurrent(next);
+    }
+    if (failed(emitRuntimeFatal(
+            location, "virtual interface call used a null or invalid handle.")))
+      return failure();
+    setCurrent(merge);
+    llvm::append_range(callResults, merge->getArguments());
+    return success();
+  };
   if (IntegerAttr importID = dpi::get<dpi::ImportId>(op)) {
     if (operands.empty())
       return emitError(location) << "DPI call is missing its runtime context",
@@ -2914,22 +3055,40 @@ FailureOr<Value> UnitLowering::lowerCall(semantic::SVCallExpressionOp op) {
     uint32_t sourceColumn = fileLocation ? fileLocation.getColumn() : 0;
     SmallVector<Type> dpiResultTypes(callResultTypes);
     dpiResultTypes.push_back(runtime::StatusType::get(builder.getContext()));
-    auto call = retainCallSite(sim::SimDPICallOp::create(
-        builder, location, dpiResultTypes,
-        builder.getI32IntegerAttr(
-            static_cast<uint32_t>(importID.getValue().getZExtValue())),
-        dpi::get<dpi::CIdentifier>(op), dpi::get<dpi::ScopeId>(op),
-        builder.getArrayAttr(signature),
-        builder.getBoolAttr(dpi::has<dpi::Pure>(op)),
-        builder.getBoolAttr(dpi::has<dpi::Context>(op)),
-        builder.getBoolAttr(dpiTask), builder.getStringAttr(sourceFile),
-        builder.getI32IntegerAttr(sourceLine),
-        builder.getI32IntegerAttr(sourceColumn), runtimeContext, operands,
-        builder.getArrayAttr(dpiOpenArrayLayouts),
-        builder.getArrayAttr(dpiAggregateLayouts),
-        /*logical_inputs=*/IntegerAttr{}));
-    sim::SimStatusCheckOp::create(builder, location, call.getResults().back());
-    llvm::append_range(callResults, call.getResults().drop_back());
+    auto emitImport = [&](IntegerAttr scope) -> ResultRange {
+      auto call = retainCallSite(sim::SimDPICallOp::create(
+          builder, location, dpiResultTypes, importID,
+          dpi::get<dpi::CIdentifier>(op), scope,
+          builder.getArrayAttr(signature),
+          builder.getBoolAttr(dpi::has<dpi::Pure>(op)),
+          builder.getBoolAttr(dpi::has<dpi::Context>(op)),
+          builder.getBoolAttr(dpiTask), builder.getStringAttr(sourceFile),
+          builder.getI32IntegerAttr(sourceLine),
+          builder.getI32IntegerAttr(sourceColumn), runtimeContext, operands,
+          builder.getArrayAttr(dpiOpenArrayLayouts),
+          builder.getArrayAttr(dpiAggregateLayouts),
+          /*logical_inputs=*/IntegerAttr{}));
+      sim::SimStatusCheckOp::create(builder, location,
+                                    call.getResults().back());
+      return call.getResults().drop_back();
+    };
+    if (!virtualCallees)
+      llvm::append_range(callResults, emitImport(dpi::get<dpi::ScopeId>(op)));
+    else if (failed(dispatchVirtualCall(
+                 [&](sim::VirtualInterfaceCalleeAttr candidate)
+                     -> FailureOr<ResultRange> {
+                   auto target = lookupNearestSymbolFrom<sim::SimFuncOp>(
+                       op, candidate.getCallee());
+                   auto scope =
+                       target ? dpi::get<dpi::ScopeId>(target) : IntegerAttr{};
+                   if (!scope)
+                     return emitError(
+                                location,
+                                "virtual DPI import has no declaration scope"),
+                            failure();
+                   return emitImport(scope);
+                 })))
+      return failure();
   } else if (!directTask) {
     if (!virtualCallees) {
       auto call = retainCallSite(
@@ -2937,22 +3096,8 @@ FailureOr<Value> UnitLowering::lowerCall(semantic::SVCallExpressionOp op) {
                                  operands, ArrayAttr{}, ArrayAttr{}));
       llvm::append_range(callResults, call.getResults());
     } else {
-      Block *merge = addBlock();
-      for (Type type : callResultTypes)
-        merge->addArgument(type, location);
-      for (auto candidate :
-           virtualCallees.getAsRange<sim::VirtualInterfaceCalleeAttr>()) {
-        Block *matched = addBlock();
-        Block *next = addBlock();
-        Value expected = arith::ConstantOp::create(
-            builder, location, builder.getI64Type(),
-            builder.getI64IntegerAttr(candidate.getScope()));
-        Value equal =
-            arith::CmpIOp::create(builder, location, arith::CmpIPredicate::eq,
-                                  virtualScope, expected);
-        cf::CondBranchOp::create(builder, location, equal, matched,
-                                 ValueRange{}, next, ValueRange{});
-        setCurrent(matched);
+      auto emitFunction = [&](sim::VirtualInterfaceCalleeAttr candidate)
+          -> FailureOr<ResultRange> {
         SmallVector<Value> candidateOperands(operands);
         for (Attribute captureAttr : candidate.getCaptures()) {
           StringRef path = cast<StringAttr>(captureAttr).getValue();
@@ -2980,15 +3125,10 @@ FailureOr<Value> UnitLowering::lowerCall(semantic::SVCallExpressionOp op) {
         auto selected = retainCallSite(sim::SimCallOp::create(
             builder, location, callResultTypes, candidate.getCallee(),
             candidateOperands, ArrayAttr{}, ArrayAttr{}));
-        cf::BranchOp::create(builder, location, merge, selected.getResults());
-        setCurrent(next);
-      }
-      if (failed(emitRuntimeFatal(
-              location,
-              "virtual interface call used a null or invalid handle.")))
+        return selected.getResults();
+      };
+      if (failed(dispatchVirtualCall(emitFunction)))
         return failure();
-      setCurrent(merge);
-      llvm::append_range(callResults, merge->getArguments());
     }
   } else {
     Block *continuation = addBlock();
@@ -3000,17 +3140,7 @@ FailureOr<Value> UnitLowering::lowerCall(semantic::SVCallExpressionOp op) {
     } else {
       for (auto candidate :
            virtualCallees.getAsRange<sim::VirtualInterfaceCalleeAttr>()) {
-        Block *matched = addBlock();
-        Block *next = addBlock();
-        Value expected = arith::ConstantOp::create(
-            builder, location, builder.getI64Type(),
-            builder.getI64IntegerAttr(candidate.getScope()));
-        Value equal =
-            arith::CmpIOp::create(builder, location, arith::CmpIPredicate::eq,
-                                  virtualScope, expected);
-        cf::CondBranchOp::create(builder, location, equal, matched,
-                                 ValueRange{}, next, ValueRange{});
-        setCurrent(matched);
+        Block *next = selectVirtualCandidate(candidate);
         SmallVector<Value> candidateOperands(operands);
         for (Attribute captureAttr : candidate.getCaptures()) {
           StringRef path = cast<StringAttr>(captureAttr).getValue();
@@ -3053,25 +3183,12 @@ FailureOr<Value> UnitLowering::lowerCall(semantic::SVCallExpressionOp op) {
   if (!directTask) {
     for (auto [index, copyOut] : llvm::enumerate(copyOuts)) {
       Value result = callResults[index + (hasFunctionResult ? 1 : 0)];
-      if (!copyOut.destination) {
-        if (failed(copyOutToActual(copyOut.actual, {}, result,
-                                   copyOut.formalSigned, location)))
-          return failure();
-        continue;
-      }
-      Type destinationType = getReferenceElementType(copyOut.destination);
-      if (!destinationType)
-        return failure();
-      FailureOr<Value> converted =
-          copyOut.openArray &&
-                  sim::getDPIAggregateBitStreamImportPlan(destinationType)
-              ? convertFixedBitstreamTarget(result, destinationType, location,
-                                            false, true)
-              : convert(result, destinationType, copyOut.formalSigned, location,
-                        copyOut.destinationSigned);
-      if (failed(converted))
-        return failure();
-      if (failed(storeReference(copyOut.destination, *converted, location)))
+      llvm::SaveAndRestore capture(
+          dpiShapeSelectors,
+          ArrayRef<DPIShapeSelector>(copyOut.shapeSelectors));
+      if (failed(copyOutToActual(
+              copyOut.actual, {}, result, copyOut.formalSigned, location,
+              copyOut.openArray && copyOut.openArray.getStorage() == 0)))
         return failure();
     }
   } else {

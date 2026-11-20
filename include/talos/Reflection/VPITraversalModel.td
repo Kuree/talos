@@ -464,9 +464,12 @@ def FileProperty : VPIProperty<"vpiFile", 5, StringProperty,
 def LineNoProperty : VPIProperty<"vpiLineNo", 6, IntegerProperty,
   SourceLocatedObjects, "37.3.3">;
 def TimeUnitProperty : VPIProperty<"vpiTimeUnit", 11, IntegerProperty,
-  InstanceAndRootObjects, "37.10; 38.6">;
+  InstanceAndRootObjects, "37.10; 38.6", StaticProperty, DeniedWhenProtected,
+  0, NoPropertyObjects, NoPropertyObjects, DerivedProperty, PackageSource>;
 def TimePrecisionProperty : VPIProperty<"vpiTimePrecision", 12,
-  IntegerProperty, InstanceAndRootObjects, "37.10; 38.6">;
+  IntegerProperty, InstanceAndRootObjects, "37.10; 38.6", StaticProperty,
+  DeniedWhenProtected, 0, NoPropertyObjects, NoPropertyObjects, DerivedProperty,
+  PackageSource>;
 def IsProtectedProperty : VPIProperty<"vpiIsProtected", 74, BooleanProperty,
   AllConcreteObjects, "37.3.6", StaticProperty, AllowedWhenProtected, 0,
   NoPropertyObjects, NoPropertyObjects, FixedImageProperty>;
@@ -1270,13 +1273,20 @@ def EndLineProperty : VPIProperty<"vpiEndLine", 663, IntegerProperty,
 def EndColumnProperty : VPIProperty<"vpiEndColumn", 664, IntegerProperty,
   AssertionLocationPropertyObjects, "37.49">;
 def DPIPureProperty : VPIProperty<"vpiDPIPure", 665, BooleanProperty,
-  TaskFunctionDeclObjects, "37.41">;
+  TaskFunctionDeclObjects, "37.41", StaticProperty, DeniedWhenProtected, 0,
+  NoPropertyObjects, NoPropertyObjects, FixedImageProperty>;
 def DPIContextProperty : VPIProperty<"vpiDPIContext", 666, BooleanProperty,
-  TaskFunctionDeclObjects, "37.41">;
+  TaskFunctionDeclObjects, "37.41", StaticProperty, DeniedWhenProtected, 0,
+  NoPropertyObjects, NoPropertyObjects, FixedImageProperty>;
 def DPICStrProperty : VPIProperty<"vpiDPICStr", 667, IntegerProperty,
-  TaskFunctionDeclObjects, "37.41">;
+  TaskFunctionDeclObjects, "37.41", StaticProperty, DeniedWhenProtected, 0,
+  NoPropertyObjects, NoPropertyObjects, OptionalImageProperty>;
+def DPISpecLegacy : VPIIntegerPropertyValue<DPICStrProperty, 1>;
+def DPISpecC : VPIIntegerPropertyValue<DPICStrProperty, 2>;
 def DPICIdentifierProperty : VPIProperty<"vpiDPICIdentifier", 668,
-  StringProperty, TaskFunctionDeclObjects, "37.41">;
+  StringProperty, TaskFunctionDeclObjects, "37.41", StaticProperty,
+  DeniedWhenProtected, 0, NoPropertyObjects, NoPropertyObjects,
+  OptionalImageProperty>;
 def IsModPortProperty : VPIProperty<"vpiIsModPort", 669, BooleanProperty,
   InterfaceTypePropertyObjects, "37.29; 37.30">;
 def IsFinalProperty : VPIProperty<"vpiIsFinal", 670, IntegerProperty,

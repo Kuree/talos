@@ -17,8 +17,16 @@
 
 thread_local ActiveDpiCall *activeDpiCall = nullptr;
 
+// The suspended import frame still owns the export's dispatch and disable
+// state. Only a new context import may expose a scope while SV is running.
+static ActiveDpiCall *currentImport() {
+  return activeDpiCall && !activeDpiCall->executingExport ? activeDpiCall
+                                                          : nullptr;
+}
+
 extern "C" talos_rt_context *talos_rt_v1_dpi_current_context(void) {
-  return activeDpiCall ? activeDpiCall->context : nullptr;
+  auto *call = currentImport();
+  return call ? call->context : nullptr;
 }
 
 namespace {
@@ -124,7 +132,8 @@ void normalize(talos_rt_import_output_v1 &output) {
   }
 }
 
-DpiScopeHandle *scopeFromOpaque(ActiveDpiCall *call, const svScope scope) {
+DpiScopeHandle *scopeFromOpaque(const svScope scope) {
+  auto *call = currentImport();
   if (!call || !scope)
     return nullptr;
   for (const std::unique_ptr<DpiScopeHandle> &candidate :
@@ -286,6 +295,8 @@ importCallImpl(talos_rt_context *context, const talos_rt_import_site_v1 *site,
     talos_rt_status status =
         binding.callback(context, site->import_id, inputs, inputCount, outputs,
                          outputCount, binding.userData);
+    if (call.exportStatus != TALOS_RT_OK)
+      return call.exportStatus;
     bool task = (site->flags & TALOS_RT_IMPORT_TASK) != 0;
     bool returnedDisabled = status == TALOS_RT_DPI_DISABLE_UNSUPPORTED;
     if (call.disabledState) {
@@ -302,8 +313,6 @@ importCallImpl(talos_rt_context *context, const talos_rt_import_site_v1 *site,
     }
     if (status != TALOS_RT_OK)
       return status;
-    if (call.exportStatus != TALOS_RT_OK)
-      return call.exportStatus;
     return finishOutputs(TALOS_RT_OK);
   });
 }
@@ -468,12 +477,16 @@ extern "C" void svPutPartselLogic(svLogicVecVal *destination,
 
 // IEEE 1800-2023 H.14.2: the opaque packed-array handle of an SV3.1a ("DPI")
 // declaration points at the canonical words, so conversion is a copy.
+static int packedWordCount(int width) {
+  return width > 0 ? 1 + (width - 1) / 32 : 0;
+}
+
 extern "C" int svSizeOfBitPackedArr(int width) {
-  return width <= 0 ? 0 : static_cast<int>(sizeof(svBitVecVal)) * ((width + 31) >> 5);
+  return static_cast<int>(sizeof(svBitVecVal)) * packedWordCount(width);
 }
 
 extern "C" int svSizeOfLogicPackedArr(int width) {
-  return width <= 0 ? 0 : static_cast<int>(sizeof(svLogicVecVal)) * ((width + 31) >> 5);
+  return static_cast<int>(sizeof(svLogicVecVal)) * packedWordCount(width);
 }
 
 extern "C" void svPutBitVec32(svBitPackedArrRef destination,
@@ -488,7 +501,7 @@ extern "C" void svPutLogicVec32(svLogicPackedArrRef destination,
   if (!destination || !source)
     return;
   auto *words = static_cast<svLogicVecVal *>(destination);
-  for (int word = 0; word < ((width + 31) >> 5); ++word) {
+  for (int word = 0, count = packedWordCount(width); word < count; ++word) {
     words[word].aval = source[word].c;
     words[word].bval = source[word].d;
   }
@@ -506,7 +519,7 @@ extern "C" void svGetLogicVec32(svLogicVec32 *destination,
   if (!destination || !source)
     return;
   const auto *words = static_cast<const svLogicVecVal *>(source);
-  for (int word = 0; word < ((width + 31) >> 5); ++word) {
+  for (int word = 0, count = packedWordCount(width); word < count; ++word) {
     destination[word].c = words[word].aval;
     destination[word].d = words[word].bval;
   }
@@ -581,13 +594,12 @@ extern "C" void svPutPartSelectLogic(svLogicPackedArrRef destination,
 }
 
 extern "C" svScope svGetScope(void) {
-  return activeDpiCall ? activeDpiCall->scope : nullptr;
+  auto *call = currentImport();
+  return call ? call->scope : nullptr;
 }
 
 extern "C" svScope svSetScope(const svScope scope) {
-  if (!activeDpiCall)
-    return nullptr;
-  DpiScopeHandle *next = scopeFromOpaque(activeDpiCall, scope);
+  DpiScopeHandle *next = scopeFromOpaque(scope);
   if (!next)
     return nullptr;
   DpiScopeHandle *previous = activeDpiCall->scope;
@@ -596,31 +608,35 @@ extern "C" svScope svSetScope(const svScope scope) {
 }
 
 extern "C" const char *svGetNameFromScope(const svScope scope) {
-  DpiScopeHandle *handle = scopeFromOpaque(activeDpiCall, scope);
+  DpiScopeHandle *handle = scopeFromOpaque(scope);
   return handle ? handle->name.c_str() : nullptr;
 }
 
 extern "C" svScope svGetScopeFromName(const char *scopeName) {
-  if (!activeDpiCall || !scopeName)
+  auto *call = currentImport();
+  if (!call || !scopeName)
     return nullptr;
-  auto found = activeDpiCall->context->dpiScopesByName.find(scopeName);
-  return found == activeDpiCall->context->dpiScopesByName.end() ? nullptr
-                                                                : found->second;
+  auto found = call->context->dpiScopesByName.find(scopeName);
+  return found == call->context->dpiScopesByName.end() ? nullptr
+                                                       : found->second;
 }
 
 extern "C" int svPutUserData(const svScope scope, void *userKey,
                              void *userData) {
-  DpiScopeHandle *handle = scopeFromOpaque(activeDpiCall, scope);
-  if (!handle || !userKey || !userData)
+  DpiScopeHandle *handle = scopeFromOpaque(scope);
+  if (!handle || !userData)
     return -1;
-  std::lock_guard<TalosContextMutex> lock(handle->context->mutex);
-  handle->userData[userKey] = userData;
-  return 0;
+  TALOS_RT_TRY {
+    std::lock_guard<TalosContextMutex> lock(handle->context->mutex);
+    handle->userData.insert_or_assign(userKey, userData);
+    return 0;
+  }
+  TALOS_RT_CATCH_ALL { return -1; }
 }
 
 extern "C" void *svGetUserData(const svScope scope, void *userKey) {
-  DpiScopeHandle *handle = scopeFromOpaque(activeDpiCall, scope);
-  if (!handle || !userKey)
+  DpiScopeHandle *handle = scopeFromOpaque(scope);
+  if (!handle)
     return nullptr;
   std::lock_guard<TalosContextMutex> lock(handle->context->mutex);
   auto found = handle->userData.find(userKey);
@@ -628,23 +644,22 @@ extern "C" void *svGetUserData(const svScope scope, void *userKey) {
 }
 
 extern "C" int svGetCallerInfo(const char **fileName, int *lineNumber) {
-  if (!activeDpiCall || activeDpiCall->callerFile.empty() ||
-      activeDpiCall->callerLine == 0 || !fileName || !lineNumber)
+  auto *call = currentImport();
+  if (!call || call->callerFile.empty() || call->callerLine == 0 || !fileName ||
+      !lineNumber)
     return 0;
-  *fileName = activeDpiCall->callerFile.c_str();
-  *lineNumber = static_cast<int>(activeDpiCall->callerLine);
+  *fileName = call->callerFile.c_str();
+  *lineNumber = static_cast<int>(call->callerLine);
   return 1;
 }
 
 extern "C" int svIsDisabledState(void) {
-  return activeDpiCall && activeDpiCall->disabledState &&
-                 !activeDpiCall->disableAcknowledged
-             ? 1
-             : 0;
+  auto *call = currentImport();
+  return call && call->disabledState;
 }
 extern "C" void svAckDisabledState(void) {
-  if (activeDpiCall && activeDpiCall->disabledState)
-    activeDpiCall->disableAcknowledged = true;
+  if (auto *call = currentImport(); call && call->disabledState)
+    call->disableAcknowledged = true;
 }
 
 namespace {
@@ -653,13 +668,13 @@ namespace {
 // scope those of simulation time, which is the design's global precision.
 // They are the values vpi_get() reports for vpiTimeUnit and vpiTimePrecision.
 bool getScopeTimescale(const svScope scope, int32_t &unit, int32_t &precision) {
-  if (!activeDpiCall || !activeDpiCall->context->execution)
+  if (!currentImport() || !activeDpiCall->context->execution)
     return false;
   if (!scope) {
     unit = precision = activeDpiCall->context->execution->dpi_time_precision;
     return true;
   }
-  DpiScopeHandle *handle = scopeFromOpaque(activeDpiCall, scope);
+  DpiScopeHandle *handle = scopeFromOpaque(scope);
   if (!handle)
     return false;
   unit = handle->timeUnit;

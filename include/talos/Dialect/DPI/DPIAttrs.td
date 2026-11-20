@@ -26,6 +26,14 @@ def DPIABIArrayAttr : TypedArrayAttrBase<DPIABIAttr, "DPI ABI signature"> {
   let constBuilderCall = "$_builder.getArrayAttr($0)";
 }
 
+def DPIScopeAttr : DPIAttr<"Scope", "scope"> {
+  let summary = "declaration scope for DPI lookup and export dispatch";
+  let parameters = (ins "uint64_t":$parent, "::mlir::StringAttr":$name,
+      "uint64_t":$unitFs, "uint64_t":$precisionFs);
+  let assemblyFormat = "`<` struct(params) `>`";
+  let genVerifyDecl = 1;
+}
+
 def DPIOpenArrayABIAttr : DPIAttr<"OpenArrayABI", "open_array_abi"> {
   let summary = "concrete actual shape bound to one DPI open-array formal";
   let parameters = (ins
@@ -44,15 +52,16 @@ def DPIOpenArrayABIAttr : DPIAttr<"OpenArrayABI", "open_array_abi"> {
       "int64_t":$packedRight,
       // Declared left/right pairs for unpacked dimensions, outermost first.
       "::mlir::DenseI64ArrayAttr":$ranges,
-      // Original actual ranges retain source direction for copy-in/copy-out;
-      // sized formal dimensions may have different normalized descriptor
-      // ranges even though their extents match.
+      // Ranges that map SV declaration order to C element order. Open
+      // dimensions take the actual range, sized ones take the formal range.
       "::mlir::DenseI64ArrayAttr":$sourceRanges,
       // Eight-word records for runtime-shaped actuals. Each record describes
       // one unpacked dimension without expanding fixed extents in the IR:
       // kind, descriptor left/right, source start, signed source stride,
-      // child provenance span, child four-state flag, reserved. Kinds are
-      // fixed(0), dynamic array(1), and queue(2).
+      // child provenance span, child four-state flag, formal sizing mode.
+      // Kinds are fixed(0), dynamic array(1), and queue(2). Mode 0 denotes
+      // an open dimension, 1 a sized dimension, and 2 a descending sized
+      // dimension whose dynamic or queue backing must be traversed in reverse.
       "::mlir::DenseI64ArrayAttr":$shapePlan);
   let assemblyFormat = "`<` struct(params) `>`";
   let genVerifyDecl = 1;

@@ -78,8 +78,8 @@ module dpi_open_array_shapes;
 endmodule
 
 // CHECK: nested=2x2 data=1,2,3,4
-// CHECK: mixed=2x2 ranges=0:1,0:1 data=11,10,13,12
-// CHECK: logic=3,2 payload=101/p01/1
+// CHECK: mixed=2x2 ranges=0:1,0:1 data=10,11,12,13
+// CHECK: logic=3,2 payload=100/p00/0
 // CHECK: nested-after=42 strings=copy-00-heap,copy-11-heap token=1
-// CHECK: sized-ranges=0:2 packed=7:0 data=13,22,31
-// CHECK: sized-after=31,22,5a
+// CHECK: sized-ranges=0:2 packed=7:0 data=31,22,13
+// CHECK: sized-after=5a,22,13

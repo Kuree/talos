@@ -35,6 +35,8 @@ def DPIDialect : Dialect {
     "::mlir::IntegerAttr":$export_id,
     "::mlir::StringAttr":$c_identifier,
     "::mlir::IntegerAttr":$scope_id,
+    // Root simulation.scope.decl: lexical scope records follow physical IDs.
+    "::mlir::ArrayAttr":$lexical_scopes,
     // `#dpi.abi` entries: logical inputs, then the result, then copy-outs.
     "::mlir::ArrayAttr":$abi_signature,
     // Per signature entry, a `#dpi.aggregate_abi` or a unit placeholder.

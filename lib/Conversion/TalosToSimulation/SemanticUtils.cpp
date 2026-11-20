@@ -2674,7 +2674,8 @@ simlowering::makeDPIAggregateABI(Type semanticType, Type normalizedType,
     records.append(
         {0, static_cast<int64_t>(bitBase), static_cast<int64_t>(byteBase),
          static_cast<int64_t>(abi->kind), static_cast<int64_t>(abi->width),
-         abi->fourState ? 1 : 0, abi->isSigned ? 1 : 0, 0});
+         sim::containsFourStateLeaf(normalized) ? 1 : 0, abi->isSigned ? 1 : 0,
+         0});
     return success();
   };
   if (failed(emit(semanticType, normalizedType, 0, 0)))

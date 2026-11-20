@@ -54,7 +54,8 @@ FailureOr<Value> UnitLowering::lowerUnary(semantic::SVUnaryExpressionOp op) {
           increment
               ? Value(arith::AddFOp::create(builder, location, oldValue, one))
               : Value(arith::SubFOp::create(builder, location, oldValue, one));
-      if (failed(writeCapturedLValue(*destination, newValue, false, false,
+      if (!projectingDPIOutputShape &&
+          failed(writeCapturedLValue(*destination, newValue, false, false,
                                      location)))
         return failure();
       bool post = kind == semantic::SVUnaryOperator::Postincrement ||
@@ -90,7 +91,8 @@ FailureOr<Value> UnitLowering::lowerUnary(semantic::SVUnaryExpressionOp op) {
         newScalar, destinationType, isSignedNode(children.front()), location);
     if (failed(newValue))
       return failure();
-    if (failed(writeCapturedLValue(*destination, *newValue, false, false,
+    if (!projectingDPIOutputShape &&
+        failed(writeCapturedLValue(*destination, *newValue, false, false,
                                    location)))
       return failure();
     bool post = kind == semantic::SVUnaryOperator::Postincrement ||

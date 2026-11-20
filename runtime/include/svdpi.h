@@ -225,6 +225,42 @@ XXTERN void svPutPartSelectBit(svBitPackedArrRef d, const svBitVec32 s, int i,
 XXTERN void svPutPartSelectLogic(svLogicPackedArrRef d, const svLogicVec32 s,
                                  int i, int w);
 
+XXTERN void svPutBitArrElemVec32(const svOpenArrayHandle d, const svBitVec32 *s,
+                                 int indx1, ...);
+XXTERN void svPutBitArrElem1Vec32(const svOpenArrayHandle d,
+                                  const svBitVec32 *s, int indx1);
+XXTERN void svPutBitArrElem2Vec32(const svOpenArrayHandle d,
+                                  const svBitVec32 *s, int indx1, int indx2);
+XXTERN void svPutBitArrElem3Vec32(const svOpenArrayHandle d,
+                                  const svBitVec32 *s, int indx1, int indx2,
+                                  int indx3);
+XXTERN void svPutLogicArrElemVec32(const svOpenArrayHandle d,
+                                   const svLogicVec32 *s, int indx1, ...);
+XXTERN void svPutLogicArrElem1Vec32(const svOpenArrayHandle d,
+                                    const svLogicVec32 *s, int indx1);
+XXTERN void svPutLogicArrElem2Vec32(const svOpenArrayHandle d,
+                                    const svLogicVec32 *s, int indx1,
+                                    int indx2);
+XXTERN void svPutLogicArrElem3Vec32(const svOpenArrayHandle d,
+                                    const svLogicVec32 *s, int indx1, int indx2,
+                                    int indx3);
+XXTERN void svGetBitArrElemVec32(svBitVec32 *d, const svOpenArrayHandle s,
+                                 int indx1, ...);
+XXTERN void svGetBitArrElem1Vec32(svBitVec32 *d, const svOpenArrayHandle s,
+                                  int indx1);
+XXTERN void svGetBitArrElem2Vec32(svBitVec32 *d, const svOpenArrayHandle s,
+                                  int indx1, int indx2);
+XXTERN void svGetBitArrElem3Vec32(svBitVec32 *d, const svOpenArrayHandle s,
+                                  int indx1, int indx2, int indx3);
+XXTERN void svGetLogicArrElemVec32(svLogicVec32 *d, const svOpenArrayHandle s,
+                                   int indx1, ...);
+XXTERN void svGetLogicArrElem1Vec32(svLogicVec32 *d, const svOpenArrayHandle s,
+                                    int indx1);
+XXTERN void svGetLogicArrElem2Vec32(svLogicVec32 *d, const svOpenArrayHandle s,
+                                    int indx1, int indx2);
+XXTERN void svGetLogicArrElem3Vec32(svLogicVec32 *d, const svOpenArrayHandle s,
+                                    int indx1, int indx2, int indx3);
+
 #undef DPI_EXTERN
 #undef DPI_PROTOTYPES
 #undef XXTERN

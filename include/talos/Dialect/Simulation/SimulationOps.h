@@ -23,7 +23,9 @@
 #include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Interfaces/MemorySlotInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+
 #include "mlir/Interfaces/ViewLikeInterface.h"
+#include <string>
 
 #include "talos/Dialect/Simulation/SimulationResources.h"
 #include "talos/Dialect/Simulation/SimulationTraits.h"
@@ -32,6 +34,9 @@
 #include "talos/Dialect/Simulation/SimulationOps.h.inc"
 
 namespace talos::sim {
+
+/// Canonical name exposed by svGetNameFromScope for a physical scope.
+std::string getDPIScopeName(SimScopeDeclOp scope);
 
 /// Consumers need the complete sequence of committed values, including
 /// multiple changes within a single scheduler time slot.

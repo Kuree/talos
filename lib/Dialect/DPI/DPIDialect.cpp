@@ -2,6 +2,7 @@
 
 #include "talos/Dialect/DPI/DPIDialect.h"
 #include "talos/Dialect/DPI/DPIAttrs.h"
+#include "talos/Runtime/Runtime.h"
 #include "talos/Runtime/StableHash.h"
 
 #include "mlir/IR/BuiltinOps.h"
@@ -30,13 +31,13 @@ void DPIDialect::initialize() {
 
 LogicalResult DPIDialect::verifyOperationAttribute(Operation *operation,
                                                    NamedAttribute attribute) {
-  if (failed(
-          discardable::verify<Import, Export, ExportBridge, ExportBody, Task,
-                              Pure, Context, ImportId, ExportId, CIdentifier,
-                              ScopeId, ABISignature, AggregateLayouts,
-                              LogicalInputs, ElidedInputs, ABIHash,
-                              ExportBridgeSymbol, ExportBodySymbol, HasExports,
-                              TransparentExports>(operation, attribute)))
+  if (failed(discardable::verify<Import, Export, ExportBridge, ExportBody, Task,
+                                 Pure, Context, ImportId, ExportId, CIdentifier,
+                                 ScopeId, LexicalScopes, ABISignature,
+                                 AggregateLayouts, LogicalInputs, ElidedInputs,
+                                 ABIHash, ExportBridgeSymbol, ExportBodySymbol,
+                                 HasExports, TransparentExports>(operation,
+                                                                 attribute)))
     return failure();
   StringRef name = attribute.getName().strref();
   Attribute value = attribute.getValue();
@@ -47,6 +48,17 @@ LogicalResult DPIDialect::verifyOperationAttribute(Operation *operation,
     const APInt &id = cast<IntegerAttr>(value).getValue();
     if (id.isZero() || id.getActiveBits() > 32)
       return error() << "must be a nonzero 32-bit identity";
+  } else if (name == LexicalScopes::getNameStr()) {
+    // The DPI dialect is independent of the simulation dialect that owns the
+    // scope operation. The design verifier checks IDs across the inventory.
+    auto id = operation->getAttrOfType<IntegerAttr>("id");
+    auto *owner = operation->getParentOp();
+    if (operation->getName().getStringRef() != "simulation.scope.decl" || !id ||
+        !id.getValue().isZero() || operation->hasAttr("parent") || !owner ||
+        owner->getName().getStringRef() != "simulation.design")
+      return error() << "belongs on the root scope of a simulation design";
+    if (!llvm::all_of(cast<ArrayAttr>(value), llvm::IsaPred<ScopeAttr>))
+      return error() << "must contain only #dpi.scope entries";
   } else if (name == ABISignature::getNameStr()) {
     if (!llvm::all_of(cast<ArrayAttr>(value), llvm::IsaPred<ABIAttr>))
       return error() << "must contain only #dpi.abi entries";
@@ -70,6 +82,31 @@ LogicalResult DPIDialect::verifyOperationAttribute(Operation *operation,
     if (!isa<ModuleOp>(operation))
       return error() << "belongs on a module";
   }
+  return success();
+}
+
+std::optional<int32_t> talos::dpi::getTimeExponent(uint64_t femtoseconds) {
+  for (int32_t exponent = -15; exponent <= 2; ++exponent) {
+    if (femtoseconds == 1)
+      return exponent;
+    if (!femtoseconds || femtoseconds % 10)
+      break;
+    femtoseconds /= 10;
+  }
+  return std::nullopt;
+}
+
+LogicalResult ScopeAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                                uint64_t, StringAttr name, uint64_t unitFs,
+                                uint64_t precisionFs) {
+  if (name.empty() || name.getValue().contains('\0'))
+    return emitError()
+           << "DPI scope requires a nonempty name without NUL bytes";
+  if (!getTimeExponent(unitFs) || !getTimeExponent(precisionFs))
+    return emitError()
+           << "DPI time scales must be decimal powers from 1 fs to 100 s";
+  if (unitFs < precisionFs)
+    return emitError() << "DPI scope time unit is finer than its precision";
   return success();
 }
 
@@ -150,27 +187,40 @@ LogicalResult OpenArrayABIAttr::verify(
     return emitError() << "DPI open-array dimension count is too large";
   if (!sourceRanges || sourceRanges.size() != ranges.size())
     return emitError() << "DPI open-array source ranges are incomplete";
-  if (storage == 0 && transportWidth == 0)
-    return emitError() << "fixed DPI open-array transport cannot be empty";
+  if (transportWidth == 0 || transportWidth > UINT32_MAX)
+    return emitError()
+           << "DPI open-array transport width must fit a nonzero 32-bit width";
   if (storage == 1 && transportWidth != 64)
     return emitError() << "dynamic DPI open-array transport must be a handle";
   if (storage == 1 && transportFourState)
     return emitError() << "dynamic DPI open-array handle cannot be four-state";
+  if (storage == 1 && ranges.size() != 2)
+    return emitError()
+           << "dynamic DPI open-array handle requires one unpacked dimension";
   if (!shapePlan || shapePlan.size() % 8 != 0)
     return emitError()
            << "DPI open-array shape plan must use eight-word records";
-  if (storage == 2 && shapePlan.size() / 8 != ranges.size() / 2)
+  if (storage == 2 &&
+      (shapePlan.empty() || shapePlan.size() / 8 != ranges.size() / 2))
     return emitError() << "recursive DPI open-array shape is incomplete";
   if (storage != 2 && !shapePlan.empty())
     return emitError() << "non-recursive DPI open-array has a shape plan";
   if (fourState && elementKind != ABIKind::UnpackedAggregate &&
-      elementKind != ABIKind::Logic && elementKind != ABIKind::LogicVector)
+      elementKind != ABIKind::BitVector && elementKind != ABIKind::Logic &&
+      elementKind != ABIKind::LogicVector)
     return emitError() << "DPI open-array element state kind is inconsistent";
   if (elementCSize == 0 || elementCAlignment == 0 ||
       (elementCAlignment & (elementCAlignment - 1)) != 0)
     return emitError() << "DPI open-array element C layout is invalid";
   if (!elementLeaves || elementLeaves.empty() || elementLeaves.size() % 8 != 0)
     return emitError() << "DPI open-array element plan is incomplete";
+  if (elementKind == ABIKind::OpenArray)
+    return emitError()
+           << "DPI open-array elements require a concrete C representation";
+  if (failed(AggregateABIAttr::verify(emitError, elementCSize,
+                                      elementCAlignment, elementStringCount,
+                                      elementLeaves)))
+    return failure();
   if (elementStringCount > (UINT64_MAX - elementCSize) / 8)
     return emitError() << "DPI open-array element string layout overflows";
   if (packedLeft < INT32_MIN || packedLeft > INT32_MAX ||
@@ -184,13 +234,37 @@ LogicalResult OpenArrayABIAttr::verify(
   if (!verifyBounds(ranges.asArrayRef()) ||
       !verifyBounds(sourceRanges.asArrayRef()))
     return emitError() << "DPI unpacked range exceeds the standardized C ABI";
+  if (storage == 0) {
+    uint64_t remaining = transportWidth;
+    auto extent = [](int64_t left, int64_t right) -> uint64_t {
+      return std::max(left, right) - std::min(left, right) + 1;
+    };
+    for (int64_t i = 0; i < ranges.size(); i += 2) {
+      uint64_t size = extent(ranges[i], ranges[i + 1]);
+      if (size != extent(sourceRanges[i], sourceRanges[i + 1]) ||
+          remaining % size)
+        return emitError()
+               << "fixed DPI open-array extents disagree with the transport";
+      remaining /= size;
+    }
+    if (remaining != elementWidth)
+      return emitError()
+             << "fixed DPI open-array elements do not cover the transport";
+  }
   for (int64_t index = 0; index != shapePlan.size(); index += 8) {
     ArrayRef<int64_t> record = shapePlan.asArrayRef().slice(index, 8);
+    int64_t dimension = index / 8;
+    if (record[1] != ranges[2 * dimension] ||
+        record[2] != ranges[2 * dimension + 1])
+      return emitError()
+             << "recursive DPI shape bounds disagree with the descriptor";
     if (record[0] < 0 || record[0] > 2 || record[1] < INT32_MIN ||
         record[1] > INT32_MAX || record[2] < INT32_MIN ||
         record[2] > INT32_MAX || record[3] < 0 || record[5] <= 0 ||
         (record[6] != 0 && record[6] != 1) ||
-        (record[7] != 0 && record[7] != 1))
+        record[7] < TALOS_RT_DPI_SHAPE_OPEN ||
+        record[7] > TALOS_RT_DPI_SHAPE_SIZED_REVERSE ||
+        (record[7] == TALOS_RT_DPI_SHAPE_SIZED_REVERSE && record[0] == 0))
       return emitError() << "DPI open-array shape record " << index / 8
                          << " is malformed";
     if (record[0] == 0 && record[4] == 0)

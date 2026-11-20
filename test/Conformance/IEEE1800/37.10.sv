@@ -1,6 +1,7 @@
 // CLAUSE: Instance: vpiInstance gives the immediate instance of any object, vpiModule only inside a module, and instances report vpiTop, lifetime, time units and package-qualified names
 // XFAIL: *
-// vpiInstance of a package variable is null, but 37 says it is the package (vpiInstance, IEEE 1800-2023 37)
+// The NULL-root vpiInstance iterator includes the compilation unit and module,
+// but omits the named package.
 // RUN: %clang -c -fPIC %S/Inputs/37.10/probe.c -I%resource_dir/include -o %t.helper0.o
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top --vpi=full -O3 --execution-tier=%tier %s %t.helper0.o -o %t.exe
 // RUN: %t.exe

@@ -755,6 +755,15 @@ module {
 // -----
 
 module {
+  // expected-error @+1 {{attribute 'dpi_legacy' failed to satisfy constraint: unit attribute}}
+  slang.symbol.subroutine @bad_legacy attributes {
+    node_id = 0 : i64, subroutine_kind = 0 : i32, dpi_legacy = false
+  } {}
+}
+
+// -----
+
+module {
   slang.symbol.variable @bad_source_range attributes {
     node_id = 0 : i64,
     // expected-error @+1 {{source range files must not be empty}}

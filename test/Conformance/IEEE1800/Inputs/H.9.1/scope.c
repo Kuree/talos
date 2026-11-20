@@ -1,3 +1,8 @@
 #include "svdpi.h"
-#include <string.h>
-int scope_ok(void){const char*n=svGetNameFromScope(svGetScope());return n&&!strcmp(n,"top.d");}
+
+const char *where_am_i(void) { return svGetNameFromScope(svGetScope()); }
+
+int read_scope(const char **name) {
+  *name = where_am_i();
+  return 0;
+}

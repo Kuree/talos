@@ -10494,8 +10494,8 @@ void TalosSimPreparePass::runOnOperation() {
       dpi::set<dpi::ImportId>(call, builder.getI32IntegerAttr(getStableDPIID(
                                         cIdentifier.getValue())));
       dpi::set<dpi::CIdentifier>(call, cIdentifier);
-      dpi::set<dpi::ScopeId>(
-          call, builder.getI64IntegerAttr(getScopeId(targetSource)));
+      dpi::set<dpi::ScopeId>(call, builder.getI64IntegerAttr(
+                                       scopes->lookupDPIScope(targetSource)));
       if (subroutine.getIsPure().value_or(false))
         dpi::mark<dpi::Pure>(call);
       if (subroutine.getIsDpiContext().value_or(false))
@@ -11409,7 +11409,7 @@ void TalosSimPreparePass::runOnOperation() {
         NamedAttribute role = dpiImport ? dpi::named<dpi::Import>(marker)
                                         : dpi::named<dpi::Export>(marker);
         IntegerAttr scopeID =
-            builder.getI64IntegerAttr(getScopeId(unit.source));
+            builder.getI64IntegerAttr(scopes->lookupDPIScope(unit.source));
         IntegerAttr logicalInputs =
             builder.getI32IntegerAttr(signature->logicalInputs);
         functionAttrs.push_back(role);

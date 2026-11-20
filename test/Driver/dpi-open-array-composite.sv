@@ -30,8 +30,9 @@ module dpi_open_array_composite;
   payload_t dynamic_values[];
   string labels[1:0] = '{"left", "right"};
   chandle tokens[1:0] = '{null, null};
-  bit [7:0] packed_only = 8'ha5;
+  logic [7:0] packed_only = 8'b1x10_z101;
   logic [5:0] packed_elements[1:0] = '{6'b10xz01, 6'b001100};
+  bit [5:0] two_state_elements[1:0] = '{6'b110011, 6'b000000};
 
   initial begin
     dynamic_values = new[2];
@@ -44,6 +45,8 @@ module dpi_open_array_composite;
              dynamic_values[1].id, dynamic_values[1].label,
              labels[1], labels[0], token_is_1234(tokens[0]),
              packed_elements[1]);
+    inspect_open_packed(packed_only, two_state_elements);
+    $display("two-state copy-out=%b", two_state_elements[1]);
   end
 endmodule
 
@@ -51,6 +54,8 @@ endmodule
 // CHECK: dynamic=2 first=31/d0 labels=right,left tokens=0,0
 // CHECK: packed-dims=0 range=7:0 raw=a5 elements=2 elem-range=5:0 value=29/c
 // CHECK: after=101/c-matrix dyn=32/d1 labels=c-left,c-right token=1 packed=10xz11
+// CHECK: packed-dims=0 range=7:0 raw=a5 elements=2 elem-range=5:0 value=33/0
+// CHECK: two-state copy-out=100011
 // HEADER-DAG: int inspect_composite(const svOpenArrayHandle arg0, const svOpenArrayHandle arg1, const svOpenArrayHandle arg2, const svOpenArrayHandle arg3);
 // HEADER-DAG: int inspect_open_packed(const svOpenArrayHandle arg0, const svOpenArrayHandle arg1);
 // HEADER-DAG: int32_t token_is_1234(void * arg0);

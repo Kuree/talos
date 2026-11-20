@@ -7,7 +7,7 @@ module {
     simulation.scope.decl 1 parent 0 hierarchy "top" vpi_kind 32
     simulation.vpi_object.anchor @top id 0 type 32 in 1 ordinal 0 hierarchy "top" debug "top" {backing = #simulation.vpi_backing<kind = scope, id = 1 : i64>}
     simulation.storage.decl 0 in 1 : !simulation.event design hierarchy "cell" {vpi_type = #event}
-    // expected-error @+1 {{storage backing requires a scalar named-event anchor}}
+    // expected-error @+1 {{storage backing requires a named event or package variable}}
     simulation.vpi_object.anchor @cell id 1 type 41 in 1 parent @top ordinal 0 hierarchy "cell" debug "cell" {backing = #simulation.vpi_backing<kind = storage, id = 0 : i64>}
   }
 }

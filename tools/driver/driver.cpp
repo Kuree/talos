@@ -541,7 +541,8 @@ public:
     reservedIdentifiers.insert(identifier);
   }
 
-  FailureOr<DPIHeaderType> get(mlir::Type type, Location location) {
+  FailureOr<DPIHeaderType> get(mlir::Type type, Location location,
+                               bool legacy = false) {
     FailureOr<talos::DPIABIType> abi =
         talos::classifyDPIABIType(type, location);
     if (failed(abi))
@@ -550,8 +551,12 @@ public:
       std::string suffix;
       if (abi->isVector())
         suffix = ("[" + Twine((uint64_t{abi->width} + 31) / 32) + "]").str();
-      return DPIHeaderType{talos::getDPICTypeSpelling(*abi).str(), suffix,
-                           abi->isVector(),
+      StringRef spelling = talos::getDPICTypeSpelling(*abi);
+      if (legacy && abi->isVector())
+        spelling = abi->kind == talos::DPIABIKind::BitVector
+                       ? "svBitPackedArrRef"
+                       : "svLogicPackedArrRef";
+      return DPIHeaderType{spelling.str(), suffix, abi->isVector(),
                            abi->kind == talos::DPIABIKind::OpenArray, false};
     }
     SmallVector<uint64_t> dimensions;
@@ -799,6 +804,7 @@ static LogicalResult writeDPIHeader(ModuleOp module, raw_ostream &output) {
       op.emitError("DPI subroutine has no resolved C identifier");
       return WalkResult::interrupt();
     }
+    bool legacy = op.getDpiLegacy().value_or(false);
     SmallVector<std::string> arguments;
     unsigned argumentIndex = 0;
     for (Operation &child : op.getRegion().front()) {
@@ -811,13 +817,13 @@ static LogicalResult writeDPIHeader(ModuleOp module, raw_ostream &output) {
         return WalkResult::interrupt();
       }
       FailureOr<DPIHeaderType> type =
-          headerTypes.get(*semanticType, formal.getLoc());
+          headerTypes.get(*semanticType, formal.getLoc(), legacy);
       if (failed(type))
         return WalkResult::interrupt();
       auto direction = formal.getDirection();
       bool input = direction == talos::ir::SVArgumentDirection::In;
-      bool pointer =
-          !type->openArray && !type->aggregate && (!input || type->vector);
+      bool pointer = !type->openArray && !type->aggregate &&
+                     !(legacy && type->vector) && (!input || type->vector);
       std::string declaration;
       if (((input && (type->vector || type->aggregate)) || type->openArray) &&
           !StringRef(type->spelling).starts_with("const "))

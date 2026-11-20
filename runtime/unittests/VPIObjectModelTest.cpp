@@ -2320,7 +2320,9 @@ TEST(VPIObjectModel, PropertyRealizationIsCompleteAndImageEquivalent) {
         descriptor.property == vpiRandType ||
         descriptor.property == vpiConstantVariable ||
         descriptor.property == vpiVirtual ||
-        descriptor.property == vpiAccessType)
+        descriptor.property == vpiAccessType ||
+        descriptor.property == vpiDPICStr ||
+        descriptor.property == vpiDPICIdentifier)
       expected = PropertyRealization::OptionalImage;
     if (descriptor.property == vpiIsProtected ||
         descriptor.property == vpiDefFile ||
@@ -2361,10 +2363,14 @@ TEST(VPIObjectModel, PropertyRealizationIsCompleteAndImageEquivalent) {
     if ((descriptor.sourceType == vpiTask ||
          descriptor.sourceType == vpiFunction) &&
         (descriptor.property == vpiMethod ||
+         descriptor.property == vpiDPIPure ||
+         descriptor.property == vpiDPIContext ||
          descriptor.property == vpiVisibility))
       expected = PropertyRealization::FixedImage;
-    if (descriptor.property == vpiDefName &&
-        descriptor.sourceType == vpiPackage)
+    if (descriptor.sourceType == vpiPackage &&
+        (descriptor.property == vpiDefName ||
+         descriptor.property == vpiTimeUnit ||
+         descriptor.property == vpiTimePrecision))
       expected = PropertyRealization::FixedImage;
     const bool instance = descriptor.sourceType == vpiPackage ||
                           descriptor.sourceType == vpiModule ||

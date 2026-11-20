@@ -9,6 +9,7 @@
 
 #include "Detail.h"
 #include "PrepareRandomFunctions.h"
+#include "talos/Dialect/DPI/DPIAttrs.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
 #include "talos/Reflection/VPIObjectModel.h"
 
@@ -1793,6 +1794,16 @@ uint64_t PreparedScopeDeclarations::lookup(Operation *operation) const {
   return 0;
 }
 
+uint64_t PreparedScopeDeclarations::lookupDPIScope(Operation *operation) const {
+  for (Operation *cursor = operation; cursor; cursor = cursor->getParentOp()) {
+    if (auto found = dpiIds.find(cursor); found != dpiIds.end())
+      return found->second;
+    if (auto found = ids.find(cursor); found != ids.end())
+      return found->second;
+  }
+  return 0;
+}
+
 uint64_t PreparedScopeDeclarations::lookupInitializationRandomScope(
     Operation *operation) const {
   for (Operation *cursor = operation; cursor; cursor = cursor->getParentOp())
@@ -2001,6 +2012,11 @@ FailureOr<PreparedScopeDeclarations> materializeScopeDeclarations(
 
   for (Operation *unit : units) {
     uint64_t scopeID = result.lookup(unit);
+    // Package and compilation-unit procedures carry their own time scales.
+    // Multiple such procedures can share physical storage at the design root.
+    if (scopeID == 0 &&
+        unit->getParentOfType<semantic::SVCompilationUnitSymbolOp>())
+      continue;
     if (scopeID >= result.declarations.size())
       continue;
     auto unitAttr = unit->getAttrOfType<IntegerAttr>("time_unit_fs");
@@ -2060,6 +2076,82 @@ FailureOr<PreparedScopeDeclarations> materializeScopeDeclarations(
   }
   if (invalid)
     return failure();
+
+  // The scheduler owns storage by instance. DPI also distinguishes the
+  // declarative scopes inside an instance (35.5.3 and H.9.3).
+  auto needsScope = [](Operation *unit) {
+    auto sub = dyn_cast<semantic::SVSubroutineSymbolOp>(unit);
+    return sub && (sub.getIsDpiContext().value_or(false) ||
+                   sub.getDpiExportCIdentifierAttr());
+  };
+  if (llvm::none_of(units, needsScope))
+    return result;
+  SmallVector<Attribute> lexical;
+  SmallVector<std::pair<uint64_t, uint64_t>> timeScales;
+  llvm::StringSet<> instanceNames;
+  for (sim::SimScopeDeclOp scope : result.declarations) {
+    instanceNames.insert(sim::getDPIScopeName(scope));
+    timeScales.emplace_back(
+        scope->getAttrOfType<IntegerAttr>("dpi_unit_femtoseconds").getUInt(),
+        scope->getAttrOfType<IntegerAttr>("dpi_precision_femtoseconds")
+            .getUInt());
+  }
+  unsigned compilationUnits = 0;
+  WalkResult lexicalWalk =
+      semanticRoot->walk<WalkOrder::PreOrder>([&](Operation *op) -> WalkResult {
+        if (auto block = dyn_cast<semantic::SVGenerateBlockSymbolOp>(op)) {
+          if (auto inactive =
+                  block->getAttrOfType<BoolAttr>("is_uninstantiated");
+              inactive && inactive.getValue())
+            return WalkResult::skip();
+        } else if (!isa<semantic::SVCompilationUnitSymbolOp,
+                        semantic::SVPackageSymbolOp>(op)) {
+          if (isa<semantic::SVInstanceBodySymbolOp>(op) &&
+              isCompileTimeOnlyInstanceMember(op))
+            return WalkResult::skip();
+          return WalkResult::advance();
+        }
+        StringRef name = getHierarchyName(op);
+        if (name.empty())
+          return WalkResult::advance();
+        StringAttr scopeName = builder.getStringAttr(name);
+        // Packages and top-level definitions have distinct name spaces (3.13).
+        // Qualify a colliding package so both svScope handles round-trip by
+        // name.
+        if (isa<semantic::SVPackageSymbolOp>(op) &&
+            instanceNames.contains(name))
+          scopeName = builder.getStringAttr((name + "::").str());
+        else if (isa<semantic::SVCompilationUnitSymbolOp>(op) &&
+                 ++compilationUnits > 1)
+          scopeName = builder.getStringAttr(
+              (name + "#" + Twine(compilationUnits)).str());
+        uint64_t parent = result.lookupDPIScope(op->getParentOp());
+        auto scale = [&](StringRef field, uint64_t inherited) -> uint64_t {
+          Attribute raw = op->getAttr(field);
+          if (!raw)
+            return inherited;
+          auto attr = dyn_cast<IntegerAttr>(raw);
+          return attr && !attr.getValue().isNegative()
+                     ? attr.getValue().getLimitedValue()
+                     : 0;
+        };
+        auto [unit, precision] = timeScales[parent];
+        auto record = dpi::ScopeAttr::getChecked(
+            [&] { return emitError(getSemanticLocation(op)); },
+            builder.getContext(), parent, scopeName,
+            scale("time_unit_fs", unit), scale("time_precision_fs", precision));
+        if (!record)
+          return WalkResult::interrupt();
+        result.dpiIds[op] = nextScopeId++;
+        timeScales.emplace_back(record.getUnitFs(), record.getPrecisionFs());
+        lexical.push_back(record);
+        return WalkResult::advance();
+      });
+  if (lexicalWalk.wasInterrupted())
+    return failure();
+  if (!lexical.empty())
+    dpi::set<dpi::LexicalScopes>(result.declarations.front(),
+                                 builder.getArrayAttr(lexical));
   return result;
 }
 

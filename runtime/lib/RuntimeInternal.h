@@ -1725,6 +1725,7 @@ struct ActiveDpiCall {
   uint32_t importFlags = 0;
   bool disabledState = false;
   bool disableAcknowledged = false;
+  bool executingExport = false;
   ActiveDpiCall *previous = nullptr;
 };
 
@@ -3075,7 +3076,8 @@ struct talos_rt_context {
   std::map<uint64_t, EventState> events;
   std::unordered_map<uint32_t, ImportBinding> imports;
   std::vector<std::unique_ptr<DpiScopeHandle>> dpiScopes;
-  std::unordered_map<std::string, DpiScopeHandle *> dpiScopesByName;
+  // The immutable names are owned by the handles in dpiScopes.
+  std::unordered_map<std::string_view, DpiScopeHandle *> dpiScopesByName;
   size_t schedulerCursor = 0;
   uint64_t schedulerEpoch = 1;
   uint64_t schedulerTime = 0;

@@ -681,7 +681,9 @@ def SimVPIObjectAnchorOp : SimOp<"vpi_object.anchor", [
     `parent` names another anchor or a canonical class-specialization typespec
     and preserves exact lexical ownership even when the display hierarchy is
     ambiguous, as it is for multiple compilation units. A backing maps the
-    anchor onto an existing scope, class, or code-unit record; otherwise the
+    anchor onto an existing scope, class, code unit, net, or storage record. A
+    storage-backed package variable keeps its physical value and lexical scope
+    on one public handle. Without a backing, the
     serializer materializes a static-only reflection object.  Anchors never
     participate in scheduling or executable lowering. Relation-backed arrays
     carry either declared `index_ranges` or exact `sparse_indices`; each child

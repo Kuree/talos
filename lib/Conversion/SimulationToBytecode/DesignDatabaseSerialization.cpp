@@ -1850,6 +1850,7 @@ SmallVector<uint8_t> serializeDesignDatabase(
   DenseMap<Operation *, ImageObjectRef> anchorRefs, nettypeRefs, typespecRefs,
       classMemberRefs, unresolvedAliasRefs, sourceInheritanceRefs;
   DenseSet<uint32_t> lexicallyAnchoredObjectIndices;
+  DenseSet<uint64_t> packageVariableStorageIDs;
   DenseMap<uint64_t, ImageObjectRef> codeUnitSourceRefs;
   if (includeStatements) {
     for (auto [index, object] : llvm::enumerate(objects))
@@ -1882,14 +1883,18 @@ SmallVector<uint8_t> serializeDesignDatabase(
         uint64_t id = backing.getId().getValue().getZExtValue();
         auto found = physicalStorageObjectIndices.find(id);
         if (found == physicalStorageObjectIndices.end()) {
-          anchor.emitOpError("backing event storage was not serialized");
+          anchor.emitOpError("backing storage was not serialized");
           return {};
         }
         uint32_t index = found->second;
         anchorRefs[anchor] = {TableKind::Object, index, objects[index].vpiKind};
-        // The event cell itself remains the public storage object. Only its
-        // lexical relations come from the exact source anchor; no private
-        // backing marker or second runtime identity is introduced.
+        // The storage itself is public. Package variable containment comes
+        // from its source anchor even though the physical state is at root.
+        if (vpiObjectSetContains(VPIObjectSetID::DataVariableObjects,
+                                 anchor.getVpiKind())) {
+          objects[index].caps |= TALOS_RT_DESIGN_CAP_LEXICAL_ANCHOR;
+          packageVariableStorageIDs.insert(id);
+        }
         lexicallyAnchoredObjectIndices.insert(index);
         continue;
       }
@@ -2749,6 +2754,10 @@ SmallVector<uint8_t> serializeDesignDatabase(
             {packed, source.index, anchor.getDebugName().str()});
       }
       uint32_t lexicalSelector = target.vpiKind;
+      if (source.vpiKind == static_cast<uint32_t>(VPIObjectKind::Package) &&
+          vpiObjectSetContains(VPIObjectSetID::DataVariableObjects,
+                               target.vpiKind))
+        lexicalSelector = static_cast<uint32_t>(VPIRelationKind::VariablesRel);
       if (source.vpiKind ==
               static_cast<uint32_t>(VPIObjectKind::ClassTypespec) &&
           vpiObjectSetContains(VPIObjectSetID::ParameterIterationObjects,
@@ -5786,6 +5795,7 @@ SmallVector<uint8_t> serializeDesignDatabase(
       };
       if (auto storage = dyn_cast<sim::SimStorageDeclOp>(operation);
           storage && (staticLocalBindings.contains(storage.getId()) ||
+                      packageVariableStorageIDs.contains(storage.getId()) ||
                       needsExactName(storage.getDebugNameAttr(),
                                      storage.getHierarchicalName())))
         if (failed(addFixedProperty(operation, packedSource, exactKind, 2,

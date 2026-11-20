@@ -4906,6 +4906,20 @@ bool validateDatabaseImpl(const Database &database) {
     if (selector == 74) {
       if (table == talos::reflection::TableKind::Statement)
         protectedStatements[sourceIndex] = true;
+    } else if (selector == 11 || selector == 12) {
+      // vpiTimeUnit and vpiTimePrecision are adjacent exact facts for a
+      // package. A legacy image may omit both and inherit its physical scale.
+      bool unit = selector == 11;
+      int32_t exponent = static_cast<int32_t>(payload);
+      if (exponent < -15 || exponent > 2 ||
+          (unit ? index + 1 == database.fixedPropertyCount : index == 0))
+        return false;
+      const uint8_t *other =
+          unit ? record + kFixedPropertySize : record - kFixedPropertySize;
+      if (read32(other) != packedSource ||
+          read16(other + 4) != (unit ? 12 : 11) ||
+          (!unit && exponent > static_cast<int32_t>(read64(other + 8))))
+        return false;
     } else if (selector == 15) {
       std::string_view file;
       if (!getString(database, payload, file) || file.empty())
@@ -6757,12 +6771,11 @@ bool validateDatabaseImpl(const Database &database) {
     }
     boundClassFields.insert(member);
   }
-  // Private delegated storage has a separate public identity. Ordinary
-  // procedural static variables retain their storage identity, but their
-  // exact lexical scope must be proved by the relations below.
-  std::unordered_set<uint32_t> proceduralStaticStorage;
-  std::unordered_map<uint32_t, uint32_t> proceduralStaticOwners,
-      proceduralStaticScopes;
+  // Package variables and procedural static variables retain their storage
+  // identity. Both directions of their lexical ownership must agree.
+  std::unordered_set<uint32_t> lexicalVariableStorage;
+  std::unordered_map<uint32_t, uint32_t> lexicalVariableOwners,
+      lexicalVariableScopes;
   for (uint32_t index = 0; index != database.objectCount; ++index) {
     uint64_t offset = database.objects + uint64_t{index} * kObjectSize;
     const uint8_t *object = database.data + offset;
@@ -6783,7 +6796,7 @@ bool validateDatabaseImpl(const Database &database) {
           !talos::reflection::tryPackTableIndex(
               talos::reflection::TableKind::Object, index, packed))
         return false;
-      proceduralStaticStorage.insert(packed);
+      lexicalVariableStorage.insert(packed);
     }
   }
   // Variable kinds newly admitted to the immutable table are class
@@ -8373,7 +8386,7 @@ bool validateDatabaseImpl(const Database &database) {
           (read32(sourceRecord + 4) & TALOS_RT_DESIGN_CAP_INTERNAL) ||
           voidFunctions.count(sourceEndpoint) ||
           (!frameLocals.count(packedTarget) &&
-           !proceduralStaticStorage.count(packedTarget)) ||
+           !lexicalVariableStorage.count(packedTarget)) ||
           fixedNames.find(sourceEndpoint) == fixedNames.end() ||
           fixedNames.find(packedTarget) == fixedNames.end() ||
           fixedNames.at(sourceEndpoint) != fixedNames.at(packedTarget) ||
@@ -8439,13 +8452,13 @@ bool validateDatabaseImpl(const Database &database) {
         (lexicalForward ||
          selector == static_cast<uint32_t>(
                          talos::reflection::VPIRelationKind::VariablesRel)) &&
-        proceduralStaticStorage.count(packedTarget)) {
+        lexicalVariableStorage.count(packedTarget)) {
       auto [owner, inserted] =
-          proceduralStaticOwners.emplace(packedTarget, sourceEndpoint);
+          lexicalVariableOwners.emplace(packedTarget, sourceEndpoint);
       if (!inserted && owner->second != sourceEndpoint)
         return false;
     }
-    if (!iterate && proceduralStaticStorage.count(sourceEndpoint) &&
+    if (!iterate && lexicalVariableStorage.count(sourceEndpoint) &&
         selector == static_cast<uint32_t>(
                         talos::reflection::VPIRelationKind::ScopeRel)) {
       uint64_t physicalScope = 0;
@@ -8461,6 +8474,16 @@ bool validateDatabaseImpl(const Database &database) {
           return false;
         physicalScope =
             database.scopes + uint64_t{read32(target + 12)} * kScopeSize;
+      } else if (targetKind ==
+                     uint32_t(talos::reflection::VPIObjectKind::Package) &&
+                 targetTable == talos::reflection::TableKind::StaticObject) {
+        physicalScope =
+            database.scopes + uint64_t{read32(target + 8)} * kScopeSize;
+      } else if (targetKind ==
+                     uint32_t(talos::reflection::VPIObjectKind::Package) &&
+                 targetTable == talos::reflection::TableKind::Object &&
+                 recordKind(target) == TALOS_RT_DESIGN_RECORD_STATIC_OBJECT) {
+        physicalScope = read64(target + 16);
       } else if (targetTable == talos::reflection::TableKind::Object &&
                  (recordKind(target) == TALOS_RT_DESIGN_RECORD_PROCESS ||
                   recordKind(target) == TALOS_RT_DESIGN_RECORD_FUNCTION) &&
@@ -8479,7 +8502,7 @@ bool validateDatabaseImpl(const Database &database) {
           read64(sourceRecord + 16) != physicalScope ||
           name == fixedNames.end() || name->second.empty() ||
           !localNames[packedTarget].insert(name->second).second ||
-          !proceduralStaticScopes.emplace(sourceEndpoint, packedTarget).second)
+          !lexicalVariableScopes.emplace(sourceEndpoint, packedTarget).second)
         return false;
     }
     const bool foreachOwner =
@@ -8930,11 +8953,11 @@ bool validateDatabaseImpl(const Database &database) {
                             staticLexicalParents.count(parent->second) != 0;
                    }))
     return false;
-  for (uint32_t storage : proceduralStaticStorage) {
-    auto owner = proceduralStaticOwners.find(storage);
-    auto scope = proceduralStaticScopes.find(storage);
-    if (owner == proceduralStaticOwners.end() ||
-        scope == proceduralStaticScopes.end() || owner->second != scope->second)
+  for (uint32_t storage : lexicalVariableStorage) {
+    auto owner = lexicalVariableOwners.find(storage);
+    auto scope = lexicalVariableScopes.find(storage);
+    if (owner == lexicalVariableOwners.end() ||
+        scope == lexicalVariableScopes.end() || owner->second != scope->second)
       return false;
   }
   if (foreachNullOwners.size() != foreachNulls.size() ||
@@ -8942,11 +8965,11 @@ bool validateDatabaseImpl(const Database &database) {
     return false;
   for (const auto &[variable, function] : functionReturns) {
     auto automatic = frameLocalOwners.find(variable);
-    auto persistent = proceduralStaticScopes.find(variable);
+    auto persistent = lexicalVariableScopes.find(variable);
     if ((automatic != frameLocalOwners.end() &&
          automatic->second != function) ||
         (automatic == frameLocalOwners.end() &&
-         (persistent == proceduralStaticScopes.end() ||
+         (persistent == lexicalVariableScopes.end() ||
           persistent->second != function)))
       return false;
   }

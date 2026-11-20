@@ -1,20 +1,21 @@
-// RUN: %target_clang %target_pic -c \
-// RUN:   %S/Inputs/dpi_open_array_ragged_impl.c -I%resource_dir/include -o %t.o
+// RUN: %target_clang %target_pic -c %S/Inputs/dpi_open_array_ragged_impl.c -I%resource_dir/include -o %t.o
 // RUN: %talos --target=native -o %t.native %s %t.o
-// RUN: not %t.native 2>&1 | FileCheck %s
+// RUN: %t.native | FileCheck %s
 // RUN: %talos --execution-tier=bytecode -o %t.bytecode %s %t.o
-// RUN: not %t.bytecode 2>&1 | FileCheck %s
+// RUN: %t.bytecode | FileCheck %s
 
 module dpi_open_array_ragged;
-  import "DPI-C" context task inspect_ragged(input int values[][]);
-  int values[][];
-
+  import "DPI-C" function int edit(inout logic [7:0] rows[][][]);
+  logic [7:0] rows[2:1][][];
   initial begin
-    values = new[2];
-    values[0] = new[1];
-    values[1] = new[2];
-    inspect_ragged(values);
+    rows[1] = new[3];
+    rows[1][1] = '{8'hxz, 8'h27};
+    rows[2] = new[2];
+    rows[2][0] = '{8'hfe};
+    if (!edit(rows)) $fatal(1, "ragged layout");
+    $display("values=%h,%h lengths=%0d,%0d,%0d", rows[1][1][0], rows[2][0][0],
+             rows[1][0].size(), rows[1][1].size(), rows[2][0].size());
   end
 endmodule
 
-// CHECK: simulation ended: format argument mismatch (status 8)
+// CHECK: values=fe,xz lengths=0,2,1

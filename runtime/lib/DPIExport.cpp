@@ -161,7 +161,8 @@ findExport(const talos_rt_execution_extension_v1 &extension, uint32_t exportID,
 }
 
 void latchFailure(ActiveDpiCall &call, talos_rt_status status) {
-  if (status != TALOS_RT_OK && call.exportStatus == TALOS_RT_OK)
+  if (status != TALOS_RT_OK && status != TALOS_RT_DPI_DISABLE_UNSUPPORTED &&
+      call.exportStatus == TALOS_RT_OK)
     call.exportStatus = status;
 }
 
@@ -193,10 +194,19 @@ private:
 
 class ScopedExportDepth {
 public:
-  ScopedExportDepth() { ++exportDepth; }
+  explicit ScopedExportDepth(ActiveDpiCall &call) : call(call) {
+    ++exportDepth;
+    call.executingExport = true;
+  }
   ScopedExportDepth(const ScopedExportDepth &) = delete;
   ScopedExportDepth &operator=(const ScopedExportDepth &) = delete;
-  ~ScopedExportDepth() { --exportDepth; }
+  ~ScopedExportDepth() {
+    call.executingExport = false;
+    --exportDepth;
+  }
+
+private:
+  ActiveDpiCall &call;
 };
 
 } // namespace
@@ -319,7 +329,7 @@ extern "C" TALOS_RT_FEATURE_TEXT talos_rt_status talos_rt_v1_export_call(
     zeroOutput(outputs[index]);
   if (inputCount != 0 && !inputs)
     return fail(TALOS_RT_INVALID_ARGUMENT);
-  if (!call || !call->context || !call->scope)
+  if (!call || call->executingExport || !call->context || !call->scope)
     return fail(TALOS_RT_INVALID_LIFECYCLE);
   if (call->disabledState)
     return fail(TALOS_RT_FATAL);
@@ -403,7 +413,7 @@ extern "C" TALOS_RT_FEATURE_TEXT talos_rt_status talos_rt_v1_export_call(
       convertedOutputs[index].value = &roots[root++];
     }
 
-    ScopedExportDepth depth;
+    ScopedExportDepth depth(*call);
     talos_rt_status status;
     bool requireBytecode =
         (execution->flags & TALOS_RT_EXECUTION_REQUIRE_BYTECODE) != 0;

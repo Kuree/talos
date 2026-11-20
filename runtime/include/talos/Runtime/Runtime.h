@@ -572,6 +572,9 @@ typedef struct talos_rt_dpi_dimension_v1 {
 
 #define TALOS_RT_DPI_DIMENSION_EMPTY (UINT32_C(1) << 0)
 #define TALOS_RT_DPI_DIMENSION_RUNTIME (UINT32_C(1) << 1)
+// For a nonuniform dimension, byte_stride is a byte offset from ranges to
+// a uint64_t row count followed by the cumulative element offsets of its rows.
+#define TALOS_RT_DPI_DIMENSION_RAGGED (UINT32_C(1) << 2)
 
 #define TALOS_RT_DPI_OPEN_ARRAY_MAGIC UINT32_C(0x4f424f41)
 #define TALOS_RT_DPI_OPEN_ARRAY_WRITABLE (UINT32_C(1) << 0)
@@ -579,6 +582,7 @@ typedef struct talos_rt_dpi_dimension_v1 {
 #define TALOS_RT_DPI_OPEN_ARRAY_PACKED (UINT32_C(1) << 2)
 #define TALOS_RT_DPI_OPEN_ARRAY_FOUR_STATE (UINT32_C(1) << 3)
 #define TALOS_RT_DPI_OPEN_ARRAY_EMPTY (UINT32_C(1) << 4)
+#define TALOS_RT_DPI_OPEN_ARRAY_RAGGED (UINT32_C(1) << 5)
 
 // Stack-owned svOpenArrayHandle payload. `data` contains one canonical C
 // representation per unpacked element: an ordinary scalar/aggregate C value,
@@ -595,6 +599,8 @@ typedef struct talos_rt_dpi_open_array_v1 {
   void *data;
   uint64_t data_size;
   const talos_rt_dpi_dimension_v1 *ranges;
+  // Zero for a rectangular layout. For a ragged layout, the byte size of
+  // the range records and their trailing row tables.
   uint64_t reserved;
 } talos_rt_dpi_open_array_v1;
 
@@ -647,6 +653,13 @@ talos_rt_status talos_rt_v1_dpi_open_array_aggregate_roots_push(
     uint64_t element_c_size, const int64_t *element_plan,
     uint64_t element_plan_words, void **out_handle);
 
+// A shape record holds the kind (fixed, dynamic, queue), C left/right bounds,
+// fixed-storage bit offset and stride, child bit span, child state domain and
+// formal sizing mode. A sized dimension uses normalized C indices. A
+// descending sized formal visits a dynamic actual's elements in reverse.
+#define TALOS_RT_DPI_SHAPE_OPEN INT64_C(0)
+#define TALOS_RT_DPI_SHAPE_SIZED INT64_C(1)
+#define TALOS_RT_DPI_SHAPE_SIZED_REVERSE INT64_C(2)
 talos_rt_status talos_rt_v1_dpi_open_array_prepare_recursive(
     const void *value, const void *unknown, uint64_t plane_size,
     uint64_t transport_width, uint32_t transport_four_state, uint32_t writable,

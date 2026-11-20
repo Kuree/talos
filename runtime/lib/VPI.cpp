@@ -2655,30 +2655,64 @@ bool nameFor(__vpiHandle *handle, std::string &name, bool localMember = false) {
   }
 }
 
-DpiScopeHandle *timeScopeFor(__vpiHandle *handle) {
+struct VPIObjectTimeScale {
+  int32_t timeUnit;
+  int32_t timePrecision;
+};
+
+std::optional<VPIObjectTimeScale> timeScopeFor(__vpiHandle *handle) {
   if (!handle || handle->kind != VPIHandleKind::Object)
-    return nullptr;
+    return std::nullopt;
+  auto *context = handle->owner->context;
   talos_rt_design_cursor_v1 cursor = handle->cursor;
   bool statement = handle->statement;
+  std::vector<uint64_t> lexicalParents;
   for (;;) {
     talos_rt_design_cursor_v1 parent{};
     bool parentIsStatement = false;
-    talos_rt_status status = TALOS_RT_OK;
+    talos_rt_status status;
     if (statement) {
       status = talos_rt_cached_vpi_statement_enclosing_scope(
-          handle->owner->context, cursor, &parent, &parentIsStatement);
+          context, cursor, &parent, &parentIsStatement);
     } else {
       talos_rt_design_info_v1 info{};
-      status =
-          talos_rt_cached_design_info(handle->owner->context, cursor, &info);
-      if (status == TALOS_RT_OK && info.kind == TALOS_RT_DESIGN_RECORD_SCOPE)
-        return talos_rt_find_dpi_scope(handle->owner->context, info.handle.id);
-      if (status == TALOS_RT_OK)
-        status = talos_rt_cached_design_parent(handle->owner->context, cursor,
-                                               &parent);
+      if (talos_rt_cached_design_info(context, cursor, &info) != TALOS_RT_OK)
+        return std::nullopt;
+      if (info.kind == TALOS_RT_DESIGN_RECORD_SCOPE) {
+        if (auto *scope = talos_rt_find_dpi_scope(context, info.handle.id))
+          return VPIObjectTimeScale{scope->timeUnit, scope->timePrecision};
+        return std::nullopt;
+      }
+      if (info.kind == TALOS_RT_DESIGN_RECORD_STATIC_OBJECT &&
+          exactTypeFor(handle->owner, cursor, info.kind) == vpiPackage) {
+        VPIFixedPropertyValue unit{}, precision{};
+        if (talos_rt_cached_vpi_fixed_property(context, cursor, vpiTimeUnit,
+                                               &unit) == TALOS_RT_OK &&
+            talos_rt_cached_vpi_fixed_property(
+                context, cursor, vpiTimePrecision, &precision) == TALOS_RT_OK)
+          return VPIObjectTimeScale{static_cast<int32_t>(unit.payload),
+                                    static_cast<int32_t>(precision.payload)};
+      }
+      // A procedure or variable in a package has a lexical vpiScope whose
+      // time scale is independent of the physical owner used for storage.
+      VPIRelationRange range{};
+      if (talos_rt_cached_vpi_relation_range(context, cursor, vpiScope, false,
+                                             &range) == TALOS_RT_OK &&
+          range.count == 1) {
+        uint32_t kind = 0;
+        status = talos_rt_cached_vpi_relation_target(
+            context, range.first, &parent, &kind, &parentIsStatement);
+        if (std::find(lexicalParents.begin(), lexicalParents.end(),
+                      parent.offset) != lexicalParents.end())
+          return std::nullopt;
+        TALOS_RT_TRY { lexicalParents.push_back(parent.offset); }
+        TALOS_RT_CATCH_ALL { return std::nullopt; }
+      } else {
+        status = talos_rt_cached_design_parent(context, cursor, &parent);
+      }
     }
     if (status != TALOS_RT_OK || parent.offset == cursor.offset)
-      return nullptr;
+      return std::nullopt;
     cursor = parent;
     statement = parentIsStatement;
   }
@@ -12468,6 +12502,15 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_get(PLI_INT32 property,
              vpiNotice);
     return vpiUndefined;
   }
+  if (property == vpiTimeUnit || property == vpiTimePrecision) {
+    auto scope = timeScopeFor(handle);
+    if (!scope) {
+      setError(handle->owner, "VPI object timescale metadata is unavailable",
+               vpiNotice);
+      return vpiUndefined;
+    }
+    return property == vpiTimeUnit ? scope->timeUnit : scope->timePrecision;
+  }
   if (handle->form == VPIObjectForm::ContAssignBit) {
     if (property == vpiOffset) {
       if (handle->assignmentOffset <= INT32_MAX)
@@ -13097,17 +13140,6 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_get(PLI_INT32 property,
                ? 0
                : static_cast<PLI_INT32>(
                      std::min<uint64_t>(info.bit_width, INT32_MAX));
-  }
-  if (property == vpiTimeUnit || property == vpiTimePrecision) {
-    if (!propertyFor(handle, property))
-      return vpiUndefined;
-    DpiScopeHandle *scope = timeScopeFor(handle);
-    if (!scope) {
-      setError(handle->owner, "VPI object timescale metadata is unavailable",
-               vpiNotice);
-      return vpiUndefined;
-    }
-    return property == vpiTimeUnit ? scope->timeUnit : scope->timePrecision;
   }
   if (property == vpiTermIndex) {
     if (!propertyFor(handle, property))
@@ -14925,7 +14957,7 @@ extern "C" TALOS_VPI_EXPORT void vpi_get_time(vpiHandle opaque,
     } else if (handle->kind == VPIHandleKind::Object) {
       if (!allowProtectedSource(handle, "vpi_get_time"))
         return;
-      DpiScopeHandle *scope = timeScopeFor(handle);
+      auto scope = timeScopeFor(handle);
       if (!scope) {
         setError(state, "VPI object timescale metadata is unavailable",
                  vpiNotice);
@@ -15357,7 +15389,7 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_register_cb(p_cb_data callbackData) {
         __vpiHandle *object = validate(callbackData->obj);
         if (!object)
           return nullptr;
-        DpiScopeHandle *scope = timeScopeFor(object);
+        auto scope = timeScopeFor(object);
         if (!scope) {
           setError(state, "VPI timer object timescale is unavailable");
           return nullptr;
@@ -15782,7 +15814,7 @@ extern "C" TALOS_VPI_EXPORT void vpi_get_delays(vpiHandle opaque,
       pathPort.exactVpiType = handle->interModPathEndpoints.back().exactVpiType;
       timeObject = &pathPort;
     }
-    DpiScopeHandle *scope = timeScopeFor(timeObject);
+    auto scope = timeScopeFor(timeObject);
     if (!scope) {
       setError(state, "VPI object timescale metadata is unavailable",
                vpiNotice);
@@ -16978,7 +17010,7 @@ vpiHandle registerValueChangeCallback(VPIState *state, p_cb_data data) {
   record.requestedFormat = data->value->format;
   if (data->time->type == vpiScaledRealTime) {
     int32_t precision = 0;
-    auto *scope = timeScopeFor(source);
+    auto scope = timeScopeFor(source);
     if (!scope || !globalTimeExponent(state, precision)) {
       setError(state, "callback object timescale is unavailable");
       return nullptr;

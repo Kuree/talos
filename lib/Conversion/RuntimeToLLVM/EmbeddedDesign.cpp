@@ -430,18 +430,11 @@ uint64_t read64(ArrayRef<int8_t> bytes, size_t offset) {
 }
 
 FailureOr<int32_t> timeExponent(ModuleOp module, uint64_t femtoseconds) {
-  if (femtoseconds == 0)
-    return module.emitError("DPI time scale must be nonzero"), failure();
-  int32_t exponent = -15;
-  while (femtoseconds > 1 && femtoseconds % 10 == 0) {
-    femtoseconds /= 10;
-    ++exponent;
-  }
-  if (femtoseconds != 1)
-    return module.emitError(
-               "DPI time scale must be an integral decimal power in seconds"),
-           failure();
-  return exponent;
+  if (auto exponent = dpi::getTimeExponent(femtoseconds))
+    return *exponent;
+  return module.emitError(
+             "DPI time scale must be a decimal power from 1 fs to 100 s"),
+         failure();
 }
 
 LogicalResult checkMagic(ModuleOp module, DenseI8ArrayAttr bytes,
@@ -918,110 +911,108 @@ materializeEmbeddedSimulationDesign(ModuleOp module,
   });
   Type dpiScopeType = LLVM::LLVMStructType::getLiteral(
       context, {i64, i64, pointer, i64, i32, i32, i32});
-  SmallVector<LLVM::GlobalOp> dpiNames;
-  SmallVector<std::string> dpiScopeNames;
-  SmallVector<int32_t> dpiUnits;
-  SmallVector<int32_t> dpiPrecisions;
+  struct DPIScopeRecord {
+    uint64_t parent;
+    LLVM::GlobalOp name;
+    uint64_t nameSize;
+    int32_t unit;
+    int32_t precision;
+  };
+  SmallVector<DPIScopeRecord> dpiScopes;
   int32_t dpiPrecision = 0;
   if (!scopes.empty()) {
-    for (auto [index, scope] : llvm::enumerate(scopes)) {
-      if (scope.getId() != index)
-        return scope.emitOpError("DPI scope IDs must be dense from zero");
-      std::string name =
-          index == 0 ? std::string("$root")
-                     : scope.getHierarchicalName().value_or(StringRef{}).str();
-      if (name.empty())
-        name = ("scope." + Twine(index)).str();
-      dpiScopeNames.push_back(name);
-      std::string globalName = ("__talos_dpi_scope_name_" + Twine(index)).str();
-      OpBuilder nameBuilder(context);
-      nameBuilder.setInsertionPointToStart(module.getBody());
-      Type nameType =
-          LLVM::LLVMArrayType::get(nameBuilder.getI8Type(), name.size());
-      dpiNames.push_back(LLVM::GlobalOp::create(
-          nameBuilder, scope.getLoc(), nameType, true, LLVM::Linkage::Internal,
-          globalName, nameBuilder.getStringAttr(name), 1));
-    }
-    sim::SimDesignOp design;
-    module.walk([&](sim::SimDesignOp candidate) {
-      if (!design)
-        design = candidate;
-    });
+    auto design = scopes.front()->getParentOfType<sim::SimDesignOp>();
     if (!design)
       return module.emitError("DPI scopes require a simulation design");
-    auto precisionFs = design.getTimePrecisionFsAttr();
     uint64_t designPrecisionFs =
-        precisionFs ? precisionFs.getValue().getZExtValue() : 1'000'000;
+        design.getTimePrecisionFs().value_or(1'000'000);
     FailureOr<int32_t> exponent = timeExponent(module, designPrecisionFs);
     if (failed(exponent))
       return failure();
     dpiPrecision = *exponent;
-    for (sim::SimScopeDeclOp scope : scopes) {
-      auto unitFs = scope->getAttrOfType<IntegerAttr>("dpi_unit_femtoseconds");
-      auto scopePrecisionFs =
-          scope->getAttrOfType<IntegerAttr>("dpi_precision_femtoseconds");
-      FailureOr<int32_t> unit =
-          timeExponent(module, unitFs ? unitFs.getValue().getZExtValue()
-                                      : designPrecisionFs);
-      FailureOr<int32_t> precision = timeExponent(
-          module, scopePrecisionFs ? scopePrecisionFs.getValue().getZExtValue()
-                                   : designPrecisionFs);
+    OpBuilder nameBuilder(module.getContext());
+    nameBuilder.setInsertionPointToStart(module.getBody());
+    auto appendScope = [&](Location loc, uint64_t parent, StringRef name,
+                           uint64_t unitFs,
+                           uint64_t precisionFs) -> LogicalResult {
+      FailureOr<int32_t> unit = timeExponent(module, unitFs);
+      FailureOr<int32_t> precision = timeExponent(module, precisionFs);
       if (failed(unit) || failed(precision))
         return failure();
-      if (*unit < *precision)
-        return scope.emitOpError(
-            "DPI scope time unit is finer than its precision");
-      dpiUnits.push_back(*unit);
-      dpiPrecisions.push_back(*precision);
+      if (*unit < *precision || *precision < dpiPrecision)
+        return emitError(loc, "DPI scope has an incompatible time scale");
+      if (!dpiScopes.empty() && parent >= dpiScopes.size())
+        return emitError(loc, "DPI scope parent must precede its child");
+      auto symbol = ("__talos_dpi_scope_name_" + Twine(dpiScopes.size())).str();
+      auto global = LLVM::GlobalOp::create(
+          nameBuilder, loc,
+          LLVM::LLVMArrayType::get(nameBuilder.getI8Type(), name.size()), true,
+          LLVM::Linkage::Internal, symbol, nameBuilder.getStringAttr(name), 1);
+      dpiScopes.push_back({parent, global, name.size(), *unit, *precision});
+      return success();
+    };
+    for (auto [index, scope] : llvm::enumerate(scopes)) {
+      if (scope.getId() != index)
+        return scope.emitOpError("DPI scope IDs must be dense from zero");
+      auto scale = [&](StringRef field) {
+        auto attr = scope->getAttrOfType<IntegerAttr>(field);
+        return attr ? attr.getValue().getZExtValue() : designPrecisionFs;
+      };
+      if (failed(appendScope(
+              scope.getLoc(), scope.getParent().value_or(UINT64_MAX),
+              sim::getDPIScopeName(scope), scale("dpi_unit_femtoseconds"),
+              scale("dpi_precision_femtoseconds"))))
+        return failure();
     }
-    Type dpiScopeArray = LLVM::LLVMArrayType::get(dpiScopeType, scopes.size());
+    if (auto lexical = dpi::get<dpi::LexicalScopes>(scopes.front()))
+      for (auto scope : lexical.getAsRange<dpi::ScopeAttr>())
+        if (failed(appendScope(scopes.front().getLoc(), scope.getParent(),
+                               scope.getName().getValue(), scope.getUnitFs(),
+                               scope.getPrecisionFs())))
+          return failure();
+    Type dpiScopeArray =
+        LLVM::LLVMArrayType::get(dpiScopeType, dpiScopes.size());
     makeAggregateGlobal(
         module, dpiScopeArray, kDPIScopesName, LLVM::Linkage::Internal, "",
         [&](OpBuilder &builder) {
           Value records =
               LLVM::ZeroOp::create(builder, module.getLoc(), dpiScopeArray);
-          for (auto [index, scope] : llvm::enumerate(scopes)) {
-            Value record =
-                LLVM::ZeroOp::create(builder, scope.getLoc(), dpiScopeType);
+          for (auto [index, scope] : llvm::enumerate(dpiScopes)) {
+            Location loc = scope.name.getLoc();
+            Value record = LLVM::ZeroOp::create(builder, loc, dpiScopeType);
+            record = insertValue(builder, loc, record,
+                                 integerConstant(builder, loc, i64, index), 0);
             record = insertValue(
-                builder, scope.getLoc(), record,
-                integerConstant(builder, scope.getLoc(), i64, scope.getId()),
-                0);
-            record = insertValue(builder, scope.getLoc(), record,
-                                 integerConstant(builder, scope.getLoc(), i64,
-                                                 scope.getParent()
-                                                     ? *scope.getParent()
-                                                     : UINT64_MAX),
-                                 1);
+                builder, loc, record,
+                integerConstant(builder, loc, i64, scope.parent), 1);
+            record =
+                insertValue(builder, loc, record,
+                            LLVM::AddressOfOp::create(builder, loc, pointer,
+                                                      scope.name.getSymName()),
+                            2);
             record = insertValue(
-                builder, scope.getLoc(), record,
-                LLVM::AddressOfOp::create(builder, scope.getLoc(), pointer,
-                                          dpiNames[index].getSymName()),
-                2);
-            record = insertValue(builder, scope.getLoc(), record,
-                                 integerConstant(builder, scope.getLoc(), i64,
-                                                 dpiScopeNames[index].size()),
-                                 3);
+                builder, loc, record,
+                integerConstant(builder, loc, i64, scope.nameSize), 3);
+            record =
+                insertValue(builder, loc, record,
+                            integerConstant(builder, loc, i32,
+                                            static_cast<uint32_t>(scope.unit)),
+                            4);
             record = insertValue(
-                builder, scope.getLoc(), record,
-                integerConstant(builder, scope.getLoc(), i32,
-                                static_cast<uint32_t>(dpiUnits[index])),
-                4);
-            record = insertValue(
-                builder, scope.getLoc(), record,
-                integerConstant(builder, scope.getLoc(), i32,
-                                static_cast<uint32_t>(dpiPrecisions[index])),
+                builder, loc, record,
+                integerConstant(builder, loc, i32,
+                                static_cast<uint32_t>(scope.precision)),
                 5);
             records = LLVM::InsertValueOp::create(
-                builder, scope.getLoc(), records, record,
+                builder, loc, records, record,
                 ArrayRef<int64_t>{static_cast<int64_t>(index)});
           }
           return records;
         });
   }
   if (!exports.empty() &&
-      failed(materializeDPIExportDescriptors(module, exports, bytecodeOnly,
-                                             pointer, i32, i64, scopes.size())))
+      failed(materializeDPIExportDescriptors(
+          module, exports, bytecodeOnly, pointer, i32, i64, dpiScopes.size())))
     return failure();
 
   runtime::ExecutionFlags executionFlags = runtime::getExecutionFlags(module);
@@ -1177,7 +1168,7 @@ materializeEmbeddedSimulationDesign(ModuleOp module,
                           9);
           value = insertValue(
               builder, module.getLoc(), value,
-              integerConstant(builder, module.getLoc(), i64, scopes.size()),
+              integerConstant(builder, module.getLoc(), i64, dpiScopes.size()),
               10);
           value =
               insertValue(builder, module.getLoc(), value,

@@ -387,12 +387,24 @@ private:
                                                     ::mlir::Type formalType,
                                                     bool formalSigned,
                                                     ::mlir::Location location);
+  struct DPIShapeSelector {
+    ::mlir::Operation *expression;
+    ::mlir::Value evaluated;
+    ::mlir::Value result;
+  };
+  ::mlir::LogicalResult
+  prepareDPIShapeSelectors(::mlir::Operation *actual,
+                           ::mlir::SmallVectorImpl<DPIShapeSelector> &selectors,
+                           ::mlir::Location location);
+  ::mlir::FailureOr<::mlir::Value>
+  lowerDPIShapeSelector(const DPIShapeSelector &selector);
   /// Assigns a returned output or inout formal to its actual. `scopeObject`
   /// is the receiver a defaulted actual is evaluated against.
   ::mlir::LogicalResult copyOutToActual(::mlir::Operation *actual,
                                         ::mlir::Value scopeObject,
                                         ::mlir::Value value, bool formalSigned,
-                                        ::mlir::Location location);
+                                        ::mlir::Location location,
+                                        bool unpackDPIArray = false);
   ::mlir::FailureOr<::mlir::Value>
   lowerNewCovergroup(semantic::SVNewCovergroupExpressionOp op,
                      semantic::SVCovergroupTypeOp covergroup = {},
@@ -996,6 +1008,10 @@ private:
   /// cloned expression. This is used when an expression's source-region value
   /// must not be recomputed in the callback's later scheduling region.
   ::llvm::DenseMap<::mlir::Operation *, ::mlir::Value> expressionCaptures;
+  // A DPI output may need the selected array's dimensions before an import.
+  // Ordinary lvalue evaluation and its side effects belong to copy-out.
+  bool projectingDPIOutputShape = false;
+  ::mlir::ArrayRef<DPIShapeSelector> dpiShapeSelectors;
   /// The procedural assertion queue epoch of this process (IEEE 1800-2023
   /// 16.14.6); pending instances queued under an older epoch do not mature.
   ::mlir::Value proceduralAssertionEpoch;

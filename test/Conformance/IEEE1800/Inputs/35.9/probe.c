@@ -1,4 +1,17 @@
 #include "svdpi.h"
-extern int wait_sv(void);static int ok;
-int call_c(void){int r=wait_sv();ok=(r==1 && svIsDisabledState());return r;}
-int status(void){return ok;}
+#include <stdio.h>
+
+extern int wait_sv(void);
+static int disabled;
+
+int call_c(svBit call_again) {
+  int result = wait_sv();
+  disabled = result == 1 && svIsDisabledState();
+  if (call_again && disabled) {
+    puts("attempting a second export");
+    wait_sv();
+  }
+  return result;
+}
+
+int status(void) { return disabled; }

@@ -1654,9 +1654,36 @@ FailureOr<llvm::StringMap<DescriptorInfo>> materializeDesignDescriptors(
       top = isa_and_nonnull<semantic::SVInstanceSymbolOp>(instance) &&
             isa_and_nonnull<semantic::SVRootSymbolOp>(instance->getParentOp());
     }
-    if (isa<semantic::SVPackageSymbolOp, semantic::SVCompilationUnitSymbolOp>(
-            source))
+    if (sourceKind == VPIKind::Package) {
       top = true;
+      // The VPI image owns its package and compilation-unit declarations
+      // independently of DPI and of their shared physical root storage.
+      for (Operation *scope = source; scope; scope = scope->getParentOp()) {
+        auto unit = scope->getAttrOfType<IntegerAttr>("time_unit_fs");
+        auto precision = scope->getAttrOfType<IntegerAttr>("time_precision_fs");
+        if (!unit && !precision)
+          continue;
+        auto exponent = [](IntegerAttr value) {
+          return value
+                     ? dpi::getTimeExponent(value.getValue().getLimitedValue())
+                     : std::nullopt;
+        };
+        auto u = exponent(unit), p = exponent(precision);
+        if (!u || !p || *u < *p) {
+          emitError(getSemanticLocation(source))
+              << "invalid package time scale";
+          invalid = true;
+          break;
+        }
+        properties.push_back(sim::VPIPropertyAttr::get(
+            builder.getContext(), builder.getI32IntegerAttr(11),
+            builder.getI32IntegerAttr(*u)));
+        properties.push_back(sim::VPIPropertyAttr::get(
+            builder.getContext(), builder.getI32IntegerAttr(12),
+            builder.getI32IntegerAttr(*p)));
+        break;
+      }
+    }
     BoolAttr cell = sim::get<sim::metadata::VpiCellInstance>(source);
     BoolAttr automatic = sim::get<sim::metadata::VpiAutomatic>(source);
     bool isAutomatic = automatic && automatic.getValue();
@@ -1719,10 +1746,21 @@ FailureOr<llvm::StringMap<DescriptorInfo>> materializeDesignDescriptors(
       int32_t access = subroutine.getDpiExportCIdentifierAttr() ? 3
                        : subroutine.getIsDpiImportAttr()        ? 4
                                                                 : 0;
-      if (access)
+      if (access) {
         properties.push_back(sim::VPIPropertyAttr::get(
             builder.getContext(), builder.getI32IntegerAttr(604),
             builder.getI32IntegerAttr(access)));
+        addBoolean(665, subroutine.getIsDpiImportAttr() &&
+                            subroutine.getIsPureAttr());
+        addBoolean(666, subroutine.getIsDpiContext().value_or(false));
+        properties.push_back(sim::VPIPropertyAttr::get(
+            builder.getContext(), builder.getI32IntegerAttr(667),
+            builder.getI32IntegerAttr(
+                subroutine.getDpiLegacy().value_or(false) ? 1 : 2)));
+        addString(668, subroutine.getIsDpiImportAttr()
+                           ? subroutine.getDpiCIdentifierAttr()
+                           : subroutine.getDpiExportCIdentifierAttr());
+      }
     }
     if (auto parameter =
             dyn_cast<semantic::SVSourceValueParameterSymbolOp>(source))
@@ -4819,6 +4857,31 @@ FailureOr<llvm::StringMap<DescriptorInfo>> materializeDesignDescriptors(
           builder, getSemanticLocation(op), id, scopeId, *type, lifetime,
           hierarchy, debug, schedule::ComputeObservabilityKindAttr{},
           retainedVPIType);
+      auto *owner = op->getParentOp();
+      if (preserveVPIMethodBindings && isa<semantic::SVVariableSymbolOp>(op) &&
+          !anchorSymbols.count(op) &&
+          isa<semantic::SVPackageSymbolOp, semantic::SVCompilationUnitSymbolOp>(
+              owner)) {
+        uint32_t kind = sim::vpiKindForStorage(retainedVPIType);
+        if (auto parent = anchorSymbols.lookup(owner);
+            parent &&
+            reflection::vpiObjectSetContains(
+                reflection::VPIObjectSetID::DataVariableObjects, kind)) {
+          std::string symbol =
+              "__talos_vpi_anchor_" + std::to_string(nextSyntheticInventoryId);
+          auto backing = sim::VPIObjectBackingAttr::get(
+              builder.getContext(), sim::VPIObjectBackingKind::Storage,
+              declaration.getIdAttr(), FlatSymbolRefAttr{});
+          sim::SimVPIObjectAnchorOp::create(
+              builder, getSemanticLocation(op), symbol,
+              nextSyntheticInventoryId++, kind, scopeId, parent,
+              nextAnchorOrdinal[owner]++, hierarchy, debug, UnitAttr{}, backing,
+              DenseI64ArrayAttr{}, DenseI64ArrayAttr{}, DenseI64ArrayAttr{},
+              DenseI64ArrayAttr{}, IntegerAttr{}, sim::VPITypeSemanticsAttr{},
+              sim::FrozenConstantAttr{}, UnitAttr{}, FlatSymbolRefAttr{},
+              UnitAttr{}, StringAttr{}, UnitAttr{});
+        }
+      }
       cov::mark<cov::SourceAuthored>(declaration);
       if (retainCoverageSourceTypes)
         cov::set<cov::SourceType>(declaration,

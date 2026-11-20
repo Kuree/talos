@@ -8,6 +8,7 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -36,27 +37,40 @@ bool addSignedMultiply(uint64_t base, uint64_t index, int64_t stride,
   return true;
 }
 
+// A GC root provider retains the traversal stack from its validation pass so
+// the collector can revisit the same nesting without allocating.
+struct PlanFrame {
+  const int64_t *records = nullptr;
+  uint64_t recordCount = 0;
+  uint64_t index = 0;
+  uint64_t bitBase = 0;
+  uint64_t byteBase = 0;
+  bool repeat = false;
+  uint64_t repetition = 0;
+  uint64_t repetitions = 0;
+  int64_t bitStride = 0;
+  uint64_t byteStride = 0;
+};
+
+template <typename Work> talos_rt_status withPlanStorage(Work &&work) {
+  TALOS_RT_TRY { return work(); }
+  TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
+  TALOS_RT_CATCH(const std::length_error &) {
+    return TALOS_RT_OUT_OF_RESOURCES;
+  }
+}
+
+uint64_t planeBytes(uint64_t bits) { return bits / 8 + ((bits & 7) != 0); }
+
 template <typename Visitor>
-bool walkPlan(const int64_t *records, uint64_t recordCount, uint64_t bitBase,
-              uint64_t byteBase, Visitor &visit) {
-  if (!records)
+bool walkPlan(const int64_t *records, uint64_t recordCount,
+              std::vector<PlanFrame> &stack, Visitor &visit) {
+  if (!records || recordCount > SIZE_MAX / sizeof(*records) / recordWords)
     return false;
-  struct Frame {
-    const int64_t *records = nullptr;
-    uint64_t recordCount = 0;
-    uint64_t index = 0;
-    uint64_t bitBase = 0;
-    uint64_t byteBase = 0;
-    bool repeat = false;
-    uint64_t repetition = 0;
-    uint64_t repetitions = 0;
-    int64_t bitStride = 0;
-    uint64_t byteStride = 0;
-  };
-  std::vector<Frame> stack;
-  stack.push_back({records, recordCount, 0, bitBase, byteBase});
+  stack.clear();
+  stack.push_back({records, recordCount});
   while (!stack.empty()) {
-    Frame &frame = stack.back();
+    PlanFrame &frame = stack.back();
     if (frame.repeat) {
       if (frame.repetition == frame.repetitions) {
         stack.pop_back();
@@ -80,8 +94,8 @@ bool walkPlan(const int64_t *records, uint64_t recordCount, uint64_t bitBase,
     const int64_t *record = frame.records + frame.index * recordWords;
     if (record[0] == 0) {
       if (record[1] < 0 || record[2] < 0 || record[3] < 0 || record[3] > 11 ||
-          record[4] <= 0 || record[5] < 0 || record[5] > 1 || record[6] < 0 ||
-          record[6] > 1 || record[7] != 0)
+          record[4] <= 0 || record[4] > UINT32_MAX || record[5] < 0 ||
+          record[5] > 1 || record[6] < 0 || record[6] > 1 || record[7] != 0)
         return false;
       uint64_t leafBit = 0, leafByte = 0;
       if (!addMultiply(frame.bitBase, 1, static_cast<uint64_t>(record[1]),
@@ -113,6 +127,16 @@ bool walkPlan(const int64_t *records, uint64_t recordCount, uint64_t bitBase,
                      record[4], static_cast<uint64_t>(record[5])});
   }
   return true;
+}
+
+template <typename Visitor>
+talos_rt_status checkPlan(const int64_t *records, uint64_t count,
+                          Visitor &visit) {
+  std::vector<PlanFrame> scratch;
+  return withPlanStorage([&] {
+    return walkPlan(records, count, scratch, visit) ? TALOS_RT_OK
+                                                    : TALOS_RT_INVALID_ARGUMENT;
+  });
 }
 
 bool bitAt(const uint8_t *data, uint64_t bit) {
@@ -159,7 +183,7 @@ bool validLeaf(uint64_t bit, uint64_t byte, uint32_t category, uint32_t width,
   if (size == 0 || bit > totalWidth || width > totalWidth - bit ||
       byte > cSize || size > cSize - byte)
     return false;
-  return !leafFourState || category == 1 || category == 7;
+  return !leafFourState || category == 1 || category == 6 || category == 7;
 }
 
 void copyPlaneBits(const uint8_t *source, uint64_t sourceBit,
@@ -190,7 +214,7 @@ extern "C" talos_rt_status talos_rt_v1_dpi_aggregate_pack(
     uint64_t outCapacity, const int64_t *plan, uint64_t planWords) {
   if (!value || !outData || !plan || planWords == 0 ||
       planWords % recordWords != 0 || fourState > 1 ||
-      (fourState && !unknown) || planeSize < (totalBitWidth + 7) / 8 ||
+      (fourState && !unknown) || planeSize < planeBytes(totalBitWidth) ||
       planeSize > SIZE_MAX || cSize == 0 || cSize > outCapacity ||
       outCapacity > SIZE_MAX)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -202,7 +226,7 @@ extern "C" talos_rt_status talos_rt_v1_dpi_aggregate_pack(
   talos_rt_status status = TALOS_RT_OK;
   auto packLeaf = [&](uint64_t bit, uint64_t byte, uint32_t category,
                       uint32_t width, uint32_t leafFourState) {
-    if (status != TALOS_RT_OK ||
+    if (status != TALOS_RT_OK || (leafFourState && !fourState) ||
         !validLeaf(bit, byte, category, width, leafFourState, totalBitWidth,
                    cSize))
       return false;
@@ -248,7 +272,7 @@ extern "C" talos_rt_status talos_rt_v1_dpi_aggregate_pack(
         if (leafFourState)
           copyPlaneBits(unknowns, source, reinterpret_cast<uint8_t *>(&bval), 0,
                         count);
-        uint32_t aval = value ^ bval;
+        uint32_t aval = category == 7 ? value ^ bval : value & ~bval;
         std::memcpy(destination + word * (category == 7 ? 8 : 4), &aval, 4);
         if (category == 7)
           std::memcpy(destination + word * 8 + 4, &bval, 4);
@@ -258,9 +282,8 @@ extern "C" talos_rt_status talos_rt_v1_dpi_aggregate_pack(
     copyPlaneBits(values, bit, destination, 0, width);
     return true;
   };
-  if (!walkPlan(plan, planWords / recordWords, 0, 0, packLeaf))
-    return status == TALOS_RT_OK ? TALOS_RT_INVALID_ARGUMENT : status;
-  return status;
+  talos_rt_status walked = checkPlan(plan, planWords / recordWords, packLeaf);
+  return status == TALOS_RT_OK ? walked : status;
 }
 
 extern "C" talos_rt_status talos_rt_v1_dpi_aggregate_unpack(
@@ -269,7 +292,7 @@ extern "C" talos_rt_status talos_rt_v1_dpi_aggregate_unpack(
     uint64_t planeSize, uint64_t totalBitWidth, uint32_t fourState) {
   if (!data || !plan || !outValue || planWords == 0 ||
       planWords % recordWords != 0 || fourState > 1 ||
-      (fourState && !outUnknown) || planeSize < (totalBitWidth + 7) / 8 ||
+      (fourState && !outUnknown) || planeSize < planeBytes(totalBitWidth) ||
       planeSize > SIZE_MAX || cSize == 0)
     return TALOS_RT_INVALID_ARGUMENT;
   auto *values = static_cast<uint8_t *>(outValue);
@@ -282,7 +305,8 @@ extern "C" talos_rt_status talos_rt_v1_dpi_aggregate_unpack(
   uint64_t stringCount = 0;
   auto countStrings = [&](uint64_t bit, uint64_t byte, uint32_t category,
                           uint32_t width, uint32_t leafFourState) {
-    if (!validLeaf(bit, byte, category, width, leafFourState, totalBitWidth,
+    if ((leafFourState && !fourState) ||
+        !validLeaf(bit, byte, category, width, leafFourState, totalBitWidth,
                    cSize))
       return false;
     if (category == 8) {
@@ -292,12 +316,19 @@ extern "C" talos_rt_status talos_rt_v1_dpi_aggregate_unpack(
     }
     return true;
   };
-  if (!walkPlan(plan, planWords / recordWords, 0, 0, countStrings) ||
-      stringCount > SIZE_MAX / sizeof(talos_rt_managed_word_v1))
-    return TALOS_RT_INVALID_ARGUMENT;
-
-  std::vector<talos_rt_managed_word_v1> stringRoots(
-      static_cast<size_t>(stringCount), 0);
+  talos_rt_status counted =
+      checkPlan(plan, planWords / recordWords, countStrings);
+  if (counted != TALOS_RT_OK)
+    return counted;
+  if (stringCount > SIZE_MAX / sizeof(talos_rt_managed_word_v1))
+    return TALOS_RT_OUT_OF_RESOURCES;
+  std::vector<talos_rt_managed_word_v1> stringRoots;
+  talos_rt_status reserved = withPlanStorage([&] {
+    stringRoots.resize(static_cast<size_t>(stringCount));
+    return TALOS_RT_OK;
+  });
+  if (reserved != TALOS_RT_OK)
+    return reserved;
   talos_rt_gc_lane_v1 *lane = nullptr;
   talos_rt_gc_managed_root_range_v1 roots{};
   if (stringCount != 0) {
@@ -312,7 +343,7 @@ extern "C" talos_rt_status talos_rt_v1_dpi_aggregate_unpack(
   talos_rt_status status = TALOS_RT_OK;
   auto unpackLeaf = [&](uint64_t bit, uint64_t byte, uint32_t category,
                         uint32_t width, uint32_t leafFourState) {
-    if (status != TALOS_RT_OK ||
+    if (status != TALOS_RT_OK || (leafFourState && !fourState) ||
         !validLeaf(bit, byte, category, width, leafFourState, totalBitWidth,
                    cSize))
       return false;
@@ -369,15 +400,13 @@ extern "C" talos_rt_status talos_rt_v1_dpi_aggregate_unpack(
     copyPlaneBits(current, 0, values, bit, width);
     return true;
   };
-  bool walked = walkPlan(plan, planWords / recordWords, 0, 0, unpackLeaf);
+  talos_rt_status walked = checkPlan(plan, planWords / recordWords, unpackLeaf);
   if (stringCount != 0) {
     talos_rt_status pop = talos_rt_v1_gc_managed_root_range_pop(lane, &roots);
     if (status == TALOS_RT_OK && pop != TALOS_RT_OK)
       status = pop;
   }
-  if (!walked && status == TALOS_RT_OK)
-    status = TALOS_RT_INVALID_ARGUMENT;
-  return status;
+  return status == TALOS_RT_OK ? walked : status;
 }
 
 namespace {
@@ -389,6 +418,7 @@ struct AggregateStringRoots {
   uint64_t planeSize = 0;
   uint64_t totalBitWidth = 0;
   std::vector<int64_t> plan;
+  std::vector<PlanFrame> scratch;
 };
 
 void enumerateAggregateStringRoots(void *opaque, ManagedRootVisit visit,
@@ -413,8 +443,8 @@ void enumerateAggregateStringRoots(void *opaque, ManagedRootVisit visit,
       visit(visitorEnvironment, reinterpret_cast<talos_rt_object_v1 **>(slot));
     return true;
   };
-  (void)walkPlan(roots->plan.data(), roots->plan.size() / recordWords, 0, 0,
-                 enumerate);
+  (void)walkPlan(roots->plan.data(), roots->plan.size() / recordWords,
+                 roots->scratch, enumerate);
 }
 
 } // namespace
@@ -425,31 +455,41 @@ talos_rt_v1_dpi_aggregate_roots_push(talos_rt_context *context, void *value,
                                      const int64_t *plan, uint64_t planWords,
                                      void **outHandle) {
   if (!context || !value || !plan || planWords == 0 ||
-      planWords % recordWords != 0 || planeSize < (totalBitWidth + 7) / 8 ||
+      planWords % recordWords != 0 || planeSize < planeBytes(totalBitWidth) ||
       !outHandle)
     return TALOS_RT_INVALID_ARGUMENT;
   *outHandle = nullptr;
+  bool hasStrings = false;
   auto validate = [&](uint64_t bit, uint64_t, uint32_t category, uint32_t width,
                       uint32_t) {
-    return category != 8 ||
-           (width == 64 && bit % 64 == 0 && bit <= totalBitWidth &&
-            64 <= totalBitWidth - bit && bit / 8 <= planeSize &&
-            sizeof(talos_rt_managed_word_v1) <= planeSize - bit / 8);
+    if (category != 8)
+      return true;
+    hasStrings = true;
+    return width == 64 && bit % 64 == 0 && bit <= totalBitWidth &&
+           64 <= totalBitWidth - bit && bit / 8 <= planeSize &&
+           sizeof(talos_rt_managed_word_v1) <= planeSize - bit / 8;
   };
-  if (!walkPlan(plan, planWords / recordWords, 0, 0, validate))
-    return TALOS_RT_INVALID_ARGUMENT;
+  std::vector<PlanFrame> scratch;
+  std::unique_ptr<AggregateStringRoots> roots;
+  talos_rt_status reserved = withPlanStorage([&] {
+    if (!walkPlan(plan, planWords / recordWords, scratch, validate))
+      return TALOS_RT_INVALID_ARGUMENT;
+    if (hasStrings) {
+      roots = std::make_unique<AggregateStringRoots>();
+      roots->plan.assign(plan, plan + planWords);
+      roots->scratch = std::move(scratch);
+    }
+    return TALOS_RT_OK;
+  });
+  if (reserved != TALOS_RT_OK || !hasStrings)
+    return reserved;
   talos_rt_gc_lane_v1 *lane = talos_rt_v1_gc_current_lane(context);
   if (!lane)
     return TALOS_RT_INVALID_LIFECYCLE;
-  std::unique_ptr<AggregateStringRoots> roots;
-  TALOS_RT_TRY { roots = std::make_unique<AggregateStringRoots>(); }
-  TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
   roots->lane = lane;
   roots->value = static_cast<uint8_t *>(value);
   roots->planeSize = planeSize;
   roots->totalBitWidth = totalBitWidth;
-  TALOS_RT_TRY { roots->plan.assign(plan, plan + planWords); }
-  TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
   talos_rt_status status = talos_rt_managed_roots_push(
       lane, &roots->provider, enumerateAggregateStringRoots, roots.get());
   if (status != TALOS_RT_OK)
@@ -477,23 +517,35 @@ talos_rt_v1_dpi_aggregate_roots_pop(talos_rt_context *context, void *handle) {
 
 namespace {
 
-bool makeOpenArrayPlan(uint32_t elementBitWidth, uint64_t elementCount,
-                       uint32_t reverseElements, uint64_t elementCSize,
-                       const int64_t *unpackedRanges,
-                       uint32_t unpackedDimensions, const int64_t *elementPlan,
-                       uint64_t elementPlanWords, std::vector<int64_t> &plan) {
+talos_rt_status
+makeOpenArrayPlan(uint32_t elementBitWidth, uint64_t elementCount,
+                  uint32_t reverseElements, uint64_t elementCSize,
+                  const int64_t *unpackedRanges, uint32_t unpackedDimensions,
+                  const int64_t *elementPlan, uint64_t elementPlanWords,
+                  std::vector<int64_t> &plan) {
   if (elementBitWidth == 0 || elementCount == 0 || reverseElements > 1 ||
       elementCSize == 0 || elementCSize > INT64_MAX || !elementPlan ||
       elementPlanWords == 0 || elementPlanWords % recordWords != 0 ||
       elementPlanWords / recordWords > INT64_MAX || elementCount > INT64_MAX ||
       (unpackedDimensions != 0 && !unpackedRanges) ||
       elementCount - 1 > UINT64_MAX / elementBitWidth)
-    return false;
+    return TALOS_RT_INVALID_ARGUMENT;
+  uint64_t prefixRecords = unpackedDimensions == 0 ? 1 : unpackedDimensions;
+  uint64_t prefixWords = prefixRecords * recordWords;
+  if (elementPlanWords > plan.max_size() ||
+      prefixWords > plan.max_size() - elementPlanWords)
+    return TALOS_RT_OUT_OF_RESOURCES;
   plan.clear();
+  talos_rt_status reserved = withPlanStorage([&] {
+    plan.reserve(static_cast<size_t>(prefixWords + elementPlanWords));
+    return TALOS_RT_OK;
+  });
+  if (reserved != TALOS_RT_OK)
+    return reserved;
   if (unpackedDimensions == 0) {
     uint64_t lastBit = (elementCount - 1) * elementBitWidth;
     if (lastBit > INT64_MAX)
-      return false;
+      return TALOS_RT_INVALID_ARGUMENT;
     int64_t firstBit = reverseElements ? static_cast<int64_t>(lastBit) : 0;
     int64_t bitStride = reverseElements ? -static_cast<int64_t>(elementBitWidth)
                                         : static_cast<int64_t>(elementBitWidth);
@@ -502,7 +554,7 @@ bool makeOpenArrayPlan(uint32_t elementBitWidth, uint64_t elementCount,
                  static_cast<int64_t>(elementCSize), 0, 0});
   } else {
     if (reverseElements != 0)
-      return false;
+      return TALOS_RT_INVALID_ARGUMENT;
     uint64_t remaining = elementCount;
     for (uint32_t dimension = 0; dimension != unpackedDimensions; ++dimension) {
       int64_t left = unpackedRanges[uint64_t{dimension} * 2];
@@ -512,17 +564,17 @@ bool makeOpenArrayPlan(uint32_t elementBitWidth, uint64_t elementCount,
               ? static_cast<uint64_t>(left) - static_cast<uint64_t>(right) + 1
               : static_cast<uint64_t>(right) - static_cast<uint64_t>(left) + 1;
       if (extent == 0 || remaining % extent != 0)
-        return false;
+        return TALOS_RT_INVALID_ARGUMENT;
       uint64_t innerElements = remaining / extent;
       if (innerElements > UINT64_MAX / elementBitWidth ||
           innerElements > UINT64_MAX / elementCSize)
-        return false;
+        return TALOS_RT_INVALID_ARGUMENT;
       uint64_t bitStride = innerElements * elementBitWidth;
       uint64_t byteStride = innerElements * elementCSize;
       uint64_t firstBit = left > right ? 0 : (extent - 1) * bitStride;
       if (bitStride > INT64_MAX || byteStride > INT64_MAX ||
           firstBit > INT64_MAX || extent > INT64_MAX)
-        return false;
+        return TALOS_RT_INVALID_ARGUMENT;
       plan.insert(plan.end(), {1, static_cast<int64_t>(firstBit), 0,
                                static_cast<int64_t>(extent),
                                left > right ? static_cast<int64_t>(bitStride)
@@ -531,17 +583,16 @@ bool makeOpenArrayPlan(uint32_t elementBitWidth, uint64_t elementCount,
       remaining = innerElements;
     }
     if (remaining != 1)
-      return false;
+      return TALOS_RT_INVALID_ARGUMENT;
   }
   plan.insert(plan.end(), elementPlan, elementPlan + elementPlanWords);
-  uint64_t prefixRecords = unpackedDimensions == 0 ? 1 : unpackedDimensions;
   for (uint64_t record = 0; record != prefixRecords; ++record) {
     uint64_t bodyRecords = plan.size() / recordWords - record - 1;
     if (bodyRecords == 0 || bodyRecords > INT64_MAX)
-      return false;
+      return TALOS_RT_INVALID_ARGUMENT;
     plan[record * recordWords + 7] = static_cast<int64_t>(bodyRecords);
   }
-  return true;
+  return TALOS_RT_OK;
 }
 
 } // namespace
@@ -558,13 +609,11 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_aggregate_roots_push(
   if (elementCount == 0)
     return totalBitWidth == 0 ? TALOS_RT_OK : TALOS_RT_INVALID_ARGUMENT;
   std::vector<int64_t> plan;
-  TALOS_RT_TRY {
-    if (!makeOpenArrayPlan(elementBitWidth, elementCount, reverseElements,
-                           elementCSize, unpackedRanges, unpackedDimensions,
-                           elementPlan, elementPlanWords, plan))
-      return TALOS_RT_INVALID_ARGUMENT;
-  }
-  TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
+  talos_rt_status prepared = makeOpenArrayPlan(
+      elementBitWidth, elementCount, reverseElements, elementCSize,
+      unpackedRanges, unpackedDimensions, elementPlan, elementPlanWords, plan);
+  if (prepared != TALOS_RT_OK)
+    return prepared;
   return talos_rt_v1_dpi_aggregate_roots_push(context, value, planeSize,
                                               totalBitWidth, plan.data(),
                                               plan.size(), outHandle);
@@ -582,7 +631,8 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_aggregate_pack(
     return totalBitWidth == 0 && dataSize == 0 && outCapacity == 0
                ? TALOS_RT_OK
                : TALOS_RT_INVALID_ARGUMENT;
-  if (elementCount > UINT64_MAX / elementBitWidth ||
+  if (elementBitWidth == 0 || elementCSize == 0 ||
+      elementCount > UINT64_MAX / elementBitWidth ||
       elementCount * elementBitWidth != totalBitWidth ||
       elementCount > UINT64_MAX / elementCSize ||
       elementCount * elementCSize != dataSize ||
@@ -594,10 +644,11 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_aggregate_pack(
       dataSize + strings * 8 != outCapacity)
     return TALOS_RT_INVALID_ARGUMENT;
   std::vector<int64_t> plan;
-  if (!makeOpenArrayPlan(elementBitWidth, elementCount, reverseElements,
-                         elementCSize, unpackedRanges, unpackedDimensions,
-                         elementPlan, elementPlanWords, plan))
-    return TALOS_RT_INVALID_ARGUMENT;
+  talos_rt_status prepared = makeOpenArrayPlan(
+      elementBitWidth, elementCount, reverseElements, elementCSize,
+      unpackedRanges, unpackedDimensions, elementPlan, elementPlanWords, plan);
+  if (prepared != TALOS_RT_OK)
+    return prepared;
   return talos_rt_v1_dpi_aggregate_pack(
       value, unknown, planeSize, totalBitWidth, fourState, outData, dataSize,
       outCapacity, plan.data(), plan.size());
@@ -613,16 +664,18 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_aggregate_unpack(
   if (elementCount == 0)
     return totalBitWidth == 0 && dataSize == 0 ? TALOS_RT_OK
                                                : TALOS_RT_INVALID_ARGUMENT;
-  if (elementCount > UINT64_MAX / elementBitWidth ||
+  if (elementBitWidth == 0 || elementCSize == 0 ||
+      elementCount > UINT64_MAX / elementBitWidth ||
       elementCount * elementBitWidth != totalBitWidth ||
       elementCount > UINT64_MAX / elementCSize ||
       elementCount * elementCSize != dataSize)
     return TALOS_RT_INVALID_ARGUMENT;
   std::vector<int64_t> plan;
-  if (!makeOpenArrayPlan(elementBitWidth, elementCount, reverseElements,
-                         elementCSize, unpackedRanges, unpackedDimensions,
-                         elementPlan, elementPlanWords, plan))
-    return TALOS_RT_INVALID_ARGUMENT;
+  talos_rt_status prepared = makeOpenArrayPlan(
+      elementBitWidth, elementCount, reverseElements, elementCSize,
+      unpackedRanges, unpackedDimensions, elementPlan, elementPlanWords, plan);
+  if (prepared != TALOS_RT_OK)
+    return prepared;
   return talos_rt_v1_dpi_aggregate_unpack(context, data, dataSize, plan.data(),
                                           plan.size(), outValue, outUnknown,
                                           planeSize, totalBitWidth, fourState);
@@ -644,22 +697,34 @@ extern "C" talos_rt_status talos_rt_v1_dpi_aggregate_export_pack(
     }
     return true;
   };
-  if (!walkPlan(plan, planWords / recordWords, 0, 0, count) ||
-      stringCount > (UINT64_MAX - cSize) / 8 ||
+  talos_rt_status counted = checkPlan(plan, planWords / recordWords, count);
+  if (counted != TALOS_RT_OK)
+    return counted;
+  if (stringCount > (UINT64_MAX - cSize) / 8 ||
       cSize + stringCount * 8 > SIZE_MAX)
     return TALOS_RT_INVALID_ARGUMENT;
   uint64_t capacity = cSize + stringCount * 8;
-  std::vector<uint8_t> temporary(static_cast<size_t>(capacity));
+  std::vector<uint8_t> temporary;
+  talos_rt_status reserved = withPlanStorage([&] {
+    temporary.resize(static_cast<size_t>(capacity));
+    if (aggregateExportStrings.size() <= outputSlot)
+      aggregateExportStrings.resize(static_cast<size_t>(outputSlot) + 1);
+    return TALOS_RT_OK;
+  });
+  if (reserved != TALOS_RT_OK)
+    return reserved;
   talos_rt_status status = talos_rt_v1_dpi_aggregate_pack(
       value, unknown, planeSize, totalBitWidth, fourState, temporary.data(),
       cSize, capacity, plan, planWords);
   if (status != TALOS_RT_OK)
     return status;
-  if (aggregateExportStrings.size() <= outputSlot)
-    aggregateExportStrings.resize(static_cast<size_t>(outputSlot) + 1);
-  std::vector<std::string> &strings = aggregateExportStrings[outputSlot];
-  strings.clear();
-  strings.reserve(static_cast<size_t>(stringCount));
+  std::vector<std::string> strings;
+  reserved = withPlanStorage([&] {
+    strings.reserve(static_cast<size_t>(stringCount));
+    return TALOS_RT_OK;
+  });
+  if (reserved != TALOS_RT_OK)
+    return reserved;
   auto retain = [&](uint64_t, uint64_t byte, uint32_t category, uint32_t,
                     uint32_t) {
     if (category != 8)
@@ -675,8 +740,10 @@ extern "C" talos_rt_status talos_rt_v1_dpi_aggregate_export_pack(
     std::memcpy(temporary.data() + byte, &text, sizeof(text));
     return true;
   };
-  if (!walkPlan(plan, planWords / recordWords, 0, 0, retain))
-    return TALOS_RT_INVALID_ARGUMENT;
+  talos_rt_status retained = checkPlan(plan, planWords / recordWords, retain);
+  if (retained != TALOS_RT_OK)
+    return retained;
+  aggregateExportStrings[outputSlot] = std::move(strings);
   std::memcpy(outData, temporary.data(), static_cast<size_t>(cSize));
   return TALOS_RT_OK;
 }
@@ -700,7 +767,10 @@ extern "C" talos_rt_status talos_rt_v1_dpi_aggregate_state_alloc(
     slots.push_back({bit, TALOS_RT_MANAGED_ROOT_KIND_STRING, 0});
     return true;
   };
-  if (!walkPlan(plan, planWords / recordWords, 0, 0, collect) || slots.empty())
+  talos_rt_status collected = checkPlan(plan, planWords / recordWords, collect);
+  if (collected != TALOS_RT_OK)
+    return collected;
+  if (slots.empty())
     return TALOS_RT_INVALID_ARGUMENT;
   if (!std::is_sorted(slots.begin(), slots.end(),
                       [](const auto &lhs, const auto &rhs) {

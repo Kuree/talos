@@ -1,10 +1,7 @@
 #include "svdpi.h"
-int dpi_sum(const svOpenArrayHandle values) {
-  int sum=0;
-  for(int i=svLow(values,1);i<=svHigh(values,1);++i) {
-    const int *value=(const int*)svGetArrElemPtr1(values,i);
-    if(!value) return -999;
-    sum+=*value;
-  }
-  return sum;
+
+int bounds(const svOpenArrayHandle q, int n) {
+  return svDimensions(q) == 1 && svSize(q, 0) == 32 && svLeft(q, 1) == 0 &&
+         svRight(q, 1) == n - 1 && svLow(q, 1) == 0 && svHigh(q, 1) == n - 1 &&
+         svIncrement(q, 1) == -1 && svSize(q, 1) == n;
 }

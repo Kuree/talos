@@ -8,6 +8,8 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Dialect.h"
 
+#include <optional>
+
 #include "talos/Dialect/DPI/DPIDialect.h.inc"
 
 namespace talos::dpi {
@@ -23,6 +25,7 @@ using ImportId = DPIDialect::ImportIdAttrHelper;
 using ExportId = DPIDialect::ExportIdAttrHelper;
 using CIdentifier = DPIDialect::CIdentifierAttrHelper;
 using ScopeId = DPIDialect::ScopeIdAttrHelper;
+using LexicalScopes = DPIDialect::LexicalScopesAttrHelper;
 using ABISignature = DPIDialect::AbiSignatureAttrHelper;
 using AggregateLayouts = DPIDialect::AggregateLayoutsAttrHelper;
 using LogicalInputs = DPIDialect::LogicalInputsAttrHelper;
@@ -43,6 +46,9 @@ using discardable::set;
 /// Stable hash of a signature's ABI entries and logical input count. Native
 /// thunks and the bytecode encoder agree on it without sharing IR.
 uint64_t getSignatureHash(mlir::ArrayAttr signature, uint64_t logicalInputs);
+
+/// Decimal exponent in seconds of an IEEE time scale from 1 fs to 100 s.
+std::optional<int32_t> getTimeExponent(uint64_t femtoseconds);
 
 } // namespace talos::dpi
 

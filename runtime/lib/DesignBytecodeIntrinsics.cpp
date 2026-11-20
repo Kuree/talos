@@ -4692,7 +4692,8 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
                               shapeWords * 8 ||
             layout.storage > 2 || layout.elementWidth == 0 ||
             layout.fourState > 1 || layout.transportFourState > 1 ||
-            (layout.storage == 1 && layout.transportFourState != 0) ||
+            (layout.storage == 1 &&
+             (layout.transportFourState != 0 || dimensions != 1)) ||
             layout.transportWidth == 0 || layout.elementCSize == 0 ||
             layout.elementCAlignment == 0 ||
             (layout.elementCAlignment & (layout.elementCAlignment - 1)) != 0 ||
@@ -4937,8 +4938,11 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       const DPIOpenLayout &layout = *dpiOpenLayouts[index];
       dpiOpenInputs[index].emplace();
       DPIOpenStorage &storage = *dpiOpenInputs[index];
+      if (layout.storage == 1 && dpiEntries[index].direction == 1)
+        return TALOS_RT_INVALID_BYTECODE;
       if (layout.storage == 2) {
-        if (dpiEntries[index].direction == 1 || layout.shapePlan.empty())
+        if (layout.shapePlan.empty() ||
+            (dpiEntries[index].direction == 1 && layout.shapePlan.front() != 0))
           return TALOS_RT_INVALID_BYTECODE;
         uint64_t rootPlaneSize = limbCount(registerLayout.width) * uint64_t{8};
         uint8_t *address = frame.data + registerLayout.offset;
@@ -4975,7 +4979,8 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
         if (layout.elementWidth != 0 &&
             storage.totalWidth / layout.elementWidth != storage.elementCount)
           return TALOS_RT_INVALID_BYTECODE;
-        storage.planeSize = (storage.totalWidth + 7) / 8;
+        storage.planeSize =
+            storage.totalWidth / 8 + ((storage.totalWidth & 7) != 0);
       } else {
         storage.elementCount = 1;
         for (size_t range = 0; range != layout.ranges.size(); range += 2) {

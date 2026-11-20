@@ -11713,6 +11713,37 @@ TEST(DesignDatabase, RejectsStoredFalseScopeIdentityBooleans) {
   }
 }
 
+TEST(DesignDatabase, ValidatesPackageTimePropertyPairs) {
+  auto check = [](std::initializer_list<std::pair<uint16_t, int32_t>> rows,
+                  talos_rt_status expected) {
+    Fixture fixture;
+    auto &bytes = fixture.database;
+    bytes = makePackageDefinitionLocationDatabase();
+    uint32_t directory = get32(bytes, 12);
+    uint64_t properties = get64(bytes, directory + 112);
+    bytes.resize(properties + rows.size() * 16);
+    put64(bytes, 24, bytes.size());
+    put64(bytes, directory + 120, rows.size());
+    for (auto [selector, exponent] : rows) {
+      put16(bytes, properties + 4, selector);
+      put16(bytes, properties + 6, 1); // Integer property.
+      put64(bytes, properties + 8, static_cast<int64_t>(exponent));
+      properties += 16;
+    }
+    put64(bytes, 32, imageChecksum(bytes));
+    fixture.execution.design_database = bytes.data();
+    fixture.execution.design_database_size = bytes.size();
+    fixture.execution.flags &= ~TALOS_RT_EXECUTION_VPI_WRITE;
+    EXPECT_EQ(talos_rt_v1_design_validate(&fixture.execution), expected);
+  };
+  check({{vpiTimeUnit, 2}, {vpiTimePrecision, -15}}, TALOS_RT_OK);
+  check({{vpiTimeUnit, -9}}, TALOS_RT_INVALID_DESIGN);
+  check({{vpiTimePrecision, -12}}, TALOS_RT_INVALID_DESIGN);
+  check({{vpiTimeUnit, -12}, {vpiTimePrecision, -9}}, TALOS_RT_INVALID_DESIGN);
+  check({{vpiTimeUnit, 3}, {vpiTimePrecision, -12}}, TALOS_RT_INVALID_DESIGN);
+  check({{vpiTimeUnit, -9}, {vpiTimePrecision, -16}}, TALOS_RT_INVALID_DESIGN);
+}
+
 TEST(DesignDatabase, RejectsProtectedStatementWithoutFixedProperty) {
   Fixture fixture;
   fixture.database = makeStatementDatabase();
@@ -19684,9 +19715,17 @@ TEST(VPI, TraversesExplicitStaticRelationsFromNullRoot) {
   talos_rt_v1_context_destroy(context);
 }
 
-TEST(VPI, ReadsPackageDefinitionLocationFromFixedImage) {
+TEST(VPI, ReadsPackageDefinitionLocationAndInheritsLegacyTimescale) {
   Fixture fixture;
   fixture.database = makePackageDefinitionLocationDatabase();
+  // This image has fixed definition coordinates and no package time rows.
+  // Assign its physical root the stable ID of the execution's root scope.
+  put64(fixture.database, get64(fixture.database, 40) + 8, 0);
+  put64(fixture.database, 32, imageChecksum(fixture.database));
+  const talos_rt_dpi_scope_v1 root{0, UINT64_MAX, "$root", 5, -9, -12, 0};
+  fixture.execution.dpi_scopes = &root;
+  fixture.execution.dpi_scope_count = 1;
+  fixture.execution.dpi_time_precision = -12;
   fixture.execution.design_database = fixture.database.data();
   fixture.execution.design_database_size = fixture.database.size();
   fixture.execution.flags &= ~TALOS_RT_EXECUTION_VPI_WRITE;
@@ -19704,6 +19743,8 @@ TEST(VPI, ReadsPackageDefinitionLocationFromFixedImage) {
   EXPECT_EQ(vpi_get(vpiType, package), vpiPackage);
   EXPECT_STREQ(vpi_get_str(vpiDefFile, package), "$root");
   EXPECT_EQ(vpi_get(vpiDefLineNo, package), 7);
+  EXPECT_EQ(vpi_get(vpiTimeUnit, package), -9);
+  EXPECT_EQ(vpi_get(vpiTimePrecision, package), -12);
   EXPECT_EQ(vpi_chk_error(nullptr), 0);
   EXPECT_EQ(vpi_scan(iterator), nullptr);
 

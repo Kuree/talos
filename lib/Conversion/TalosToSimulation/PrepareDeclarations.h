@@ -44,10 +44,12 @@ struct PreparedClassDeclarations {
 
 struct PreparedScopeDeclarations {
   llvm::DenseMap<mlir::Operation *, uint64_t> ids;
+  llvm::DenseMap<mlir::Operation *, uint64_t> dpiIds;
   llvm::DenseMap<mlir::Operation *, uint64_t> initializationRandomIds;
   mlir::SmallVector<sim::SimScopeDeclOp> declarations;
 
   uint64_t lookup(mlir::Operation *operation) const;
+  uint64_t lookupDPIScope(mlir::Operation *operation) const;
   uint64_t lookupInitializationRandomScope(mlir::Operation *operation) const;
 };
 

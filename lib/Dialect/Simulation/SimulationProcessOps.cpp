@@ -1051,8 +1051,13 @@ LogicalResult SimDPICallOp::verify() {
   for (auto [index, abi] : llvm::enumerate(signature)) {
     Attribute layout = openLayouts ? openLayouts[index] : Attribute{};
     if (abi.getKind() == dpi::ABIKind::OpenArray) {
-      if (!isa_and_nonnull<dpi::OpenArrayABIAttr>(layout))
+      auto open = dyn_cast_or_null<dpi::OpenArrayABIAttr>(layout);
+      if (!open)
         return emitOpError("open-array ABI entry has no concrete shape");
+      if (abi.getWidth() != open.getElementWidth() ||
+          abi.getFourState() != open.getFourState())
+        return emitOpError(
+            "open-array ABI entry disagrees with its element layout");
     } else if (layout && !isa<UnitAttr>(layout)) {
       return emitOpError("non-open DPI ABI entry has open-array shape");
     }
@@ -1078,13 +1083,18 @@ LogicalResult SimDPICallOp::verify() {
       continue;
     if (outputCursor >= signature.size())
       return emitOpError("DPI signature is missing a formal copy-out");
-    dpi::ABIAttr output = signature[outputCursor++];
+    dpi::ABIAttr output = signature[outputCursor];
     if (output.getDirection() != dpi::ArgumentDirection::Output ||
         output.getKind() != input.getKind() ||
         output.getWidth() != input.getWidth() ||
         output.getFourState() != input.getFourState() ||
         output.getIsSigned() != input.getIsSigned())
       return emitOpError("DPI formal copy-out must match its input ABI entry");
+    if ((openLayouts && openLayouts[index] != openLayouts[outputCursor]) ||
+        (aggregateLayouts &&
+         aggregateLayouts[index] != aggregateLayouts[outputCursor]))
+      return emitOpError("DPI formal copy-out must use its input layout");
+    ++outputCursor;
   }
   if (!getIsTask() &&
       llvm::any_of(ArrayRef<dpi::ABIAttr>(signature).drop_front(outputCursor),
