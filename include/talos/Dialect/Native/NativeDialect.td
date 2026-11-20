@@ -107,6 +107,10 @@ def NativeDialect : Dialect {
     // State access and managed-root certificates.
     "::mlir::UnitAttr":$bulk_copy_source_assume_clean,
     "::mlir::UnitAttr":$guarded_ref_store,
+    // Numeric instance property of an allocation used only by the current
+    // activation and its statically bound receiver calls.
+    "::mlir::UnitAttr":$private_class_field,
+    "::mlir::UnitAttr":$private_queue,
     "::mlir::UnitAttr":$in_bounds_handle_offset,
     "::mlir::UnitAttr":$managed_root_range_record,
     "::mlir::UnitAttr":$managed_root_range_push_check,

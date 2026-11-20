@@ -2,6 +2,7 @@
 
 #include "SimulationToLLVMCoroutinePrivate.h"
 
+#include "SimulationPrivateQueues.h"
 #include "talos/Analysis/SimulationStorageAnalysis.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Runtime/RuntimeOps.h"
@@ -45,11 +46,16 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     if (adaptor.getContainer().size() != 1)
       return failure();
+    StringRef callee = "talos_rt_v1_container_size";
+    if (native::has<native::PrivateQueue>(op) &&
+        isa<sim::QueueType>(op.getContainer().getType()))
+      callee = getPrivateQueueAccess(op->getParentOfType<ModuleOp>(),
+                                     op.getLoc(), PrivateQueueAction::Size)
+                   .getSymName();
     rewriter.replaceOp(
         op, LLVM::CallOp::create(
                 rewriter, op.getLoc(), TypeRange{rewriter.getI64Type()},
-                SymbolRefAttr::get(rewriter.getContext(),
-                                   "talos_rt_v1_container_size"),
+                SymbolRefAttr::get(rewriter.getContext(), callee),
                 managedObjectPointer(rewriter, op.getLoc(),
                                      adaptor.getContainer().front()))
                 .getResult());
@@ -2098,6 +2104,16 @@ public:
     StringRef callee = std::is_same_v<Op, sim::SimQueuePopOp>
                            ? "talos_rt_v1_queue_read_delete_checked"
                            : "talos_rt_v1_container_read_checked";
+    if (native::has<native::PrivateQueue>(op) &&
+        isa<sim::QueueType>(op.getContainer().getType())) {
+      auto action = std::is_same_v<Op, sim::SimQueuePopOp>
+                        ? PrivateQueueAction::Pop
+                        : PrivateQueueAction::Read;
+      callee = getPrivateQueueAccess(op->template getParentOfType<ModuleOp>(),
+                                     op.getLoc(), action, byteSizes.front(),
+                                     storage.size() == 2)
+                   .getSymName();
+    }
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
@@ -2157,6 +2173,16 @@ public:
         storage.size() == 2
             ? storage[1]
             : Value(LLVM::ZeroOp::create(rewriter, op.getLoc(), pointer));
+    if constexpr (std::is_same_v<Op, sim::SimQueuePushBackOp>)
+      if (native::has<native::PrivateQueue>(op) &&
+          isa<sim::QueueType>(op.getContainer().getType()))
+        if (auto integer =
+                dyn_cast<IntegerType>(adaptor.getValue().front().getType()))
+          callee = getPrivateQueueAccess(
+                       op->template getParentOfType<ModuleOp>(), op.getLoc(),
+                       PrivateQueueAction::Append, (integer.getWidth() + 7) / 8,
+                       storage.size() == 2)
+                       .getSymName();
     auto [context, lane] = managedContextAndLane(rewriter, op.getLoc());
     Value status =
         LLVM::CallOp::create(

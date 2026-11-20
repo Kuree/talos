@@ -4863,6 +4863,8 @@ public:
                                "pipeline phase Schedule");
       return signalPassFailure();
     }
+    detail::elideFreshConstructorStores(getOperation());
+    detail::specializePrivateClassFields(getOperation());
     TalosSimInstrumentManagedRootsPassOptions rootOptions;
     rootOptions.polled = sim::has<sim::metadata::GCPolled>(getOperation());
     auto instrumentFunctions = [&]() -> LogicalResult {

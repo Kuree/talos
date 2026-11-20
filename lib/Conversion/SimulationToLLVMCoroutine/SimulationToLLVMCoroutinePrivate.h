@@ -604,6 +604,8 @@ void populateStateReadWriteToLLVMConversionPatterns(
         &stateAccesses,
     const LocalStorageLowering *locals = nullptr,
     const NativeStateLayout *layout = nullptr);
+void elideFreshConstructorStores(mlir::ModuleOp module);
+void specializePrivateClassFields(mlir::ModuleOp module);
 void annotateStaticDriverNets(mlir::ModuleOp module,
                               const NativeStateLayout &layout);
 /// Without `directState`, driver contributions go through the runtime state

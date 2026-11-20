@@ -35,6 +35,8 @@ add_mlir_library(TalosSimulationToLLVMCoroutine
   SimulationManagedCoverageLowering.cpp
   SimulationManagedPreparation.cpp
   SimulationManagedReferenceLowering.cpp
+  SimulationPrivateClassFields.cpp
+  SimulationPrivateQueues.cpp
   SimulationManagedRootInstrumentation.cpp
   SimulationManagedRootSupport.cpp
   SimulationManagedStringLowering.cpp

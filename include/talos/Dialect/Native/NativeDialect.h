@@ -69,6 +69,8 @@ using CleanBulkDrive = NativeDialect::CleanBulkDriveAttrHelper;
 using BulkCopySourceAssumeClean =
     NativeDialect::BulkCopySourceAssumeCleanAttrHelper;
 using GuardedRefStore = NativeDialect::GuardedRefStoreAttrHelper;
+using PrivateClassField = NativeDialect::PrivateClassFieldAttrHelper;
+using PrivateQueue = NativeDialect::PrivateQueueAttrHelper;
 using InBoundsHandleOffset = NativeDialect::InBoundsHandleOffsetAttrHelper;
 using ManagedRootRangeRecord = NativeDialect::ManagedRootRangeRecordAttrHelper;
 using ManagedRootRangePushCheck =

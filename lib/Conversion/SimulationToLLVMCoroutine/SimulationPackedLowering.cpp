@@ -6,6 +6,7 @@
 #include "talos/Analysis/LocalStorageAnalysis.h"
 #include "talos/Analysis/NativeWordAnalysis.h"
 #include "talos/Analysis/ParallelWalk.h"
+#include "talos/Analysis/SimulationEffectAnalysis.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleDialect.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
@@ -170,6 +171,151 @@ std::string encodeUnsignedPlan(ArrayRef<uint64_t> plan) {
   return bytes;
 }
 
+// Before a constructor call, the fresh handle may only have initialized its
+// own fields (for example its object RNG). An earlier capture, reference
+// escape, or call with the handle in another formal keeps all stores.
+bool hasPrivateNewReceiver(sim::SimCallOp call) {
+  if (call.getNumOperands() < 2)
+    return false;
+  Value receiver = call.getOperand(1);
+  auto allocation = receiver.getDefiningOp<sim::SimClassAllocOp>();
+  Block *block = call->getBlock();
+  if (!allocation || allocation->getBlock() != block)
+    return false;
+  auto before = [&](Operation *user) {
+    auto *at = block->findAncestorOpInBlock(*user);
+    return at && (at == call || at->isBeforeInBlock(call));
+  };
+  for (OpOperand &use : receiver.getUses()) {
+    Operation *user = use.getOwner();
+    if (user == call && use.getOperandNumber() == 1)
+      continue;
+    if (!before(user))
+      continue;
+    auto field = dyn_cast<sim::SimClassFieldRefOp>(user);
+    if (!field)
+      return false;
+    for (OpOperand &access : field.getResult().getUses()) {
+      if (!before(access.getOwner()))
+        continue;
+      auto store = dyn_cast<sim::SimManagedStoreOp>(access.getOwner());
+      if (!store || store.getReference() != field.getResult() ||
+          !analysis::isPlainValueType(store.getValue().getType()))
+        return false;
+    }
+  }
+  return true;
+}
+
+// Track direct fields in the straight-line initialization prefix. A read
+// preserves the store that supplies it, and an opaque operation ends the
+// prefix. RHS expressions, object RNG seeding and handle stores stay intact.
+SmallVector<sim::SimManagedStoreOp> overwrittenInitialFields(Block &entry) {
+  Value receiver = entry.getArgument(1);
+  DenseMap<StringAttr, sim::SimManagedStoreOp> pending;
+  SmallVector<sim::SimManagedStoreOp> redundant;
+  auto fieldOf = [&](Value ref) {
+    auto field = ref.getDefiningOp<sim::SimClassFieldRefOp>();
+    return field && field.getObject() == receiver
+               ? field.getFieldAttr().getAttr()
+               : StringAttr{};
+  };
+  for (Operation &op : entry.without_terminator()) {
+    if (auto store = dyn_cast<sim::SimManagedStoreOp>(op)) {
+      auto field = fieldOf(store.getReference());
+      if (!field)
+        break;
+      if (analysis::isPlainValueType(store.getValue().getType())) {
+        auto &previous = pending[field];
+        if (previous)
+          redundant.push_back(previous);
+        previous = store;
+      }
+    } else if (auto load = dyn_cast<sim::SimManagedLoadOp>(op)) {
+      auto field = fieldOf(load.getReference());
+      if (!field)
+        break;
+      pending.erase(field);
+    } else if (!isa<sim::SimRefAllocOp, sim::SimRefLoadOp,
+                    sim::SimClassFieldRefOp>(op) &&
+               (op.getNumRegions() || !isMemoryEffectFree(&op))) {
+      break;
+    }
+  }
+  return redundant;
+}
+
+// IEEE 1800-2023 8.7: initialization precedes the user constructor body.
+// A constructor or a private helper may overwrite several defaults before
+// anyone can see them. Prove that property at every call on the executable
+// IR, after the frontend has discarded constructor syntax.
+unsigned elidePrivateConstructorStores(sim::SimDesignOp design) {
+  auto graph = design.getComputeGraphAttr();
+  if (!graph || graph.getVpi() != schedule::ComputeVPIMode::Off)
+    return 0;
+  struct Candidate {
+    SmallVector<sim::SimManagedStoreOp> redundant;
+    bool called = false, escaped = false;
+  };
+  DenseMap<StringAttr, Candidate> candidates;
+  for (auto function : design.getOps<sim::SimFuncOp>()) {
+    if (function.isExternal() || !function.isPrivate() ||
+        function.getEntryKind() != sim::EntryKind::Function ||
+        function.getNumArguments() < 2)
+      continue;
+    Block &entry = function.getBody().front();
+    if (!isa<sim::ClassHandleType>(entry.getArgument(1).getType()))
+      continue;
+    auto redundant = overwrittenInitialFields(entry);
+    if (!redundant.empty())
+      candidates.try_emplace(function.getSymNameAttr(),
+                             Candidate{std::move(redundant)});
+  }
+  if (candidates.empty())
+    return 0;
+  DenseMap<StringAttr, StringAttr> methods;
+  for (auto method : design.getOps<sim::SimClassMethodDeclOp>())
+    if (auto impl = method.getImplementationAttr();
+        impl && candidates.count(impl.getAttr())) {
+      methods[method.getSymNameAttr()] = impl.getAttr();
+      if (method.getIsVirtual() || method.getSlot())
+        candidates[impl.getAttr()].escaped = true;
+    }
+  auto uses = analysis::getSymbolUsesConcurrently(&design.getBody());
+  if (!uses)
+    return 0;
+  for (const auto &use : *uses) {
+    auto name = use.getSymbolRef().getRootReference();
+    Operation *user = use.getUser();
+    if (auto method = methods.find(name);
+        method != methods.end() && !isa<sim::SimClassDeclOp>(user)) {
+      // The implementation names its declaring method. This reciprocal
+      // metadata is not a callable reference to the receiver.
+      auto function = dyn_cast<sim::SimFuncOp>(user);
+      if (!function || function.getSymNameAttr() != method->second ||
+          sim::get<sim::metadata::ClassMethod>(function) != use.getSymbolRef())
+        candidates[method->second].escaped = true;
+    }
+    auto found = candidates.find(name);
+    if (found == candidates.end() || isa<sim::SimClassMethodDeclOp>(user))
+      continue;
+    auto call = dyn_cast<sim::SimCallOp>(user);
+    if (call && call.getCalleeAttr().getAttr() == name &&
+        hasPrivateNewReceiver(call))
+      found->second.called = true;
+    else
+      found->second.escaped = true;
+  }
+  unsigned removed = 0;
+  for (auto &[name, candidate] : candidates)
+    if (candidate.called && !candidate.escaped) {
+      for (auto store : candidate.redundant)
+        store.erase();
+      removed += candidate.redundant.size();
+    }
+  return removed;
+}
+
 void fuseWideManagedBitStores(ModuleOp module) {
   SmallVector<sim::SimManagedStoreOp> stores;
   module.walk([&](sim::SimManagedStoreOp store) { stores.push_back(store); });
@@ -228,6 +374,19 @@ void fuseWideManagedBitStores(ModuleOp module) {
 }
 
 } // namespace
+
+void elideFreshConstructorStores(ModuleOp module) {
+  if (native::has<native::ClosedExecutable>(module) &&
+      !sim::has<sim::metadata::SnapshotPublications>(module)) {
+    unsigned removed = 0;
+    module.walk([&](sim::SimDesignOp design) {
+      removed += elidePrivateConstructorStores(design);
+    });
+    if (native::has<native::DebugTiming>(module))
+      llvm::errs() << "talos fresh constructor stores: elided=" << removed
+                   << '\n';
+  }
+}
 
 NativeStateLayout makeCleanEvalStateLayout(const NativeStateLayout &layout) {
   NativeStateLayout clean = layout;

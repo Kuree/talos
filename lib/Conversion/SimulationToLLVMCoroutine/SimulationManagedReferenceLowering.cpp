@@ -17,6 +17,7 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/Support/Alignment.h"
 #include "llvm/Support/MathExtras.h"
 
 #include <cstddef>
@@ -558,8 +559,7 @@ public:
     Type i64 = rewriter.getI64Type();
     UnpackedArgumentReference reference = unpackArgumentReference(
         rewriter, location, adaptor.getReference().front());
-    auto [context, lane] = managedContextAndLane(rewriter, location);
-    (void)lane;
+    Value context = managedContext(rewriter, location);
     Value valueOut = entryAlloca(rewriter, location, convertedTypes[0], 1,
                                  storage->alignment);
     LLVM::StoreOp::create(
@@ -650,8 +650,7 @@ public:
     Type i64 = rewriter.getI64Type();
     UnpackedArgumentReference reference = unpackArgumentReference(
         rewriter, location, adaptor.getReference().front());
-    auto [context, lane] = managedContextAndLane(rewriter, location);
-    (void)lane;
+    Value context = managedContext(rewriter, location);
     Value valueState = detail::createStatePlaneAddress(
         rewriter, location, schedule::StatePlane::Value);
     Value unknownState = detail::createStatePlaneAddress(
@@ -705,6 +704,23 @@ private:
   uint64_t stateBitCount;
 };
 
+// The proven receiver is an allocation with the verified property layout
+// (1800-2023 8.7). Keep the same failure exit for null as a checked property
+// access (8.4). The heap keeps the payload stationary while its lane runs.
+Value privateFieldAddress(ConversionPatternRewriter &rewriter, Location loc,
+                          Value object, Value byteOffset) {
+  Value missing = LLVM::ICmpOp::create(
+      rewriter, loc, LLVM::ICmpPredicate::eq, object,
+      LLVM::ZeroOp::create(rewriter, loc, object.getType()));
+  Type i32 = rewriter.getI32Type();
+  Value status = LLVM::SelectOp::create(
+      rewriter, loc, missing,
+      llvmConstant(rewriter, loc, i32, TALOS_RT_INVALID_ARGUMENT),
+      llvmConstant(rewriter, loc, i32, TALOS_RT_OK));
+  reportManagedStatus(rewriter, loc, Value{}, status);
+  return createAddressAt(rewriter, loc, object, byteOffset, 0);
+}
+
 class ManagedLoadConversion final
     : public OpConversionPattern<sim::SimManagedLoadOp> {
 public:
@@ -736,9 +752,22 @@ public:
     Value object =
         managedObjectPointer(rewriter, op.getLoc(), adaptor.getReference()[0]);
     Value baseOffset = adaptor.getReference()[1];
-    auto [context, lane] = managedContextAndLane(rewriter, op.getLoc());
-    (void)lane;
     SmallVector<Value> results;
+    if (native::has<native::PrivateClassField>(op)) {
+      Value address = privateFieldAddress(rewriter, op.getLoc(), object,
+                                          baseOffset);
+      for (auto [plane, type] : llvm::enumerate(convertedTypes)) {
+        uint64_t offset = plane * storage->size;
+        auto align = llvm::commonAlignment(llvm::Align(storage->alignment),
+                                           offset);
+        results.push_back(
+            loadAt(rewriter, op.getLoc(), address, offset, type, align.value()));
+      }
+      SmallVector<ValueRange> replacements{ValueRange(results)};
+      rewriter.replaceOpWithMultiple(op, replacements);
+      return success();
+    }
+    Value context = managedContext(rewriter, op.getLoc());
     SmallVector<Value> outputs;
     for (Type type : convertedTypes) {
       Value output =
@@ -849,8 +878,7 @@ public:
     Value validI32 = arith::ExtUIOp::create(rewriter, location, i32, valid);
     Value object = managedObjectPointer(rewriter, location,
                                         adaptor.getReference().front());
-    auto [context, lane] = managedContextAndLane(rewriter, location);
-    (void)lane;
+    Value context = managedContext(rewriter, location);
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{i32},
@@ -894,8 +922,19 @@ public:
     Value object =
         managedObjectPointer(rewriter, op.getLoc(), adaptor.getReference()[0]);
     Value baseOffset = adaptor.getReference()[1];
-    auto [context, lane] = managedContextAndLane(rewriter, op.getLoc());
-    (void)lane;
+    if (native::has<native::PrivateClassField>(op)) {
+      Value address = privateFieldAddress(rewriter, op.getLoc(), object,
+                                          baseOffset);
+      for (auto [plane, value] : llvm::enumerate(adaptor.getValue())) {
+        uint64_t offset = plane * storage->size;
+        auto align = llvm::commonAlignment(llvm::Align(storage->alignment),
+                                           offset);
+        storeAt(rewriter, op.getLoc(), address, offset, value, align.value());
+      }
+      rewriter.eraseOp(op);
+      return success();
+    }
+    Value context = managedContext(rewriter, op.getLoc());
     SmallVector<Value> inputs;
     for (Value value : adaptor.getValue()) {
       Value input = entryAlloca(rewriter, op.getLoc(), value.getType(), 1,
@@ -978,8 +1017,7 @@ public:
     Value delay = adaptor.getDelay().empty()
                       ? llvmConstant(rewriter, location, i64, 0)
                       : adaptor.getDelay().front();
-    auto [context, lane] = managedContextAndLane(rewriter, location);
-    (void)lane;
+    Value context = managedContext(rewriter, location);
     Value object =
         managedObjectPointer(rewriter, location, adaptor.getDestination()[0]);
     Value offset = path ? llvmConstant(rewriter, location, i64, UINT64_MAX)
@@ -1057,8 +1095,7 @@ public:
     Value delay = adaptor.getDelay().empty()
                       ? llvmConstant(rewriter, location, i64, 0)
                       : adaptor.getDelay().front();
-    auto [context, lane] = managedContextAndLane(rewriter, location);
-    (void)lane;
+    Value context = managedContext(rewriter, location);
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{rewriter.getI32Type()},
