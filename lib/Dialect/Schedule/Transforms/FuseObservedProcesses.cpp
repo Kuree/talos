@@ -6,8 +6,8 @@
 // code runs in spawned processes. A design with many assertions on one clock
 // otherwise pays a scheduler resumption per assertion and edge.
 //
-// Processes that wait for the same edge of the same root and resume in the
-// Observed region become one process. It runs every member's start-up code
+// Processes that wait for the same edge and resume in the Observed region
+// become one process. It runs every member's start-up code
 // in turn, waits once, and then runs each member's activation in turn. Every
 // member is waiting whenever the fused process waits, because each activation
 // ends at its member's single wait. So one edge resumes all members, as it
@@ -17,8 +17,9 @@
 //
 // Members must not depend on their process identity, directly or through
 // the functions they call: no process handle, block activation, disable,
-// monitor, termination, or return. Nor may they, or code they call or spawn,
-// use random state: each process has its own random number generator and
+// monitor, or independent return. A return guarded by design-wide
+// termination ends the shared activation. Nor may they, or code they call or
+// spawn, use random state: each process has its own random number generator and
 // seeds the processes it creates from it (18.14.1), so merged members would
 // share one stream. Operations with unknown effects are treated as using
 // both. Members write only private state, so none can change the clock that
@@ -29,6 +30,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "talos/Analysis/ActivationMemoryAnalysis.h"
+#include "talos/Analysis/ActivationPhaseAnalysis.h"
 #include "talos/Analysis/HandleDataflowAnalysis.h"
 #include "talos/Analysis/ParallelWalk.h"
 #include "talos/Dialect/Native/NativeDialect.h"
@@ -39,10 +41,12 @@
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/PostOrderIterator.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringMap.h"
 
 #include <functional>
@@ -72,6 +76,180 @@ struct Traits {
   bool randomOrOpaque = false;
   bool writesDesign = false;
 };
+
+// A positive delay must precede every execution of the sole clock store.
+// Thus every Active port copy settles before Observed, even if several
+// levels separate it from the writer (IEEE 1800-2023 4.5, 9.4.1, 23.3.3).
+bool isDelayedClockWriter(sim::SimFuncOp function, uint64_t clock,
+                          const analysis::ActivationPhaseAnalysis &phases) {
+  if (!function || function.getHomeRegion() != sim::EventRegion::Active ||
+      function.getDomain() != sim::ExecutionDomain::Design)
+    return false;
+  sim::SimRefStoreOp store;
+  for (Block &block : function.getBody())
+    for (Operation &op : block) {
+      if (auto write = dyn_cast<sim::SimRefStoreOp>(op)) {
+        if (store || phases.getRoot(function, write.getReference()) != clock)
+          return false;
+        store = write;
+      } else if (!isa<sim::SimRefLoadOp, sim::SimSuspendDelayOp>(op) &&
+                 !isMemoryEffectFree(&op))
+        return false;
+    }
+  Block *before = store ? store->getBlock()->getSinglePredecessor() : nullptr;
+  auto delay = before
+                   ? dyn_cast<sim::SimSuspendDelayOp>(before->getTerminator())
+                   : sim::SimSuspendDelayOp{};
+  auto amount = delay ? delay.getDelay().getDefiningOp<sim::SimTimeConstantOp>()
+                      : sim::SimTimeConstantOp{};
+  return amount && amount.getValue() > 0 &&
+         delay.getResumeRegion().value_or(sim::EventRegion::Active) ==
+             sim::EventRegion::Active;
+}
+
+bool isTerminationExit(Block *block) {
+  return !block->hasNoPredecessors() && block->getOperations().size() == 1 &&
+         llvm::all_of(block->getPredecessors(), [&](Block *pred) {
+           auto branch = dyn_cast<cf::CondBranchOp>(pred->getTerminator());
+           return branch && branch.getTrueDest() == block &&
+                  branch.getFalseDest() != block &&
+                  branch.getCondition()
+                      .getDefiningOp<sim::SimTerminationRequestedOp>();
+         });
+}
+
+// The root initializer and its ordinary, zero-time callees may only put 0
+// on this bit. Copies initially contain X (or 0 for bit), so propagation at
+// startup cannot produce a posedge (6.8, Table 6-7, Table 9-2).
+bool hasOnlyLowInitialWrites(sim::SimFuncOp function, uint64_t clock,
+                             const analysis::ActivationPhaseAnalysis &phases,
+                             SymbolTable &symbols,
+                             DenseSet<Operation *> &visiting) {
+  if (!function || function.isExternal() || !visiting.insert(function).second)
+    return false;
+  llvm::scope_exit guard([&] { visiting.erase(function); });
+  for (Block &block : function.getBody()) {
+    if (ArrayAttr effects = phases.getFragmentEffects(&block)) {
+      bool mayWrite = llvm::any_of(
+          effects.getAsRange<schedule::ComputeEffectAttr>(), [&](auto effect) {
+            using Kind = schedule::ComputeEffectKind;
+            if ((effect.getEffect() != Kind::Write &&
+                 effect.getEffect() != Kind::NBA &&
+                 effect.getEffect() != Kind::Drive) ||
+                effect.getTarget() == schedule::ComputeTargetKind::Local)
+              return false;
+            auto roots =
+                phases.getEffectRoots(function.getSymNameAttr(), effect);
+            return !roots || llvm::is_contained(*roots, clock);
+          });
+      if (!mayWrite)
+        continue;
+    }
+    for (Operation &op : block) {
+      if (auto store = dyn_cast<sim::SimRefStoreOp>(op)) {
+        auto target = phases.getRoot(function, store.getReference());
+        if (!target)
+          return false;
+        if (*target != clock)
+          continue;
+        Value value = store.getValue();
+        if (auto level = value.getDefiningOp<sim::SimLogicConstantOp>()) {
+          if (level.getValue().getBitWidth() != 1 ||
+              !level.getValue().isZero() || !level.getUnknown().isZero())
+            return false;
+        } else if (!value.getType().isInteger(1) ||
+                   !matchPattern(value, m_Zero()))
+          return false;
+      } else if (auto call = dyn_cast<sim::SimCallOp>(op)) {
+        if (!hasOnlyLowInitialWrites(
+                symbols.lookup<sim::SimFuncOp>(call.getCallee()), clock, phases,
+                symbols, visiting))
+          return false;
+      } else if (!isa<sim::SimSpawnOp>(op)) {
+        // The spawned processes have their own entries in the writer graph.
+        auto effects = getEffectsRecursively(&op);
+        if (!effects || llvm::any_of(*effects, [](const auto &effect) {
+              return isa<MemoryEffects::Write>(effect.getEffect()) &&
+                     isa<sim::StorageResource, sim::ExternalResource>(
+                         effect.getResource());
+            }))
+          return false;
+      }
+    }
+  }
+  return true;
+}
+
+// Keys for Observed posedge waits only. Active readers and clock storage keep
+// their individual updates. A missing writer, initializer or copy proof keeps
+// the original wait.
+DenseMap<uint64_t, uint64_t> observedPosedgeOrigins(
+    sim::SimDesignOp design, sim::SimFuncOp root, SymbolTable &symbols,
+    const analysis::HandleDataflowAnalysis &handles, ArrayRef<uint64_t> watched,
+    function_ref<bool(StringAttr)> startsOnce) {
+  analysis::ActivationPhaseAnalysis phases(design, handles);
+  DenseMap<uint64_t, uint64_t> origins;
+  if (!phases.isValid() || phases.getClockCopies().empty())
+    return origins;
+  DenseMap<uint64_t, SmallVector<uint64_t>> descendants;
+  for (uint64_t clock : watched) {
+    uint64_t origin = clock;
+    DenseSet<uint64_t> seen;
+    while (true) {
+      auto copy = phases.getClockCopies().find(origin);
+      if (copy == phases.getClockCopies().end())
+        break;
+      auto process = symbols.lookup<sim::SimFuncOp>(copy->second.process);
+      if (!seen.insert(origin).second || !startsOnce(copy->second.process) ||
+          process.getHomeRegion() != sim::EventRegion::Active ||
+          process.getDomain() != sim::ExecutionDomain::Design ||
+          cast<sim::SimSuspendChangeOp>(
+              process.getBody().back().getTerminator())
+                  .getResumeRegion()
+                  .value_or(sim::EventRegion::Active) !=
+              sim::EventRegion::Active) {
+        origin = clock;
+        break;
+      }
+      origin = copy->second.source;
+    }
+    descendants[origin].push_back(clock);
+  }
+  DenseMap<uint64_t, sim::SimFuncOp> writers;
+  DenseSet<uint64_t> initialized;
+  for (auto &[block, info] : phases.getBlockInfos()) {
+    auto function = cast<sim::SimFuncOp>(block->getParentOp());
+    if (function.getEntryKind() == sim::EntryKind::Function)
+      continue;
+    for (auto [clock, update] : info.writes) {
+      if (clock == analysis::ActivationPhaseAnalysis::anyRoot)
+        return origins;
+      if (!descendants.count(clock))
+        continue;
+      if (function == root) {
+        initialized.insert(clock);
+        continue;
+      }
+      auto [writer, inserted] = writers.try_emplace(clock, function);
+      if (writer->second != function ||
+          update != analysis::ActivationPhaseAnalysis::BlockInfo::Update::Same)
+        writer->second = {};
+    }
+  }
+  for (auto &[clock, copies] : descendants) {
+    sim::SimFuncOp writer = writers.lookup(clock);
+    if (copies.size() < 2 || !writer || !startsOnce(writer.getSymNameAttr()) ||
+        !isDelayedClockWriter(writer, clock, phases))
+      continue;
+    DenseSet<Operation *> visiting;
+    if (initialized.contains(clock) &&
+        !hasOnlyLowInitialWrites(root, clock, phases, symbols, visiting))
+      continue;
+    for (uint64_t copy : copies)
+      origins[copy] = clock;
+  }
+  return origins;
+}
 
 class TalosSimFuseObservedProcessesPass final
     : public impl::TalosSimFuseObservedProcessesPassBase<
@@ -155,13 +333,22 @@ void TalosSimFuseObservedProcessesPass::runOnOperation() {
         return;
       }
       if (isa<sim::SimReturnOp>(operation)) {
-        traits.processDependent |= top;
+        // A true design-wide finish poll also ends every remaining ordinary
+        // Observed activation (1800-2023 20.2, 20.10). Clone this branch and
+        // its return intact. An independent member return cannot end peers.
+        traits.processDependent |=
+            top && !isTerminationExit(operation->getBlock());
+        return;
+      }
+      if (top && isa<sim::SimSampledHistoryOp>(operation)) {
+        // Its only process-local state is a ring keyed by (process, site).
+        // Each $past expression keeps its own history of gated clock ticks
+        // (IEEE 1800-2023 16.9.3).
         return;
       }
       StringRef name = operation->getName().getStringRef();
       if (name.starts_with("simulation.monitor.") ||
-          name.starts_with("simulation.coverage") ||
-          isa<sim::SimTerminationRequestedOp>(operation))
+          name.starts_with("simulation.coverage"))
         traits.processDependent = true;
       std::optional<SmallVector<MemoryEffects::EffectInstance>> effects =
           getEffectsRecursively(operation);
@@ -197,12 +384,12 @@ void TalosSimFuseObservedProcessesPass::runOnOperation() {
 
   llvm::StringMap<unsigned> rejections;
   auto reject = [&](StringRef reason) { ++rejections[reason]; };
-  // Group by the exact waited root and edge, and by everything else that the
-  // fused process takes from its first member. Equal handles make equal
-  // events; copies of a clock are not merged here.
+  // Group by the waited root and edge, and by everything else that the
+  // fused process takes from its first member.
   using Key =
       std::tuple<uint64_t, unsigned, unsigned, unsigned, unsigned, Attribute>;
   llvm::MapVector<Key, SmallVector<Member>> groups;
+  llvm::SmallSetVector<uint64_t, 8> risingClocks;
   for (sim::SimFuncOp function :
        design.getBody().front().getOps<sim::SimFuncOp>()) {
     if (function.isExternal() ||
@@ -307,9 +494,48 @@ void TalosSimFuseObservedProcessesPass::runOnOperation() {
             static_cast<unsigned>(
                 schedule::has<schedule::Field::StartsWithoutWaiting>(function)),
             member.suspend->getDiscardableAttrDictionary()};
+    if (member.suspend.getEdge() == sim::EdgeKind::Posedge &&
+        fact->second.resource == schedule::ComputeResourceKind::Storage &&
+        fact->second.width == 1)
+      risingClocks.insert(*watched);
     groups[key].push_back(std::move(member));
   }
 
+  if (risingClocks.size() > 1 && design.getComputeGraphAttr() && module &&
+      !sim::has<sim::metadata::SnapshotPublications>(module)) {
+    auto startsOnce = [&](StringAttr name) {
+      auto it = spawns.find(name);
+      return it != spawns.end() && it->second.size() == 1 &&
+             it->second.front()->getBlock() == &root.getBody().front() &&
+             it->second.front().getResult().use_empty() &&
+             symbolUses.lookup(name) == 1;
+    };
+    auto origins =
+        observedPosedgeOrigins(design, root, symbols, provenance,
+                               risingClocks.getArrayRef(), startsOnce);
+    if (!origins.empty()) {
+      decltype(groups) merged;
+      for (auto &[key, members] : groups) {
+        Key canonical = key;
+        if (std::get<1>(key) == static_cast<unsigned>(sim::EdgeKind::Posedge))
+          if (auto origin = origins.find(std::get<0>(key));
+              origin != origins.end())
+            std::get<0>(canonical) = origin->second;
+        llvm::append_range(
+            merged[canonical],
+            llvm::make_range(std::make_move_iterator(members.begin()),
+                             std::make_move_iterator(members.end())));
+      }
+      groups = std::move(merged);
+    }
+  }
+
+  uint64_t nextStorage = 0;
+  for (auto storage : design.getOps<sim::SimStorageDeclOp>())
+    nextStorage = std::max<uint64_t>(nextStorage, storage.getId() + 1);
+  DenseMap<uint64_t, uint64_t> scopes;
+  for (auto declaration : design.getOps<sim::SimCodeUnitDeclOp>())
+    scopes.try_emplace(declaration.getId(), declaration.getScopeId());
   unsigned kernels = 0, fused = 0;
   for (auto &group : groups) {
     const Key &key = group.first;
@@ -423,11 +649,75 @@ void TalosSimFuseObservedProcessesPass::runOnOperation() {
     }
     // Blocks are cloned in reverse post-order, so every definition is cloned
     // before its uses.
+    DenseMap<std::pair<Operation *, uint64_t>, uint64_t> historySites;
     auto cloneOperations = [&](ArrayRef<Block *> sources, IRMapping &mapping) {
       for (Block *source : sources) {
         builder.setInsertionPointToEnd(mapping.lookup(source));
-        for (Operation &operation : *source)
-          builder.clone(operation, mapping);
+        for (Operation &operation : *source) {
+          if (auto history = dyn_cast<sim::SimSampledHistoryOp>(operation)) {
+            // The original token separated equal site IDs in different
+            // members. Repeated visits to one member's site still share its
+            // ring, including visits from both startup and activation.
+            auto site = historySites.try_emplace(
+                {source->getParentOp(), history.getId()},
+                historySites.size() + 1);
+            cast<sim::SimSampledHistoryOp>(builder.clone(operation, mapping))
+                .setId(site.first->second);
+            continue;
+          }
+          auto allocation = dyn_cast<sim::SimRefAllocOp>(operation);
+          if (!source->isEntryBlock() || !allocation ||
+              !isa<IntegerType>(allocation.getInitialValue().getType()) ||
+              !llvm::any_of(
+                  allocation.getResult().getUsers(), [&](Operation *user) {
+                    auto spawn = dyn_cast<sim::SimSpawnOp>(user);
+                    auto actor =
+                        spawn
+                            ? symbols.lookup<sim::SimFuncOp>(spawn.getCallee())
+                            : sim::SimFuncOp{};
+                    return actor &&
+                           schedule::has<schedule::Field::ConcurrentCancel>(
+                               actor) &&
+                           schedule::has<schedule::Field::DetachedControls>(
+                               actor);
+                  })) {
+            builder.clone(operation, mapping);
+            continue;
+          }
+          // This member is spawned once at the root; its entry runs once.
+          // The monitor and its detached cancellation actors share this one
+          // private cell for the entire simulation (1800-2023 9.3.2, 16.12).
+          // Keep the initialization at the original point in the start-up CFG.
+          Location loc = allocation.getLoc();
+          auto parent = allocation->getParentOfType<sim::SimFuncOp>();
+          auto unit = parent.getCodeUnitIdAttr();
+          auto scope = unit ? scopes.find(unit.getUInt()) : scopes.end();
+          if (scope == scopes.end()) {
+            builder.clone(operation, mapping);
+            continue;
+          }
+          uint64_t id = nextStorage++;
+          {
+            OpBuilder::InsertionGuard guard(builder);
+            builder.setInsertionPoint(kernel);
+            sim::SimStorageDeclOp::create(
+                builder, loc, id, scope->second,
+                allocation.getInitialValue().getType(), sim::Lifetime::Design,
+                StringAttr{}, StringAttr{},
+                schedule::ComputeObservabilityKindAttr::get(
+                    design.getContext(),
+                    schedule::ComputeObservabilityKind::Invisible),
+                sim::VPITypeSemanticsAttr{});
+          }
+          Value reference = sim::SimContextStorageOp::create(
+              builder, loc, allocation.getType(),
+              mapping.lookup(source->getArgument(0)),
+              builder.getI64IntegerAttr(id));
+          sim::SimRefStoreOp::create(
+              builder, loc,
+              mapping.lookupOrDefault(allocation.getInitialValue()), reference);
+          mapping.map(allocation.getResult(), reference);
+        }
       }
     };
 
