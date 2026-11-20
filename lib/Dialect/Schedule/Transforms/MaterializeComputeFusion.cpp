@@ -2592,16 +2592,19 @@ FailureOr<sim::SimFuncOp> materializeStraightLineKernel(
   // member so the kernel keeps always_comb handling.
   if (!retainedStartup &&
       schedule::has<schedule::Field::ArmedCombinational>(semanticOwner)) {
-    auto unarmed = llvm::make_filter_range(candidates, [](Candidate &c) {
-      return !schedule::has<schedule::Field::ArmedCombinational>(c.function);
-    });
-    auto comb = llvm::find_if(unarmed, [](Candidate &c) {
-      return c.function.getEntryKind() == sim::EntryKind::AlwaysComb;
-    });
-    if (comb != unarmed.end())
-      semanticOwner = comb->function;
-    else if (!unarmed.empty())
-      semanticOwner = unarmed.begin()->function;
+    sim::SimFuncOp unarmed, comb;
+    for (Candidate &c : candidates) {
+      if (schedule::has<schedule::Field::ArmedCombinational>(c.function))
+        continue;
+      if (!unarmed)
+        unarmed = c.function;
+      if (c.function.getEntryKind() == sim::EntryKind::AlwaysComb) {
+        comb = c.function;
+        break;
+      }
+    }
+    if (sim::SimFuncOp owner = comb ? comb : unarmed)
+      semanticOwner = owner;
   }
   SmallVector<NamedAttribute> attributes;
   if (IntegerAttr codeUnit = semanticOwner.getCodeUnitIdAttr())
