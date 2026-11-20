@@ -170,6 +170,30 @@ static BoundaryFact getFact(DataFlowSolver &solver, Value value) {
   return lattice->getValue();
 }
 
+// A packed struct or array passed by value has exactly the bits of its
+// scalar view (1800-2023 7.2.1, 7.4.1, 13.5.1). The view itself is not a
+// ConstantLike op. Carry both planes across a call so a large immutable
+// configuration need not be copied into each callee's native frame.
+static BoundaryFact getBoundaryFact(DataFlowSolver &solver, Value value) {
+  auto view = value.getDefiningOp<sim::SimPackedUnflattenOp>();
+  if (!view ||
+      sim::getPackedWidth(view.getInput().getType()).value_or(0) <= 256)
+    return getFact(solver, value);
+  BoundaryFact bits = getFact(solver, view.getInput());
+  if (bits.isUninitialized() || !bits.getConstantValue())
+    return bits;
+  Attribute payload = bits.getConstantValue();
+  if (auto integer = dyn_cast<IntegerAttr>(payload)) {
+    auto zero = IntegerAttr::get(integer.getType(), 0);
+    payload = ArrayAttr::get(value.getContext(), {integer, zero});
+  } else if (!isa<ArrayAttr>(payload)) {
+    return getFact(solver, value);
+  }
+  auto frozen = sim::FrozenConstantAttr::get(value.getContext(),
+                                             value.getType(), payload, false);
+  return BoundaryFact(frozen, view->getDialect());
+}
+
 static void addBoundarySeeds(ArrayRef<FunctionInfo> functions,
                              unsigned functionIndex,
                              DenseMap<Value, BoundaryFact> &seeds) {
@@ -228,14 +252,14 @@ analyzeFunction(ArrayRef<FunctionInfo> functions, unsigned functionIndex,
     if (isa<sim::SimCallOp, sim::SimTaskCallOp, sim::SimClassVirtualTaskCallOp>(
             site.operation)) {
       for (Value operand : getBoundaryOperands(site.operation))
-        result.operands.push_back(getFact(*solver, operand));
+        result.operands.push_back(getBoundaryFact(*solver, operand));
     } else if (auto spawn = dyn_cast<sim::SimSpawnOp>(site.operation)) {
       for (Value operand : spawn.getOperands())
-        result.operands.push_back(getFact(*solver, operand));
+        result.operands.push_back(getBoundaryFact(*solver, operand));
     } else {
       auto returnOp = cast<sim::SimReturnOp>(site.operation);
       for (Value operand : returnOp.getOperands())
-        result.operands.push_back(getFact(*solver, operand));
+        result.operands.push_back(getBoundaryFact(*solver, operand));
     }
   }
 
@@ -296,6 +320,19 @@ static void rewriteFunction(const DenseMap<Value, ConstantValue> &constants,
 
   OperationFolder folder(function.getContext());
   OpBuilder builder(function.getContext());
+  auto materialize = [&](ConstantValue fact, Value value) -> Value {
+    if (auto packed =
+            dyn_cast<sim::FrozenConstantAttr>(fact.getConstantValue())) {
+      if (packed.getType() != value.getType())
+        return {};
+      auto result =
+          sim::materializeFrozenConstant(builder, value.getLoc(), packed);
+      return succeeded(result) ? *result : Value{};
+    }
+    return folder.getOrCreateConstant(builder.getInsertionBlock(),
+                                      fact.getConstantDialect(),
+                                      fact.getConstantValue(), value.getType());
+  };
   addToWorklist(function->getRegions());
   while (!worklist.empty()) {
     Block *block = worklist.pop_back_val();
@@ -308,10 +345,7 @@ static void rewriteFunction(const DenseMap<Value, ConstantValue> &constants,
           replacedAll = false;
           continue;
         }
-        const ConstantValue &value = fact->second;
-        Value constant = folder.getOrCreateConstant(
-            builder.getInsertionBlock(), value.getConstantDialect(),
-            value.getConstantValue(), result.getType());
+        Value constant = materialize(fact->second, result);
         if (!constant) {
           replacedAll = false;
           continue;
@@ -335,10 +369,7 @@ static void rewriteFunction(const DenseMap<Value, ConstantValue> &constants,
       auto fact = constants.find(argument);
       if (fact == constants.end())
         continue;
-      const ConstantValue &value = fact->second;
-      Value constant = folder.getOrCreateConstant(
-          builder.getInsertionBlock(), value.getConstantDialect(),
-          value.getConstantValue(), argument.getType());
+      Value constant = materialize(fact->second, argument);
       if (constant)
         argument.replaceAllUsesWith(constant);
     }
