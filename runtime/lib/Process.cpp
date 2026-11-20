@@ -4097,14 +4097,17 @@ __attribute__((noinline, cold)) talos_rt_status admitSchedulerRegionUnlocked(
 // publish one private event to sampled computed observers. The event is
 // enabled lazily by observer registration, so designs without asynchronous
 // sampled conditions pay no per-slot observer-scan cost.
-talos_rt_status runPreponedHooks(talos_rt_context *context) {
-  talos_rt_status status = talos_rt_capture_preponed_unlocked(context);
-  if (status != TALOS_RT_OK || !context->preponedSlotHooks)
-    return status;
+talos_rt_status runPreponedHooks(talos_rt_context *context,
+                                 talos_rt_sampled_plane_copy copy) {
+  if (context->preponedSlotHooks & kPreponedSnapshotSlotHook) {
+    talos_rt_status status = talos_rt_capture_preponed_unlocked(context, copy);
+    if (status != TALOS_RT_OK)
+      return status;
+  }
   if (context->preponedSlotHooks & kVPISignalSlotHook)
     talos_rt_vpi_signal_poll_unlocked(context);
   if (!(context->preponedSlotHooks & kPreponedObserverSlotHook))
-    return status;
+    return TALOS_RT_OK;
   TALOS_RT_TRY {
     EventState &event = context->events[TALOS_RT_STABLE_HANDLE_PREPONED_EVENT];
     if (++event.generation == 0)
@@ -4124,7 +4127,9 @@ talos_rt_status runPreponedHooks(talos_rt_context *context) {
   TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_ARGUMENT; }
 }
 
-talos_rt_status enterSchedulerTimeSlotUnlocked(talos_rt_context *context) {
+talos_rt_status
+enterSchedulerTimeSlotUnlocked(talos_rt_context *context,
+                               talos_rt_sampled_plane_copy copy) {
   if (context->schedulerPreponedTime == context->schedulerTime)
     return TALOS_RT_OK;
   if (context->schedulerCohortEnabled) {
@@ -4135,14 +4140,16 @@ talos_rt_status enterSchedulerTimeSlotUnlocked(talos_rt_context *context) {
   }
   // IEEE 1800-2023 4.4-4.5, 16.5.1: sample before executable regions and
   // retain that sample through all Active/NBA iterations and tier changes.
-  talos_rt_status status = runPreponedHooks(context);
-  if (status != TALOS_RT_OK) {
-    context->schedulerStatus = status;
-    return status;
+  if (context->preponedSlotHooks) {
+    talos_rt_status status = runPreponedHooks(context, copy);
+    if (status != TALOS_RT_OK) {
+      context->schedulerStatus = status;
+      return status;
+    }
   }
   context->schedulerPreponedTime = context->schedulerTime;
   context->schedulerSlotProgress = 0;
-  status = admitDueProcessDelaysUnlocked(context);
+  talos_rt_status status = admitDueProcessDelaysUnlocked(context);
   if (status != TALOS_RT_OK)
     return status;
   if (context->staticNBASlowRootsPresent) {

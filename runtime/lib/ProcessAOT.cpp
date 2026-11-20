@@ -2706,11 +2706,20 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_prepare_periodic_aot(
 extern "C" talos_rt_status
 talos_rt_v1_scheduler_enter_periodic_aot(talos_rt_context *context,
                                          uint64_t time) {
+  return talos_rt_v1_scheduler_enter_sampled_periodic_aot(context, time,
+                                                          nullptr, nullptr);
+}
+
+extern "C" talos_rt_status talos_rt_v1_scheduler_enter_sampled_periodic_aot(
+    talos_rt_context *context, uint64_t time,
+    const talos_rt_execution_descriptor_v1 *execution,
+    talos_rt_sampled_plane_copy copy) {
   if (!context || activeNativeAOTContext != context ||
       lockedNativeAOTContext != context || time < context->schedulerTime)
     return TALOS_RT_INVALID_LIFECYCLE;
   context->schedulerTime = time;
-  return enterSchedulerTimeSlotUnlocked(context);
+  return enterSchedulerTimeSlotUnlocked(
+      context, execution && execution == context->execution ? copy : nullptr);
 }
 
 extern "C" talos_rt_status

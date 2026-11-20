@@ -22,6 +22,10 @@ class ModuleOp;
 
 namespace talos::analysis {
 
+/// Byte size of a plain packed sampled root that occupies exactly one native
+/// container. A zero result keeps the declaration in the ordinary layout.
+unsigned getSampledContainerBytes(mlir::Type type);
+
 /// Stable root allocation and connectivity facts for native simulation state.
 struct NativeStateLayoutAnalysis {
   struct Bound {

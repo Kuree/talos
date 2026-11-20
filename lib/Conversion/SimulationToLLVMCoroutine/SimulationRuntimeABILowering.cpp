@@ -725,6 +725,16 @@ void declareNativeRuntimeABI(ModuleOp module) {
   getOrDeclareLLVMFunction(
       module, "talos_rt_v1_sampled_read", managedI32,
       {managedPointer, managedI64, managedI64, managedPointer, managedPointer});
+  auto snapshot =
+      getOrDeclareLLVMFunction(module, "talos_rt_v1_sampled_plane",
+                               managedPointer, {managedPointer, managedI32});
+  auto none = LLVM::ModRefInfo::NoModRef;
+  snapshot.setMemoryEffectsAttr(LLVM::MemoryEffectsAttr::get(
+      context, none, LLVM::ModRefInfo::Ref, none, none, none, none));
+  snapshot.setNoUnwind(true);
+  snapshot.setWillReturn(true);
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_sampled_word", managedI64,
+                           {managedPointer, managedI64, managedI32});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_sampled_history", managedI32,
                            {managedPointer, managedI64, managedI64, managedI64,
                             managedI32, managedI32, managedPointer,

@@ -1,5 +1,6 @@
 //===- Sampled.cpp - Preponed sampled-value history ---------------------===//
 
+#include "ProcessContext.h"
 #include "RuntimeInternal.h"
 
 #include "talos/Runtime/StableHandle.h"
@@ -8,18 +9,6 @@
 #include <limits>
 
 namespace {
-
-bool getBit(const uint8_t *bytes, uint64_t bit) {
-  return bytes && (bytes[bit / 8] & static_cast<uint8_t>(1u << (bit % 8))) != 0;
-}
-
-void setBit(uint8_t *bytes, uint64_t bit, bool value) {
-  uint8_t mask = static_cast<uint8_t>(1u << (bit % 8));
-  if (value)
-    bytes[bit / 8] |= mask;
-  else
-    bytes[bit / 8] &= static_cast<uint8_t>(~mask);
-}
 
 bool checkedBytes(uint64_t bits, size_t &bytes) {
   if (bits == 0 || bits > UINT64_MAX - 7)
@@ -43,11 +32,18 @@ void copyPackedRange(uint8_t *destination, const uint8_t *source,
   size_t bytes = static_cast<size_t>((bitWidth + 7) / 8);
   unsigned shift = static_cast<unsigned>(sourceBit % 8);
   uint64_t sourceByte = sourceBit / 8;
-  for (size_t index = 0; index != bytes; ++index) {
-    uint16_t value = source[sourceByte + index];
-    if (shift != 0 && sourceByte + index + 1 < sourceBytes)
-      value |= static_cast<uint16_t>(source[sourceByte + index + 1]) << 8;
-    destination[index] = static_cast<uint8_t>(value >> shift);
+  if (shift == 0) {
+    if (bytes == 1)
+      destination[0] = source[sourceByte];
+    else
+      std::memcpy(destination, source + sourceByte, bytes);
+  } else {
+    for (size_t index = 0; index != bytes; ++index) {
+      uint16_t value = source[sourceByte + index];
+      if (sourceByte + index + 1 < sourceBytes)
+        value |= static_cast<uint16_t>(source[sourceByte + index + 1]) << 8;
+      destination[index] = static_cast<uint8_t>(value >> shift);
+    }
   }
   if (bitWidth % 8 != 0)
     destination[bytes - 1] &= static_cast<uint8_t>((1u << (bitWidth % 8)) - 1);
@@ -105,7 +101,9 @@ bool resolveSnapshotRange(const talos_rt_context *context,
 
 } // namespace
 
-talos_rt_status talos_rt_capture_preponed_unlocked(talos_rt_context *context) {
+talos_rt_status
+talos_rt_capture_preponed_unlocked(talos_rt_context *context,
+                                   talos_rt_sampled_plane_copy copy) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   if (!context->execution ||
@@ -115,14 +113,44 @@ talos_rt_status talos_rt_capture_preponed_unlocked(talos_rt_context *context) {
     const talos_rt_execution_descriptor_v1 &execution = *context->execution;
     const talos_rt_execution_extension_v1 &extension =
         *executionExtension(execution);
-    const talos_rt_sampled_range_v1 &last =
-        extension.sampled_ranges[extension.sampled_range_count - 1];
-    uint64_t snapshotBytes =
-        last.snapshot_byte_offset + (last.bit_width + 7) / 8;
-    size_t words = static_cast<size_t>((snapshotBytes + 7) / 8);
-    context->preponedValue.resize(words);
-    if (!context->twoState())
-      context->preponedUnknown.resize(words);
+    if (!context->sampledCapturePlan) {
+      auto plan = std::make_unique<talos_rt_context::SampledCapturePlan>();
+      for (uint64_t i = 0; i < extension.sampled_range_count; ++i) {
+        auto range = extension.sampled_ranges[i];
+        unsigned shift = range.source_bit_offset % 8;
+        if (range.bit_width <= 8 - shift) {
+          plan->bytes.push_back({range.source_bit_offset / 8,
+                                 range.snapshot_byte_offset, uint8_t(shift),
+                                 uint8_t((1u << range.bit_width) - 1)});
+          continue;
+        }
+        // Adjacent whole bytes have the same layout in both planes. A
+        // partial range keeps its own mask and public sampled bounds.
+        if (!plan->ranges.empty() && shift == 0 && range.bit_width % 8 == 0) {
+          auto &prev = plan->ranges.back();
+          if (prev.source_bit_offset % 8 == 0 && prev.bit_width % 8 == 0 &&
+              prev.source_bit_offset + prev.bit_width ==
+                  range.source_bit_offset &&
+              prev.snapshot_byte_offset + prev.bit_width / 8 ==
+                  range.snapshot_byte_offset) {
+            prev.bit_width += range.bit_width;
+            continue;
+          }
+        }
+        plan->ranges.push_back(range);
+      }
+      const auto &last =
+          extension.sampled_ranges[extension.sampled_range_count - 1];
+      uint64_t snapshotBytes =
+          last.snapshot_byte_offset + (last.bit_width + 7) / 8;
+      size_t words = static_cast<size_t>((snapshotBytes + 7) / 8);
+      context->preponedValue.resize(words);
+      if (!context->twoState())
+        context->preponedUnknown.resize(words);
+      context->preponedPlanes = {context->preponedValue.data(),
+                                 context->preponedUnknown.data()};
+      context->sampledCapturePlan = std::move(plan);
+    }
 
     const uint8_t *value = nullptr;
     const uint8_t *unknown = nullptr;
@@ -148,9 +176,21 @@ talos_rt_status talos_rt_capture_preponed_unlocked(talos_rt_context *context) {
         reinterpret_cast<uint8_t *>(context->preponedValue.data());
     uint8_t *sampledUnknown =
         reinterpret_cast<uint8_t *>(context->preponedUnknown.data());
+    if (copy) {
+      copy(value, sampledValue);
+      if (sampledUnknown)
+        copy(unknown, sampledUnknown);
+      return TALOS_RT_OK;
+    }
     uint64_t stateBytes = (execution.state_bit_count + 7) / 8;
-    for (uint64_t index = 0; index != extension.sampled_range_count; ++index) {
-      const talos_rt_sampled_range_v1 &range = extension.sampled_ranges[index];
+    for (const auto &copy : context->sampledCapturePlan->bytes) {
+      sampledValue[copy.destination] =
+          (value[copy.source] >> copy.shift) & copy.mask;
+      if (sampledUnknown)
+        sampledUnknown[copy.destination] =
+            (unknown[copy.source] >> copy.shift) & copy.mask;
+    }
+    for (const auto &range : context->sampledCapturePlan->ranges) {
       copyPackedRange(sampledValue + range.snapshot_byte_offset, value,
                       stateBytes, range.source_bit_offset, range.bit_width);
       if (sampledUnknown)
@@ -168,6 +208,31 @@ talos_rt_recapture_initialized_preponed_unlocked(talos_rt_context *context) {
   if (context->schedulerTime != 0 || context->preponedValue.empty())
     return TALOS_RT_OK;
   return talos_rt_capture_preponed_unlocked(context);
+}
+
+extern "C" const uint64_t *
+talos_rt_v1_sampled_plane(const talos_rt_context *context, uint32_t unknown) {
+  if (!context)
+    return nullptr;
+  return unknown ? context->preponedPlanes.unknown
+                 : context->preponedPlanes.value;
+}
+
+extern "C" uint64_t talos_rt_v1_sampled_word(talos_rt_context *context,
+                                             uint64_t word, uint32_t unknown) {
+  if (!context)
+    return 0;
+  ContextMutexLock lock(context);
+  if (word < context->preponedValue.size()) {
+    if (!unknown)
+      return context->preponedValue[word];
+    if (word < context->preponedUnknown.size())
+      return context->preponedUnknown[word];
+    if (context->twoState())
+      return 0;
+  }
+  talos_rt_v1_scheduler_fail(context, TALOS_RT_INVALID_HANDLE);
+  return 0;
 }
 
 extern "C" talos_rt_status talos_rt_v1_sampled_read(talos_rt_context *context,
@@ -198,16 +263,16 @@ extern "C" talos_rt_status talos_rt_v1_sampled_read(talos_rt_context *context,
         context->preponedValue.empty() ||
         (context->preponedUnknown.empty() && !context->twoState()))
       return TALOS_RT_INVALID_HANDLE;
-    std::memset(outValue, 0, bytes);
-    std::memset(outUnknown, 0, bytes);
-    const uint8_t *values =
-        reinterpret_cast<const uint8_t *>(context->preponedValue.data());
-    const uint8_t *unknowns =
-        reinterpret_cast<const uint8_t *>(context->preponedUnknown.data());
-    for (uint64_t bit = 0; bit != bitWidth; ++bit) {
-      setBit(outValue, bit, getBit(values, snapshotStart + bit));
-      setBit(outUnknown, bit, getBit(unknowns, snapshotStart + bit));
-    }
+    auto copy = [&](uint8_t *destination, const std::vector<uint64_t> &plane) {
+      copyPackedRange(destination,
+                      reinterpret_cast<const uint8_t *>(plane.data()),
+                      plane.size() * sizeof(uint64_t), snapshotStart, bitWidth);
+    };
+    copy(outValue, context->preponedValue);
+    if (context->preponedUnknown.empty())
+      std::memset(outUnknown, 0, bytes);
+    else
+      copy(outUnknown, context->preponedUnknown);
     return TALOS_RT_OK;
   }
   TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_DESIGN; }

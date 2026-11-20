@@ -543,6 +543,10 @@ LogicalResult lowerPackedSimulationOperations(
     }
   }
   markTiming("parallel selector proofs");
+  auto sampledRanges = getSampledRangeLayout(module, stateLayout.bitCount);
+  if (failed(sampledRanges))
+    return failure();
+  DenseMap<Operation *, uint64_t> sampledOffsets;
   for (auto [index, function] : llvm::enumerate(proofFunctions)) {
     const auto &handles = handleProofs[index];
     const auto &provenance = handles.facts;
@@ -550,6 +554,40 @@ LogicalResult lowerPackedSimulationOperations(
     // omit its range/knownness/invalid-handle guard when every enclosing
     // selection is proved valid in a representable static storage root.
     function.walk([&](Operation *operation) {
+      if (auto read = dyn_cast<sim::SimSampledReadOp>(operation)) {
+        // A fixed, valid selection has an exact sampled bit range. A varying
+        // CFG join and a possibly invalid index
+        // still read through the evaluated handle (1800-2023 11.5, 16.5.1).
+        auto fact = provenance.find(read.getSource());
+        auto proof = handles.certificates.find(read.getSource());
+        auto width = nativeStateWidth(read.getResult().getType());
+        if (!dataLayout.isLittleEndian() || !width || *width > 4096 ||
+            fact == provenance.end() || !fact->second.descriptor ||
+            fact->second.resource != schedule::ComputeResourceKind::Storage ||
+            fact->second.dynamic || fact->second.width != *width ||
+            proof == handles.certificates.end() ||
+            !proof->second.constantAddress || !proof->second.inBounds)
+          return;
+        auto base = stateLayout.storageOffsets.find(*fact->second.descriptor);
+        if (base == stateLayout.storageOffsets.end())
+          return;
+        uint64_t start = base->second + fact->second.low;
+        auto next =
+            llvm::upper_bound(*sampledRanges, start,
+                              [](uint64_t bit, const SampledRangeInfo &range) {
+                                return bit < range.sourceBitOffset;
+                              });
+        if (next == sampledRanges->begin())
+          return;
+        const auto &range = *std::prev(next);
+        uint64_t within = start - range.sourceBitOffset;
+        if (within > range.bitWidth || *width > range.bitWidth - within ||
+            range.snapshotByteOffset > (UINT64_MAX - within) / 8)
+          return;
+        uint64_t bit = range.snapshotByteOffset * 8 + within;
+        sampledOffsets.try_emplace(read, bit);
+        return;
+      }
       Value reference;
       if (auto load = dyn_cast<sim::SimRefLoadOp>(operation))
         reference = load.getReference();
@@ -1257,8 +1295,9 @@ LogicalResult lowerPackedSimulationOperations(
     populateKnownRootsToLLVMConversionPatterns(patterns, c, stateLayout);
     populateOverrideToLLVMConversionPatterns(patterns, c, stateLayout.bitCount,
                                              dataLayout);
-    populateManagedToLLVMConversionPatterns(
-        patterns, c, dataLayout, stateLayout.bitCount, *classLowering);
+    populateManagedToLLVMConversionPatterns(patterns, c, dataLayout,
+                                            stateLayout.bitCount,
+                                            *classLowering, sampledOffsets);
     populateDriverToLLVMConversionPatterns(patterns, c, selectedLayout,
                                            stateLayout, directDriverStores);
     populateNBAToLLVMConversionPatterns(

@@ -267,10 +267,13 @@ talos_rt_status runScheduler(talos_rt_context *context,
                              bool *drainedIdle = nullptr);
 talos_rt_status executeNativeAOTNodeUnlocked(talos_rt_context *context,
                                              uint32_t actorSlot);
-talos_rt_status runPreponedHooks(talos_rt_context *context);
+talos_rt_status runPreponedHooks(talos_rt_context *context,
+                                 talos_rt_sampled_plane_copy copy = nullptr);
 // Initialize the current slot once, regardless of which executor entered it.
 // Reentry in the same slot preserves its sampled state and progress cursor.
-talos_rt_status enterSchedulerTimeSlotUnlocked(talos_rt_context *context);
+talos_rt_status
+enterSchedulerTimeSlotUnlocked(talos_rt_context *context,
+                               talos_rt_sampled_plane_copy copy = nullptr);
 talos_rt_status retireInvalidPowerNBAsUnlocked(talos_rt_context *context);
 bool powerNBAAllowedUnlocked(talos_rt_context *context, uint64_t sequence,
                              uint8_t half);

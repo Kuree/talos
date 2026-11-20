@@ -488,6 +488,32 @@ LogicalResult appendRetentionEntry(ModuleOp module, LLVM::GlobalOp global,
 
 } // namespace
 
+FailureOr<SmallVector<SampledRangeInfo>>
+getSampledRangeLayout(ModuleOp module, uint64_t stateBits) {
+  SmallVector<SampledRangeInfo> sampledRanges;
+  uint64_t snapshotBytes = 0;
+  if (auto attr = runtime::get<runtime::SampledRanges>(module)) {
+    ArrayRef<int64_t> values = attr.asArrayRef();
+    if (values.size() % 2 != 0)
+      return module.emitError("sampled range metadata must contain pairs"),
+             failure();
+    for (size_t index = 0; index != values.size(); index += 2) {
+      uint64_t offset = static_cast<uint64_t>(values[index]);
+      uint64_t width = static_cast<uint64_t>(values[index + 1]);
+      if (width == 0 || offset > stateBits || width > stateBits - offset ||
+          (!sampledRanges.empty() &&
+           offset < sampledRanges.back().sourceBitOffset +
+                        sampledRanges.back().bitWidth) ||
+          width > UINT64_MAX - 7 ||
+          snapshotBytes > UINT64_MAX - (width + 7) / 8)
+        return module.emitError("sampled range metadata is invalid"), failure();
+      sampledRanges.push_back({offset, snapshotBytes, width});
+      snapshotBytes += (width + 7) / 8;
+    }
+  }
+  return sampledRanges;
+}
+
 LogicalResult
 materializeEmbeddedSimulationDesign(ModuleOp module,
                                     const llvm::DataLayout &dataLayout) {
@@ -1017,31 +1043,10 @@ materializeEmbeddedSimulationDesign(ModuleOp module,
   uint32_t flags = static_cast<uint32_t>(executionFlags);
   if (auto attr = runtime::get<runtime::StateBits>(module))
     stateBits = attr.getValue().getZExtValue();
-  struct SampledRangeInfo {
-    uint64_t sourceBitOffset;
-    uint64_t snapshotByteOffset;
-    uint64_t bitWidth;
-  };
-  SmallVector<SampledRangeInfo> sampledRanges;
-  uint64_t snapshotBytes = 0;
-  if (auto attr = runtime::get<runtime::SampledRanges>(module)) {
-    ArrayRef<int64_t> values = attr.asArrayRef();
-    if (values.size() % 2 != 0)
-      return module.emitError("sampled range metadata must contain pairs");
-    for (size_t index = 0; index != values.size(); index += 2) {
-      uint64_t offset = static_cast<uint64_t>(values[index]);
-      uint64_t width = static_cast<uint64_t>(values[index + 1]);
-      if (width == 0 || offset > stateBits || width > stateBits - offset ||
-          (!sampledRanges.empty() &&
-           offset < sampledRanges.back().sourceBitOffset +
-                        sampledRanges.back().bitWidth) ||
-          width > UINT64_MAX - 7 ||
-          snapshotBytes > UINT64_MAX - (width + 7) / 8)
-        return module.emitError("sampled range metadata is invalid");
-      sampledRanges.push_back({offset, snapshotBytes, width});
-      snapshotBytes += (width + 7) / 8;
-    }
-  }
+  auto layout = getSampledRangeLayout(module, stateBits);
+  if (failed(layout))
+    return failure();
+  ArrayRef<SampledRangeInfo> sampledRanges = *layout;
   if (((flags & TALOS_RT_EXECUTION_PREPONED_SNAPSHOT) != 0) !=
       !sampledRanges.empty())
     return module.emitError(

@@ -1264,7 +1264,8 @@ materializeManagedMethodThunks(ModuleOp module,
 void populateManagedToLLVMConversionPatterns(
     RewritePatternSet &patterns, TypeConverter &converter,
     const llvm::DataLayout &dataLayout, uint64_t stateBitCount,
-    const NativeClassLowering &classes) {
+    const NativeClassLowering &classes,
+    const DenseMap<Operation *, uint64_t> &sampledOffsets) {
   MLIRContext *context = patterns.getContext();
   patterns.add<ClassNullConversion, ManagedNullConversion,
                ManagedIdentityEqualConversion<sim::SimSemaphoreEqualOp>,
@@ -1278,7 +1279,7 @@ void populateManagedToLLVMConversionPatterns(
                ManagedObjectOutputConversion<sim::SimWeakGetOp>,
                WeakClearConversion, GCSafepointConversion>(converter, context);
   populateManagedContainerToLLVMConversionPatterns(patterns, converter,
-                                                   dataLayout);
+                                                   dataLayout, sampledOffsets);
   populateManagedCoverageToLLVMConversionPatterns(patterns, converter,
                                                   dataLayout, stateBitCount);
   populateManagedReferenceToLLVMConversionPatterns(patterns, converter,

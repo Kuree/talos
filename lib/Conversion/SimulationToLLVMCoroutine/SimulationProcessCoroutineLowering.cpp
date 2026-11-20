@@ -21,6 +21,7 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 
 #include "llvm/ADT/SetVector.h"
@@ -625,6 +626,116 @@ LogicalResult lowerFinalReturn(sim::SimReturnOp operation,
   return success();
 }
 
+// Read a snapshot plane once in each activation that uses it. A live plane
+// has a fixed allocation. An absent plane still takes the checked word load
+// at each original use. Reload the current context at every native resume,
+// including a handoff from bytecode (IEEE 1800-2023 4.5, 16.5.1).
+void shareObservedSampledPlanes(
+    sim::SimFuncOp function, const SimulationProcessFrameAnalysis &analysis) {
+  if (function.getHomeRegion() != sim::EventRegion::Observed ||
+      analysis.getSuspensions().size() != 1 ||
+      analysis.getEntryCaptureLayout().empty() ||
+      analysis.getEntryCaptureLayout().front().hasValueStorage())
+    return;
+  Block &entry = function.getBody().front();
+  if (entry.getNumArguments() == 0)
+    return;
+  SmallVector<LLVM::CallOp> reads[2];
+  for (Operation *user : entry.getArgument(0).getUsers()) {
+    auto context = dyn_cast<schedule::NativeContextOp>(user);
+    if (!context)
+      continue;
+    for (Operation *consumer : context.getResult().getUsers()) {
+      auto call = dyn_cast<LLVM::CallOp>(consumer);
+      APInt selector;
+      if (call && call.getCallee() == "talos_rt_v1_sampled_plane" &&
+          matchPattern(call.getArgOperands()[1], m_ConstantInt(&selector)) &&
+          selector.ule(1))
+        reads[selector.getZExtValue()].push_back(call);
+    }
+  }
+  if (reads[0].size() < 2 && reads[1].size() < 2)
+    return;
+  Block *resume = nullptr;
+  for (Block &block : function.getBody()) {
+    Operation *end = block.getTerminator();
+    if (!sim::isSuspensionOp(end))
+      continue;
+    if (resume || end->getNumSuccessors() != 1)
+      return;
+    resume = end->getSuccessor(0);
+  }
+  if (!resume || resume == &entry)
+    return;
+  // The frame ABI predates native CFG rewriting. Use the live suspension's
+  // successor and follow only nonsuspending paths in each activation.
+  auto reachable = [](Block *start) {
+    DenseSet<Block *> seen;
+    SmallVector<Block *> work{start};
+    while (!work.empty()) {
+      Block *block = work.pop_back_val();
+      if (seen.insert(block).second &&
+          !sim::isSuspensionOp(block->getTerminator()))
+        llvm::append_range(work, block->getSuccessors());
+    }
+    return seen;
+  };
+  auto initial = reachable(&entry), resumed = reachable(resume);
+  for (auto [selector, calls] : llvm::enumerate(reads)) {
+    if (calls.size() < 2)
+      continue;
+    OpBuilder builder = OpBuilder::atBlockBegin(&entry);
+    Location loc = function.getLoc();
+    auto pointer = LLVM::LLVMPointerType::get(function.getContext());
+    // A single activation dominates most reads. Carry its plane in SSA so
+    // calls and stores in a different assertion cannot clobber its address.
+    // Only a read reachable from both startup and resume needs a joined
+    // value, since those activations can see different snapshots (16.5.1).
+    bool hasSharedReads = llvm::any_of(calls, [&](LLVM::CallOp call) {
+      Block *block = call->getBlock();
+      return initial.contains(block) && resumed.contains(block);
+    });
+    Value slot;
+    if (hasSharedReads)
+      slot = entryAlloca(builder, loc, pointer, 1, 8);
+    auto capture = [&](Block *start, const DenseSet<Block *> &blocks) -> Value {
+      if (llvm::none_of(calls, [&](LLVM::CallOp call) {
+            return blocks.contains(call->getBlock());
+          }))
+        return {};
+      if (start == &entry && slot)
+        builder.setInsertionPointAfter(slot.getDefiningOp());
+      else
+        builder.setInsertionPointToStart(start);
+      Value context = schedule::NativeContextOp::create(builder, loc, pointer,
+                                                        entry.getArgument(0));
+      Value index = llvmConstant(builder, loc, builder.getI32Type(), selector);
+      Value base = LLVM::CallOp::create(builder, loc, TypeRange{pointer},
+                                        calls.front().getCalleeAttr(),
+                                        ValueRange{context, index})
+                       .getResult();
+      if (slot)
+        LLVM::StoreOp::create(builder, loc, base, slot, 8);
+      return base;
+    };
+    Value first = capture(&entry, initial);
+    Value next = capture(resume, resumed);
+    for (LLVM::CallOp call : calls) {
+      Block *block = call->getBlock();
+      bool atStart = initial.contains(block), atResume = resumed.contains(block);
+      if (!atStart && !atResume)
+        continue;
+      Value base = atStart ? first : next;
+      if (atStart && atResume) {
+        builder.setInsertionPoint(call);
+        base = LLVM::LoadOp::create(builder, call.getLoc(), pointer, slot, 8);
+      }
+      call.getResult().replaceAllUsesWith(base);
+      call.erase();
+    }
+  }
+}
+
 } // namespace
 
 FailureOr<PreparedSuspendableProcess> prepareSuspendableProcess(
@@ -632,6 +743,7 @@ FailureOr<PreparedSuspendableProcess> prepareSuspendableProcess(
     bool copyActivation, std::optional<NativeTableProcess> tableProcess) {
   if (failed(lowerSimulationTimeOperations(function)))
     return failure();
+  shareObservedSampledPlanes(function, analysis);
   ModuleOp module = function->getParentOfType<ModuleOp>();
   OpBuilder builder(function);
   Location location = function.getLoc();

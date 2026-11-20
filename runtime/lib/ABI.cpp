@@ -1263,6 +1263,10 @@ ABI_FUNCTION(talos_rt_v1_random_real64_interval,
 ABI_FUNCTION(talos_rt_v1_random_real32_interval,
              talos_rt_status (*)(talos_rt_random_state_v1 *, float, float,
                                  uint32_t, float *, uint32_t *));
+ABI_FUNCTION(talos_rt_v1_sampled_plane,
+             const uint64_t *(*)(const talos_rt_context *, uint32_t));
+ABI_FUNCTION(talos_rt_v1_sampled_word,
+             uint64_t (*)(talos_rt_context *, uint64_t, uint32_t));
 ABI_FUNCTION(talos_rt_v1_sampled_read,
              talos_rt_status (*)(talos_rt_context *, uint64_t, uint64_t,
                                  uint8_t *, uint8_t *));
@@ -1726,6 +1730,10 @@ ABI_FUNCTION(talos_rt_v1_scheduler_drain_periodic_aot,
                                  talos_rt_native_periodic_control_v1 *));
 ABI_FUNCTION(talos_rt_v1_scheduler_enter_periodic_aot,
              talos_rt_status (*)(talos_rt_context *, uint64_t));
+ABI_FUNCTION(talos_rt_v1_scheduler_enter_sampled_periodic_aot,
+             talos_rt_status (*)(talos_rt_context *, uint64_t,
+                                 const talos_rt_execution_descriptor_v1 *,
+                                 talos_rt_sampled_plane_copy));
 ABI_FUNCTION(talos_rt_v1_scheduler_postponed_slot_aot,
              talos_rt_status (*)(talos_rt_context *));
 ABI_FUNCTION(talos_rt_v1_scheduler_snapshot_aot,

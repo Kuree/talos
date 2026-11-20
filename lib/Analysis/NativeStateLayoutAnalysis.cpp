@@ -3,6 +3,7 @@
 #include "talos/Analysis/NativeStateLayoutAnalysis.h"
 
 #include "talos/Analysis/SimulationAnalysis.h"
+#include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Runtime/StableHandle.h"
 
@@ -65,13 +66,73 @@ std::optional<uint64_t> getStaticDriverID(Value value) {
 
 } // namespace
 
+unsigned getSampledContainerBytes(Type type) {
+  auto width = isa<FloatType>(type)
+                   ? std::optional<unsigned>(type.getIntOrFloatBitWidth())
+                   : sim::getPackedWidth(type);
+  if (!width || !*width || *width > 64 ||
+      getSimulationStorageBitWidth(type) != width)
+    return 0;
+  unsigned bytes = (*width + 7) / 8;
+  return llvm::isPowerOf2_32(bytes) ? bytes : 0;
+}
+
 FailureOr<NativeStateLayoutAnalysis>
 NativeStateLayoutAnalysis::compute(ModuleOp module) {
   NativeStateLayoutAnalysis layout;
   DenseSet<uint64_t> initialXDrivers;
   uint32_t nextHandleID = 1;
-  auto allocate = [&](Type type, bool fourState, uint64_t &offset,
-                      uint64_t &handle) -> LogicalResult {
+  DenseMap<Operation *, uint64_t> sampleOffsets;
+  if (auto order = native::get<native::SampledPlacement>(module)) {
+    auto pairs = order.asArrayRef();
+    if (pairs.size() % 2)
+      return module.emitError(
+                 "sampled placement requires resource/descriptor pairs"),
+             failure();
+    using Resource = schedule::ComputeResourceKind;
+    DenseMap<std::pair<int64_t, int64_t>, size_t> requested;
+    for (size_t i = 0; i < pairs.size(); i += 2)
+      if (!requested.try_emplace(std::make_pair(pairs[i], pairs[i + 1]), i / 2)
+               .second)
+        return module.emitError("duplicate sampled placement root"), failure();
+    SmallVector<std::pair<Operation *, Type>> roots(requested.size());
+    module.walk([&](Operation *op) {
+      auto assign = [&](Resource resource, uint64_t id, Type type) {
+        auto found = requested.find(
+            {static_cast<int64_t>(resource), static_cast<int64_t>(id)});
+        if (found != requested.end())
+          roots[found->second] = {op, type};
+      };
+      if (auto decl = dyn_cast<sim::SimStorageDeclOp>(op))
+        assign(Resource::Storage, decl.getId(), decl.getType());
+      else if (auto decl = dyn_cast<sim::SimNetDeclOp>(op))
+        assign(Resource::Net, decl.getId(), decl.getType());
+    });
+    for (auto [op, type] : roots) {
+      if (!op)
+        return module.emitError(
+                   "sampled placement names an unknown state root"),
+               failure();
+      uint64_t container = uint64_t{getSampledContainerBytes(type)} * 8;
+      if (!container)
+        return op->emitOpError("sampled placement needs plain packed storage "
+                               "in a native container"),
+               failure();
+      uint64_t alignment = std::max<uint64_t>(
+          container, sim::getProvenanceAlignment(type).value_or(1));
+      if (layout.bitCount > UINT64_MAX - (alignment - 1))
+        return op->emitOpError("sampled placement exceeds the state size"),
+               failure();
+      layout.bitCount = llvm::alignTo(layout.bitCount, alignment);
+      if (container > UINT64_MAX - layout.bitCount)
+        return op->emitOpError("sampled placement exceeds the state size"),
+               failure();
+      sampleOffsets[op] = layout.bitCount;
+      layout.bitCount += container;
+    }
+  }
+  auto allocate = [&](Operation *declaration, Type type, bool fourState,
+                      uint64_t &offset, uint64_t &handle) -> LogicalResult {
     std::optional<unsigned> width = getSimulationStorageBitWidth(type);
     if (!width || *width == 0 || *width > INT32_MAX || nextHandleID == 0 ||
         nextHandleID > TALOS_RT_STABLE_HANDLE_MAX_STATIC_ID)
@@ -92,17 +153,21 @@ NativeStateLayoutAnalysis::compute(ModuleOp module) {
       alignment = std::max(alignment, *elementAlignment);
     if (!managedRootOffsets.empty())
       alignment = 64;
-    if (alignment != 1) {
+    if (auto sampled = sampleOffsets.find(declaration);
+        sampled != sampleOffsets.end()) {
+      offset = sampled->second;
+    } else {
       if (layout.bitCount >
           std::numeric_limits<uint64_t>::max() - (alignment - 1))
         return failure();
       layout.bitCount = llvm::alignTo(layout.bitCount, alignment);
+      offset = layout.bitCount;
+      uint64_t allocatedWidth = containerWidth ? containerWidth : *width;
+      if (layout.bitCount >
+          std::numeric_limits<uint64_t>::max() - allocatedWidth)
+        return failure();
+      layout.bitCount += allocatedWidth;
     }
-    offset = layout.bitCount;
-    uint64_t allocatedWidth = containerWidth ? containerWidth : *width;
-    if (layout.bitCount > std::numeric_limits<uint64_t>::max() - allocatedWidth)
-      return failure();
-    layout.bitCount += allocatedWidth;
     handle = encodeStaticHandle(nextHandleID);
     layout.bounds.push_back({nextHandleID++, offset, *width, fourState,
                              std::move(managedRootOffsets),
@@ -113,7 +178,7 @@ NativeStateLayoutAnalysis::compute(ModuleOp module) {
   auto allocateStorage = [&](sim::SimStorageDeclOp declaration) {
     uint64_t offset;
     uint64_t handle;
-    if (failed(allocate(declaration.getType(),
+    if (failed(allocate(declaration, declaration.getType(),
                         containsFourStateLogic(declaration.getType()), offset,
                         handle))) {
       declaration.emitError("native storage must have a fixed packed width");
@@ -137,7 +202,7 @@ NativeStateLayoutAnalysis::compute(ModuleOp module) {
     } else if (auto declaration = dyn_cast<sim::SimNetDeclOp>(operation)) {
       uint64_t offset;
       uint64_t handle;
-      if (failed(allocate(declaration.getType(),
+      if (failed(allocate(declaration, declaration.getType(),
                           containsFourStateLogic(declaration.getType()), offset,
                           handle))) {
         declaration.emitError("native net must have a fixed packed width");
@@ -191,8 +256,8 @@ NativeStateLayoutAnalysis::compute(ModuleOp module) {
           getSimulationStorageBitWidth(declaration.getType());
       // Driver state always retains an unknown plane so it can represent Z
       // release even when the resolved destination is two-state.
-      if (!width ||
-          failed(allocate(declaration.getType(), true, offset, handle))) {
+      if (!width || failed(allocate(declaration, declaration.getType(), true,
+                                    offset, handle))) {
         declaration.emitError("native driver must have a fixed packed width");
         return WalkResult::interrupt();
       }

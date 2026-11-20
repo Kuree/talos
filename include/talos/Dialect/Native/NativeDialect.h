@@ -24,6 +24,7 @@ using MaxStateDomainFunctions =
 using DisableTwoStateSpecialization =
     NativeDialect::DisableTwoStateSpecializationAttrHelper;
 using TwoState = NativeDialect::TwoStateAttrHelper;
+using SampledPlacement = NativeDialect::SampledPlacementAttrHelper;
 using NBAField = NativeDialect::NbaFieldAttrHelper;
 using DebugTiming = NativeDialect::DebugTimingAttrHelper;
 using FallbackReport = NativeDialect::FallbackReportAttrHelper;

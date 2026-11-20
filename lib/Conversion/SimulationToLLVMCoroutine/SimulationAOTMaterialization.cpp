@@ -13,6 +13,7 @@
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
 #include "talos/Dialect/Schedule/ScheduleOps.h"
 
+#include "talos/Conversion/RuntimeToLLVM.h"
 #include "talos/Conversion/SimulationRuntime.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
 #include "talos/Runtime/Runtime.h"
@@ -41,6 +42,131 @@ namespace talos::detail {
 
 static uint32_t fanoutRoute(const talos_rt_static_fanout_entry &entry) {
   return entry.reserved & TALOS_RT_FANOUT_ROUTE_MASK;
+}
+
+// Adjacent logical samples can occupy native byte or word containers while
+// still having their own Preponed bounds. Project all lanes in one load,
+// masking the private tail of each field in both the value and X/Z planes.
+static size_t emitSampledRun(OpBuilder &builder, Location loc, Value source,
+                             Value destination,
+                             ArrayRef<SampledRangeInfo> ranges) {
+  const auto &first = ranges.front();
+  unsigned bytes = (first.bitWidth + 7) / 8;
+  if (first.sourceBitOffset % 8 || first.bitWidth >= 64 ||
+      !llvm::isPowerOf2_32(bytes) || first.bitWidth == bytes * 8)
+    return 0;
+  size_t count = 1;
+  while (count < ranges.size()) {
+    const auto &next = ranges[count];
+    if (next.bitWidth != first.bitWidth ||
+        next.sourceBitOffset != first.sourceBitOffset + count * bytes * 8 ||
+        next.snapshotByteOffset != first.snapshotByteOffset + count * bytes)
+      break;
+    ++count;
+  }
+  if (count < 2)
+    return 0;
+  auto element = builder.getIntegerType(bytes * 8);
+  auto low = builder.getIntegerAttr(
+      element, APInt::getLowBitsSet(bytes * 8, first.bitWidth));
+  for (size_t i = 0; i != count;) {
+    unsigned lanes = llvm::bit_floor(std::min<size_t>(16 / bytes, count - i));
+    Type type = element;
+    Attribute mask = low;
+    if (lanes > 1) {
+      auto vector = VectorType::get({int64_t(lanes)}, element);
+      type = vector;
+      mask = DenseElementsAttr::get(vector, low);
+    }
+    Value from =
+        byteGEP(builder, loc, source, first.sourceBitOffset / 8 + i * bytes);
+    Value to = byteGEP(builder, loc, destination,
+                       first.snapshotByteOffset + i * bytes);
+    Value value = LLVM::LoadOp::create(builder, loc, type, from, 1);
+    Value masked = LLVM::AndOp::create(
+        builder, loc, value,
+        LLVM::ConstantOp::create(builder, loc, type, cast<TypedAttr>(mask)));
+    LLVM::StoreOp::create(builder, loc, masked, to, 1);
+    i += lanes;
+  }
+  return count;
+}
+
+// IEEE 1800-2023 4.4.2.1 and 16.5.1. A shared clock enters the same
+// Preponed region as the runtime. The execution descriptor fixes every
+// source and destination byte, so a bounded plan can compile the gather.
+static FailureOr<LLVM::LLVMFuncOp> makePeriodicSampleCopy(ModuleOp module,
+                                                          uint64_t stateBits) {
+  if (!module.lookupSymbol("__talos_execution_descriptor_v1"))
+    return LLVM::LLVMFuncOp{};
+  auto ranges = getSampledRangeLayout(module, stateBits);
+  if (failed(ranges))
+    return failure();
+  if (ranges->empty())
+    return LLVM::LLVMFuncOp{};
+  uint64_t budget = schedule::getMaxInlineOperations(module);
+  for (const auto &range : *ranges) {
+    uint64_t pieces = range.sourceBitOffset % 8 ? 1 + (range.bitWidth - 1) / 64
+                                                : 1 + (range.bitWidth % 8 != 0);
+    if (pieces > budget / 8)
+      return LLVM::LLVMFuncOp{};
+    budget -= pieces * 8;
+  }
+  OpBuilder builder = OpBuilder::atBlockEnd(module.getBody());
+  auto loc = module.getLoc();
+  Type ptr = LLVM::LLVMPointerType::get(module.getContext());
+  auto copy = LLVM::LLVMFuncOp::create(
+      builder, loc, "__talos_sampled_plane_copy_v1",
+      LLVM::LLVMFunctionType::get(LLVM::LLVMVoidType::get(module.getContext()),
+                                  {ptr, ptr}),
+      LLVM::Linkage::Internal);
+  Block *entry = copy.addEntryBlock(builder);
+  builder.setInsertionPointToStart(entry);
+  for (size_t index = 0; index < ranges->size();) {
+    size_t copied = emitSampledRun(
+        builder, loc, entry->getArgument(0), entry->getArgument(1),
+        ArrayRef<SampledRangeInfo>(*ranges).drop_front(index));
+    if (copied) {
+      index += copied;
+      continue;
+    }
+    const auto &range = (*ranges)[index++];
+    uint64_t bit = 0;
+    if (range.sourceBitOffset % 8 == 0 && range.bitWidth >= 8) {
+      uint64_t bytes = range.bitWidth / 8;
+      LLVM::MemcpyOp::create(
+          builder, loc,
+          byteGEP(builder, loc, entry->getArgument(1),
+                  range.snapshotByteOffset),
+          byteGEP(builder, loc, entry->getArgument(0),
+                  range.sourceBitOffset / 8),
+          llvmConstant(builder, loc, builder.getI64Type(), bytes), false);
+      bit = bytes * 8;
+    }
+    while (bit < range.bitWidth) {
+      unsigned width = std::min<uint64_t>(64, range.bitWidth - bit);
+      unsigned shift = range.sourceBitOffset % 8;
+      auto span = builder.getIntegerType(((width + shift + 7) / 8) * 8);
+      auto output = builder.getIntegerType(((width + 7) / 8) * 8);
+      Value source = byteGEP(builder, loc, entry->getArgument(0),
+                             (range.sourceBitOffset + bit) / 8);
+      Value value = LLVM::LoadOp::create(builder, loc, span, source, 1);
+      if (shift)
+        value = arith::ShRUIOp::create(builder, loc, value,
+                                       llvmConstant(builder, loc, span, shift));
+      value = resizeNativeInteger(builder, loc, value, output);
+      if (width % 8)
+        value = arith::AndIOp::create(
+            builder, loc, value,
+            llvmConstant(builder, loc, output, (uint64_t{1} << width) - 1));
+      Value target = byteGEP(builder, loc, entry->getArgument(1),
+                             range.snapshotByteOffset + bit / 8);
+      LLVM::StoreOp::create(builder, loc, value, target, 1);
+      bit += width;
+    }
+  }
+  LLVM::ReturnOp::create(builder, loc, ValueRange{});
+  return copy;
 }
 
 static constexpr StringLiteral nbaDirtyRootsName =
@@ -4969,12 +5095,21 @@ FailureOr<bool> makeNativeEvalPlan(
 
     builder.setInsertionPointToStart(step);
     if (sharedPeriodic) {
+      auto capture = makePeriodicSampleCopy(module, stateLayout.bitCount);
+      if (mlir::failed(capture))
+        return mlir::failure();
+      SmallVector<Value> args{runEntry->getArgument(1), step->getArgument(0)};
+      StringRef enter = "talos_rt_v1_scheduler_enter_periodic_aot";
+      if (*capture) {
+        enter = "talos_rt_v1_scheduler_enter_sampled_periodic_aot";
+        args.push_back(LLVM::AddressOfOp::create(
+            builder, location, pointer, "__talos_execution_descriptor_v1"));
+        args.push_back(LLVM::AddressOfOp::create(builder, location, pointer,
+                                                 (*capture).getSymName()));
+      }
       Value entered =
-          LLVM::CallOp::create(
-              builder, location, TypeRange{i32},
-              SymbolRefAttr::get(context,
-                                 "talos_rt_v1_scheduler_enter_periodic_aot"),
-              ValueRange{runEntry->getArgument(1), step->getArgument(0)})
+          LLVM::CallOp::create(builder, location, TypeRange{i32},
+                               SymbolRefAttr::get(context, enter), args)
               .getResult();
       Value ok = arith::CmpIOp::create(
           builder, location, arith::CmpIPredicate::eq, entered,
@@ -8592,6 +8727,9 @@ FailureOr<bool> makeNativeEvalPlan(
                            i32, {pointer, pointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_enter_periodic_aot",
                            i32, {pointer, i64});
+  getOrDeclareLLVMFunction(module,
+                           "talos_rt_v1_scheduler_enter_sampled_periodic_aot",
+                           i32, {pointer, i64, pointer, pointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_postponed_slot_aot",
                            i32, {pointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_commit_root", i32,

@@ -32,7 +32,7 @@ NativeDialect::verifyOperationAttribute(Operation *operation,
                                         NamedAttribute attribute) {
   if (failed(discardable::verify<
              OptimizationLevel, MaxStateDomainFunctions,
-             DisableTwoStateSpecialization, TwoState,
+             DisableTwoStateSpecialization, TwoState, SampledPlacement,
              NBAField, DebugTiming, FallbackReport, ProcessesMaterialized,
              ClosedExecutable, Partition, PartitionManifest, PartitionManifests,
              ElementDefaults, PhysicalPartitionManifest, Frame, FrameInputs,
@@ -59,7 +59,8 @@ NativeDialect::verifyOperationAttribute(Operation *operation,
   auto error = [&]() {
     return operation->emitOpError("attribute '") << name << "' ";
   };
-  bool moduleOption = name == OptimizationLevel::getNameStr() ||
+  bool moduleOption = name == SampledPlacement::getNameStr() ||
+                      name == OptimizationLevel::getNameStr() ||
                       name == MaxStateDomainFunctions::getNameStr() ||
                       name == DisableTwoStateSpecialization::getNameStr() ||
                       name == TwoState::getNameStr() ||

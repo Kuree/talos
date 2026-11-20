@@ -1341,6 +1341,8 @@ extern "C" talos_rt_status talos_rt_v1_context_create_for_design(
     }
     auto *context = new talos_rt_context();
     context->execution = execution;
+    if (execution && (execution->flags & TALOS_RT_EXECUTION_PREPONED_SNAPSHOT))
+      context->preponedSlotHooks |= kPreponedSnapshotSlotHook;
     context->designDatabase = designDatabase;
     context->designBytecodeImage = designBytecodeImage;
     context->designBytecodeImageValidated = designBytecodeImage.data != nullptr;

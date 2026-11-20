@@ -9,6 +9,7 @@
 
 #include "BytecodeEncoder.h"
 #include "BytecodeSerialization.h"
+#include "talos/Analysis/NativeStateLayoutAnalysis.h"
 #include "talos/Analysis/SimulationAnalysis.h"
 #include "talos/Analysis/SimulationProcessFrameAnalysis.h"
 #include "talos/Analysis/SimulationVPIAnalysis.h"
@@ -73,9 +74,14 @@ static bool needsWaveformMetadata(sim::SimDesignOp design) {
   return needed;
 }
 
-static FailureOr<SmallVector<SimulationSampledRange>>
-planSampledRanges(sim::SimDesignOp design, const StateLayout &state) {
-  SmallVector<SimulationSampledRange> sampledRanges;
+struct SampledAccess {
+  schedule::ComputeResourceKind resource;
+  uint64_t descriptor, low, width, rootWidth;
+};
+
+static FailureOr<SmallVector<SampledAccess>>
+collectSampledAccesses(sim::SimDesignOp design) {
+  SmallVector<SampledAccess> accesses;
   bool invalidSampledRange = false;
   std::optional<analysis::HandleDataflowAnalysis> provenanceAnalysis;
   design.walk([&](sim::SimFuncOp function) {
@@ -117,31 +123,96 @@ planSampledRanges(sim::SimDesignOp design, const StateLayout &state) {
         invalidSampledRange = true;
         return;
       }
-      const auto *offsets =
-          found->second.resource == schedule::ComputeResourceKind::Storage
-              ? &state.storageOffsets
-          : found->second.resource == schedule::ComputeResourceKind::Net
-              ? &state.netOffsets
-              : nullptr;
-      auto base = offsets ? offsets->find(*found->second.descriptor)
-                          : state.storageOffsets.end();
-      if (!offsets || base == offsets->end() ||
-          base->second > std::numeric_limits<uint64_t>::max() - low) {
+      auto resource = found->second.resource;
+      if (resource != schedule::ComputeResourceKind::Storage &&
+          resource != schedule::ComputeResourceKind::Net) {
         sampled.emitOpError("references an unknown canonical state object");
         invalidSampledRange = true;
         return;
       }
-      uint64_t bitOffset = base->second + low;
-      if (bitOffset > state.bits || rangeWidth > state.bits - bitOffset) {
-        sampled.emitOpError("canonical sampled range exceeds design state");
-        invalidSampledRange = true;
-        return;
-      }
-      sampledRanges.push_back({bitOffset, rangeWidth});
+      accesses.push_back({resource, *found->second.descriptor, low, rangeWidth,
+                          found->second.rootWidth});
     });
   });
   if (invalidSampledRange)
     return failure();
+  return accesses;
+}
+
+// Freeze the placement before encoding addresses for either execution tier.
+// Descriptor identities and the semantic sample ranges remain independent
+// of how canonical storage is arranged (1800-2023 4.4.2.1, 16.5.1).
+static void freezeSampledPlacement(sim::SimDesignOp design,
+                                   ArrayRef<SampledAccess> accesses) {
+  auto module = design->getParentOfType<ModuleOp>();
+  // An existing execution image already assigns the canonical offsets.
+  if (accesses.empty() || native::has<native::SampledPlacement>(module) ||
+      runtime::has<runtime::StateBits>(module))
+    return;
+  using Resource = schedule::ComputeResourceKind;
+  using Key = std::pair<Resource, uint64_t>;
+  DenseSet<Key> whole;
+  for (const auto &access : accesses)
+    if (!access.low && access.width == access.rootWidth && access.width <= 64)
+      whole.insert({access.resource, access.descriptor});
+  if (whole.size() < 2)
+    return;
+  struct Root {
+    unsigned bytes, width;
+    Resource resource;
+    uint64_t descriptor;
+  };
+  SmallVector<Root> roots;
+  size_t bytes = 0;
+  auto consider = [&](Resource resource, uint64_t id, Type type) {
+    if (!whole.contains({resource, id}))
+      return;
+    unsigned container = analysis::getSampledContainerBytes(type);
+    if (container) {
+      roots.push_back({container, *analysis::getSimulationStorageBitWidth(type),
+                       resource, id});
+      bytes += container;
+    }
+  };
+  for (auto decl : design.getOps<sim::SimStorageDeclOp>())
+    consider(Resource::Storage, decl.getId(), decl.getType());
+  for (auto decl : design.getOps<sim::SimNetDeclOp>())
+    consider(Resource::Net, decl.getId(), decl.getType());
+  // Keep small layouts intact when they do not fill even one native vector.
+  if (roots.size() < 2 || bytes < 16)
+    return;
+  llvm::sort(roots, [](const Root &a, const Root &b) {
+    if (a.bytes != b.bytes)
+      return a.bytes > b.bytes;
+    return std::tie(a.width, a.resource, a.descriptor) <
+           std::tie(b.width, b.resource, b.descriptor);
+  });
+  SmallVector<int64_t> pairs;
+  for (const Root &root : roots) {
+    pairs.push_back(static_cast<int64_t>(root.resource));
+    pairs.push_back(static_cast<int64_t>(root.descriptor));
+  }
+  native::set<native::SampledPlacement>(
+      module, DenseI64ArrayAttr::get(design.getContext(), pairs));
+}
+
+static FailureOr<SmallVector<SimulationSampledRange>>
+planSampledRanges(sim::SimDesignOp design, const StateLayout &state,
+                  ArrayRef<SampledAccess> accesses) {
+  SmallVector<SimulationSampledRange> sampledRanges;
+  for (const auto &access : accesses) {
+    const auto &offsets =
+        access.resource == schedule::ComputeResourceKind::Storage
+            ? state.storageOffsets
+            : state.netOffsets;
+    auto base = offsets.find(access.descriptor);
+    if (base == offsets.end() || base->second > state.bits ||
+        access.low > state.bits - base->second ||
+        access.width > state.bits - base->second - access.low)
+      return design.emitOpError("canonical sampled range exceeds design state"),
+             failure();
+    sampledRanges.push_back({base->second + access.low, access.width});
+  }
   llvm::sort(sampledRanges, [](const SimulationSampledRange &lhs,
                                const SimulationSampledRange &rhs) {
     return std::tie(lhs.bitOffset, lhs.bitWidth) <
@@ -185,12 +256,16 @@ FailureOr<EncodedSimulationDesign> Encoder::encode() {
     return failure();
   if (failed(prepareStaticSpecializationSites()))
     return failure();
+  auto sampleUses = collectSampledAccesses(design);
+  if (failed(sampleUses))
+    return failure();
+  freezeSampledPlacement(design, *sampleUses);
   FailureOr<StateLayout> builtState = buildStateLayout(design);
   if (failed(builtState))
     return failure();
   state = *builtState;
   FailureOr<SmallVector<SimulationSampledRange>> sampledRanges =
-      planSampledRanges(design, state);
+      planSampledRanges(design, state, *sampleUses);
   if (failed(sampledRanges))
     return failure();
   if (failed(planTwoStateRegisters()))
@@ -1078,11 +1153,15 @@ public:
 
 FailureOr<SimulationSampledStatePlan>
 planSimulationSampledState(sim::SimDesignOp design) {
+  auto sampleUses = bytecode::collectSampledAccesses(design);
+  if (failed(sampleUses))
+    return failure();
+  bytecode::freezeSampledPlacement(design, *sampleUses);
   FailureOr<bytecode::StateLayout> state = bytecode::buildStateLayout(design);
   if (failed(state))
     return failure();
   FailureOr<SmallVector<SimulationSampledRange>> ranges =
-      bytecode::planSampledRanges(design, *state);
+      bytecode::planSampledRanges(design, *state, *sampleUses);
   if (failed(ranges))
     return failure();
   SimulationSampledStatePlan result;

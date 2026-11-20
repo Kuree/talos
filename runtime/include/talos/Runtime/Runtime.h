@@ -4286,6 +4286,14 @@ talos_rt_status talos_rt_v1_scheduler_drain_periodic_aot(
 talos_rt_status
 talos_rt_v1_scheduler_enter_periodic_aot(talos_rt_context *context,
                                          uint64_t time);
+// A model-specific gather copies one canonical plane into its Preponed
+// snapshot. Use it only with the execution descriptor that supplied its ranges.
+typedef void (*talos_rt_sampled_plane_copy)(const uint8_t *source,
+                                            uint8_t *snapshot);
+talos_rt_status talos_rt_v1_scheduler_enter_sampled_periodic_aot(
+    talos_rt_context *context, uint64_t time,
+    const talos_rt_execution_descriptor_v1 *execution,
+    talos_rt_sampled_plane_copy copy);
 // End the current time slot of a generated periodic loop: run the
 // runtime's Postponed work for it (value change dumps, IEEE 1800-2023 4.4.2.9,
 // 21.7). The loop calls it only while `postponed_slot_hooks` is nonzero.
@@ -5173,6 +5181,14 @@ uint64_t talos_rt_v1_scheduler_cohort(talos_rt_context *context);
 // its first activation, so its first query needs no region seed.
 void talos_rt_v1_scheduler_track_cohorts(talos_rt_context *context);
 
+// Read the installed value or unknown plane. Once installed, its allocation
+// stays fixed. A missing plane keeps the checked sampled-word path.
+const uint64_t *talos_rt_v1_sampled_plane(const talos_rt_context *context,
+                                          uint32_t unknown);
+// Load one word of a compiler-resolved Preponed snapshot plane. A missing
+// snapshot reports a scheduler error, just like a failed native sampled read.
+uint64_t talos_rt_v1_sampled_word(talos_rt_context *context, uint64_t word,
+                                  uint32_t unknown);
 // Read one packed value from the once-per-time-slot Preponed snapshot. The
 // stable handle and width are compiler-resolved; automatic storage is rejected
 // because its lifetime is not part of the canonical design plane.

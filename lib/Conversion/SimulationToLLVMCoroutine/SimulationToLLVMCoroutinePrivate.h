@@ -554,12 +554,14 @@ collectNativeClassLowering(mlir::ModuleOp module);
 void populateManagedToLLVMConversionPatterns(
     mlir::RewritePatternSet &patterns, mlir::TypeConverter &converter,
     const llvm::DataLayout &dataLayout, uint64_t stateBitCount,
-    const NativeClassLowering &classes);
+    const NativeClassLowering &classes,
+    const llvm::DenseMap<mlir::Operation *, uint64_t> &sampledOffsets);
 void populateManagedStringToLLVMConversionPatterns(
     mlir::RewritePatternSet &patterns, mlir::TypeConverter &converter);
 void populateManagedContainerToLLVMConversionPatterns(
     mlir::RewritePatternSet &patterns, mlir::TypeConverter &converter,
-    const llvm::DataLayout &dataLayout);
+    const llvm::DataLayout &dataLayout,
+    const llvm::DenseMap<mlir::Operation *, uint64_t> &sampledOffsets);
 void populateManagedAssociativeToLLVMConversionPatterns(
     mlir::RewritePatternSet &patterns, mlir::TypeConverter &converter);
 void populateManagedCoverageToLLVMConversionPatterns(

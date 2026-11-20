@@ -3148,8 +3148,21 @@ struct talos_rt_context {
   }
   // Canonical state captured once at entry to each time slot, before any
   // Active-region work. Sampled-value reads never consult the live planes.
+  struct SampledByteCopy {
+    uint64_t source, destination;
+    uint8_t shift, mask;
+  };
+  struct SampledCapturePlan {
+    std::vector<SampledByteCopy> bytes;
+    std::vector<talos_rt_sampled_range_v1> ranges;
+  };
+  std::unique_ptr<SampledCapturePlan> sampledCapturePlan;
   std::vector<uint64_t> preponedValue;
   std::vector<uint64_t> preponedUnknown;
+  struct {
+    const uint64_t *value = nullptr;
+    const uint64_t *unknown = nullptr;
+  } preponedPlanes;
   std::unordered_map<uint64_t,
                      std::unordered_map<uint64_t, SampledHistoryState>>
       sampledHistories;
@@ -3433,7 +3446,9 @@ inline void talos_rt_set_design_task_filter_unlocked(talos_rt_context *context,
 void talos_rt_sync_native_state_range_unlocked(talos_rt_context *context,
                                                uint64_t begin, uint64_t width);
 
-talos_rt_status talos_rt_capture_preponed_unlocked(talos_rt_context *context);
+talos_rt_status
+talos_rt_capture_preponed_unlocked(talos_rt_context *context,
+                                   talos_rt_sampled_plane_copy copy = nullptr);
 /// Retakes the time-zero Preponed snapshot once the root initializer has run.
 /// Declaration initializers precede every time-zero event (IEEE 1800-2023
 /// 6.8, 16.5.1), so the values they establish are what time zero samples.
@@ -4787,6 +4802,7 @@ void talos_rt_unindex_static_signal_bucket(
 
 inline constexpr uint8_t kPreponedObserverSlotHook = 1;
 inline constexpr uint8_t kVPISignalSlotHook = 2;
+inline constexpr uint8_t kPreponedSnapshotSlotHook = 4;
 // talos_rt_context::postponedSlotHooks: something is selected for a value
 // change dump whose file is open.
 inline constexpr uint8_t kDumpSlotHook = 1;

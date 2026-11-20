@@ -7,6 +7,7 @@
 
 #include "mlir/Support/LogicalResult.h"
 
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 
 namespace mlir {
@@ -30,6 +31,17 @@ void registerRuntimeToLLVMPipeline();
 
 /// LLVM type shared by process descriptor declarations and definitions.
 mlir::Type getNativeProcessDescriptorType(mlir::MLIRContext *context);
+
+struct SampledRangeInfo {
+  uint64_t sourceBitOffset;
+  uint64_t snapshotByteOffset;
+  uint64_t bitWidth;
+};
+
+/// The byte-packed Preponed snapshot layout used by native reads and the
+/// execution descriptor (IEEE 1800-2023 16.5.1).
+mlir::FailureOr<llvm::SmallVector<SampledRangeInfo>>
+getSampledRangeLayout(mlir::ModuleOp module, uint64_t stateBits);
 
 /// Materialize the always-present execution descriptor and any encoded
 /// simulation bytecode/design database attributes as immutable LLVM globals.

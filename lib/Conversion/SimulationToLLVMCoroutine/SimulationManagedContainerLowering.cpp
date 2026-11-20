@@ -10,6 +10,7 @@
 #include "talos/Runtime/Runtime.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Transforms/DialectConversion.h"
 
@@ -1299,8 +1300,12 @@ public:
 
 class SampledReadConversion final
     : public OpConversionPattern<sim::SimSampledReadOp> {
+  const DenseMap<Operation *, uint64_t> &offsets;
+
 public:
-  using OpConversionPattern::OpConversionPattern;
+  SampledReadConversion(TypeConverter &converter, MLIRContext *context,
+                        const DenseMap<Operation *, uint64_t> &offsets)
+      : OpConversionPattern(converter, context), offsets(offsets) {}
   LogicalResult
   matchAndRewrite(sim::SimSampledReadOp op, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -1317,28 +1322,128 @@ public:
                       : dyn_cast<IntegerType>(types.front());
     if (!plane || (types.size() == 2 && (real || types[1] != plane)))
       return failure();
-    Value value = entryAlloca(rewriter, op.getLoc(), plane, 1, 1);
-    Value unknown = entryAlloca(rewriter, op.getLoc(), plane, 1, 1);
-    Value status =
-        LLVM::CallOp::create(
-            rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_sampled_read"),
-            ValueRange{adaptor.getContext().front(),
-                       adaptor.getSource().front(),
-                       llvmConstant(rewriter, op.getLoc(),
-                                    rewriter.getI64Type(), plane.getWidth()),
-                       value, unknown})
-            .getResult();
-    reportManagedStatus(rewriter, op.getLoc(), adaptor.getContext().front(),
-                        status);
-    Value loaded = LLVM::LoadOp::create(rewriter, op.getLoc(), plane, value, 1);
+    Location loc = op.getLoc();
+    Value ctx = adaptor.getContext().front();
+    Type i64 = rewriter.getI64Type(),
+         pointer = LLVM::LLVMPointerType::get(rewriter.getContext());
+    bool fourState = types.size() == 2;
+    unsigned width = plane.getWidth();
+    auto genericRead = [&]() {
+      Value value = entryAlloca(rewriter, loc, plane, 1, 1);
+      Value unknown = entryAlloca(rewriter, loc, plane, 1, 1);
+      Value status = LLVM::CallOp::create(
+                         rewriter, loc, TypeRange{rewriter.getI32Type()},
+                         "talos_rt_v1_sampled_read",
+                         ValueRange{ctx, adaptor.getSource().front(),
+                                    llvmConstant(rewriter, loc, i64, width),
+                                    value, unknown})
+                         .getResult();
+      reportManagedStatus(rewriter, loc, ctx, status);
+      SmallVector<Value> results{
+          LLVM::LoadOp::create(rewriter, loc, plane, value, 1)};
+      if (fourState)
+        results.push_back(
+            LLVM::LoadOp::create(rewriter, loc, plane, unknown, 1));
+      return results;
+    };
+    auto function = op->getParentOfType<sim::SimFuncOp>();
+    bool observed = function &&
+                    function.getHomeRegion() == sim::EventRegion::Observed &&
+                    function.getEntryKind() != sim::EntryKind::Function &&
+                    function.getEntryKind() != sim::EntryKind::Observer;
+    auto found = offsets.find(op);
+    bool oneWord = found != offsets.end() && width <= 64 - found->second % 64;
+    SmallVector<Value> results;
+    if (found == offsets.end() || (!oneWord && !observed)) {
+      results = genericRead();
+    } else {
+      uint64_t bit = found->second;
+      Value word = llvmConstant(rewriter, loc, i64, bit / 64);
+      auto extract = [&](Value value, unsigned shift) -> Value {
+        if (shift)
+          value = LLVM::LShrOp::create(
+              rewriter, loc, value,
+              llvmConstant(rewriter, loc, value.getType(), shift));
+        return value.getType() == plane
+                   ? value
+                   : LLVM::TruncOp::create(rewriter, loc, plane, value)
+                         .getResult();
+      };
+      auto checkedWords = [&]() {
+        SmallVector<Value> values;
+        for (unsigned selector = 0; selector != types.size(); ++selector) {
+          Value index =
+              llvmConstant(rewriter, loc, rewriter.getI32Type(), selector);
+          Value value = LLVM::CallOp::create(rewriter, loc, TypeRange{i64},
+                                             "talos_rt_v1_sampled_word",
+                                             ValueRange{ctx, word, index})
+                            .getResult();
+          values.push_back(extract(value, bit % 64));
+        }
+        return values;
+      };
+      if (!observed) {
+        results = checkedWords();
+      } else {
+        // Both planes belong to the same Preponed snapshot (1800-2023
+        // 16.5.1). Select the view once for this read, including a wide or
+        // unaligned slice. Missing planes take the checked path at this site.
+        SmallVector<Value> bases;
+        Value present;
+        Value null = LLVM::ZeroOp::create(rewriter, loc, pointer);
+        for (unsigned selector = 0; selector != types.size(); ++selector) {
+          Value index =
+              llvmConstant(rewriter, loc, rewriter.getI32Type(), selector);
+          Value base = LLVM::CallOp::create(rewriter, loc, TypeRange{pointer},
+                                            "talos_rt_v1_sampled_plane",
+                                            ValueRange{ctx, index})
+                           .getResult();
+          bases.push_back(base);
+          Value bound = LLVM::ICmpOp::create(
+              rewriter, loc, LLVM::ICmpPredicate::ne, base, null);
+          present = present ? LLVM::AndOp::create(rewriter, loc, present, bound)
+                                  .getResult()
+                            : bound;
+        }
+        Block *head = rewriter.getInsertionBlock();
+        Block *join = rewriter.splitBlock(head, rewriter.getInsertionPoint());
+        Region *region = head->getParent();
+        Block *fast = rewriter.createBlock(region, join->getIterator());
+        Block *slow = rewriter.createBlock(region, join->getIterator());
+        rewriter.setInsertionPointToEnd(head);
+        cf::CondBranchOp::create(rewriter, loc, present, fast, slow);
+
+        rewriter.setInsertionPointToEnd(fast);
+        SmallVector<Value> direct;
+        for (Value base : bases) {
+          Value source;
+          Type span;
+          unsigned shift;
+          if (oneWord) {
+            span = i64;
+            shift = bit % 64;
+            source = LLVM::GEPOp::create(rewriter, loc, pointer, i64, base,
+                                         ValueRange{word});
+          } else {
+            shift = bit % 8;
+            span = rewriter.getIntegerType(((shift + width + 7) / 8) * 8);
+            source = byteGEP(rewriter, loc, base, bit / 8);
+          }
+          Value value = LLVM::LoadOp::create(rewriter, loc, span, source,
+                                             oneWord ? 8 : 1);
+          direct.push_back(extract(value, shift));
+        }
+        cf::BranchOp::create(rewriter, loc, join, direct);
+        rewriter.setInsertionPointToEnd(slow);
+        cf::BranchOp::create(rewriter, loc, join,
+                             oneWord ? checkedWords() : genericRead());
+        for (unsigned i = 0; i != types.size(); ++i)
+          results.push_back(join->addArgument(plane, loc));
+        rewriter.setInsertionPoint(op);
+      }
+    }
     if (real)
-      loaded = LLVM::BitcastOp::create(rewriter, op.getLoc(), real, loaded);
-    SmallVector<Value> results{loaded};
-    if (types.size() == 2)
-      results.push_back(
-          LLVM::LoadOp::create(rewriter, op.getLoc(), plane, unknown, 1));
+      results[0] = LLVM::BitcastOp::create(rewriter, loc, real, results[0]);
     rewriter.replaceOpWithMultiple(op, ArrayRef<SmallVector<Value>>{results});
     return success();
   }
@@ -2270,7 +2375,8 @@ public:
 
 void populateManagedContainerToLLVMConversionPatterns(
     RewritePatternSet &patterns, TypeConverter &converter,
-    const llvm::DataLayout &dataLayout) {
+    const llvm::DataLayout &dataLayout,
+    const DenseMap<Operation *, uint64_t> &sampledOffsets) {
   MLIRContext *context = patterns.getContext();
   patterns.add<
       ContainerSizeConversion, ContainerCreateLikeConversion,
@@ -2300,9 +2406,10 @@ void populateManagedContainerToLLVMConversionPatterns(
       converter, context, dataLayout);
   patterns.add<RandomSolveWideConversion, RandomFunctionStageConversion,
                RandomCycleSampleConversion, RandomRealToRankConversion,
-               RandomRealFromRankConversion, SampledReadConversion,
-               SampledHistoryConversion, ClockedSampleUpdateConversion,
-               ClockedSampleReadConversion>(converter, context);
+               RandomRealFromRankConversion, SampledHistoryConversion,
+               ClockedSampleUpdateConversion, ClockedSampleReadConversion>(
+      converter, context);
+  patterns.add<SampledReadConversion>(converter, context, sampledOffsets);
   populateManagedAssociativeToLLVMConversionPatterns(patterns, converter);
 }
 

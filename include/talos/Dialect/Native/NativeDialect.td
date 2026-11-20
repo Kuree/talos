@@ -28,6 +28,8 @@ def NativeDialect : Dialect {
     "::mlir::UnitAttr":$disable_two_state_specialization,
     // Frontend two-state semantics with value-only canonical storage.
     "::mlir::UnitAttr":$two_state,
+    // Storage/net descriptor pairs placed together for Preponed sampling.
+    "::mlir::DenseI64ArrayAttr":$sampled_placement,
     // Logical NBA field addresses, retained until transaction planning ends.
     "::mlir::IntegerAttr":$nba_field,
     // Print native planning and timing diagnostics to stderr.
