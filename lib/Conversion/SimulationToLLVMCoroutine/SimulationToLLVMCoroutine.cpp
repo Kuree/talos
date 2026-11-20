@@ -4564,6 +4564,7 @@ public:
       return signalPassFailure();
     detail::eliminateTwoStateUnknownPlane(module);
     timing.mark("native eval transaction materialization");
+    schedule::specializeNativeValueFunctions(module);
     schedule::cacheNativePureCones(module);
     timing.mark("pure cone caching");
   }

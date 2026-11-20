@@ -3,6 +3,7 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/Threading.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -11,6 +12,8 @@
 #include "talos/Dialect/Schedule/Transforms/NativeTransforms.h"
 #include "talos/Dialect/Schedule/Transforms/Passes.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
+#include "talos/Dialect/Simulation/SimulationOps.h"
+#include "llvm/ADT/MapVector.h"
 
 using namespace mlir;
 namespace talos::schedule {
@@ -284,6 +287,110 @@ void cacheFunction(ModuleOp module, LLVM::LLVMFuncOp function,
                         SmallVector<int32_t>(keys.begin(), keys.end())));
 }
 } // namespace
+// Partitioned native codegen optimizes each owner's LLVM separately. Give
+// repeated direct calls with the same constant controls a common body in
+// their caller's partition. The original ABI handles all other arguments.
+// Preserve both planes of each by-value argument (IEEE 1800-2023 6.11.2,
+// 13.5.1), including a dynamic unknown plane alongside a constant value.
+void specializeNativeValueFunctions(ModuleOp module) {
+  if (!native::has<native::ClosedExecutable>(module))
+    return;
+  using Key = std::tuple<Operation *, StringAttr, ArrayAttr>;
+  llvm::MapVector<Key, SmallVector<LLVM::CallOp>> groups;
+  SymbolTable symbols(module);
+  Builder attrs(module.getContext());
+  for (auto caller : module.getOps<LLVM::LLVMFuncOp>()) {
+    auto partition = native::get<native::Partition>(caller);
+    if (!partition || caller.isExternal())
+      continue;
+    caller.walk([&](LLVM::CallOp call) {
+      auto name = call.getCallee();
+      auto callee =
+          name ? symbols.lookup<LLVM::LLVMFuncOp>(*name) : LLVM::LLVMFuncOp{};
+      auto kind =
+          callee ? native::get<native::EntryKind>(callee) : IntegerAttr{};
+      if (!callee || callee.isExternal() || !callee.isPrivate() || !kind ||
+          kind.getInt() != static_cast<unsigned>(sim::EntryKind::Function) ||
+          native::get<native::Partition>(callee) == partition ||
+          callee.getFunctionType().isVarArg() ||
+          !cacheWidth(callee.getFunctionType().getReturnType()) ||
+          callee.getNumArguments() != call.getArgOperands().size())
+        return;
+      SmallVector<Attribute> constants;
+      bool specializes = false;
+      for (auto [formal, actual] :
+           llvm::zip_equal(callee.getBody().front().getArguments(),
+                           call.getArgOperands())) {
+        APInt value;
+        auto type = dyn_cast<IntegerType>(actual.getType());
+        if (!formal.use_empty() && type && type.getWidth() <= 16 &&
+            matchPattern(actual, m_ConstantInt(&value))) {
+          constants.push_back(attrs.getIntegerAttr(type, value));
+          specializes = true;
+        } else {
+          constants.push_back(attrs.getUnitAttr());
+        }
+      }
+      if (specializes)
+        groups[{callee, partition, attrs.getArrayAttr(constants)}].push_back(
+            call);
+    });
+  }
+  // Bound cloned IR independently of the number of elaborated instances.
+  // Reserve specialization for nontrivial arithmetic that normal local
+  // inlining cannot see across an owner boundary.
+  constexpr unsigned maxBody = 512, maxAdditionalOps = 8192;
+  unsigned added = 0, copies = 0, rewritten = 0;
+  DenseMap<Operation *, unsigned> costs;
+  for (auto &[key, calls] : groups) {
+    if (calls.size() < 2)
+      continue;
+    auto [owner, partition, constants] = key;
+    auto function = cast<LLVM::LLVMFuncOp>(owner);
+    auto [pos, inserted] = costs.try_emplace(owner);
+    if (inserted) {
+      unsigned cost = 0;
+      WalkResult checked = function.walk([&](Operation *op) {
+        if (op == function || op->hasTrait<OpTrait::IsTerminator>())
+          return WalkResult::advance();
+        ++cost;
+        // The call still executes in place. In particular, a poison
+        // aggregate filled by insertvalue or a freeze is evaluated afresh
+        // at every call. The stronger memoization test stays separate.
+        return cost <= maxBody &&
+                       (isDeterministicValueOp(op) ||
+                        isa<LLVM::PoisonOp, LLVM::UndefOp, LLVM::FreezeOp>(op))
+                   ? WalkResult::advance()
+                   : WalkResult::interrupt();
+      });
+      if (!checked.wasInterrupted() && cost >= 32)
+        pos->second = cost;
+    }
+    unsigned cost = pos->second;
+    if (!cost || cost > maxAdditionalOps - added)
+      continue;
+    auto clone = cast<LLVM::LLVMFuncOp>(function->clone());
+    clone.setSymName((function.getSymName() + ".__talos_const").str());
+    clone.setLinkage(LLVM::Linkage::Internal);
+    native::set<native::Partition>(clone, partition);
+    auto name = symbols.insert(clone, std::next(function->getIterator()));
+    OpBuilder builder = OpBuilder::atBlockBegin(&clone.getBody().front());
+    for (auto [arg, constant] :
+         llvm::zip_equal(clone.getBody().front().getArguments(), constants))
+      if (auto value = dyn_cast<IntegerAttr>(constant))
+        arg.replaceAllUsesWith(LLVM::ConstantOp::create(builder, clone.getLoc(),
+                                                        arg.getType(), value));
+    for (LLVM::CallOp call : calls)
+      call.setCalleeAttr(FlatSymbolRefAttr::get(name));
+    added += cost;
+    ++copies;
+    rewritten += calls.size();
+  }
+  if (native::has<native::DebugTiming>(module))
+    llvm::errs() << "talos constant value functions: copies=" << copies
+                 << " calls=" << rewritten << '\n';
+}
+
 void cacheNativePureCones(ModuleOp module, uint64_t minimumCost,
                           uint64_t maximumCost, unsigned maximumCaches) {
   unsigned outlined =

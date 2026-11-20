@@ -69,6 +69,7 @@ private:
 void coalesceNativeReadyUpdates(mlir::Operation *operation);
 void coalesceNativeReadyUpdates(mlir::Operation *operation,
                                 const NativeGlobalLookup &globals);
+void specializeNativeValueFunctions(mlir::ModuleOp module);
 void cacheNativePureCones(mlir::ModuleOp module, uint64_t minimumCost = 256,
                           uint64_t maximumCost = 4096,
                           unsigned maximumCaches = 128);
