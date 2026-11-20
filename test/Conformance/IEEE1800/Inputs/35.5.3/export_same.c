@@ -8,7 +8,12 @@ static int values[43];
 int distinct_package(void) {
   svScope pkg = svGetScope();
   svScope instance = svGetScopeFromName("top");
-  return pkg && instance && pkg != instance &&
+  const char *name = "top.declarations.with_function";
+  svScope ordinary = svGetScopeFromName(name);
+  svScope functions = svGetScopeFromName("functions_only");
+  return pkg && instance && pkg != instance && ordinary &&
+         !strcmp(svGetNameFromScope(ordinary), name) && functions &&
+         !strcmp(svGetNameFromScope(functions), "functions_only") &&
          svGetScopeFromName(svGetNameFromScope(pkg)) == pkg;
 }
 

@@ -2086,6 +2086,24 @@ FailureOr<PreparedScopeDeclarations> materializeScopeDeclarations(
   };
   if (llvm::none_of(units, needsScope))
     return result;
+  // H.9.3 permits looking up the scope of any subroutine declaration,
+  // including an ordinary SV function never called by the design. Record
+  // its lexical scopes up to the physical instance. A replicated block of
+  // wires or a package of types needs no additional DPI records.
+  llvm::SmallPtrSet<Operation *, 32> declarationScopes;
+  for (Operation *unit : units) {
+    if (!isa<semantic::SVSubroutineSymbolOp>(unit))
+      continue;
+    for (Operation *owner = unit->getParentOp();
+         owner && !result.ids.count(owner); owner = owner->getParentOp()) {
+      if (isa<semantic::SVGenerateBlockSymbolOp, semantic::SVPackageSymbolOp,
+              semantic::SVCompilationUnitSymbolOp>(owner) &&
+          !declarationScopes.insert(owner).second)
+        break;
+    }
+  }
+  if (declarationScopes.empty())
+    return result;
   SmallVector<Attribute> lexical;
   SmallVector<std::pair<uint64_t, uint64_t>> timeScales;
   llvm::StringSet<> instanceNames;
@@ -2114,6 +2132,11 @@ FailureOr<PreparedScopeDeclarations> materializeScopeDeclarations(
         StringRef name = getHierarchyName(op);
         if (name.empty())
           return WalkResult::advance();
+        bool isCompilationUnit = isa<semantic::SVCompilationUnitSymbolOp>(op);
+        if (isCompilationUnit)
+          ++compilationUnits;
+        if (!declarationScopes.contains(op))
+          return WalkResult::advance();
         StringAttr scopeName = builder.getStringAttr(name);
         // Packages and top-level definitions have distinct name spaces (3.13).
         // Qualify a colliding package so both svScope handles round-trip by
@@ -2121,8 +2144,7 @@ FailureOr<PreparedScopeDeclarations> materializeScopeDeclarations(
         if (isa<semantic::SVPackageSymbolOp>(op) &&
             instanceNames.contains(name))
           scopeName = builder.getStringAttr((name + "::").str());
-        else if (isa<semantic::SVCompilationUnitSymbolOp>(op) &&
-                 ++compilationUnits > 1)
+        else if (isCompilationUnit && compilationUnits > 1)
           scopeName = builder.getStringAttr(
               (name + "#" + Twine(compilationUnits)).str());
         uint64_t parent = result.lookupDPIScope(op->getParentOp());

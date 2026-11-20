@@ -18,8 +18,18 @@ package top;
   import "DPI-C" context function int distinct_package();
 endpackage
 
+package functions_only;
+  timeunit 1ns/1ps;
+  function int ordinary(); return 2; endfunction
+endpackage
+
 module top;
   timeunit 1ns/1ps;
+  if (1) begin : declarations
+    if (1) begin : with_function
+      function int ordinary(); return 1; endfunction
+    end
+  end
   for (genvar i = 0; i < 2; i++) begin : blk
     import "DPI-C" context function int probe(input int n, input string name);
     import "DPI-C" context function int nested(input int n);
