@@ -1610,6 +1610,7 @@ struct ClassBitstreamState {
 };
 
 struct SignalSubscriptionDiagnostics {
+  uint64_t reusedNBACuts = 0;
   uint64_t publications = 0;
   uint64_t subscriptionsCurrent = 0;
   uint64_t subscriptionsHighWater = 0;
@@ -1633,6 +1634,7 @@ struct SignalSubscriptionDiagnostics {
   uint64_t frameStoresShared = 0;
   uint64_t frameStoreFallbacks = 0;
   uint64_t aotNBAPrivateCommits = 0;
+  uint64_t aotNBABarrierCommits = 0;
   uint64_t aotStateFastPaths = 0;
   uint64_t aotStateSlowPaths = 0;
   uint64_t aotDeadlineHighWater = 0;
@@ -2925,6 +2927,9 @@ struct talos_rt_context {
   std::vector<StaticNBAAccumulator> staticNBAAccumulators;
   bool staticNBAAccumulatorsPending = false;
   size_t staticNBAPendingAccumulatorCount = 0;
+  // Validate this candidate against the live count and slot before using it
+  // as the only pending canonical accumulator.
+  uint32_t lastStaticNBAAccumulator = UINT32_MAX;
   std::vector<uint8_t> staticNBASlowRoots;
   bool staticNBASlowRootsPresent = false;
   std::vector<uint8_t> staticNBARootHasFanout;

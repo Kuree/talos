@@ -1688,6 +1688,12 @@ ABI_FUNCTION(talos_rt_v1_scheduler_priority_signal_pending,
              uint32_t (*)(talos_rt_context *));
 ABI_FUNCTION(talos_rt_v1_scheduler_priority_signal_flag,
              const uint8_t *(*)(const talos_rt_context *));
+ABI_FUNCTION(talos_rt_v1_scheduler_prepare_quiet_eval_nba,
+             talos_rt_status (*)(talos_rt_context *, uint32_t *, uint64_t *));
+ABI_FUNCTION(talos_rt_v1_scheduler_drain_clocked_active,
+             talos_rt_status (*)(talos_rt_context *, uint32_t *, uint64_t *));
+ABI_FUNCTION(talos_rt_v1_scheduler_clocked_nba_region,
+             uint32_t (*)(talos_rt_context *));
 ABI_FUNCTION(talos_rt_v1_scheduler_handoff_pending,
              uint32_t (*)(talos_rt_context *));
 ABI_FUNCTION(talos_rt_v1_scheduler_runtime_work_pending,
@@ -1896,10 +1902,22 @@ ABI_FUNCTION(talos_rt_v1_static_nba_commit_batch,
 ABI_FUNCTION(talos_rt_v1_static_nba_batch_guard,
              uint32_t (*)(talos_rt_context *,
                           const talos_rt_native_schedule_plan *, uint32_t));
+ABI_FUNCTION(talos_rt_v1_static_nba_barrier_guard,
+             uint32_t (*)(talos_rt_context *,
+                          const talos_rt_native_schedule_plan *, uint32_t));
+ABI_FUNCTION(talos_rt_v1_static_nba_prefix_guard,
+             uint32_t (*)(talos_rt_context *, const talos_rt_native_schedule_plan *,
+                          uint32_t, uint32_t, uint32_t));
+ABI_FUNCTION(talos_rt_v1_static_nba_batch_word_guard,
+             uint32_t (*)(talos_rt_context *,
+                          const talos_rt_native_schedule_plan *, uint32_t,
+                          uint32_t, uint64_t, uint32_t));
 ABI_FUNCTION(talos_rt_v1_static_nba_batch_knownness,
              void (*)(talos_rt_context *, uint64_t, uint64_t, uint64_t,
                       uint64_t));
 ABI_FUNCTION(talos_rt_v1_static_nba_batch_finish,
+             void (*)(talos_rt_context *, uint64_t, uint64_t, uint32_t));
+ABI_FUNCTION(talos_rt_v1_static_nba_barrier_finish,
              void (*)(talos_rt_context *, uint64_t, uint64_t, uint32_t));
 ABI_FUNCTION(talos_rt_v1_static_nba_commit_ordered,
              talos_rt_status (*)(talos_rt_context *, uint32_t, int64_t,

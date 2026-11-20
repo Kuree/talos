@@ -187,15 +187,17 @@ NBAInfluenceAnalysis::NBAInfluenceAnalysis(sim::SimDesignOp design,
         if (!input && !output)
           continue;
         if (effect.getTarget() == schedule::ComputeTargetKind::Formal) {
-          // A write through a formal bound to a caller-private local cannot
-          // alias a design root; the owner's closure carries that value on.
-          // Private reads stay conservative.
+          // A caller-local actual has no design root. Its copy-in and
+          // copy-out can carry values across the call, so the enclosing
+          // closure above still joins all of its design inputs to its
+          // outputs (IEEE 1800-2023 13.5.1-2). Unresolved and exported
+          // references remain conservative.
           resolved &= formals.resolve(
               current.getSymNameAttr(), effect,
               [&](uint64_t, schedule::ComputeEffectAttr actual) {
                 record(actual, input);
               },
-              /*ignorePrivate=*/!input);
+              /*ignorePrivate=*/true);
           continue;
         }
         if (effect.getTarget() != schedule::ComputeTargetKind::Descriptor) {

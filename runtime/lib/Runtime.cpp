@@ -299,6 +299,7 @@ void talos_rt_report_signal_diagnostics_unlocked(talos_rt_context *context) {
       "aot_region_passes=%llu aot_fanout_entries=%llu "
       "aot_nba_stages=%llu aot_nba_commits=%llu "
       "aot_nba_batches=%llu aot_nba_private_commits=%llu "
+      "aot_nba_barrier_commits=%llu "
       "nba_queue_enqueues=%llu "
       "aot_state_fast_paths=%llu aot_state_slow_paths=%llu "
       "aot_deadline_high_water=%llu aot_fallbacks=%llu "
@@ -333,6 +334,8 @@ void talos_rt_report_signal_diagnostics_unlocked(talos_rt_context *context) {
       static_cast<unsigned long long>(
           context->signalDiagnostics.aotNBAPrivateCommits),
       static_cast<unsigned long long>(
+          context->signalDiagnostics.aotNBABarrierCommits),
+      static_cast<unsigned long long>(
           context->signalDiagnostics.nbaQueueEnqueues),
       static_cast<unsigned long long>(
           context->signalDiagnostics.aotStateFastPaths),
@@ -355,6 +358,10 @@ void talos_rt_report_signal_diagnostics_unlocked(talos_rt_context *context) {
           context->signalDiagnostics.periodicClocksHighWater),
       static_cast<unsigned long long>(
           context->signalDiagnostics.periodicSlotDrains));
+  if (context->signalDiagnostics.reusedNBACuts)
+    std::fprintf(stderr, "talos-nba-cut reused=%llu\n",
+                 static_cast<unsigned long long>(
+                     context->signalDiagnostics.reusedNBACuts));
   if (context->signalDiagnostics.frameStoresShared ||
       context->signalDiagnostics.frameStoreFallbacks)
     std::fprintf(stderr, "talos-frame-store shared=%llu fallback=%llu\n",

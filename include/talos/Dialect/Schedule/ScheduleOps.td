@@ -340,9 +340,14 @@ def NativeNBABatchOp : ScheduleNativeOp<"nba.batch", [SingleBlock,
     pending for the canonical commit that must follow this region. A successful
     root commit consumes its staging record and only its own dirty bit. The
     changed flag is accumulated, and status reports a runtime error, if any.
+    With barrier_local, a generated change consumer may reach an observer
+    when Active resumes. Its source-order update cannot reach an immediate
+    observer during this NBA drain. The runtime checks that observation
+    environment before any root is consumed.
   }];
   let arguments = (ins LLVM_AnyPointer:$context, I32:$barrier,
-      LLVM_AnyPointer:$changed, OptionalAttr<NBABatchLayoutAttr>:$layout);
+      LLVM_AnyPointer:$changed, OptionalAttr<NBABatchLayoutAttr>:$layout,
+      OptionalAttr<UnitAttr>:$barrier_local);
   let results = (outs I32:$status);
   let regions = (region AnyRegion:$body);
   let assemblyFormat = [{ $context `,` $barrier `,` $changed $body attr-dict

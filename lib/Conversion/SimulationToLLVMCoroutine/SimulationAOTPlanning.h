@@ -482,6 +482,7 @@ materializeNativeEvalGroupBodies(mlir::ModuleOp module,
                                  mlir::AnalysisManager manager);
 mlir::LogicalResult materializeNativeEvalTransactions(mlir::ModuleOp module);
 void lowerNativePrioritySignalPolls(mlir::ModuleOp module);
+void reuseQuietNBACuts(mlir::ModuleOp module);
 std::unique_ptr<mlir::Pass> createPromoteNativeGroupFunctionPass();
 
 mlir::FailureOr<llvm::SmallVector<std::string>>

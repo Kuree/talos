@@ -4187,6 +4187,20 @@ talos_rt_v1_scheduler_run_clock_coordinator(talos_rt_context *context);
 talos_rt_status
 talos_rt_v1_scheduler_prepare_eval_nba(talos_rt_context *context,
                                        uint32_t *out_region);
+// Reuse a drained Active/Inactive cut across generated register captures.
+// The coordinator owns this array for one invocation. It clears word zero
+// on entry and before any unproved call, publication, or barrier service.
+#define TALOS_RT_EVAL_NBA_CUT_WORDS 5
+talos_rt_status talos_rt_v1_scheduler_prepare_quiet_eval_nba(
+    talos_rt_context *context, uint32_t *out_region, uint64_t *cut);
+// Drain earlier runtime regions while the generated coordinator still owns
+// deferred clock work. The result is UINT32_MAX or EVAL_NBA_TERMINATED.
+// Once generated Active and deferred owners are empty, query the actual
+// barrier under the same calendar lock (1800-2023 4.4.2.3-4, 4.5).
+talos_rt_status
+talos_rt_v1_scheduler_drain_clocked_active(talos_rt_context *context,
+                                           uint32_t *out_region, uint64_t *cut);
+uint32_t talos_rt_v1_scheduler_clocked_nba_region(talos_rt_context *context);
 // As above, including captured transaction-local NBA work. The only admitted
 // local region is NBA; UINT32_MAX denotes no local capture. This does not
 // publish, commit, or reevaluate any RHS or target (IEEE 1800-2023 4.9.4).
@@ -4740,6 +4754,18 @@ uint32_t
 talos_rt_v1_static_nba_batch_guard(talos_rt_context *context,
                                    const talos_rt_native_schedule_plan *plan,
                                    uint32_t barrier_region);
+uint32_t
+talos_rt_v1_static_nba_barrier_guard(talos_rt_context *context,
+                                     const talos_rt_native_schedule_plan *plan,
+                                     uint32_t barrier_region);
+// A certified prefix can precede a disjoint later canonical accumulator.
+uint32_t talos_rt_v1_static_nba_prefix_guard(
+    talos_rt_context *context, const talos_rt_native_schedule_plan *plan,
+    uint32_t barrier_region, uint32_t last_root, uint32_t barrier_local);
+uint32_t talos_rt_v1_static_nba_batch_word_guard(
+    talos_rt_context *context, const talos_rt_native_schedule_plan *plan,
+    uint32_t barrier_region, uint32_t word, uint64_t roots,
+    uint32_t barrier_local);
 void talos_rt_v1_static_nba_batch_knownness(talos_rt_context *context,
                                             uint64_t offset, uint64_t width,
                                             uint64_t old_unknown,
@@ -4747,6 +4773,9 @@ void talos_rt_v1_static_nba_batch_knownness(talos_rt_context *context,
 void talos_rt_v1_static_nba_batch_finish(talos_rt_context *context,
                                          uint64_t stages, uint64_t commits,
                                          uint32_t ingress_pending);
+void talos_rt_v1_static_nba_barrier_finish(talos_rt_context *context,
+                                           uint64_t stages, uint64_t commits,
+                                           uint32_t ingress_pending);
 
 // Cold commit of one generated ordered record after external mutation. It
 // honors force/assign masks and publishes through canonical runtime fanout.

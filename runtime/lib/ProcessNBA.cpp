@@ -269,8 +269,10 @@ static bool validInertialStrengthPairUnlocked(
 void markStaticNBAAccumulatorPending(talos_rt_context *context,
                                      uint32_t rootIndex,
                                      StaticNBAAccumulator &accumulator) {
-  if (!accumulator.valid)
+  if (!accumulator.valid) {
     ++context->staticNBAPendingAccumulatorCount;
+    context->lastStaticNBAAccumulator = rootIndex;
+  }
   accumulator.valid = true;
   context->staticNBAAccumulatorsPending = true;
   const talos_rt_native_schedule_plan *plan = context->nativeSchedulePlan;
@@ -5104,15 +5106,39 @@ extern "C" talos_rt_status talos_rt_v1_static_nba_commit_batch(
   return context->schedulerStatus;
 }
 
-extern "C" uint32_t
-talos_rt_v1_static_nba_batch_guard(talos_rt_context *context,
-                                   const talos_rt_native_schedule_plan *plan,
-                                   uint32_t barrierRegion) {
+static bool
+batchPrecedesCanonicalAccumulator(talos_rt_context *context,
+                                  const talos_rt_native_schedule_plan *plan,
+                                  uint32_t lastRoot) {
+  if (!context->staticNBAAccumulatorsPending)
+    return true;
+  uint32_t pending = context->lastStaticNBAAccumulator;
+  if (pending <= lastRoot || !context->nativeScheduleNBARoots ||
+      pending >= plan->nba_root_count ||
+      pending >= context->nativeScheduleNBARootCount ||
+      pending >= context->staticNBAAccumulators.size() ||
+      context->staticNBAPendingAccumulatorCount != 1 ||
+      !context->staticNBAAccumulators[pending].valid || context->powerNBAs ||
+      context->vpiState || context->vcdState || context->evcdState)
+    return false;
+  // Canonical commit visits roots in increasing order. The generated prefix
+  // therefore precedes this root in both executions (1800-2023 4.5, 4.6,
+  // 10.4.2). Keep its dirty bit, payload and original publication. Runtime
+  // subscriptions that observe that publication use the complete barrier.
+  uint64_t handle = talos_rt_stable_handle_encode(
+      TALOS_RT_STABLE_HANDLE_STATIC,
+      context->nativeScheduleNBARoots[pending].static_state, 0);
+  return talos_rt_transition_unconsumed_unlocked(context, handle);
+}
+
+static uint32_t staticNBABatchGuard(talos_rt_context *context,
+                                    const talos_rt_native_schedule_plan *plan,
+                                    uint32_t barrierRegion, uint32_t lastRoot) {
   if (!context || !plan || plan != context->nativeSchedulePlan ||
       barrierRegion != TALOS_RT_REGION_NBA ||
       activeNativeAOTContext != context || lockedNativeAOTContext != context ||
       context->schedulerStatus != TALOS_RT_OK ||
-      context->staticNBAAccumulatorsPending ||
+      !batchPrecedesCanonicalAccumulator(context, plan, lastRoot) ||
       context->staticNBASlowRootsPresent || !canUseStaticAOTFanout(context) ||
       !nativeAOTTransientBoundaryClean(context) ||
       !nativeStaticSpecializationEnvironmentClean(context) ||
@@ -5131,6 +5157,45 @@ talos_rt_v1_static_nba_batch_guard(talos_rt_context *context,
           context->nativeStateBitCount == plan->state_bit_count);
 }
 
+extern "C" uint32_t
+talos_rt_v1_static_nba_batch_guard(talos_rt_context *context,
+                                   const talos_rt_native_schedule_plan *plan,
+                                   uint32_t barrierRegion) {
+  return staticNBABatchGuard(context, plan, barrierRegion, UINT32_MAX);
+}
+
+static bool barrierObserversQuiet(talos_rt_context *context) {
+  // A compiler-certified plain change consumer runs in the next Active
+  // iteration. Before moving its root's capture into this group, exclude
+  // consumers that can sample another root at publication time (4.5,
+  // 9.4.2.3). The common guard validates overrides, shared planes and the
+  // complete read set of any asynchronous assertion disable predicates.
+  return context && !context->saif && !context->coverage &&
+         !context->vcdState && !context->evcdState &&
+         !context->clockOccurrences && !context->exactEvents &&
+         !context->observerDepth && !context->observerForcesCanonicalPlane &&
+         context->signalValueSnapshots.empty() &&
+         context->pendingNativeComputedWaiters.empty() &&
+         context->pendingDesignComputedWaiters.empty();
+}
+
+extern "C" uint32_t
+talos_rt_v1_static_nba_barrier_guard(talos_rt_context *context,
+                                     const talos_rt_native_schedule_plan *plan,
+                                     uint32_t barrierRegion) {
+  return barrierObserversQuiet(context) &&
+         staticNBABatchGuard(context, plan, barrierRegion, UINT32_MAX);
+}
+
+extern "C" uint32_t talos_rt_v1_static_nba_prefix_guard(
+    talos_rt_context *context, const talos_rt_native_schedule_plan *plan,
+    uint32_t barrierRegion, uint32_t lastRoot, uint32_t barrierLocal) {
+  return context && plan && context->nativeSchedulePlan == plan &&
+         lastRoot < plan->nba_root_count &&
+         (!barrierLocal || barrierObserversQuiet(context)) &&
+         staticNBABatchGuard(context, plan, barrierRegion, lastRoot);
+}
+
 extern "C" void talos_rt_v1_static_nba_batch_knownness(
     talos_rt_context *context, uint64_t offset, uint64_t width,
     uint64_t oldUnknown, uint64_t newUnknown) {
@@ -5139,15 +5204,45 @@ extern "C" void talos_rt_v1_static_nba_batch_knownness(
                                        width, oldUnknown, newUnknown);
 }
 
+extern "C" uint32_t talos_rt_v1_static_nba_batch_word_guard(
+    talos_rt_context *context, const talos_rt_native_schedule_plan *plan,
+    uint32_t barrierRegion, uint32_t word, uint64_t roots,
+    uint32_t barrierLocal) {
+  // Consult only the installed plan under its owning lock. A clean subset
+  // has no captures to consume and cannot publish even a transient wake.
+  if (!context || lockedNativeAOTContext != context || !plan ||
+      context->nativeSchedulePlan != plan ||
+      word >= plan->nba_dirty_word_count || !plan->nba_dirty_roots ||
+      !(plan->nba_dirty_roots[word] & roots))
+    return 0;
+  return barrierLocal
+             ? talos_rt_v1_static_nba_barrier_guard(context, plan,
+                                                    barrierRegion)
+             : talos_rt_v1_static_nba_batch_guard(context, plan, barrierRegion);
+}
+
+static void finishGeneratedNBABatch(talos_rt_context *context, uint64_t stages,
+                                    uint64_t commits, uint32_t ingressPending) {
+  ++context->signalDiagnostics.aotNBABatches;
+  context->signalDiagnostics.aotNBAStages += stages;
+  context->signalDiagnostics.aotNBACommits += commits;
+  context->nativeScheduleClockIngressPending |= ingressPending != 0;
+}
+
 extern "C" void talos_rt_v1_static_nba_batch_finish(talos_rt_context *context,
                                                     uint64_t stages,
                                                     uint64_t commits,
                                                     uint32_t ingressPending) {
-  ++context->signalDiagnostics.aotNBABatches;
-  context->signalDiagnostics.aotNBAStages += stages;
-  context->signalDiagnostics.aotNBACommits += commits;
+  finishGeneratedNBABatch(context, stages, commits, ingressPending);
   context->signalDiagnostics.aotNBAPrivateCommits += commits;
-  context->nativeScheduleClockIngressPending |= ingressPending != 0;
+}
+
+extern "C" void talos_rt_v1_static_nba_barrier_finish(talos_rt_context *context,
+                                                      uint64_t stages,
+                                                      uint64_t commits,
+                                                      uint32_t ingressPending) {
+  finishGeneratedNBABatch(context, stages, commits, ingressPending);
+  context->signalDiagnostics.aotNBABarrierCommits += commits;
 }
 
 extern "C" uint32_t

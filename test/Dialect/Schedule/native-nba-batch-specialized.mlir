@@ -3,6 +3,8 @@
 // RUN: %llvm_dist/bin/mlir-opt %t.lowered --convert-arith-to-llvm --convert-cf-to-llvm | talos-translate --mlir-to-llvmir | %llc -filetype=obj -relocation-model=pic -o %t.o
 // RUN: %llvm_dist/bin/clang -O2 %t.o %S/Inputs/native-nba-batch.c -o %t.exe
 // RUN: %t.exe
+// RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-edit-attributes{op=schedule.nba.batch set={barrier_local}},convert-native-schedule-actions-to-llvm)' -o %t.region && FileCheck %s --check-prefix=BARRIER < %t.region
+// RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-set-module-attributes{attrs="{schedule.eval.runtime_calendar}"},convert-native-schedule-actions-to-llvm)' | FileCheck %s --check-prefix=PREFIX
 
 // The layout survives as an explicit region certificate until conversion.
 // Conversion selects dirty roots, emits their stores, and groups readiness.
@@ -13,6 +15,14 @@
 // CHECK: llvm.call @talos_rt_v1_static_nba_batch_knownness
 // CHECK: llvm.call @talos_rt_v1_static_nba_batch_finish
 // CHECK-NOT: schedule.nba
+// The closed barrier guard precedes the branch that consumes dirty roots.
+// BARRIER-LABEL: llvm.func @specialized
+// BARRIER: llvm.call @talos_rt_v1_static_nba_barrier_guard(
+// BARRIER: cf.cond_br
+// BARRIER: llvm.call @talos_rt_v1_static_nba_barrier_finish(
+// PREFIX-LABEL: llvm.func @specialized
+// PREFIX: %[[LAST:.*]] = llvm.mlir.constant(65 : i32)
+// PREFIX: llvm.call @talos_rt_v1_static_nba_prefix_guard({{.*}}, %[[LAST]], %
 #batch = #schedule.nba_batch_layout<plan = @plan, value = @value, unknown = @unknown, dirty = @dirty, summary = @summary, ingress = @ingress, bitCount = 256, rootCount = 66, capacity = 130>
 #consumer = #schedule.nba_consumer<low = 64, width = 65, bit = 129>
 #slot_consumer = #schedule.nba_consumer<low = 75, width = 5, bit = 64>

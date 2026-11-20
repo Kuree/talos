@@ -6,6 +6,7 @@
 #include "talos/Analysis/GraphAlgorithms.h"
 #include "talos/Analysis/ParallelWalk.h"
 #include "talos/Analysis/SimulationEffectAnalysis.h"
+#include "talos/Analysis/SimulationScheduleAnalysis.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 #include "talos/Analysis/SimulationAnalysis.h"
@@ -2169,6 +2170,52 @@ computeNBATransientObservers(sim::SimDesignOp design, bool guardedVPI) {
       return true;
     });
   }
+  // Event-time iff/observer reads are in the wait fragment, including the
+  // substituted effects of directly bound evaluators. A read in a resumed
+  // block runs as a separate evaluation event (1800-2023 4.5, 9.4.2.3).
+  // Consult the finer inventory only when the process-wide one is ambiguous.
+  std::optional<llvm::DenseMap<Block *, ArrayAttr>> waitEffects;
+  auto readAtWait = [&](sim::SimFuncOp function,
+                        schedule::ComputeEffectAttr formal) {
+    if (!waitEffects) {
+      waitEffects.emplace();
+      SymbolTable symbols(design);
+      analysis::ComputeGraphBlockIndex blocks;
+      for (Attribute node : graph.getNodes())
+        if (auto fragment = dyn_cast<schedule::ComputeFragmentAttr>(node))
+          if (auto owner = symbols.lookup<sim::SimFuncOp>(
+                  fragment.getFunction().getAttr()))
+            if (Block *block = blocks.lookup(owner, fragment.getBlock()))
+              waitEffects->try_emplace(block, fragment.getEffects());
+    }
+    for (Block &block : function.getBody()) {
+      Operation *wait = block.getTerminator();
+      if (isa<sim::SimSuspendLevelOp, sim::SimSuspendClockSetOp>(wait))
+        return true;
+      if (auto observe = dyn_cast<sim::SimSuspendObserveOp>(wait)) {
+        auto bound = [](Value operand) {
+          return operand.getDefiningOp<sim::SimObserverBindOp>() != nullptr;
+        };
+        if (!llvm::all_of(observe.getPrimaries(), bound) ||
+            !llvm::all_of(observe.getConditions(), bound))
+          return true;
+      } else if (!isa<sim::SimSuspendEdgeIffOp>(wait))
+        continue;
+      ArrayAttr effects = waitEffects->lookup(&block);
+      if (!effects ||
+          llvm::any_of(effects.getAsRange<schedule::ComputeEffectAttr>(),
+                       [&](schedule::ComputeEffectAttr effect) {
+                         return effect.getEffect() ==
+                                    schedule::ComputeEffectKind::Read &&
+                                (effect.getResource() ==
+                                     schedule::ComputeResourceKind::Unknown ||
+                                 (effect.getTarget() == formal.getTarget() &&
+                                  effect.getFormal() == formal.getFormal()));
+                       }))
+        return true;
+    }
+    return false;
+  };
   for (sim::SimFuncOp function : functions) {
     ArrayAttr summary = function.getEffectSummaryAttr();
     if (!summary)
@@ -2206,7 +2253,8 @@ computeNBATransientObservers(sim::SimDesignOp design, bool guardedVPI) {
                   [&](uint64_t descriptor, schedule::ComputeEffectAttr) {
                     observable.insert(descriptor);
                   },
-                  /*ignorePrivate=*/false)) {
+                  /*ignorePrivate=*/false) &&
+              readAtWait(function, effect)) {
             explain("unresolved conditional formal read", function, effect);
             return std::nullopt;
           }

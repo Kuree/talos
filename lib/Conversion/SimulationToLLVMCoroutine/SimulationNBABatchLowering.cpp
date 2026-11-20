@@ -20,9 +20,17 @@ void declareSpecializedNBABatchRuntime(ModuleOp module) {
   auto voidType = LLVM::LLVMVoidType::get(context);
   getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_batch_guard", i32,
                            {ptr, ptr, i32});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_barrier_guard", i32,
+                           {ptr, ptr, i32});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_batch_word_guard",
+                           i32, {ptr, ptr, i32, i32, i64, i32});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_prefix_guard", i32,
+                           {ptr, ptr, i32, i32, i32});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_batch_knownness",
                            voidType, {ptr, i64, i64, i64, i64});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_batch_finish",
+                           voidType, {ptr, i64, i64, i32});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_barrier_finish",
                            voidType, {ptr, i64, i64, i32});
 }
 
@@ -45,9 +53,37 @@ public:
     op.getStatus().replaceAllUsesWith(status);
     if (declareRuntime)
       declareSpecializedNBABatchRuntime(module);
-    Value guard =
-        call("talos_rt_v1_static_nba_batch_guard", i32,
-             {op.getContext(), address(layout.getPlan()), op.getBarrier()});
+    StringRef guardName = op.getBarrierLocal()
+                              ? "talos_rt_v1_static_nba_barrier_guard"
+                              : "talos_rt_v1_static_nba_batch_guard";
+    SmallVector<Value> guardArgs{op.getContext(), address(layout.getPlan()),
+                                 op.getBarrier()};
+    auto roots = op.getBody().getOps<schedule::NativeNBACommitOp>();
+    if (!roots.empty() &&
+        schedule::has<schedule::Field::EvalRuntimeCalendar>(module)) {
+      uint32_t word = (*roots.begin()).getRoot() / 64;
+      uint64_t mask = 0;
+      uint32_t lastRoot = 0;
+      bool oneWord = true;
+      for (auto root : roots) {
+        uint32_t index = root.getRoot();
+        lastRoot = std::max(lastRoot, index);
+        mask |= uint64_t{1} << (index % 64);
+        oneWord &= index / 64 == word;
+      }
+      if (oneWord) {
+        guardName = "talos_rt_v1_static_nba_batch_word_guard";
+        guardArgs.append(
+            {llvmConstant(b, loc, i32, word), c(mask),
+             llvmConstant(b, loc, i32, op.getBarrierLocal() ? 1 : 0)});
+      } else {
+        guardName = "talos_rt_v1_static_nba_prefix_guard";
+        guardArgs.append(
+            {llvmConstant(b, loc, i32, lastRoot),
+             llvmConstant(b, loc, i32, op.getBarrierLocal() ? 1 : 0)});
+      }
+    }
+    Value guard = call(guardName, i32, guardArgs);
     Block *start = block();
     cf::CondBranchOp::create(b, loc, ne(guard, llvmConstant(b, loc, i32, 0)),
                              start, done);
@@ -157,7 +193,9 @@ public:
     Value prior = load32(op.getChanged());
     LLVM::StoreOp::create(b, loc, bor(prior, resize(ne(wasChanged, c(0)), i32)),
                           op.getChanged(), 4);
-    call("talos_rt_v1_static_nba_batch_finish", {},
+    call(op.getBarrierLocal() ? "talos_rt_v1_static_nba_barrier_finish"
+                              : "talos_rt_v1_static_nba_batch_finish",
+         {},
          {op.getContext(), load(stages), load(commits),
           resize(ne(pending, c(0)), i32)});
     cf::BranchOp::create(b, loc, done);

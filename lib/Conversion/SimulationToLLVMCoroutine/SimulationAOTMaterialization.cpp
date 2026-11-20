@@ -7856,6 +7856,12 @@ FailureOr<bool> makeNativeEvalPlan(
   // consumers retain per-bit transient masks and receive one pending
   // activation.
   SmallVector<uint32_t> privateRoots;
+  SmallVector<uint32_t> barrierRoots;
+  bool closedBarrier = staticFanoutPlan.exact &&
+                       staticNBAPlan.completeSourceWriters && computeGraph &&
+                       computeGraph.getVpi() == schedule::ComputeVPIMode::Off &&
+                       native::has<native::ClosedExecutable>(module) &&
+                       !sim::has<sim::metadata::SnapshotPublications>(module);
   llvm::DenseSet<uint32_t> nonPrivateFanout;
   for (const auto &entry : fanoutEntries)
     if (fanoutRoute(entry) != TALOS_RT_FANOUT_DIRECT ||
@@ -7867,28 +7873,43 @@ FailureOr<bool> makeNativeEvalPlan(
       bool accumulator = !staticNBAPlan.generatedAccumulators[index].empty();
       if (root.bit_width == 0 || (!accumulator && rootSlots[index].empty()) ||
           (accumulator && !staticNBAPlan.mergeSafeRoots[index]) ||
-          !staticNBAPlan.privateInfluenceRoots[index] ||
-          staticFanoutPlan.runtimeTransitionStates.contains(root.static_state))
+          staticFanoutPlan.runtimeTransitionStates.contains(
+              root.static_state) ||
+          nonPrivateFanout.contains(root.static_state))
         continue;
-      if (!nonPrivateFanout.contains(root.static_state))
+      if (!staticNBAPlan.privateInfluenceRoots[index]) {
+        // The change wait awakens Active work only after this NBA drain
+        // (4.5, 9.4.2). Keep its exact pending bit even when later Active
+        // logic drives an edge-sensitive output. No ordered record, runtime
+        // waiter, edge consumer, or uncaptured intermediate pulse is folded.
+        if (!closedBarrier || !accumulator ||
+            !staticNBAPlan.barrierChangeRoots[index] ||
+            staticNBAPlan.generatedCommitRegions[index] != TALOS_RT_REGION_NBA)
+          continue;
+        barrierRoots.push_back(index);
+      } else {
         privateRoots.push_back(index);
+      }
     }
   if (native::has<native::DebugTiming>(module))
-    llvm::errs() << "talos native NBA batch: candidates=" << privateRoots.size()
-                 << " roots=" << nbaRoots.size() << " private-cone="
-                 << llvm::count(staticNBAPlan.privateInfluenceRoots, true)
-                 << " unread=" << llvm::count(staticNBAPlan.unreadRoots, true)
-                 << " wide="
-                 << llvm::count_if(privateRoots,
-                                   [&](uint32_t root) {
-                                     return nbaRoots[root].bit_width > 64;
-                                   })
-                 << " slots="
-                 << llvm::count_if(
-                        privateRoots,
-                        [&](uint32_t root) { return !rootSlots[root].empty(); })
-                 << '\n';
-  if (!privateRoots.empty()) {
+    llvm::errs()
+        << "talos native NBA batch: candidates="
+        << privateRoots.size() + barrierRoots.size()
+        << " roots=" << nbaRoots.size() << " private-cone="
+        << llvm::count(staticNBAPlan.privateInfluenceRoots, true)
+        << " unread=" << llvm::count(staticNBAPlan.unreadRoots, true)
+        << " wide="
+        << llvm::count_if(
+               llvm::concat<const uint32_t>(privateRoots, barrierRoots),
+               [&](uint32_t root) { return nbaRoots[root].bit_width > 64; })
+        << " slots="
+        << llvm::count_if(
+               llvm::concat<const uint32_t>(privateRoots, barrierRoots),
+               [&](uint32_t root) { return !rootSlots[root].empty(); })
+        << " barrier-local=" << barrierRoots.size() << '\n';
+  auto emitBatch = [&](ArrayRef<uint32_t> roots, bool barrierLocal) {
+    if (roots.empty())
+      return;
     auto batch = schedule::NativeNBABatchOp::create(
         builder, location, i32, runtimeCommitEntry->getArgument(1),
         runtimeCommitEntry->getArgument(2), runtimeCommitEntry->getArgument(3),
@@ -7901,11 +7922,12 @@ FailureOr<bool> makeNativeEvalPlan(
             FlatSymbolRefAttr::get(context, nbaDirtyRootsName),
             FlatSymbolRefAttr::get(context, nbaDirtySummaryName),
             FlatSymbolRefAttr::get(context, evalModelIngressName),
-            stateLayout.bitCount, nbaRoots.size(), mergedFragments.size()));
+            stateLayout.bitCount, nbaRoots.size(), mergedFragments.size()),
+        barrierLocal ? builder.getUnitAttr() : UnitAttr{});
     {
       OpBuilder::InsertionGuard guard(builder);
       builder.createBlock(&batch.getBody());
-      for (uint32_t root : privateRoots) {
+      for (uint32_t root : roots) {
         SmallVector<Attribute> slots, consumers;
         for (const auto *slot : rootSlots[root])
           slots.push_back(schedule::NBASlotLayoutAttr::get(
@@ -7948,7 +7970,9 @@ FailureOr<bool> makeNativeEvalPlan(
     builder.setInsertionPointToStart(failed);
     LLVM::ReturnOp::create(builder, location, batch.getStatus());
     builder.setInsertionPointToStart(canonical);
-  }
+  };
+  emitBatch(privateRoots, false);
+  emitBatch(barrierRoots, true);
   Value runtimeCommitStatus =
       LLVM::CallOp::create(
           builder, location, TypeRange{i32},

@@ -4626,6 +4626,7 @@ public:
     NativeStepTiming timing(module);
     if (failed(detail::materializeNativeEvalTransactions(module)))
       return signalPassFailure();
+    detail::reuseQuietNBACuts(module);
     detail::lowerNativePrioritySignalPolls(module);
     detail::eliminateTwoStateUnknownPlane(module);
     timing.mark("native eval transaction materialization");

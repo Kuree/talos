@@ -448,6 +448,7 @@ FailureOr<NativeStaticNBAPlan> buildNativeStaticNBAPlan(
       guardedPrivate = {};
   }
   plan.trackTransients.assign(plan.roots.size(), false);
+  plan.barrierChangeRoots.assign(plan.roots.size(), false);
   plan.changeWatchedRoots.assign(plan.roots.size(), false);
   for (auto [index, root] : llvm::enumerate(plan.roots)) {
     plan.privateInfluenceRoots[index] =
@@ -470,9 +471,11 @@ FailureOr<NativeStaticNBAPlan> buildNativeStaticNBAPlan(
     plan.trackTransients[index] =
         root.bit_width <= TALOS_RT_SCALAR_NBA_MAX_BITS &&
         mergeSafety.commitNeedsTransients(root.commit_node);
-    unobservable[index] = mergeSafety.commitMayMerge(root.commit_node) ||
-                          plan.trackTransients[index] ||
-                          plan.guardedMergeRoots[index];
+    plan.barrierChangeRoots[index] =
+        mergeSafety.commitMayMerge(root.commit_node) ||
+        plan.trackTransients[index];
+    unobservable[index] =
+        plan.barrierChangeRoots[index] || plan.guardedMergeRoots[index];
   }
   // The generated commit scans roots in layout order, while the runtime NBA
   // queue performs updates in enqueue order across all roots (LRM 4.6(b)).

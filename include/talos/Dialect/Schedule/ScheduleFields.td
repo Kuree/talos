@@ -182,6 +182,9 @@ def EvalRouteProofDependencies : ScheduleField<"EvalRouteProofDependencies", "sc
 def ForceGenericNBA : ScheduleField<"ForceGenericNBA", "schedule.force_generic_nba", "::mlir::UnitAttr">;
 def EvalRuntimeCalendar : ScheduleField<"EvalRuntimeCalendar", "schedule.eval.runtime_calendar",
     "::mlir::UnitAttr">;
+// Readiness of the NBA barrier after all generated deferred owners have run.
+def EvalNbaBarrierRead : ScheduleField<"EvalNbaBarrierRead", "schedule.eval.nba_barrier_read",
+    "::mlir::UnitAttr">;
 def EvalAssertionObservers : ScheduleField<"EvalAssertionObservers", "schedule.eval.assertion_observers",
     "::mlir::BoolAttr">;
 def EvalRuntimeNbaFallback : ScheduleField<"EvalRuntimeNbaFallback", "schedule.eval.runtime_nba_fallback",

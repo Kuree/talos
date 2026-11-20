@@ -1754,7 +1754,10 @@ materializeNativeEvalDispatch(ModuleOp module,
       cf::BranchOp::create(builder, location, performCommit);
     }
     builder.setInsertionPointToStart(performCommit);
-    Value barrier = LLVM::LoadOp::create(builder, location, i32, region, 4);
+    auto barrier = LLVM::LoadOp::create(builder, location, i32, region, 4);
+    if (hasDeferred)
+      ::talos::schedule::set<::talos::schedule::Field::EvalNbaBarrierRead>(
+          barrier, builder.getUnitAttr());
     Value isNBA = arith::CmpIOp::create(
         builder, location, arith::CmpIPredicate::eq, barrier,
         llvmConstant(builder, location, i32, TALOS_RT_REGION_NBA));

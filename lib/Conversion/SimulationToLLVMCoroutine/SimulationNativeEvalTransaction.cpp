@@ -435,6 +435,7 @@ bool pendingRuntimeTransparent(LLVM::CallOp call,
       *callee == "talos_rt_v1_static_nba_direct_commit_guard" ||
       *callee == "talos_rt_v1_static_nba_account_generated_commits" ||
       *callee == "talos_rt_v1_static_nba_batch_guard" ||
+      *callee == "talos_rt_v1_static_nba_prefix_guard" ||
       *callee == "talos_rt_v1_static_nba_batch_knownness" ||
       *callee == "talos_rt_v1_static_nba_batch_finish" ||
       *callee == "talos_rt_v1_scheduler_priority_signal_pending" ||
@@ -754,6 +755,313 @@ static void shareGenericQueueView(ModuleOp module) {
   }
 }
 } // namespace
+
+// The shared coordinator visits its pre-NBA cut between deferred clock
+// owners. Keep a cut only across a closed call tree that cannot publish to
+// runtime actors. Generated Active readiness is still consumed by the
+// ordinary dispatcher after every owner (1800-2023 4.4.2.3-4, 4.5).
+void reuseQuietNBACuts(ModuleOp module) {
+  if (!schedule::has<schedule::Field::EvalRuntimeCalendar>(module) ||
+      schedule::has<schedule::Field::ForceGenericNBA>(module) ||
+      !native::has<native::ClosedExecutable>(module))
+    return;
+  auto dispatch =
+      module.lookupSymbol<LLVM::LLVMFuncOp>("__talos_eval_dispatch_v1");
+  if (!dispatch || dispatch.isExternal())
+    return;
+  constexpr StringLiteral prepare = "talos_rt_v1_scheduler_prepare_eval_nba";
+  SymbolTable symbols(module);
+  DenseMap<Operation *, bool> inspected;
+  auto localMemory = [&](Operation *op) {
+    if (accessesOnlyGeneratedStorage(op))
+      return true;
+    auto store = dyn_cast<LLVM::StoreOp>(op);
+    if (!store)
+      return false;
+    Value addr = store.getAddr();
+    while (auto gep = addr.getDefiningOp<LLVM::GEPOp>())
+      addr = gep.getBase();
+    auto data = addr.getDefiningOp<LLVM::LoadOp>();
+    // Field zero points into the separately reserved array of NBA captures.
+    if (!data || !isa<LLVM::LLVMPointerType>(data.getType()))
+      return false;
+    addr = data.getAddr();
+    while (auto gep = addr.getDefiningOp<LLVM::GEPOp>()) {
+      if (!llvm::all_of(gep.getIndices(), [](auto index) {
+            if (auto attr = dyn_cast<IntegerAttr>(index))
+              return attr.getValue().isZero();
+            return zero(cast<Value>(index));
+          }))
+        return false;
+      addr = gep.getBase();
+    }
+    return baseGlobal(addr) == evalNBAQueueName;
+  };
+  std::function<bool(LLVM::CallOp)> quiet = [&](LLVM::CallOp call) {
+    auto name = call.getCallee();
+    if (!name)
+      return false;
+    if (::talos::detail::isEvalNBAReserve(*name) ||
+        *name == "talos_rt_v1_scheduler_fail" ||
+        *name == "talos_rt_v1_scheduler_priority_signal_pending" ||
+        *name == "talos_rt_v1_scheduler_priority_signal_flag" ||
+        *name == "talos_rt_v1_native_promotion_invalidate_ranges" ||
+        *name == "talos_rt_v1_native_promotion_recheck_ranges" ||
+        *name == "talos_rt_v1_native_promotion_invalidate_buckets" ||
+        *name == "talos_rt_v1_native_promotion_recheck_buckets" ||
+        *name == "talos_rt_v1_native_promotion_publish_window" ||
+        *name == "talos_rt_v1_native_promotion_slices_adjust" ||
+        *name == "talos_rt_v1_native_promotion_slices_recount" ||
+        *name == "talos_rt_v1_native_state_refresh_unknown_summary" ||
+        *name == "talos_rt_v1_native_state_mark_unknown")
+      return true;
+    auto fn = symbols.lookup<LLVM::LLVMFuncOp>(*name);
+    if (!fn || fn == dispatch || fn.isExternal())
+      return false;
+    if (auto found = inspected.find(fn); found != inspected.end())
+      return found->second;
+    inspected[fn] = false;
+    // Independent helpers can be selected through a value-domain probe.
+    // Never infer safety from a hot branch or from a function's name.
+    bool safe =
+        !fn.walk([&](Operation *op) {
+             auto nested = dyn_cast<LLVM::CallOp>(op);
+             return (nested ? quiet(nested) : op == fn || localMemory(op))
+                        ? WalkResult::advance()
+                        : WalkResult::interrupt();
+           }).wasInterrupted();
+    inspected[fn] = safe;
+    return safe;
+  };
+  // A clock owner can sit behind an executor adapter. Follow that adapter
+  // to the body whose captures it actually runs.
+  auto defined = [&](LLVM::CallOp call) -> LLVM::LLVMFuncOp {
+    if (auto name = call.getCallee())
+      if (auto fn = symbols.lookup<LLVM::LLVMFuncOp>(*name);
+          fn && !fn.isExternal() && fn != dispatch &&
+          !fn.getFunctionType().isVarArg())
+        return fn;
+    return {};
+  };
+  DenseMap<Operation *, bool> hasClock;
+  std::function<bool(LLVM::CallOp)> reachesClock = [&](LLVM::CallOp call) {
+    auto fn = defined(call);
+    if (!fn)
+      return false;
+    if (schedule::isClockedKernelSymbol(fn.getSymName()))
+      return true;
+    if (auto found = hasClock.find(fn); found != hasClock.end())
+      return found->second;
+    hasClock[fn] = false;
+    return hasClock[fn] = fn.walk([&](LLVM::CallOp nested) {
+                              return reachesClock(nested)
+                                         ? WalkResult::interrupt()
+                                         : WalkResult::advance();
+                            }).wasInterrupted();
+  };
+
+  // Some register bodies have an assertion report or publication on one
+  // branch. Preserve the drained cut on paths that only capture registers.
+  // An opaque operation anywhere on the executed path clears it before its
+  // effects become visible. Follow ordinary CFG edges only.
+  DenseMap<Operation *, bool> hasQuietPath;
+  std::function<bool(LLVM::CallOp)> conditional = [&](LLVM::CallOp call) {
+    auto fn = defined(call);
+    if (!fn || quiet(call))
+      return false;
+    if (auto found = hasQuietPath.find(fn); found != hasQuietPath.end())
+      return found->second;
+    hasQuietPath[fn] = false;
+    SmallVector<Block *> pending{&fn.getBody().front()};
+    llvm::SmallPtrSet<Block *, 16> seen;
+    while (!pending.empty()) {
+      Block *block = pending.pop_back_val();
+      if (!seen.insert(block).second)
+        continue;
+      bool clear = llvm::all_of(*block, [&](Operation &op) {
+        if (auto nested = dyn_cast<LLVM::CallOp>(op))
+          return quiet(nested) || conditional(nested);
+        return op.getNumRegions() == 0 && localMemory(&op);
+      });
+      if (!clear)
+        continue;
+      if (isa<LLVM::ReturnOp>(block->getTerminator()))
+        return hasQuietPath[fn] = true;
+      llvm::append_range(pending, block->getSuccessors());
+    }
+    return false;
+  };
+
+  SmallVector<LLVM::CallOp> checks, clockCalls;
+  SmallVector<Operation *> cuts;
+  llvm::SetVector<Operation *> conditionalBodies;
+  unsigned quietClocked = 0;
+  dispatch.walk([&](Operation *op) {
+    if (auto call = dyn_cast<LLVM::CallOp>(op)) {
+      if (call.getCallee() == prepare && call.getArgOperands().size() == 2) {
+        checks.push_back(call);
+        return;
+      }
+      if (quiet(call)) {
+        quietClocked += reachesClock(call);
+        return;
+      }
+      if (reachesClock(call) && conditional(call)) {
+        conditionalBodies.insert(defined(call));
+        clockCalls.push_back(call);
+        ++quietClocked;
+        return;
+      }
+    } else if (op == dispatch || localMemory(op)) {
+      return;
+    }
+    cuts.push_back(op);
+  });
+  if (checks.empty() || quietClocked < 2)
+    return;
+  OpBuilder b = OpBuilder::atBlockBegin(&dispatch.getBody().front());
+  Location loc = dispatch.getLoc();
+  auto ptr = LLVM::LLVMPointerType::get(module.getContext());
+  // Deferred owners can stage more NBAs. Only the barrier read after their
+  // ready set is empty needs to select a region. The earlier checks still
+  // drain every runtime Active/Inactive event and report termination (4.5).
+  LLVM::LoadOp barrier;
+  if (checks.size() == 1) {
+    auto prepare = checks.front();
+    Value region = prepare.getArgOperands()[1];
+    auto ctx = dyn_cast<BlockArgument>(prepare.getArgOperands()[0]);
+    // The early result can still report termination. A caller that also
+    // inspects the actual region before the marked read needs the original
+    // prepare contract.
+    auto testsTermination = [](Value value, Operation *user) {
+      if (auto cmp = dyn_cast<arith::CmpIOp>(user)) {
+        if (cmp.getPredicate() != arith::CmpIPredicate::eq &&
+            cmp.getPredicate() != arith::CmpIPredicate::ne)
+          return false;
+      } else if (auto cmp = dyn_cast<LLVM::ICmpOp>(user)) {
+        if (cmp.getPredicate() != LLVM::ICmpPredicate::eq &&
+            cmp.getPredicate() != LLVM::ICmpPredicate::ne)
+          return false;
+      } else
+        return false;
+      APInt other;
+      return matchPattern(
+                 user->getOperand(user->getOperand(0) == value ? 1 : 0),
+                 m_ConstantInt(&other)) &&
+             other == TALOS_RT_EVAL_NBA_TERMINATED;
+    };
+    if (region.getDefiningOp<LLVM::AllocaOp>() && ctx &&
+        ctx.getOwner() == &dispatch.getBody().front())
+      for (Operation *use : region.getUsers()) {
+        if (use == prepare)
+          continue;
+        auto read = dyn_cast<LLVM::LoadOp>(use);
+        if (read && !read.getVolatile_() &&
+            read.getOrdering() == LLVM::AtomicOrdering::not_atomic) {
+          if (schedule::has<schedule::Field::EvalNbaBarrierRead>(read)) {
+            if (!barrier) {
+              barrier = read;
+              continue;
+            }
+          } else if (llvm::all_of(read->getUsers(), [&](Operation *user) {
+                       return testsTermination(read.getResult(), user);
+                     }))
+            continue;
+        }
+        barrier = {};
+        break;
+      }
+  }
+  auto service = getOrDeclareLLVMFunction(
+      module,
+      barrier ? "talos_rt_v1_scheduler_drain_clocked_active"
+              : "talos_rt_v1_scheduler_prepare_quiet_eval_nba",
+      b.getI32Type(), {ptr, ptr, ptr});
+  Value stamp =
+      entryAlloca(b, loc, b.getI64Type(), TALOS_RT_EVAL_NBA_CUT_WORDS, 8);
+  Value invalid = llvmConstant(b, loc, b.getI64Type(), 0);
+  LLVM::StoreOp::create(b, loc, invalid, stamp, 8);
+  for (Operation *cut : cuts) {
+    b.setInsertionPoint(cut);
+    LLVM::StoreOp::create(b, cut->getLoc(), invalid, stamp, 8);
+  }
+  if (!conditionalBodies.empty()) {
+    for (unsigned i = 0; i != conditionalBodies.size(); ++i) {
+      auto fn = cast<LLVM::LLVMFuncOp>(conditionalBodies[i]);
+      fn.walk([&](LLVM::CallOp call) {
+        if (conditional(call))
+          conditionalBodies.insert(defined(call));
+      });
+    }
+    DenseMap<Operation *, LLVM::LLVMFuncOp> cores;
+    for (Operation *op : conditionalBodies) {
+      auto original = cast<LLVM::LLVMFuncOp>(op);
+      Location at = original.getLoc();
+      auto core = moveBodyWithPointerArgument(
+          original, ".__talos_clock_cut",
+          extendArgAttrs(module.getContext(), original.getArgAttrsAttr(),
+                         original.getArgumentTypes().size()),
+          symbols);
+      cores[op] = core;
+      // Callers outside the coordinator retain their ABI. Their private
+      // word can be cleared without affecting another invocation.
+      Block *entry = original.addEntryBlock(b);
+      b.setInsertionPointToStart(entry);
+      SmallVector<Value> args(entry->getArguments());
+      args.push_back(entryAlloca(b, at, b.getI64Type(), 1, 8));
+      auto result = LLVM::CallOp::create(b, at, core, args);
+      LLVM::ReturnOp::create(b, at, result.getResults());
+    }
+    auto forward = [&](LLVM::CallOp call, Value activeCut) {
+      if (auto core = cores.lookup(defined(call))) {
+        call.setCallee(core.getSymName());
+        call.getCalleeOperandsMutable().append(activeCut);
+        return true;
+      }
+      return false;
+    };
+    for (LLVM::CallOp call : clockCalls)
+      forward(call, stamp);
+    for (Operation *op : conditionalBodies) {
+      auto core = cores.lookup(op);
+      Value activeCut = core.getBody().front().getArguments().back();
+      SmallVector<Operation *> publications;
+      core.walk([&](Operation *nested) {
+        if (auto call = dyn_cast<LLVM::CallOp>(nested)) {
+          if (forward(call, activeCut) || quiet(call))
+            return;
+        } else if (nested == core || localMemory(nested)) {
+          return;
+        }
+        publications.push_back(nested);
+      });
+      for (Operation *publication : publications) {
+        b.setInsertionPoint(publication);
+        auto at = publication->getLoc();
+        LLVM::StoreOp::create(b, at, llvmConstant(b, at, b.getI64Type(), 0),
+                              activeCut, 8);
+      }
+    }
+  }
+  if (native::has<native::DebugTiming>(module))
+    llvm::errs() << "talos deferred clock captures: owners=" << quietClocked
+                 << " conditional bodies=" << conditionalBodies.size()
+                 << " deferred barrier=" << bool(barrier) << '\n';
+  for (auto call : checks) {
+    call.setCallee(service.getSymName());
+    call.getCalleeOperandsMutable().append(stamp);
+  }
+  if (barrier) {
+    auto query = getOrDeclareLLVMFunction(
+        module, "talos_rt_v1_scheduler_clocked_nba_region", b.getI32Type(),
+        {ptr});
+    b.setInsertionPoint(barrier);
+    auto region = LLVM::CallOp::create(b, barrier.getLoc(), query,
+                                       checks.front().getArgOperands()[0]);
+    barrier.replaceAllUsesWith(region.getResult());
+    barrier.erase();
+  }
+}
 
 LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
   if (schedule::has<schedule::Field::ForceGenericNBA>(module) &&

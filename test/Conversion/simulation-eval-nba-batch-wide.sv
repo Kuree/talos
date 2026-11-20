@@ -12,7 +12,7 @@
 // TRACE: talos native NBA batch: candidates=4 roots=4 private-cone=4 unread=0 wide=3 slots=3
 // CHECK-LABEL: llvm.func @__talos_aot_static_nba_commit_v1(
 // CHECK-NOT: llvm.call @talos_rt_v1_static_nba_commit_ordered(
-// CHECK: llvm.call @talos_rt_v1_static_nba_batch_guard(
+// CHECK: llvm.call @talos_rt_v1_static_nba_batch{{(_word)?}}_guard(
 // CHECK-NOT: llvm.call @talos_rt_v1_static_nba_commit_ordered(
 // CHECK: llvm.call @talos_rt_v1_static_nba_batch_finish(
 // CHECK-NOT: llvm.call @talos_rt_v1_static_nba_commit_ordered(

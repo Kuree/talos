@@ -2722,7 +2722,9 @@ talos_rt_v1_scheduler_prepare_eval_nba(talos_rt_context *context,
 
 static talos_rt_status prepareEvalNBALocal(talos_rt_context *context,
                                            uint32_t localRegion,
-                                           uint32_t *outRegion, bool writable) {
+                                           uint32_t *outRegion, bool writable,
+                                           bool *drainedIdle = nullptr,
+                                           bool selectBarrier = true) {
   if (localRegion != UINT32_MAX && localRegion != TALOS_RT_REGION_NBA)
     return TALOS_RT_INVALID_ARGUMENT;
   if (!context || !outRegion || activeNativeAOTContext != context ||
@@ -2740,7 +2742,7 @@ static talos_rt_status prepareEvalNBALocal(talos_rt_context *context,
   options.stopBeforeNBA = true;
   options.localPendingNBARegion = localRegion;
   options.stopBeforeUnscopedActors = writable;
-  auto status = runScheduler(context, options);
+  auto status = runScheduler(context, options, drainedIdle);
   if (status != TALOS_RT_OK)
     return status;
   if (context->nativeScheduleDeoptimized)
@@ -2754,8 +2756,90 @@ static talos_rt_status prepareEvalNBALocal(talos_rt_context *context,
   // The continuation will consume every newly published fine ingress bit.
   // This flag belongs to the outer scheduler trampoline, not another queue.
   context->nativeScheduleClockIngressPending = false;
-  *outRegion = std::min(nextDueNBABarrierRegionUnlocked(context), localRegion);
+  *outRegion =
+      selectBarrier
+          ? std::min(nextDueNBABarrierRegionUnlocked(context), localRegion)
+          : UINT32_MAX;
   return TALOS_RT_OK;
+}
+
+static talos_rt_status prepareQuietEvalNBA(talos_rt_context *context,
+                                           uint32_t *outRegion, uint64_t *cut,
+                                           bool selectBarrier) {
+  if (!context || !outRegion || !cut)
+    return TALOS_RT_INVALID_ARGUMENT;
+  if (activeNativeAOTContext != context || lockedNativeAOTContext != context ||
+      !context->nativeSchedulePlan ||
+      !(context->nativeSchedulePlan->flags &
+        TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL))
+    return TALOS_RT_INVALID_LIFECYCLE;
+  // While a generated activation holds the calendar lock, pure register
+  // captures can stage NBAs and set generated ingress. They cannot wake a
+  // runtime Active/Inactive actor. Select a barrier only if requested;
+  // the coordinator still checks every generated ingress bit (4.4.2, 4.5).
+  if (cut[0] && cut[0] == context->schedulerSelectionGeneration &&
+      cut[1] == context->schedulerTime &&
+      cut[2] == context->schedulerSlotProgress &&
+      cut[3] == context->schedulerEpoch &&
+      cut[4] == context->nextSchedulerSequence &&
+      context->schedulerStatus == TALOS_RT_OK &&
+      !context->schedulerFinishRequested.load(std::memory_order_relaxed)) {
+    const uint32_t region =
+        selectBarrier ? nextDueNBABarrierRegionUnlocked(context) : UINT32_MAX;
+    if (region >= TALOS_RT_REGION_NBA) {
+      *outRegion = region;
+      context->nativeScheduleClockIngressPending = false;
+      if (context->signalDiagnosticsEnabled)
+        ++context->signalDiagnostics.reusedNBACuts;
+      return TALOS_RT_OK;
+    }
+  }
+  cut[0] = 0;
+  bool drainedIdle = false;
+  auto status = prepareEvalNBALocal(context, UINT32_MAX, outRegion, false,
+                                    &drainedIdle, selectBarrier);
+  if (drainedIdle && status == TALOS_RT_OK &&
+      *outRegion != TALOS_RT_EVAL_NBA_TERMINATED &&
+      !context->nativeScheduleSingleStep && !context->schedulerCohortEnabled &&
+      !context->nativeStaticEvalIslandCertified &&
+      !context->activeNativeProcess && !context->designTaskExecuting &&
+      !context->activeLogicalProcessToken && !context->coverage &&
+      !context->saif && !context->vpiState && !context->powerNBAs &&
+      !context->clockOccurrences && !context->exactEvents &&
+      !context->prioritySignalPending && context->forceMask.empty() &&
+      context->assignMask.empty() && context->stateValue.shared() &&
+      reinterpret_cast<const uint8_t *>(context->stateValue.data()) ==
+          context->nativeSchedulePlan->state_value &&
+      (!context->nativeSchedulePlan->state_unknown ||
+       (context->stateUnknown.shared() &&
+        reinterpret_cast<const uint8_t *>(context->stateUnknown.data()) ==
+            context->nativeSchedulePlan->state_unknown))) {
+    cut[0] = context->schedulerSelectionGeneration;
+    cut[1] = context->schedulerTime;
+    cut[2] = context->schedulerSlotProgress;
+    cut[3] = context->schedulerEpoch;
+    cut[4] = context->nextSchedulerSequence;
+  }
+  return status;
+}
+
+extern "C" talos_rt_status talos_rt_v1_scheduler_prepare_quiet_eval_nba(
+    talos_rt_context *context, uint32_t *outRegion, uint64_t *cut) {
+  return prepareQuietEvalNBA(context, outRegion, cut, true);
+}
+
+extern "C" talos_rt_status
+talos_rt_v1_scheduler_drain_clocked_active(talos_rt_context *context,
+                                           uint32_t *outRegion, uint64_t *cut) {
+  return prepareQuietEvalNBA(context, outRegion, cut, false);
+}
+
+extern "C" uint32_t
+talos_rt_v1_scheduler_clocked_nba_region(talos_rt_context *context) {
+  if (!context || activeNativeAOTContext != context ||
+      lockedNativeAOTContext != context)
+    return UINT32_MAX;
+  return nextDueNBABarrierRegionUnlocked(context);
 }
 
 extern "C" talos_rt_status talos_rt_v1_scheduler_prepare_eval_nba_local(

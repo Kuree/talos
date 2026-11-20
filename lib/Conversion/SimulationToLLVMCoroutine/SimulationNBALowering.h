@@ -58,6 +58,9 @@ struct NativeStaticNBAPlan {
   // Source storage lies outside the pre-fusion sparse observer influence cone.
   // Missing proof means false, independently of the once-per-window proof.
   llvm::SmallVector<bool> privateInfluenceRoots;
+  // Immediate source observers either cannot see intermediate writes or are
+  // plain change waits reproduced by the accumulator's transient mask.
+  llvm::SmallVector<bool> barrierChangeRoots;
   // Conditional source-only proof. Full VPI checks visibility independently
   // of value-domain specialization; fine/cold staging keeps its guarded ABI.
   llvm::SmallVector<bool> guardedMergeRoots;

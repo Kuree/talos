@@ -10129,11 +10129,54 @@ TEST(RuntimeInternals, PrivateNBABatchPreservesMasksTransientsAndFallback) {
     EXPECT_EQ(talos_rt_v1_static_nba_batch_guard(context, &plan,
                                                  TALOS_RT_REGION_RE_NBA),
               0u);
+    EXPECT_EQ(talos_rt_v1_static_nba_barrier_guard(context, &plan,
+                                                   TALOS_RT_REGION_NBA),
+              1u);
+    EXPECT_EQ(talos_rt_v1_static_nba_batch_word_guard(
+                  context, &plan, TALOS_RT_REGION_NBA, 0, 4, 1),
+              1u);
+    EXPECT_EQ(talos_rt_v1_static_nba_batch_word_guard(
+                  context, &plan, TALOS_RT_REGION_NBA, 0, 8, 1),
+              0u);
+    EXPECT_EQ(talos_rt_v1_static_nba_batch_word_guard(
+                  context, &plan, TALOS_RT_REGION_NBA, 1, 1, 1),
+              0u);
+    context->exactEvents = std::make_unique<ExactEventFeatureState>();
+    EXPECT_EQ(talos_rt_v1_static_nba_barrier_guard(context, &plan,
+                                                   TALOS_RT_REGION_NBA),
+              0u);
+    EXPECT_EQ(dirty, 7u);
+    EXPECT_EQ(staged[0].valid, 1u);
+    context->exactEvents.reset();
     context->staticNBAAccumulatorsPending = true;
     EXPECT_EQ(
         talos_rt_v1_static_nba_batch_guard(context, &plan, TALOS_RT_REGION_NBA),
         0u);
     context->staticNBAAccumulatorsPending = false;
+    plan.nba_root_count = 3;
+    plan.nba_roots = roots;
+    markStaticNBAAccumulatorPending(context, 2,
+                                    context->staticNBAAccumulators[2]);
+    EXPECT_EQ(talos_rt_v1_static_nba_prefix_guard(context, &plan,
+                                                  TALOS_RT_REGION_NBA, 1, 1),
+              1u);
+    EXPECT_EQ(talos_rt_v1_static_nba_prefix_guard(context, &plan,
+                                                  TALOS_RT_REGION_NBA, 2, 1),
+              0u);
+    EXPECT_EQ(
+        talos_rt_v1_static_nba_batch_guard(context, &plan, TALOS_RT_REGION_NBA),
+        0u);
+    EXPECT_TRUE(context->staticNBAAccumulators[2].valid);
+    EXPECT_EQ(dirty, 7u);
+    markStaticNBAAccumulatorPending(context, 0,
+                                    context->staticNBAAccumulators[0]);
+    EXPECT_EQ(talos_rt_v1_static_nba_prefix_guard(context, &plan,
+                                                  TALOS_RT_REGION_NBA, 1, 0),
+              0u);
+    context->staticNBAAccumulators[0].valid = false;
+    context->staticNBAAccumulators[2].valid = false;
+    context->staticNBAPendingAccumulatorCount = 0;
+    refreshStaticNBAAccumulatorsPending(context);
     context->staticNBASlowRootsPresent = true;
     EXPECT_EQ(
         talos_rt_v1_static_nba_batch_guard(context, &plan, TALOS_RT_REGION_NBA),
@@ -11006,6 +11049,99 @@ TEST(Scheduler, EvalNBACutRetainsCanonicalNBAs) {
     ASSERT_EQ(talos_rt_v1_scheduler_complete_eval_nba(context, region, 0),
               TALOS_RT_OK);
     EXPECT_EQ(context->events.count(1), 1u);
+  }
+  talos_rt_v1_context_destroy(context);
+}
+
+TEST(Scheduler, QuietEvalCutRechecksNBAAndDrainsNewInactiveWork) {
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  talos_rt_native_schedule_plan plan{};
+  plan.flags = TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL;
+  uint32_t ordered = 0;
+  plan.nba_ordered_count = &ordered;
+  context->nativeSchedulePlan = &plan;
+  context->stateValue.bind(nullptr, 0);
+  context->signalDiagnosticsEnabled = true;
+  {
+    ContextMutexLock lock(context);
+    NativeAOTContextScope aot(context);
+    NativeAOTMutexScope mutex(context);
+    uint64_t cut[TALOS_RT_EVAL_NBA_CUT_WORDS]{};
+    uint32_t region = 99;
+    // Enter the slot before asking for a certificate for its idle runtime.
+    ASSERT_EQ(talos_rt_v1_scheduler_prepare_eval_nba(context, &region),
+              TALOS_RT_OK);
+    ASSERT_EQ(
+        talos_rt_v1_scheduler_prepare_quiet_eval_nba(context, &region, cut),
+        TALOS_RT_OK);
+    EXPECT_EQ(region, UINT32_MAX);
+    ASSERT_NE(cut[0], 0u);
+    ordered = 1;
+    ASSERT_EQ(
+        talos_rt_v1_scheduler_prepare_quiet_eval_nba(context, &region, cut),
+        TALOS_RT_OK);
+    EXPECT_EQ(region, TALOS_RT_REGION_NBA);
+    EXPECT_EQ(context->signalDiagnostics.reusedNBACuts, 1u);
+    ordered = 0;
+    ScheduledDesignEvent event;
+    event.stableID = 42;
+    event.execRegion = TALOS_RT_REGION_INACTIVE;
+    event.sequence = context->nextSchedulerSequence++;
+    context->scheduledDesignEvents.push_back(event);
+    ASSERT_EQ(
+        talos_rt_v1_scheduler_prepare_quiet_eval_nba(context, &region, cut),
+        TALOS_RT_OK);
+    EXPECT_EQ(region, UINT32_MAX);
+    EXPECT_EQ(context->events.count(42), 1u);
+    EXPECT_EQ(context->signalDiagnostics.reusedNBACuts, 1u);
+    ASSERT_EQ(talos_rt_v1_scheduler_finish(context, 0), TALOS_RT_OK);
+    ASSERT_EQ(
+        talos_rt_v1_scheduler_prepare_quiet_eval_nba(context, &region, cut),
+        TALOS_RT_OK);
+    EXPECT_EQ(region, TALOS_RT_EVAL_NBA_TERMINATED);
+    EXPECT_EQ(cut[0], 0u);
+  }
+  talos_rt_v1_context_destroy(context);
+}
+
+TEST(Scheduler, DeferredClockOwnersDrainInactiveBeforeSelectingNBA) {
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  talos_rt_native_schedule_plan plan{};
+  plan.flags = TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL;
+  uint32_t ordered = 0;
+  plan.nba_ordered_count = &ordered;
+  context->nativeSchedulePlan = &plan;
+  context->stateValue.bind(nullptr, 0);
+  {
+    ContextMutexLock lock(context);
+    NativeAOTContextScope aot(context);
+    NativeAOTMutexScope mutex(context);
+    uint64_t cut[TALOS_RT_EVAL_NBA_CUT_WORDS]{};
+    uint32_t region = 0;
+    ASSERT_EQ(talos_rt_v1_scheduler_prepare_eval_nba(context, &region),
+              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_scheduler_drain_clocked_active(context, &region, cut),
+              TALOS_RT_OK);
+    EXPECT_NE(cut[0], 0u);
+    EXPECT_EQ(talos_rt_v1_scheduler_clocked_nba_region(context), UINT32_MAX);
+    ordered = 1;
+    ScheduledDesignEvent event;
+    event.stableID = 71;
+    event.execRegion = TALOS_RT_REGION_INACTIVE;
+    event.sequence = context->nextSchedulerSequence++;
+    context->scheduledDesignEvents.push_back(event);
+    ASSERT_EQ(talos_rt_v1_scheduler_drain_clocked_active(context, &region, cut),
+              TALOS_RT_OK);
+    EXPECT_EQ(context->events.count(71), 1u);
+    EXPECT_EQ(region, UINT32_MAX);
+    EXPECT_EQ(talos_rt_v1_scheduler_clocked_nba_region(context),
+              TALOS_RT_REGION_NBA);
+    ASSERT_EQ(talos_rt_v1_scheduler_finish(context, 0), TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_scheduler_drain_clocked_active(context, &region, cut),
+              TALOS_RT_OK);
+    EXPECT_EQ(region, TALOS_RT_EVAL_NBA_TERMINATED);
   }
   talos_rt_v1_context_destroy(context);
 }
