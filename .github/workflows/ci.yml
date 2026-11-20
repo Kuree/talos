@@ -257,7 +257,12 @@ jobs:
       - name: Build
         id: build
         # Compile excluded test helpers here so the test step only runs tests.
-        run: cmake --build build --target all talos-test-depends
+        # Windows keeps going past a failed file: one round then reports every
+        # Windows-only compile error and caches every object that compiled.
+        run: |
+          keep_going=()
+          if [ "$RUNNER_OS" = Windows ]; then keep_going=(-- -k 0); fi
+          cmake --build build --target all talos-test-depends "${keep_going[@]}"
 
       - name: Run lit regression suite
         run: |
