@@ -238,7 +238,6 @@ promoteScalarSlots(ArrayRef<PromotableAllocationOpInterface> allocations,
   return success();
 }
 
-
 using NativeByteFootprint = SmallVector<std::pair<uint64_t, uint64_t>, 2>;
 struct NativeStateFootprint {
   bool exact = false;
@@ -751,6 +750,7 @@ promoteGroupState(LLVM::LLVMFuncOp function,
     bool read = false, written = false;
     unsigned stores = 0;
     Block *scope = nullptr;
+    Block *dominatedBy = nullptr;
     Operation *first = nullptr, *last = nullptr;
     uint64_t beginOrder = UINT64_MAX, endOrder = 0;
   };
@@ -767,10 +767,21 @@ promoteGroupState(LLVM::LLVMFuncOp function,
     window.stores += range.stores;
   }
   DominanceInfo dominance(function);
+  // Several state ranges commonly live in the same arm. Find its exits
+  // once and bound the total CFG walk by the existing promotion budget.
+  DenseMap<Block *, SmallVector<Block *, 2>> scopeExits;
+  uint64_t scopeBudget = budget;
   for (Window &window : windows) {
     bool oneBlock = true;
+    Block *root = nullptr;
+    bool reachable = true;
     for (Range *range : window.ranges)
       for (Operation *operation : range->operations) {
+        Block *block = operation->getBlock();
+        reachable &= dominance.isReachableFromEntry(block);
+        if (reachable)
+          root =
+              root ? dominance.findNearestCommonDominator(root, block) : block;
         if (!window.scope)
           window.scope = operation->getBlock();
         oneBlock &= window.scope == operation->getBlock();
@@ -787,9 +798,40 @@ promoteGroupState(LLVM::LLVMFuncOp function,
     if (!oneBlock) {
       window.scope = nullptr;
       window.first = window.last = nullptr;
+      // Acquire this window only on entry to the arm containing all its
+      // accesses. Publish before any exit from that dominator subtree and
+      // before a backedge re-enters its root. An observer in the arm still
+      // gets the ordinary publish/reacquire pair (1800-2023 4.6, 4.9.3).
+      if (!reachable || !root || root == &function.getBody().front() ||
+          !window.read || !window.written)
+        continue;
+      if (!scopeExits.contains(root)) {
+        if (!scopeBudget)
+          continue;
+        SmallVector<llvm::DomTreeNodeBase<Block> *> work{
+            dominance.getDomTree(&function.getBody()).getNode(root)};
+        SmallVector<Block *, 2> exits;
+        while (!work.empty() && scopeBudget) {
+          --scopeBudget;
+          auto *node = work.pop_back_val();
+          Block *block = node->getBlock();
+          if (llvm::any_of(block->getSuccessors(), [&](Block *target) {
+                return target == root || !dominance.dominates(root, target);
+              }))
+            exits.push_back(block);
+          llvm::append_range(work, node->children());
+        }
+        if (!work.empty())
+          continue;
+        scopeExits.try_emplace(root, std::move(exits));
+      }
+      window.dominatedBy = root;
     }
   }
   auto intersects = [&](Operation *boundary, const Window &window) {
+    if (window.dominatedBy &&
+        !dominance.dominates(window.dominatedBy, boundary->getBlock()))
+      return false;
     if (window.scope && (boundary->getBlock() != window.scope ||
                          operationOrder.lookup(boundary) < window.beginOrder ||
                          operationOrder.lookup(boundary) > window.endOrder))
@@ -811,12 +853,18 @@ promoteGroupState(LLVM::LLVMFuncOp function,
     // A large evaluator may have thousands of blocks but only a few reaching
     // definitions for this window. The IDF bounds its SSA merge growth.
     llvm::SmallPtrSet<Block *, 32> definitions;
-    definitions.insert(&function.getBody().front());
+    definitions.insert(window.dominatedBy ? window.dominatedBy
+                                          : &function.getBody().front());
+    bool writesOnEntry = false;
     for (Range *range : window.ranges)
       for (Operation *operation : range->operations)
-        if (isNativeMemoryStore(operation))
+        if (isNativeMemoryStore(operation)) {
           definitions.insert(operation->getBlock());
-    uint64_t relevantBoundaries = 0;
+          writesOnEntry |= operation->getBlock() == window.dominatedBy;
+        }
+    uint64_t relevantBoundaries =
+        window.dominatedBy ? scopeExits.find(window.dominatedBy)->second.size()
+                           : 0;
     for (Operation *boundary : boundaries) {
       if (!intersects(boundary, window))
         continue;
@@ -828,8 +876,11 @@ promoteGroupState(LLVM::LLVMFuncOp function,
     // a longer live range and unconditional epilogue stores, without saving
     // any source store. Retain that canonical form unless accesses share one
     // block or repeated writes can amortize the real publication cuts.
+    // A window whose entry only compares old and new keeps its conditional
+    // store on the change path. A write in the entry already takes effect
+    // on every path through the scope.
     if (activation && window.owners.size() < 2 && !window.scope &&
-        window.stores <= relevantBoundaries)
+        !writesOnEntry && window.stores <= relevantBoundaries)
       continue;
     SmallVector<Block *> joins;
     if (!function.getBody().hasOneBlock()) {
@@ -878,10 +929,13 @@ promoteGroupState(LLVM::LLVMFuncOp function,
     // block, acquire at its first access and publish after its last access.
     // This preserves source order and avoids touching state on a skipped
     // branch. Intervening observers still flush/reacquire below (38.15/38.34).
-    // Otherwise acquire at the function entry, right after the window's
-    // slot: no position among the accesses this loop erases.
+    // A multi-block window starts at the entry of its dominated region.
+    // When it spans the function, acquire after the local allocation, which
+    // stays valid as this loop erases the original accesses.
     if (window->scope)
       builder.setInsertionPoint(window->first);
+    else if (window->dominatedBy)
+      builder.setInsertionPointToStart(window->dominatedBy);
     else
       builder.setInsertionPointAfter(local.getDefiningOp());
     Slot slot{window->offset, local, type, window};
@@ -935,6 +989,13 @@ promoteGroupState(LLVM::LLVMFuncOp function,
                   LLVM::LoadOp::create(builder, operation->getLoc(), type,
                                        local, 1));
         operation->erase();
+      }
+    if (window->dominatedBy)
+      for (Block *block : scopeExits.find(window->dominatedBy)->second) {
+        Operation *exit = block->getTerminator();
+        builder.setInsertionPoint(exit);
+        publish(exit->getLoc(), slot,
+                LLVM::LoadOp::create(builder, exit->getLoc(), type, local, 1));
       }
   }
   for (Operation *boundary : boundaries) {
@@ -2114,7 +2175,7 @@ LogicalResult GroupMaterializer::materializeGroup(LLVM::LLVMFuncOp function,
                    << " accepted=" << accepted << '\n';
     if (accepted)
       return acceptCandidate(function, original, members);
-    if (identitiesValid)
+    if (identitiesValid && !native::has<native::TwoState>(module))
       refineOriginal(function, original);
     symbols.erase(function);
     return success();
@@ -2193,6 +2254,27 @@ void GroupMaterializer::refineOriginal(LLVM::LLVMFuncOp function,
 LogicalResult GroupMaterializer::acceptCandidate(LLVM::LLVMFuncOp function,
                                                  LLVM::LLVMFuncOp original,
                                                  DenseI32ArrayAttr members) {
+  if (native::has<native::TwoState>(module)) {
+    // These members execute their canonical bodies in a globally two-state
+    // model. The group's live ingress, source order and finite CFG were
+    // checked above. There is no value-domain branch or slow copy to keep.
+    original.getBody().dropAllReferences();
+    original.getBody().takeBody(function.getBody());
+    for (auto role : {schedule::Field::EvalMaterializedGroupCalls,
+                      schedule::Field::EvalSsaReadyWords,
+                      schedule::Field::EvalSsaValueRanges,
+                      schedule::Field::EvalSsaUnknownRanges,
+                      schedule::Field::EvalControlFlowDataflow,
+                      schedule::Field::EvalUnconditionalMembers}) {
+      if (auto attr = schedule::get<Attribute>(function, role))
+        schedule::set(original, role, attr);
+      else
+        schedule::remove(original, role);
+    }
+    whollyOutlinedGroups.erase(original);
+    symbols.erase(function);
+    return success();
+  }
   // Promote the slow body before adding its fast guard, so slow-path
   // materialization never introduces loads on a collapsed child's entry.
   if (auto remaining = residualBudgets.find(original);

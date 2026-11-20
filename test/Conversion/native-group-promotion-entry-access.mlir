@@ -79,3 +79,49 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128"} {
     llvm.return
   }
 }
+
+// -----
+
+// A conditional arm owns this window across blocks. The inactive path
+// reaches the observer without touching the window. The loop backedge and
+// both exits publish the last blocking write before control leaves the arm.
+// CHECK-LABEL: llvm.func @conditional(
+// CHECK-SAME: schedule.eval.ssa_value_ranges = 1
+// CHECK-NOT: schedule.state
+// CHECK: llvm.cond_br %arg0, ^[[ARM:bb[0-9]+]]({{.*}}), ^[[DONE:bb[0-9]+]]
+// CHECK: ^[[ARM]](
+// CHECK: %[[OLD:.*]] = schedule.state.load @__talos_state_value[0]
+// CHECK: %[[FIRST:.*]] = llvm.add %[[OLD]],
+// CHECK: schedule.state.store %[[FIRST]], @__talos_state_value[0]
+// CHECK: llvm.cond_br %arg1, ^[[MORE:bb[0-9]+]], ^[[DONE]]
+// CHECK: ^[[MORE]]:
+// CHECK-NOT: schedule.state.load
+// CHECK: %[[SECOND:.*]] = llvm.add %[[FIRST]],
+// CHECK: schedule.state.store %[[SECOND]], @__talos_state_value[0]
+// CHECK-NEXT: llvm.cond_br {{.*}}, ^[[ARM]]({{.*}}), ^[[DONE]]
+// CHECK: ^[[DONE]]:
+// CHECK-NOT: schedule.state
+// CHECK: llvm.call @observe()
+module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128"} {
+  llvm.mlir.global internal @__talos_state_value(dense<0> : tensor<8xi8>) : !llvm.array<8 x i8>
+  llvm.func @observe()
+  llvm.func @conditional(%active: i1, %twice: i1, %count: i8) attributes {schedule.eval.raw_captures} {
+    llvm.cond_br %active, ^arm(%count : i8), ^done
+  ^arm(%n: i8):
+    %one = llvm.mlir.constant(1 : i8) : i8
+    %old = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
+    %value = llvm.add %old, %one : i8
+    schedule.state.store %value, @__talos_state_value[0] {alignment = 1 : i64} : i8
+    llvm.cond_br %twice, ^again, ^done
+  ^again:
+    %next = llvm.sub %n, %one : i8
+    %saved = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
+    %inc = llvm.add %saved, %one : i8
+    schedule.state.store %inc, @__talos_state_value[0] {alignment = 1 : i64} : i8
+    %more = llvm.icmp "ugt" %n, %one : i8
+    llvm.cond_br %more, ^arm(%next : i8), ^done
+  ^done:
+    llvm.call @observe() : () -> ()
+    llvm.return
+  }
+}
