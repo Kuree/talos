@@ -2325,6 +2325,22 @@ def SimQueueDeleteOp : SimOp<"queue.delete", [
   let hasVerifier = 1;
 }
 
+def SimQueuePopOp : SimOp<"queue.pop", [
+    MemoryEffects<[MemRead<SimHeapResource>, MemWrite<SimHeapResource>]>
+  ]> {
+  let summary = "read and remove the queue element at a captured logical index";
+  let description = [{
+    An empty queue produces the element type's nonexistent-entry value.
+    References to surviving elements keep denoting those elements
+    (IEEE 1800-2023 7.4.5 Table 7-1, 7.10.2.4-5, and 7.10.3).
+  }];
+  let arguments = (ins SimQueueType:$container, I64:$index);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$container `[` $index `]` attr-dict `:` "
+                       "qualified(type($container)) `->` type($result)";
+  let hasVerifier = 1;
+}
+
 def SimQueueInsertOp : SimOp<"queue.insert", [
     SimAllocatesManagedStorage,
     MemoryEffects<[MemRead<SimHeapResource>, MemWrite<SimHeapResource>]>
@@ -2333,6 +2349,21 @@ def SimQueueInsertOp : SimOp<"queue.insert", [
   let arguments = (ins SimQueueType:$queue, I64:$index, AnyType:$value);
   let assemblyFormat = "$value `into` $queue `[` $index `]` attr-dict `:` "
                        "qualified(type($queue)) `,` type($value)";
+  let hasVerifier = 1;
+}
+
+def SimQueuePushBackOp : SimOp<"queue.push_back", [
+    SimAllocatesManagedStorage,
+    MemoryEffects<[MemRead<SimHeapResource>, MemWrite<SimHeapResource>]>
+  ]> {
+  let summary = "append an element to an unbounded queue";
+  let description = [{
+    Append the evaluated argument after the current last element. Existing
+    element references remain valid (IEEE 1800-2023 7.10.2.7 and 7.10.3).
+  }];
+  let arguments = (ins SimQueueType:$container, AnyType:$value);
+  let assemblyFormat = "$value `into` $container attr-dict `:` "
+                       "qualified(type($container)) `,` type($value)";
   let hasVerifier = 1;
 }
 

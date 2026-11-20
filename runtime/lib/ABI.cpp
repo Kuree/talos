@@ -2362,6 +2362,9 @@ ABI_FUNCTION(talos_rt_v1_queue_insert,
                                  int64_t, const void *, const void *));
 ABI_FUNCTION(talos_rt_v1_queue_delete_index,
              talos_rt_status (*)(talos_rt_object_v1 *, int64_t));
+ABI_FUNCTION(talos_rt_v1_queue_read_delete_checked,
+             talos_rt_status (*)(talos_rt_object_v1 *, int64_t, void *,
+                                 uint64_t, void *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_assoc_create,
              talos_rt_status (*)(talos_rt_gc_lane_v1 *,
                                  const talos_rt_element_type_v1 *,

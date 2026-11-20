@@ -2053,18 +2053,19 @@ using RandomFunctionStageConversion =
 using RandomCycleSampleConversion =
     RandomPlanWideConversion<sim::SimRandomCycleSampleOp>;
 
-class ContainerReadConversion final
-    : public OpConversionPattern<sim::SimContainerReadOp> {
+template <typename Op>
+class ContainerReadConversion final : public OpConversionPattern<Op> {
 public:
-  using OpConversionPattern::OpConversionPattern;
+  using OpConversionPattern<Op>::OpConversionPattern;
   LogicalResult
-  matchAndRewrite(sim::SimContainerReadOp op, OneToNOpAdaptor adaptor,
+  matchAndRewrite(Op op,
+                  typename OpConversionPattern<Op>::OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     if (adaptor.getContainer().size() != 1 || adaptor.getIndex().size() != 1)
       return failure();
     SmallVector<Type> types;
-    if (failed(
-            getTypeConverter()->convertType(op.getResult().getType(), types)) ||
+    if (failed(this->getTypeConverter()->convertType(op.getResult().getType(),
+                                                     types)) ||
         types.empty() || types.size() > 2)
       return failure();
     SmallVector<Value> storage;
@@ -2094,11 +2095,13 @@ public:
         storage.size() == 2
             ? storage[1]
             : Value(LLVM::ZeroOp::create(rewriter, op.getLoc(), pointer));
+    StringRef callee = std::is_same_v<Op, sim::SimQueuePopOp>
+                           ? "talos_rt_v1_queue_read_delete_checked"
+                           : "talos_rt_v1_container_read_checked";
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_container_read_checked"),
+            SymbolRefAttr::get(rewriter.getContext(), callee),
             ValueRange{managedObjectPointer(rewriter, op.getLoc(),
                                             adaptor.getContainer().front()),
                        adaptor.getIndex().front(), storage.front(),
@@ -2109,9 +2112,7 @@ public:
                                     rewriter.getI64Type(),
                                     storage.size() == 2 ? byteSizes[1] : 0)})
             .getResult();
-    auto [context, lane] = managedContextAndLane(rewriter, op.getLoc());
-    (void)lane;
-    reportManagedStatus(rewriter, op.getLoc(), context, status);
+    reportManagedStatus(rewriter, op.getLoc(), Value{}, status);
     SmallVector<Value> values;
     for (auto [type, slot] : llvm::zip_equal(types, storage))
       values.push_back(
@@ -2123,16 +2124,28 @@ public:
   }
 };
 
-class ContainerWriteConversion final
-    : public OpConversionPattern<sim::SimContainerWriteOp> {
+template <typename Op>
+class ContainerWriteConversion final : public OpConversionPattern<Op> {
 public:
-  using OpConversionPattern::OpConversionPattern;
+  using OpConversionPattern<Op>::OpConversionPattern;
   LogicalResult
-  matchAndRewrite(sim::SimContainerWriteOp op, OneToNOpAdaptor adaptor,
+  matchAndRewrite(Op op,
+                  typename OpConversionPattern<Op>::OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (adaptor.getContainer().size() != 1 || adaptor.getIndex().size() != 1 ||
-        adaptor.getValue().empty() || adaptor.getValue().size() > 2)
+    if (adaptor.getContainer().size() != 1 || adaptor.getValue().empty() ||
+        adaptor.getValue().size() > 2)
       return failure();
+    Value position;
+    StringRef callee;
+    if constexpr (std::is_same_v<Op, sim::SimQueuePushBackOp>) {
+      callee = "talos_rt_v1_queue_push";
+      position = llvmConstant(rewriter, op.getLoc(), rewriter.getI32Type(), 0);
+    } else {
+      if (adaptor.getIndex().size() != 1)
+        return failure();
+      callee = "talos_rt_v1_container_write";
+      position = adaptor.getIndex().front();
+    }
     SmallVector<Value> storage;
     for (Value value : adaptor.getValue()) {
       Value slot = entryAlloca(rewriter, op.getLoc(), value.getType(), 1, 8);
@@ -2148,12 +2161,11 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_container_write"),
+            SymbolRefAttr::get(rewriter.getContext(), callee),
             ValueRange{lane,
                        managedObjectPointer(rewriter, op.getLoc(),
                                             adaptor.getContainer().front()),
-                       adaptor.getIndex().front(), storage.front(), unknown})
+                       position, storage.front(), unknown})
             .getResult();
     reportManagedStatus(rewriter, op.getLoc(), context, status);
     rewriter.eraseOp(op);
@@ -2245,7 +2257,10 @@ void populateManagedContainerToLLVMConversionPatterns(
       MailboxTryReadConversion<sim::SimMailboxTryGetOp, true>,
       BoxCastConversion<sim::SimBoxPackOp>,
       BoxCastConversion<sim::SimBoxCastOp>, BoxIsTypeConversion,
-      BoxBindTypeConversion, ContainerReadConversion, ContainerWriteConversion,
+      BoxBindTypeConversion, ContainerReadConversion<sim::SimContainerReadOp>,
+      ContainerReadConversion<sim::SimQueuePopOp>,
+      ContainerWriteConversion<sim::SimContainerWriteOp>,
+      ContainerWriteConversion<sim::SimQueuePushBackOp>,
       RandomInitializationEnterConversion, RandomInitializationLeaveConversion,
       RandomNextConversion, LegacyRandomConversion, RandomStateConversion,
       RandomSetStateConversion, RandomSeedConversion, RandomBoundedConversion,

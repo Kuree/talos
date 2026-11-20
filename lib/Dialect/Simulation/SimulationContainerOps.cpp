@@ -1553,8 +1553,14 @@ LogicalResult SimContainerCreateOp::verify() {
   if (isa<DynamicArrayType>(type) &&
       getContainerKind() != ContainerKind::DynamicArray)
     return emitOpError("dynamic-array result requires dynamic-array metadata");
-  if (isa<QueueType>(type) && getContainerKind() != ContainerKind::Queue)
-    return emitOpError("queue result requires queue metadata");
+  if (auto queue = dyn_cast<QueueType>(type)) {
+    if (getContainerKind() != ContainerKind::Queue)
+      return emitOpError("queue result requires queue metadata");
+    // IEEE 1800-2023 7.10.5 applies the declared bound to every mutation.
+    uint64_t bound = queue.getBound() ? queue.getBound() : UINT64_MAX;
+    if (getBound() != bound)
+      return emitOpError("queue bound must match the result type");
+  }
   if (failed(verifyElementMetadata(
           getOperation(), element, getElementKind(), getElementFlags(),
           getValueSize(), getBitWidth(), traceOffsets, traceKinds,
@@ -1688,6 +1694,21 @@ LogicalResult SimQueueInsertOp::verify() {
   if (!queue)
     return emitOpError("queue operand must have queue type");
   if (queue.getElementType() != getValue().getType())
+    return emitOpError("value type must match the queue element");
+  return success();
+}
+
+LogicalResult SimQueuePopOp::verify() {
+  if (getContainer().getType().getElementType() != getResult().getType())
+    return emitOpError("result type must match the queue element");
+  return success();
+}
+
+LogicalResult SimQueuePushBackOp::verify() {
+  auto type = getContainer().getType();
+  if (type.getBound())
+    return emitOpError("requires an unbounded queue");
+  if (type.getElementType() != getValue().getType())
     return emitOpError("value type must match the queue element");
   return success();
 }

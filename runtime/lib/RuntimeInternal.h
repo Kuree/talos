@@ -3843,6 +3843,14 @@ talos_rt_status
 talos_rt_managed_object_access(talos_rt_object_v1 *object,
                                talos_rt_managed_kind_v1 expectedKind,
                                ManagedObjectAccess access, void *environment);
+// Mutate a container without a managed safepoint. The calling lane keeps
+// the object live for the callback. Root it before subsequent allocation or
+// observer delivery. A forced/assigned value suppresses the callback.
+talos_rt_status talos_rt_mutate_owned_container(talos_rt_gc_lane_v1 *lane,
+                                                talos_rt_object_v1 *container,
+                                                ManagedObjectAccess access,
+                                                void *environment,
+                                                bool &watched);
 // Feature-local zero-copy traversal can retain a managed object's ticket lock
 // across an explicit continuation frame. Every successful acquire must be
 // paired with exactly one release; acquiring a second lease for the same

@@ -13,6 +13,7 @@
 #include <limits>
 #include <optional>
 #include <stdexcept>
+#include <type_traits>
 
 #if defined(_WIN32)
 #include <locale.h>
@@ -480,74 +481,81 @@ talos_rt_status validateManagedSlots(talos_rt_context *context,
   return status;
 }
 
-struct HeaderSnapshot {
-  ContainerHeader header{};
-};
+talos_rt_status validateContainerHeader(const ContainerHeader &header) {
+  if (header.descriptor != &containerDescriptorToken || !header.element ||
+      header.size > header.capacity ||
+      header.referenceCount > header.referenceCapacity ||
+      (header.referenceCapacity == 0) != (header.referenceBuffer == nullptr) ||
+      ((header.capacity == 0) != (header.buffer == nullptr) &&
+       !hasInlineQueueStorage(header)))
+    return TALOS_RT_INVALID_HANDLE;
+  if (header.kind == TALOS_RT_CONTAINER_DYNAMIC_ARRAY)
+    return TALOS_RT_OK;
+  bool powerOfTwo = (header.capacity & (header.capacity - 1)) == 0;
+  if (header.kind == TALOS_RT_CONTAINER_QUEUE)
+    return !header.capacity || (powerOfTwo && header.head < header.capacity)
+               ? TALOS_RT_OK
+               : TALOS_RT_INVALID_HANDLE;
+  if (header.kind != TALOS_RT_CONTAINER_ASSOCIATIVE_ARRAY ||
+      header.hasDefault > 1 ||
+      (header.capacity && (header.capacity < 8 || !powerOfTwo)))
+    return TALOS_RT_INVALID_HANDLE;
+
+  bool validKey;
+  if (header.keyKind == TALOS_RT_ASSOC_KEY_ELEMENT) {
+    validKey = header.associativeKey.element && header.associativeKey.plan &&
+               header.keyWidth == header.associativeKey.element->value_size * 8;
+  } else {
+    bool handleKey = header.keyKind == TALOS_RT_ASSOC_KEY_STRING ||
+                     header.keyKind == TALOS_RT_ASSOC_KEY_CLASS ||
+                     header.keyKind == TALOS_RT_ASSOC_KEY_PROCESS ||
+                     header.keyKind == TALOS_RT_ASSOC_KEY_WILDCARD;
+    bool integralKey = header.keyKind == TALOS_RT_ASSOC_KEY_UNSIGNED ||
+                       header.keyKind == TALOS_RT_ASSOC_KEY_SIGNED;
+    validKey =
+        !header.associativeKey.element && !header.associativeKey.plan &&
+        ((handleKey && !header.keyWidth) ||
+         (integralKey && header.keyWidth && header.keyWidth <= UINT64_MAX - 7));
+  }
+  return validKey ? TALOS_RT_OK : TALOS_RT_INVALID_HANDLE;
+}
+
+// Validate and consume the same header under its owning object's lock. The
+// element address and length of a queue must agree even if another lane
+// inserts or erases an element (1800-2023 7.10, 7.10.3).
+template <typename Access>
+talos_rt_status accessContainerHeader(void *environment, uint8_t *object,
+                                      uint64_t extent) {
+  if (extent != sizeof(ContainerHeader))
+    return TALOS_RT_INVALID_HANDLE;
+  auto &header = *reinterpret_cast<ContainerHeader *>(object);
+  auto status = validateContainerHeader(header);
+  if (status != TALOS_RT_OK)
+    return status;
+  return (*static_cast<Access *>(environment))(header);
+}
+
+template <typename Access>
+talos_rt_status withContainerHeader(talos_rt_object_v1 *container,
+                                    Access access) {
+  return talos_rt_managed_object_access(container, TALOS_RT_MANAGED_CONTAINER,
+                                        accessContainerHeader<Access>, &access);
+}
+
+template <typename Access>
+talos_rt_status mutateContainerHeader(talos_rt_gc_lane_v1 *lane,
+                                      talos_rt_object_v1 *container,
+                                      bool &watched, Access access) {
+  return talos_rt_mutate_owned_container(
+      lane, container, accessContainerHeader<Access>, &access, watched);
+}
 
 talos_rt_status snapshotHeader(talos_rt_object_v1 *container,
-                               ContainerHeader &header) {
-  HeaderSnapshot snapshot;
-  talos_rt_status status = talos_rt_managed_object_access(
-      container, TALOS_RT_MANAGED_CONTAINER,
-      [](void *environment, uint8_t *object,
-         uint64_t extent) -> talos_rt_status {
-        if (extent != sizeof(ContainerHeader))
-          return TALOS_RT_INVALID_HANDLE;
-        auto *snapshot = static_cast<HeaderSnapshot *>(environment);
-        std::memcpy(&snapshot->header, object, sizeof(ContainerHeader));
-        bool sequential =
-            snapshot->header.kind == TALOS_RT_CONTAINER_DYNAMIC_ARRAY ||
-            snapshot->header.kind == TALOS_RT_CONTAINER_QUEUE;
-        bool associative =
-            snapshot->header.kind == TALOS_RT_CONTAINER_ASSOCIATIVE_ARRAY;
-        bool handleKey =
-            snapshot->header.keyKind == TALOS_RT_ASSOC_KEY_STRING ||
-            snapshot->header.keyKind == TALOS_RT_ASSOC_KEY_CLASS ||
-            snapshot->header.keyKind == TALOS_RT_ASSOC_KEY_PROCESS ||
-            snapshot->header.keyKind == TALOS_RT_ASSOC_KEY_WILDCARD;
-        const talos_rt_element_type_v1 *keyElement =
-            snapshot->header.keyElement;
-        bool validAssocKey =
-            handleKey
-                ? snapshot->header.keyWidth == 0
-                : ((snapshot->header.keyKind == TALOS_RT_ASSOC_KEY_UNSIGNED ||
-                    snapshot->header.keyKind == TALOS_RT_ASSOC_KEY_SIGNED) &&
-                   snapshot->header.keyWidth >= 1 &&
-                   snapshot->header.keyWidth <= UINT64_MAX - 7);
-        if (snapshot->header.keyKind == TALOS_RT_ASSOC_KEY_ELEMENT)
-          validAssocKey =
-              keyElement && snapshot->header.keyPlan &&
-              snapshot->header.keyWidth == keyElement->value_size * 8;
-        else if (keyElement || snapshot->header.keyPlan)
-          validAssocKey = false;
-        bool invalidAssoc =
-            associative && (snapshot->header.hasDefault > 1 || !validAssocKey ||
-                            (snapshot->header.capacity != 0 &&
-                             (snapshot->header.capacity < 8 ||
-                              (snapshot->header.capacity &
-                               (snapshot->header.capacity - 1)) != 0)));
-        if (snapshot->header.descriptor != &containerDescriptorToken ||
-            !snapshot->header.element || (!sequential && !associative) ||
-            snapshot->header.size > snapshot->header.capacity ||
-            snapshot->header.referenceCount >
-                snapshot->header.referenceCapacity ||
-            (snapshot->header.referenceCapacity == 0) !=
-                (snapshot->header.referenceBuffer == nullptr) ||
-            (snapshot->header.capacity == 0) !=
-                (snapshot->header.buffer == nullptr) ||
-            (snapshot->header.kind == TALOS_RT_CONTAINER_QUEUE &&
-             snapshot->header.capacity != 0 &&
-             ((snapshot->header.capacity & (snapshot->header.capacity - 1)) !=
-                  0 ||
-              snapshot->header.head >= snapshot->header.capacity)) ||
-            invalidAssoc)
-          return TALOS_RT_INVALID_HANDLE;
-        return TALOS_RT_OK;
-      },
-      &snapshot);
-  if (status == TALOS_RT_OK)
-    header = snapshot.header;
-  return status;
+                               ContainerHeader &snapshot) {
+  return withContainerHeader(container, [&](const ContainerHeader &header) {
+    snapshot = header;
+    return TALOS_RT_OK;
+  });
 }
 
 talos_rt_status finishContainerMutation(talos_rt_object_v1 *container,
@@ -561,10 +569,9 @@ talos_rt_status finishContainerMutation(talos_rt_object_v1 *container,
 /// A queue mutation that may change a mailbox's readiness: also advances the
 /// owning context's mailbox generation, so its blocked puts and gets poll
 /// again (two-tier B5). Advancing without a change only costs a poll.
-talos_rt_status finishQueueMutation(talos_rt_object_v1 *container,
-                                    const ContainerHeader &snapshot,
+talos_rt_status finishQueueMutation(talos_rt_object_v1 *container, bool mailbox,
                                     talos_rt_status status) {
-  if (status == TALOS_RT_OK && snapshot.isMailbox)
+  if (status == TALOS_RT_OK && mailbox)
     if (talos_rt_context *context = talos_rt_managed_object_context(container))
       context->mailboxGeneration.fetch_add(1, std::memory_order_acq_rel);
   return finishContainerMutation(container, status);
@@ -591,6 +598,31 @@ talos_rt_status accessBuffer(talos_rt_object_v1 *buffer, Access &&access) {
                                       extent - sizeof(BufferHeader));
       },
       &environment);
+}
+
+// Called with the header locked at the first actual growth. Reserve the
+// identity that the backing buffer would receive at this point, keeping
+// later user-visible object IDs stable. No managed reference lives inline.
+static talos_rt_status startInlineQueue(talos_rt_context *context,
+                                        ContainerHeader &header) {
+  uint64_t identity;
+  auto status = talos_rt_managed_identity_reserve(context, &identity);
+  if (status != TALOS_RT_OK)
+    return status;
+  for (size_t i = 0; i < sizeof(header.inlineElements); ++i)
+    header.inlineElements[i] = 0;
+  header.head = 0;
+  header.capacity = talos::runtime_detail::inlineQueueCapacity;
+  ++header.epoch;
+  return TALOS_RT_OK;
+}
+
+template <typename Access>
+talos_rt_status accessSequentialStorage(ContainerHeader &header,
+                                        Access &&access) {
+  if (hasInlineQueueStorage(header))
+    return access(header.inlineElements, sizeof(header.inlineElements));
+  return accessBuffer(header.buffer, std::forward<Access>(access));
 }
 
 talos_rt_status allocateBuffer(talos_rt_gc_lane_v1 *lane, uint64_t capacity,
@@ -796,9 +828,8 @@ talos_rt_status mutateSequentialReferences(talos_rt_object_v1 *container,
             if (path->index >= 0 &&
                 static_cast<uint64_t>(path->index) < update->owner->size) {
               uint64_t stride = elementStride(path->element);
-              talos_rt_status copied =
-                  accessBuffer(update->owner->buffer, [&](uint8_t *source,
-                                                          uint64_t sourceSize) {
+              talos_rt_status copied = accessSequentialStorage(
+                  *update->owner, [&](uint8_t *source, uint64_t sourceSize) {
                     uint64_t sourceOffset =
                         physicalIndex(*update->owner,
                                       static_cast<uint64_t>(path->index)) *
@@ -888,6 +919,7 @@ talos_rt_status swapSequentialReferences(talos_rt_object_v1 *container,
   });
 }
 
+template <bool Interned = false>
 talos_rt_status initializeContainer(talos_rt_gc_lane_v1 *lane,
                                     talos_rt_container_kind_v1 kind,
                                     const talos_rt_element_type_v1 *element,
@@ -895,7 +927,7 @@ talos_rt_status initializeContainer(talos_rt_gc_lane_v1 *lane,
                                     talos_rt_object_v1 **outContainer,
                                     bool isMailbox = false) {
   if (!outContainer ||
-      talos_rt_v1_element_type_validate(element) != TALOS_RT_OK)
+      (!Interned && talos_rt_v1_element_type_validate(element) != TALOS_RT_OK))
     return TALOS_RT_INVALID_ARGUMENT;
   *outContainer = nullptr;
   if (kind == TALOS_RT_CONTAINER_QUEUE)
@@ -913,16 +945,33 @@ talos_rt_status initializeContainer(talos_rt_gc_lane_v1 *lane,
       alignof(ContainerHeader), &containerDescriptorToken, &container);
   if (status != TALOS_RT_OK)
     return status;
+  // The interned descriptor belongs to this lane's context. An empty
+  // container needs no backing allocation. From allocation to publication
+  // the active lane crosses no safepoint and no other lane has its handle.
+  if (Interned && !capacity) {
+    auto *header = reinterpret_cast<ContainerHeader *>(container);
+    *header = {};
+    header->descriptor = &containerDescriptorToken;
+    header->kind = kind;
+    header->isMailbox = isMailbox;
+    header->element = element;
+    header->bound = bound;
+    header->epoch = 1;
+    *outContainer = container;
+    return TALOS_RT_OK;
+  }
   talos_rt_gc_root_v1 root{};
   status = talos_rt_v1_gc_root_push(lane, &root, &container);
   if (status != TALOS_RT_OK)
     return status;
-  talos_rt_context *context = talos_rt_managed_object_context(container);
-  status = talos_rt_v1_element_type_register(context, element);
-  if (status == TALOS_RT_OK) {
-    element = talos_rt_managed_element_type_lookup(context, element->type_id);
-    if (!element)
-      status = TALOS_RT_INVALID_DESIGN;
+  if constexpr (!Interned) {
+    talos_rt_context *context = talos_rt_managed_object_context(container);
+    status = talos_rt_v1_element_type_register(context, element);
+    if (status == TALOS_RT_OK) {
+      element = talos_rt_managed_element_type_lookup(context, element->type_id);
+      if (!element)
+        status = TALOS_RT_INVALID_DESIGN;
+    }
   }
   talos_rt_object_v1 *buffer = nullptr;
   if (status == TALOS_RT_OK)
@@ -1049,8 +1098,8 @@ initializeAssoc(talos_rt_gc_lane_v1 *lane,
           header->boxTypeID = 0;
           header->keyKind = initialize->keyKind;
           header->keyWidth = initialize->keyWidth;
-          header->keyElement = initialize->keyElement;
-          header->keyPlan = initialize->keyPlan;
+          header->associativeKey.element = initialize->keyElement;
+          header->associativeKey.plan = initialize->keyPlan;
           header->referenceBuffer = nullptr;
           header->referenceCount = 0;
           header->referenceCapacity = 0;
@@ -1091,6 +1140,17 @@ talos_rt_status ensureCapacity(talos_rt_gc_lane_v1 *lane,
     status = snapshotHeader(container, snapshot);
     if (status != TALOS_RT_OK || snapshot.capacity >= required)
       break;
+    if (!snapshot.capacity &&
+        required <= talos::runtime_detail::inlineQueueCapacity &&
+        supportsInlineQueue(snapshot)) {
+      status = withContainerHeader(container, [&](ContainerHeader &current) {
+        return current.capacity
+                   ? TALOS_RT_OK
+                   : startInlineQueue(talos_rt_managed_lane_context(lane),
+                                      current);
+      });
+      continue;
+    }
     uint64_t capacity =
         snapshot.kind == TALOS_RT_CONTAINER_QUEUE
             ? nextPowerOfTwo(std::max<uint64_t>(required, 4))
@@ -1128,8 +1188,8 @@ talos_rt_status ensureCapacity(talos_rt_gc_lane_v1 *lane,
           uint64_t stride = elementStride(current->element);
           talos_rt_status copyStatus = TALOS_RT_OK;
           if (current->size != 0) {
-            copyStatus = accessBuffer(
-                current->buffer, [&](uint8_t *source, uint64_t sourceSize) {
+            copyStatus = accessSequentialStorage(
+                *current, [&](uint8_t *source, uint64_t sourceSize) {
                   return accessBuffer(
                       publish->replacement,
                       [&](uint8_t *destination, uint64_t destinationSize) {
@@ -1176,8 +1236,13 @@ uint64_t hashBytes(const char *bytes, uint64_t size) {
 struct StringView {
   const char *bytes = "";
   uint64_t size = 0;
-  uint64_t hash = 0;
   char inlineBytes[8] = {};
+};
+
+// String bytes and length are sufficient for formatting and concatenation.
+// Only hash consumers read or initialize the immutable string's cache.
+struct HashedStringView : StringView {
+  uint64_t hash = 0;
 };
 
 talos_rt_object_v1 *heapStringObject(talos_rt_string_v1 string) {
@@ -1215,7 +1280,8 @@ talos_rt_string_v1 encodeInlineString(const char *bytes, uint64_t size) {
   return string;
 }
 
-talos_rt_status readString(talos_rt_string_v1 string, StringView &view) {
+template <typename View>
+talos_rt_status readString(talos_rt_string_v1 string, View &view) {
   view = {};
   if (string == 0)
     return TALOS_RT_OK;
@@ -1227,7 +1293,8 @@ talos_rt_status readString(talos_rt_string_v1 string, StringView &view) {
     for (uint64_t index = 0; index != view.size; ++index)
       view.inlineBytes[index] = static_cast<char>(string >> (8 + index * 8));
     view.bytes = view.inlineBytes;
-    view.hash = hashBytes(view.bytes, view.size);
+    if constexpr (std::is_same_v<View, HashedStringView>)
+      view.hash = hashBytes(view.bytes, view.size);
     return TALOS_RT_OK;
   }
   if (tag != 0)
@@ -1236,7 +1303,7 @@ talos_rt_status readString(talos_rt_string_v1 string, StringView &view) {
   if (!object)
     return TALOS_RT_INVALID_HANDLE;
   struct Read {
-    StringView *view;
+    View *view;
   } read{&view};
   return talos_rt_managed_object_access(
       object, TALOS_RT_MANAGED_STRING,
@@ -1255,12 +1322,14 @@ talos_rt_status readString(talos_rt_string_v1 string, StringView &view) {
           return TALOS_RT_INVALID_HANDLE;
         read->view->bytes = bytes;
         read->view->size = length;
-        uint64_t hash = header->hash.load(std::memory_order_relaxed);
-        if (hash == 0) {
-          hash = hashBytes(bytes, length);
-          header->hash.store(hash, std::memory_order_relaxed);
+        if constexpr (std::is_same_v<View, HashedStringView>) {
+          uint64_t hash = header->hash.load(std::memory_order_relaxed);
+          if (hash == 0) {
+            hash = hashBytes(bytes, length);
+            header->hash.store(hash, std::memory_order_relaxed);
+          }
+          read->view->hash = hash;
         }
-        read->view->hash = hash;
         return TALOS_RT_OK;
       },
       &read);
@@ -1493,7 +1562,7 @@ talos_rt_status talos_rt_coverage_set_snapshot(talos_rt_context *context,
 
   if (header.size) {
     const uint64_t stride = elementStride(header.element);
-    status = accessBuffer(header.buffer, [&](uint8_t *data, uint64_t size) {
+    status = accessSequentialStorage(header, [&](uint8_t *data, uint64_t size) {
       for (uint64_t index = 0; index != header.size; ++index) {
         const uint64_t physical = physicalIndex(header, index);
         if (physical > UINT64_MAX / stride)
@@ -1952,7 +2021,7 @@ extern "C" uint64_t talos_rt_v1_string_length(talos_rt_string_v1 string) {
 }
 
 extern "C" uint64_t talos_rt_v1_string_hash(talos_rt_string_v1 string) {
-  StringView view;
+  HashedStringView view;
   return readString(string, view) == TALOS_RT_OK ? view.hash : hashBytes("", 0);
 }
 
@@ -3135,10 +3204,10 @@ talos_rt_status serializeAssocKeyBox(const ContainerHeader &header,
   talos_rt_status status = readAssocKeyBox(box, storage, key);
   if (status != TALOS_RT_OK)
     return status;
-  if (!header.keyElement || key.width != header.keyWidth)
+  if (!header.associativeKey.element || key.width != header.keyWidth)
     return TALOS_RT_INVALID_HANDLE;
   AssocKeySerializer serializer(talos_rt_managed_object_context(box),
-                                header.keyPlan, bytes);
+                                header.associativeKey.plan, bytes);
   status = serializer.serialize(static_cast<const uint8_t *>(key.value_data),
                                 static_cast<const uint8_t *>(key.unknown_data),
                                 depth);
@@ -3425,7 +3494,7 @@ talos_rt_status normalizeAssocKey(talos_rt_context *context,
     if (key->value != 0 || key->unknown != 0 ||
         !stringBelongsTo(context, key->string))
       return TALOS_RT_INVALID_HANDLE;
-    StringView view;
+    HashedStringView view;
     talos_rt_status status = readString(key->string, view);
     if (status != TALOS_RT_OK)
       return status;
@@ -3454,7 +3523,7 @@ talos_rt_status normalizeAssocKey(talos_rt_context *context,
   if (key->kind == TALOS_RT_ASSOC_KEY_ELEMENT) {
     if (key->string != 0 || !key->value_data)
       return TALOS_RT_INVALID_ARGUMENT;
-    AssocKeySerializer serializer(context, header.keyPlan,
+    AssocKeySerializer serializer(context, header.associativeKey.plan,
                                   normalized.wideIntegral);
     talos_rt_status status = serializer.serialize(
         static_cast<const uint8_t *>(key->value_data),
@@ -3654,8 +3723,8 @@ bool assocKeysEqual(const ContainerHeader &header, const AssocSlot &slot,
            std::memcmp(stored.bytes, key.wideIntegral.data(),
                        static_cast<size_t>(stored.size)) == 0;
   }
-  StringView left;
-  StringView right;
+  HashedStringView left;
+  HashedStringView right;
   return readString(slot.string, left) == TALOS_RT_OK &&
          readString(key.string, right) == TALOS_RT_OK &&
          left.size == right.size && left.hash == right.hash &&
@@ -3887,8 +3956,8 @@ talos_rt_status snapshotValues(talos_rt_object_v1 *container,
           if (current->size == 0)
             return TALOS_RT_OK;
           uint64_t stride = elementStride(current->element);
-          return accessBuffer(
-              current->buffer, [&](uint8_t *source, uint64_t sourceSize) {
+          return accessSequentialStorage(
+              *current, [&](uint8_t *source, uint64_t sourceSize) {
                 if (sourceSize < current->capacity * stride)
                   return TALOS_RT_INVALID_HANDLE;
                 for (uint64_t index = 0; index != current->size; ++index)
@@ -4013,9 +4082,9 @@ talos_rt_status cloneAssocContainer(talos_rt_gc_lane_v1 *lane,
   if (status != TALOS_RT_OK)
     return status;
   talos_rt_object_v1 *result = nullptr;
-  status = initializeAssoc(lane, snapshot.element, snapshot.keyKind,
-                           snapshot.keyWidth, &result, snapshot.keyElement,
-                           snapshot.keyPlan);
+  status = initializeAssoc(
+      lane, snapshot.element, snapshot.keyKind, snapshot.keyWidth, &result,
+      snapshot.associativeKey.element, snapshot.associativeKey.plan);
   ScopedManagedRoot resultRoot(lane, &result);
   if (status == TALOS_RT_OK && resultRoot.getStatus() != TALOS_RT_OK)
     status = resultRoot.getStatus();
@@ -4794,6 +4863,23 @@ static talos_rt_status internElementType(
     return TALOS_RT_INVALID_ARGUMENT;
   *outElement = nullptr;
 
+  talos_rt_context *context = talos_rt_managed_lane_context(lane);
+  if (!traceSlotCount && !patternByteCount) {
+    // A context-owned descriptor is immutable after registration, including
+    // its default image. Match every field of this untraced request before
+    // reusing it. A conflicting or externally owned ID takes normal validation.
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
+    auto found = context->managedOwnedElementTypes.find(typeID);
+    if (found != context->managedOwnedElementTypes.end()) {
+      const auto &element = found->second->descriptor;
+      if (!element.trace && element.kind == elementKind &&
+          element.flags == elementFlags && element.value_size == valueSize &&
+          element.alignment == alignment && element.bit_width == bitWidth) {
+        *outElement = &element;
+        return TALOS_RT_OK;
+      }
+    }
+  }
   std::unique_ptr<OwnedElementTypeDescriptor> owned;
   TALOS_RT_TRY { owned = std::make_unique<OwnedElementTypeDescriptor>(); }
   TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
@@ -4866,7 +4952,6 @@ static talos_rt_status internElementType(
     return std::shared_ptr<const std::vector<uint64_t>>(std::move(decoded));
   };
 
-  talos_rt_context *context = talos_rt_managed_lane_context(lane);
   const talos_rt_element_type_v1 *element = nullptr;
   TALOS_RT_TRY {
     std::lock_guard<TalosContextMutex> lock(context->mutex);
@@ -4967,7 +5052,7 @@ extern "C" talos_rt_status talos_rt_v1_container_create_typed(
       traceSlots, traceSlotCount, nullptr, 0, &element);
   if (status != TALOS_RT_OK)
     return status;
-  return initializeContainer(
+  return initializeContainer<true>(
       lane, static_cast<talos_rt_container_kind_v1>(containerKind), element,
       containerKind == TALOS_RT_CONTAINER_QUEUE ? 0 : size, bound,
       outContainer);
@@ -4995,7 +5080,7 @@ extern "C" talos_rt_status talos_rt_v1_container_create_typed_pattern(
       traceSlots, traceSlotCount, patternBytes, patternByteCount, &element);
   if (status != TALOS_RT_OK)
     return status;
-  return initializeContainer(
+  return initializeContainer<true>(
       lane, static_cast<talos_rt_container_kind_v1>(containerKind), element,
       containerKind == TALOS_RT_CONTAINER_QUEUE ? 0 : size, bound,
       outContainer);
@@ -5275,8 +5360,8 @@ talos_rt_container_element_snapshot(talos_rt_object_v1 *container,
             if (*copy.index >= current.size)
               return TALOS_RT_EOF;
             const uint64_t stride = elementStride(current.element);
-            return accessBuffer(current.buffer, [&](uint8_t *data,
-                                                    uint64_t size) {
+            return accessSequentialStorage(current, [&](uint8_t *data,
+                                                        uint64_t size) {
               if (stride == 0 || current.capacity > size / stride)
                 return TALOS_RT_INVALID_HANDLE;
               std::memcpy(copy.value->data(),
@@ -5552,8 +5637,12 @@ extern "C" talos_rt_status talos_rt_v1_assoc_create_element_keyed(
 extern "C" uint64_t talos_rt_v1_container_size(talos_rt_object_v1 *container) {
   if (!container)
     return 0;
-  ContainerHeader snapshot;
-  return snapshotHeader(container, snapshot) == TALOS_RT_OK ? snapshot.size : 0;
+  uint64_t size = 0;
+  (void)withContainerHeader(container, [&](const ContainerHeader &header) {
+    size = header.size;
+    return TALOS_RT_OK;
+  });
+  return size;
 }
 
 extern "C" uint32_t talos_rt_v1_box_is_type(talos_rt_object_v1 *box,
@@ -5564,56 +5653,53 @@ extern "C" uint32_t talos_rt_v1_box_is_type(talos_rt_object_v1 *box,
          snapshot.element && snapshot.element->type_id == typeID;
 }
 
+template <bool Checked>
+static talos_rt_status
+readSequentialElement(talos_rt_object_v1 *container, int64_t index, void *value,
+                      uint64_t valueSize, void *unknown, uint64_t unknownSize) {
+  return withContainerHeader(
+      container, [&](ContainerHeader &header) -> talos_rt_status {
+        const auto *element = header.element;
+        bool fourState = element->flags & TALOS_RT_ELEMENT_FOUR_STATE;
+        if constexpr (Checked)
+          if (valueSize < element->value_size ||
+              fourState != (unknown != nullptr) ||
+              (fourState && unknownSize < element->value_size))
+            return TALOS_RT_INVALID_ARGUMENT;
+        if (header.kind == TALOS_RT_CONTAINER_ASSOCIATIVE_ARRAY)
+          return TALOS_RT_INVALID_ARGUMENT;
+        if ((fourState && !unknown) || index < 0 ||
+            uint64_t(index) >= header.size) {
+          initializeElementDefault(element, value, unknown);
+          return fourState && !unknown ? TALOS_RT_INVALID_ARGUMENT
+                                       : TALOS_RT_OK;
+        }
+        auto status =
+            accessSequentialStorage(header, [&](uint8_t *data, uint64_t bytes) {
+              uint64_t stride = elementStride(element);
+              uint64_t offset = physicalIndex(header, uint64_t(index)) * stride;
+              if (offset > bytes || stride > bytes - offset)
+                return TALOS_RT_INVALID_HANDLE;
+              std::memcpy(value, data + offset,
+                          static_cast<size_t>(element->value_size));
+              if (fourState)
+                std::memcpy(unknown, data + offset + element->value_size,
+                            static_cast<size_t>(element->value_size));
+              return TALOS_RT_OK;
+            });
+        if (status != TALOS_RT_OK)
+          initializeElementDefault(element, value, unknown);
+        return status;
+      });
+}
+
 extern "C" talos_rt_status
 talos_rt_v1_container_read(talos_rt_object_v1 *container, int64_t index,
                            void *outValue, void *outUnknown) {
   if (!container || !outValue)
     return TALOS_RT_INVALID_ARGUMENT;
-  ContainerHeader snapshot;
-  talos_rt_status status = snapshotHeader(container, snapshot);
-  if (status != TALOS_RT_OK)
-    return status;
-  if (snapshot.kind == TALOS_RT_CONTAINER_ASSOCIATIVE_ARRAY)
-    return TALOS_RT_INVALID_ARGUMENT;
-  initializeElementDefault(snapshot.element, outValue, outUnknown);
-  if (snapshot.element->flags & TALOS_RT_ELEMENT_FOUR_STATE) {
-    if (!outUnknown)
-      return TALOS_RT_INVALID_ARGUMENT;
-  }
-  if (index < 0 || static_cast<uint64_t>(index) >= snapshot.size)
-    return TALOS_RT_OK;
-  struct Read {
-    int64_t index;
-    void *value;
-    void *unknown;
-  } read{index, outValue, outUnknown};
-  return talos_rt_managed_object_access(
-      container, TALOS_RT_MANAGED_CONTAINER,
-      [](void *opaque, uint8_t *object, uint64_t extent) -> talos_rt_status {
-        if (extent != sizeof(ContainerHeader))
-          return TALOS_RT_INVALID_HANDLE;
-        auto *header = reinterpret_cast<ContainerHeader *>(object);
-        auto *read = static_cast<Read *>(opaque);
-        if (read->index < 0 ||
-            static_cast<uint64_t>(read->index) >= header->size)
-          return TALOS_RT_OK;
-        uint64_t stride = elementStride(header->element);
-        return accessBuffer(header->buffer, [&](uint8_t *data, uint64_t size) {
-          uint64_t offset =
-              physicalIndex(*header, static_cast<uint64_t>(read->index)) *
-              stride;
-          if (offset > size || stride > size - offset)
-            return TALOS_RT_INVALID_HANDLE;
-          std::memcpy(read->value, data + offset,
-                      static_cast<size_t>(header->element->value_size));
-          if (header->element->flags & TALOS_RT_ELEMENT_FOUR_STATE)
-            std::memcpy(read->unknown,
-                        data + offset + header->element->value_size,
-                        static_cast<size_t>(header->element->value_size));
-          return TALOS_RT_OK;
-        });
-      },
-      &read);
+  return readSequentialElement<false>(container, index, outValue, 0, outUnknown,
+                                      0);
 }
 
 extern "C" talos_rt_status
@@ -5622,23 +5708,12 @@ talos_rt_v1_container_read_checked(talos_rt_object_v1 *container, int64_t index,
                                    void *outUnknown, uint64_t unknownSize) {
   if (!outValue || ((outUnknown == nullptr) != (unknownSize == 0)))
     return TALOS_RT_INVALID_ARGUMENT;
-  // A default-initialized dynamic array or queue is represented by a null
-  // managed handle. The typed callers initialize their output to the element
-  // default before entering the runtime, so an indexed read simply preserves
-  // that value. The unchecked ABI cannot do this because it has no element
-  // layout information and therefore continues to reject null handles.
+  // Typed callers initialize the default for a null sequential container
+  // (1800-2023 7.4.5, Table 7-1).
   if (!container)
     return TALOS_RT_OK;
-  ContainerHeader snapshot;
-  talos_rt_status status = snapshotHeader(container, snapshot);
-  if (status != TALOS_RT_OK)
-    return status;
-  bool fourState = (snapshot.element->flags & TALOS_RT_ELEMENT_FOUR_STATE) != 0;
-  if (valueSize < snapshot.element->value_size ||
-      (fourState && unknownSize < snapshot.element->value_size) ||
-      (!fourState && unknownSize != 0) || fourState != (outUnknown != nullptr))
-    return TALOS_RT_INVALID_ARGUMENT;
-  return talos_rt_v1_container_read(container, index, outValue, outUnknown);
+  return readSequentialElement<true>(container, index, outValue, valueSize,
+                                     outUnknown, unknownSize);
 }
 
 extern "C" talos_rt_status
@@ -5705,92 +5780,125 @@ talos_rt_v1_dynamic_array_resize(talos_rt_gc_lane_v1 *lane,
   return finishContainerMutation(array, status);
 }
 
+// Call with the container locked and a complete, independently captured
+// element. Commit the length only after writing its slot (1800-2023 7.10).
+static talos_rt_status writeSequentialSlot(ContainerHeader &header,
+                                           uint64_t index, bool append,
+                                           const uint8_t *element) {
+  if (append) {
+    if (index != header.size || index >= header.capacity || queueIsFull(header))
+      return TALOS_RT_INVALID_LIFECYCLE;
+  } else if (index >= header.size) {
+    return TALOS_RT_OK;
+  }
+  uint64_t stride = elementStride(header.element);
+  auto status =
+      accessSequentialStorage(header, [&](uint8_t *data, uint64_t size) {
+        uint64_t offset = physicalIndex(header, index) * stride;
+        if (offset > size || stride > size - offset)
+          return TALOS_RT_INVALID_HANDLE;
+        std::memcpy(data + offset, element, static_cast<size_t>(stride));
+        return TALOS_RT_OK;
+      });
+  if (status == TALOS_RT_OK) {
+    header.size += append;
+    ++header.epoch;
+  }
+  return status;
+}
+
+// Consume an ordinary value under the container lock. A backing allocation
+// or nested value copy may collect, so the caller prepares those outside it.
+// Capture both planes before mutating a queue: the caller may supply an
+// element of the same queue (IEEE 1800-2023 7.10.2, 13.5.1).
+static std::optional<talos_rt_status>
+writePlainSequentialSlot(talos_rt_context *context, ContainerHeader &header,
+                         uint64_t index, bool append, const void *value,
+                         const void *unknown) {
+  bool grow = append && header.size == header.capacity;
+  bool beginInline = grow && !header.capacity && supportsInlineQueue(header);
+  const auto *element = header.element;
+  std::array<uint8_t, 128> capture;
+  if ((grow && !beginInline) || element->trace ||
+      elementStride(element) > capture.size())
+    return std::nullopt;
+  bool fourState = element->flags & TALOS_RT_ELEMENT_FOUR_STATE;
+  if (!value || (fourState && !unknown))
+    return TALOS_RT_INVALID_ARGUMENT;
+  size_t bytes = static_cast<size_t>(element->value_size);
+  std::memcpy(capture.data(), value, bytes);
+  if (fourState)
+    std::memcpy(capture.data() + bytes, unknown, bytes);
+  if (beginInline) {
+    auto status = startInlineQueue(context, header);
+    if (status != TALOS_RT_OK)
+      return status;
+  }
+  return writeSequentialSlot(header, index, append, capture.data());
+}
+
 extern "C" talos_rt_status
 talos_rt_v1_container_write(talos_rt_gc_lane_v1 *lane,
                             talos_rt_object_v1 *container, int64_t index,
                             const void *value, const void *unknown) {
   if (!lane || !container)
     return TALOS_RT_INVALID_ARGUMENT;
-  if (talos_rt_managed_object_context(container) !=
-      talos_rt_managed_lane_context(lane))
-    return TALOS_RT_INVALID_HANDLE;
-  if (talos_rt_managed_value_mutation_masked(container))
-    return TALOS_RT_OK;
+  auto *context = talos_rt_managed_lane_context(lane);
+  const talos_rt_element_type_v1 *needsPreparation = nullptr;
+  bool grow = false, append = false, mailbox = false, notify = false;
+  bool watched;
+  auto status = mutateContainerHeader(
+      lane, container, watched,
+      [&](ContainerHeader &header) -> talos_rt_status {
+        if (header.kind == TALOS_RT_CONTAINER_ASSOCIATIVE_ARRAY)
+          return TALOS_RT_INVALID_ARGUMENT;
+        bool queue = header.kind == TALOS_RT_CONTAINER_QUEUE;
+        if (index < 0 || uint64_t(index) > header.size) {
+          if (queue)
+            warnIgnoredQueueWrite(false);
+          return TALOS_RT_OK;
+        }
+        append = uint64_t(index) == header.size;
+        if (append && !queue)
+          return TALOS_RT_OK;
+        if (append && queueIsFull(header)) {
+          warnIgnoredQueueWrite(true);
+          return TALOS_RT_OK;
+        }
+        mailbox = header.isMailbox;
+        grow = append && header.size == header.capacity;
+        if (auto stored = writePlainSequentialSlot(
+                context, header, uint64_t(index), append, value, unknown)) {
+          notify = *stored == TALOS_RT_OK;
+          return *stored;
+        }
+        needsPreparation = header.element;
+        return TALOS_RT_OK;
+      });
+  if (status != TALOS_RT_OK ||
+      (!needsPreparation && (!notify || (!watched && !mailbox))))
+    return status;
   ScopedManagedRoot ownerRoot(lane, &container);
   if (ownerRoot.getStatus() != TALOS_RT_OK)
     return ownerRoot.getStatus();
-  ContainerHeader snapshot;
-  talos_rt_status status = snapshotHeader(container, snapshot);
-  if (status != TALOS_RT_OK)
-    return status;
-  if (snapshot.kind == TALOS_RT_CONTAINER_ASSOCIATIVE_ARRAY)
-    return TALOS_RT_INVALID_ARGUMENT;
-  if (index < 0 || static_cast<uint64_t>(index) > snapshot.size) {
-    if (snapshot.kind == TALOS_RT_CONTAINER_QUEUE)
-      warnIgnoredQueueWrite(false);
-    return TALOS_RT_OK;
-  }
-  bool append = snapshot.kind == TALOS_RT_CONTAINER_QUEUE &&
-                static_cast<uint64_t>(index) == snapshot.size;
-  if (!append && static_cast<uint64_t>(index) >= snapshot.size)
-    return TALOS_RT_OK;
-  if (append) {
-    if (queueIsFull(snapshot)) {
-      warnIgnoredQueueWrite(true);
-      return TALOS_RT_OK;
-    }
-    // Grow only when the snapshot has no spare slot; the write below
-    // rechecks the capacity under the object lock either way (two-tier B5).
-    if (snapshot.capacity <= snapshot.size) {
-      status = ensureCapacity(lane, container, snapshot.size + 1);
-      if (status != TALOS_RT_OK)
-        return status;
-    }
+  if (!needsPreparation)
+    return finishQueueMutation(container, mailbox, status);
+
+  if (grow) {
+    status = ensureCapacity(lane, container, uint64_t(index) + 1);
+    if (status != TALOS_RT_OK)
+      return status;
   }
   std::vector<uint8_t> prepared;
-  status = prepareElementValue(lane, talos_rt_managed_object_context(container),
-                               snapshot.element, value, unknown, prepared);
+  status = prepareElementValue(lane, context, needsPreparation, value, unknown,
+                               prepared);
   if (status != TALOS_RT_OK)
     return status;
-  struct Write {
-    int64_t index;
-    const std::vector<uint8_t> *value;
-    bool append;
-  } write{index, &prepared, append};
-  status = talos_rt_managed_object_access(
-      container, TALOS_RT_MANAGED_CONTAINER,
-      [](void *opaque, uint8_t *object, uint64_t extent) -> talos_rt_status {
-        auto *write = static_cast<Write *>(opaque);
-        if (extent != sizeof(ContainerHeader))
-          return TALOS_RT_INVALID_HANDLE;
-        auto *header = reinterpret_cast<ContainerHeader *>(object);
-        if (write->index < 0)
-          return TALOS_RT_OK;
-        uint64_t index = static_cast<uint64_t>(write->index);
-        if (write->append) {
-          if (index != header->size || header->size >= header->capacity ||
-              queueIsFull(*header))
-            return TALOS_RT_INVALID_LIFECYCLE;
-          ++header->size;
-        } else if (index >= header->size) {
-          return TALOS_RT_OK;
-        }
-        uint64_t stride = elementStride(header->element);
-        talos_rt_status status =
-            accessBuffer(header->buffer, [&](uint8_t *data, uint64_t size) {
-              uint64_t offset = physicalIndex(*header, index) * stride;
-              if (offset > size || stride > size - offset)
-                return TALOS_RT_INVALID_HANDLE;
-              std::memcpy(data + offset, write->value->data(),
-                          static_cast<size_t>(stride));
-              return TALOS_RT_OK;
-            });
-        if (status == TALOS_RT_OK)
-          ++header->epoch;
-        return status;
-      },
-      &write);
-  return finishQueueMutation(container, snapshot, status);
+  status = withContainerHeader(container, [&](ContainerHeader &header) {
+    return writeSequentialSlot(header, uint64_t(index), append,
+                               prepared.data());
+  });
+  return finishQueueMutation(container, mailbox, status);
 }
 
 extern "C" talos_rt_status talos_rt_v1_container_write_checked(
@@ -5849,7 +5957,7 @@ talos_rt_v1_container_swap(talos_rt_object_v1 *container, int64_t left,
           return status;
         uint64_t stride = elementStride(header->element);
         status =
-            accessBuffer(header->buffer, [&](uint8_t *data, uint64_t size) {
+            accessSequentialStorage(*header, [&](uint8_t *data, uint64_t size) {
               uint64_t leftOffset = physicalIndex(*header, swap->left) * stride;
               uint64_t rightOffset =
                   physicalIndex(*header, swap->right) * stride;
@@ -5999,7 +6107,7 @@ talos_rt_v1_container_delete(talos_rt_object_v1 *container) {
         return TALOS_RT_OK;
       },
       nullptr);
-  return finishQueueMutation(container, snapshot, status);
+  return finishQueueMutation(container, snapshot.isMailbox, status);
 }
 
 static talos_rt_status queuePushImpl(talos_rt_gc_lane_v1 *lane,
@@ -6010,20 +6118,37 @@ static talos_rt_status queuePushImpl(talos_rt_gc_lane_v1 *lane,
     return TALOS_RT_INVALID_ARGUMENT;
   if (outInserted)
     *outInserted = 0;
-  if (talos_rt_managed_object_context(queue) !=
-      talos_rt_managed_lane_context(lane))
-    return TALOS_RT_INVALID_HANDLE;
-  if (talos_rt_managed_value_mutation_masked(queue))
-    return TALOS_RT_OK;
+  auto *context = talos_rt_managed_lane_context(lane);
+  ContainerHeader snapshot;
+  bool slow = false, inserted = false, mailbox = false;
+  bool watched;
+  talos_rt_status status = mutateContainerHeader(
+      lane, queue, watched, [&](ContainerHeader &header) -> talos_rt_status {
+        if (header.kind != TALOS_RT_CONTAINER_QUEUE)
+          return TALOS_RT_INVALID_ARGUMENT;
+        if (queueIsFull(header))
+          return TALOS_RT_OK;
+        if (!front) {
+          if (auto stored = writePlainSequentialSlot(
+                  context, header, header.size, true, value, unknown)) {
+            inserted = *stored == TALOS_RT_OK;
+            mailbox = header.isMailbox;
+            return *stored;
+          }
+        }
+        snapshot = header;
+        slow = true;
+        return TALOS_RT_OK;
+      });
+  if (inserted && outInserted)
+    *outInserted = 1;
+  if (status != TALOS_RT_OK || (!slow && (!inserted || (!watched && !mailbox))))
+    return status;
   ScopedManagedRoot ownerRoot(lane, &queue);
   if (ownerRoot.getStatus() != TALOS_RT_OK)
     return ownerRoot.getStatus();
-  ContainerHeader snapshot;
-  talos_rt_status status = snapshotHeader(queue, snapshot);
-  if (status != TALOS_RT_OK || snapshot.kind != TALOS_RT_CONTAINER_QUEUE)
-    return status == TALOS_RT_OK ? TALOS_RT_INVALID_ARGUMENT : status;
-  if (queueIsFull(snapshot))
-    return TALOS_RT_OK;
+  if (!slow)
+    return finishQueueMutation(queue, mailbox, status);
   // The access below rechecks the capacity under the object lock.
   if (snapshot.capacity <= snapshot.size) {
     status = ensureCapacity(lane, queue, snapshot.size + 1);
@@ -6031,8 +6156,8 @@ static talos_rt_status queuePushImpl(talos_rt_gc_lane_v1 *lane,
       return status;
   }
   std::vector<uint8_t> prepared;
-  status = prepareElementValue(lane, talos_rt_managed_object_context(queue),
-                               snapshot.element, value, unknown, prepared);
+  status = prepareElementValue(lane, context, snapshot.element, value, unknown,
+                               prepared);
   if (status != TALOS_RT_OK)
     return status;
   struct Push {
@@ -6068,7 +6193,7 @@ static talos_rt_status queuePushImpl(talos_rt_gc_lane_v1 *lane,
             push->front ? header->head : physicalIndex(*header, header->size);
         uint64_t stride = elementStride(header->element);
         talos_rt_status status =
-            accessBuffer(header->buffer, [&](uint8_t *data, uint64_t size) {
+            accessSequentialStorage(*header, [&](uint8_t *data, uint64_t size) {
               uint64_t offset = physical * stride;
               if (offset > size || stride > size - offset)
                 return TALOS_RT_INVALID_HANDLE;
@@ -6085,7 +6210,7 @@ static talos_rt_status queuePushImpl(talos_rt_gc_lane_v1 *lane,
         return status;
       },
       &push);
-  return finishQueueMutation(queue, snapshot, status);
+  return finishQueueMutation(queue, snapshot.isMailbox, status);
 }
 
 extern "C" talos_rt_status
@@ -6221,7 +6346,7 @@ extern "C" talos_rt_status talos_rt_v1_queue_pop(talos_rt_object_v1 *queue,
           return references;
         uint64_t stride = elementStride(header->element);
         talos_rt_status status =
-            accessBuffer(header->buffer, [&](uint8_t *data, uint64_t size) {
+            accessSequentialStorage(*header, [&](uint8_t *data, uint64_t size) {
               uint64_t offset = physicalIndex(*header, logical) * stride;
               if (offset > size || stride > size - offset)
                 return TALOS_RT_INVALID_HANDLE;
@@ -6244,7 +6369,7 @@ extern "C" talos_rt_status talos_rt_v1_queue_pop(talos_rt_object_v1 *queue,
         return status;
       },
       &pop);
-  return finishQueueMutation(queue, snapshot, status);
+  return finishQueueMutation(queue, snapshot.isMailbox, status);
 }
 
 extern "C" talos_rt_status
@@ -6284,7 +6409,7 @@ talos_rt_v1_mailbox_try_peek(talos_rt_object_v1 *mailbox, void *outValue,
           return TALOS_RT_OK;
         uint64_t stride = elementStride(header->element);
         talos_rt_status status =
-            accessBuffer(header->buffer, [&](uint8_t *data, uint64_t size) {
+            accessSequentialStorage(*header, [&](uint8_t *data, uint64_t size) {
               uint64_t offset = header->head * stride;
               if (offset > size || stride > size - offset)
                 return TALOS_RT_INVALID_HANDLE;
@@ -6412,16 +6537,21 @@ extern "C" talos_rt_status talos_rt_v1_queue_insert(talos_rt_gc_lane_v1 *lane,
           return references;
         uint64_t stride = elementStride(header->element);
         talos_rt_status status =
-            accessBuffer(header->buffer, [&](uint8_t *data, uint64_t size) {
+            accessSequentialStorage(*header, [&](uint8_t *data, uint64_t size) {
               if (size < header->capacity * stride)
                 return TALOS_RT_INVALID_HANDLE;
-              for (uint64_t logical = header->size; logical > insert->index;
-                   --logical)
-                std::memcpy(data + physicalIndex(*header, logical) * stride,
-                            data + physicalIndex(*header, logical - 1) * stride,
-                            static_cast<size_t>(stride));
-              std::memcpy(data + physicalIndex(*header, insert->index) * stride,
-                          insert->value->data(), static_cast<size_t>(stride));
+              auto slot = [&](uint64_t logical) {
+                return data + physicalIndex(*header, logical) * stride;
+              };
+              if (insert->index < header->size - insert->index) {
+                header->head = (header->head - 1) & (header->capacity - 1);
+                for (uint64_t i = 0; i < insert->index; ++i)
+                  std::memcpy(slot(i), slot(i + 1), stride);
+              } else {
+                for (uint64_t i = header->size; i > insert->index; --i)
+                  std::memcpy(slot(i), slot(i - 1), stride);
+              }
+              std::memcpy(slot(insert->index), insert->value->data(), stride);
               return TALOS_RT_OK;
             });
         if (status == TALOS_RT_OK) {
@@ -6431,61 +6561,124 @@ extern "C" talos_rt_status talos_rt_v1_queue_insert(talos_rt_gc_lane_v1 *lane,
         return status;
       },
       &insert);
-  return finishQueueMutation(queue, snapshot, status);
+  return finishQueueMutation(queue, snapshot.isMailbox, status);
 }
+
+namespace {
+struct QueueReadResult {
+  void *value;
+  uint64_t valueSize;
+  void *unknown;
+  uint64_t unknownSize;
+};
+
+// A SystemVerilog pop returns the old element and removes its identity.
+// Shift the shorter side of the ring. Both endpoints take constant time
+// for the slot movement (1800-2023 7.10.2.4--5 and 7.10.3).
+talos_rt_status eraseQueueIndex(talos_rt_object_v1 *queue, int64_t index,
+                                const QueueReadResult *result) {
+  auto read = [&] {
+    return talos_rt_v1_container_read_checked(
+        queue, index, result->value, result->valueSize, result->unknown,
+        result->unknownSize);
+  };
+  // Typed reads leave the caller's default intact for a null (empty) queue.
+  if (!queue || index < 0 || talos_rt_managed_value_mutation_masked(queue))
+    return result ? read() : TALOS_RT_OK;
+
+  bool mailbox = false, erased = false;
+  auto status = withContainerHeader(
+      queue, [&](ContainerHeader &header) -> talos_rt_status {
+        if (header.kind != TALOS_RT_CONTAINER_QUEUE)
+          return TALOS_RT_INVALID_ARGUMENT;
+        mailbox = header.isMailbox;
+        const auto *element = header.element;
+        bool fourState = element->flags & TALOS_RT_ELEMENT_FOUR_STATE;
+        if (result &&
+            (result->valueSize < element->value_size ||
+             fourState != (result->unknown != nullptr) ||
+             (fourState && result->unknownSize < element->value_size)))
+          return TALOS_RT_INVALID_ARGUMENT;
+        if (uint64_t(index) >= header.size) {
+          if (result)
+            initializeElementDefault(element, result->value, result->unknown);
+          return TALOS_RT_OK;
+        }
+        uint64_t stride = elementStride(element);
+        auto copyResult = [&](const uint8_t *slot) {
+          std::memcpy(result->value, slot, element->value_size);
+          if (fourState)
+            std::memcpy(result->unknown, slot + element->value_size,
+                        element->value_size);
+        };
+        // A ref detach can fail. Capture the result first in this case and
+        // keep the header locked until the same logical slot is removed.
+        bool captured = result && header.referenceCount;
+        if (captured) {
+          auto status = accessSequentialStorage(
+              header, [&](uint8_t *data, uint64_t size) {
+                if (stride > size / header.capacity)
+                  return TALOS_RT_INVALID_HANDLE;
+                copyResult(data + physicalIndex(header, index) * stride);
+                return TALOS_RT_OK;
+              });
+          if (status != TALOS_RT_OK) {
+            initializeElementDefault(element, result->value, result->unknown);
+            return status;
+          }
+        }
+        auto refs = mutateSequentialReferences(
+            queue, header, SequentialReferenceMutation::Erase, index);
+        if (refs != TALOS_RT_OK)
+          return refs;
+        auto removed =
+            accessSequentialStorage(header, [&](uint8_t *data, uint64_t size) {
+              if (stride > size / header.capacity)
+                return TALOS_RT_INVALID_HANDLE;
+              auto slot = [&](uint64_t logical) {
+                return data + physicalIndex(header, logical) * stride;
+              };
+              if (result && !captured)
+                copyResult(slot(index));
+              uint64_t last = header.size - 1;
+              if (uint64_t(index) < last - uint64_t(index)) {
+                for (uint64_t i = index; i > 0; --i)
+                  std::memcpy(slot(i), slot(i - 1), stride);
+                std::memset(slot(0), 0, stride);
+                header.head = (header.head + 1) & (header.capacity - 1);
+              } else {
+                for (uint64_t i = index; i < last; ++i)
+                  std::memcpy(slot(i), slot(i + 1), stride);
+                std::memset(slot(last), 0, stride);
+              }
+              return TALOS_RT_OK;
+            });
+        if (removed == TALOS_RT_OK) {
+          --header.size;
+          ++header.epoch;
+          erased = true;
+        } else if (result && !captured) {
+          initializeElementDefault(element, result->value, result->unknown);
+        }
+        return removed;
+      });
+  return erased ? finishQueueMutation(queue, mailbox, status) : status;
+}
+} // namespace
 
 extern "C" talos_rt_status
 talos_rt_v1_queue_delete_index(talos_rt_object_v1 *queue, int64_t index) {
-  if (index < 0)
-    return TALOS_RT_OK;
-  if (talos_rt_managed_value_mutation_masked(queue))
-    return TALOS_RT_OK;
-  ContainerHeader snapshot;
-  talos_rt_status status = snapshotHeader(queue, snapshot);
-  if (status != TALOS_RT_OK)
-    return status;
-  struct Delete {
-    uint64_t index;
-  } remove{static_cast<uint64_t>(index)};
-  status = talos_rt_managed_object_access(
-      queue, TALOS_RT_MANAGED_CONTAINER,
-      [](void *opaque, uint8_t *object, uint64_t extent) -> talos_rt_status {
-        auto *remove = static_cast<Delete *>(opaque);
-        if (extent != sizeof(ContainerHeader))
-          return TALOS_RT_INVALID_HANDLE;
-        auto *header = reinterpret_cast<ContainerHeader *>(object);
-        if (header->kind != TALOS_RT_CONTAINER_QUEUE)
-          return TALOS_RT_INVALID_ARGUMENT;
-        if (remove->index >= header->size)
-          return TALOS_RT_OK;
-        talos_rt_status references = mutateSequentialReferences(
-            reinterpret_cast<talos_rt_object_v1 *>(object), *header,
-            SequentialReferenceMutation::Erase, remove->index);
-        if (references != TALOS_RT_OK)
-          return references;
-        uint64_t stride = elementStride(header->element);
-        talos_rt_status status =
-            accessBuffer(header->buffer, [&](uint8_t *data, uint64_t size) {
-              if (size < header->capacity * stride)
-                return TALOS_RT_INVALID_HANDLE;
-              for (uint64_t logical = remove->index; logical + 1 < header->size;
-                   ++logical)
-                std::memcpy(data + physicalIndex(*header, logical) * stride,
-                            data + physicalIndex(*header, logical + 1) * stride,
-                            static_cast<size_t>(stride));
-              std::memset(data +
-                              physicalIndex(*header, header->size - 1) * stride,
-                          0, static_cast<size_t>(stride));
-              return TALOS_RT_OK;
-            });
-        if (status == TALOS_RT_OK) {
-          --header->size;
-          ++header->epoch;
-        }
-        return status;
-      },
-      &remove);
-  return finishQueueMutation(queue, snapshot, status);
+  return eraseQueueIndex(queue, index, nullptr);
+}
+
+extern "C" talos_rt_status
+talos_rt_v1_queue_read_delete_checked(talos_rt_object_v1 *queue, int64_t index,
+                                      void *value, uint64_t valueSize,
+                                      void *unknown, uint64_t unknownSize) {
+  if (!value || ((unknown == nullptr) != (unknownSize == 0)))
+    return TALOS_RT_INVALID_ARGUMENT;
+  QueueReadResult result{value, valueSize, unknown, unknownSize};
+  return eraseQueueIndex(queue, index, &result);
 }
 
 extern "C" talos_rt_status
@@ -6538,7 +6731,7 @@ static talos_rt_status createAssocKeyBox(talos_rt_gc_lane_v1 *lane,
                                          const ContainerHeader &header,
                                          const talos_rt_assoc_key_v1 *key,
                                          talos_rt_object_v1 **outBox) {
-  const talos_rt_element_type_v1 *element = header.keyElement;
+  const talos_rt_element_type_v1 *element = header.associativeKey.element;
   ValueRootEnvironment keyRoots{talos_rt_managed_lane_context(lane),
                                 static_cast<uint8_t *>(key->value_data), 1,
                                 elementStride(element), element};
@@ -7261,7 +7454,7 @@ talos_rt_status talos_rt_assoc_snapshot(talos_rt_object_v1 *array,
             return TALOS_RT_INVALID_HANDLE;
           copy.result.keyKind = header.keyKind;
           copy.result.keyWidth = header.keyWidth;
-          copy.result.keyElement = header.keyElement;
+          copy.result.keyElement = header.associativeKey.element;
           copy.result.element = header.element;
           if (header.size > SIZE_MAX)
             return TALOS_RT_OUT_OF_RESOURCES;
@@ -7754,8 +7947,8 @@ static talos_rt_status assocTraverse(talos_rt_gc_lane_v1 *lane,
                   return read;
                 if (!traverse->key->value_data)
                   return TALOS_RT_INVALID_ARGUMENT;
-                size_t size =
-                    static_cast<size_t>(header->keyElement->value_size);
+                size_t size = static_cast<size_t>(
+                    header->associativeKey.element->value_size);
                 std::memcpy(traverse->key->value_data, storedKey.value_data,
                             size);
                 if (traverse->key->unknown_data) {
@@ -8034,7 +8227,7 @@ static talos_rt_status referenceAssocKeyBytes(const ReferencePathHeader &path,
   TALOS_RT_TRY { bytes.assign(1, 0); }
   TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
   AssocKeySerializer serializer(talos_rt_managed_object_context(path.owner),
-                                owner.keyPlan, bytes);
+                                owner.associativeKey.plan, bytes);
   status =
       serializer.serialize(static_cast<const uint8_t *>(key.value_data),
                            static_cast<const uint8_t *>(key.unknown_data), 0);
@@ -8081,7 +8274,7 @@ static talos_rt_status referenceIdentityHash(const ReferencePathHeader &path,
     append(path.key.value);
     append(path.key.unknown);
     for (talos_rt_string_v1 word : {path.key.string, path.keyUnknown}) {
-      StringView view;
+      HashedStringView view;
       talos_rt_status status = readString(word, view);
       if (status != TALOS_RT_OK)
         return status;
@@ -9350,6 +9543,37 @@ static talos_rt_status accessReferenceWindow(
         ownerFourState ? prepared.data() + ownerSize : nullptr);
   };
   if (path.selector == ReferenceSelector::Index) {
+    if (hasInlineQueueStorage(container)) {
+      // Write into the live header, never into the snapshot. Queue mutations
+      // lock the header before adjusting its element references (7.10.3).
+      bool accessed = false;
+      status = withContainerHeader(
+          path.owner, [&](ContainerHeader &current) -> talos_rt_status {
+            auto status = snapshotReferencePath(owner, path);
+            if (status != TALOS_RT_OK)
+              return status;
+            if (path.detached) {
+              accessed = true;
+              return accessBuffer(path.detachedValue,
+                                  [&](uint8_t *data, uint64_t size) {
+                                    return accessSlot(data, size, 0);
+                                  });
+            }
+            if (path.index < 0 || uint64_t(path.index) >= current.size) {
+              container = current;
+              return TALOS_RT_OK;
+            }
+            accessed = true;
+            uint64_t start = physicalIndex(current, uint64_t(path.index)) *
+                             elementStride(path.element);
+            return accessSequentialStorage(
+                current, [&](uint8_t *data, uint64_t size) {
+                  return accessSlot(data, size, start);
+                });
+          });
+      if (status != TALOS_RT_OK || accessed)
+        return status;
+    }
     if (path.index < 0 || static_cast<uint64_t>(path.index) >= container.size) {
       if (store) {
         if (path.index < 0 || container.kind != TALOS_RT_CONTAINER_QUEUE ||

@@ -202,14 +202,12 @@ module {
 
 // pop_front reads and removes the element at index zero.
 // CHECK-LABEL: simulation.func private @unit_1
-// CHECK: %[[POP_ZERO:.*]] = arith.constant {{.*}}0 : i64
-// CHECK: simulation.container.read {{.*}}, %[[POP_ZERO]]
-// CHECK: %[[DELETE_ZERO:.*]] = arith.constant {{.*}}0 : i64
-// CHECK: simulation.queue.delete {{.*}}[%[[DELETE_ZERO]]]
+// CHECK: ^bb{{[0-9]+}}(%[[FRONT_QUEUE:.*]]: !simulation.queue<i32, 0>):
+// CHECK-NEXT: %[[POP_ZERO:.*]] = arith.constant {{.*}}0 : i64
+// CHECK-NEXT: %{{.*}} = simulation.queue.pop %[[FRONT_QUEUE]][%[[POP_ZERO]]]
 
 // pop_back reads and removes the element at size - 1.
 // CHECK-LABEL: simulation.func private @unit_2
 // CHECK: %[[SIZE:.*]] = simulation.container.size
 // CHECK: %[[LAST:.*]] = arith.subi %[[SIZE]],
-// CHECK: simulation.container.read {{.*}}, %[[LAST]]
-// CHECK: simulation.queue.delete {{.*}}[%[[LAST]]]
+// CHECK: simulation.queue.pop {{.*}}[%[[LAST]]]

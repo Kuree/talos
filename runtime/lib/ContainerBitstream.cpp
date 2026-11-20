@@ -95,22 +95,16 @@ struct BufferRequest {
   ExportRequest *request;
 };
 
-TALOS_RT_FEATURE_HELPER talos_rt_status packBuffer(void *opaque,
-                                                   uint8_t *buffer,
-                                                   uint64_t extent) {
-  auto *environment = static_cast<BufferRequest *>(opaque);
-  ContainerHeader &header = *environment->header;
-  ExportRequest &request = *environment->request;
-  if (extent < sizeof(BufferHeader) ||
-      reinterpret_cast<BufferHeader *>(buffer)->reserved != 0)
-    return TALOS_RT_INVALID_HANDLE;
+TALOS_RT_FEATURE_HELPER talos_rt_status packSequentialBytes(
+    BufferRequest &environment, const uint8_t *data, uint64_t size) {
+  ContainerHeader &header = *environment.header;
+  ExportRequest &request = *environment.request;
   if (request.elementFourState && request.elementPlaneSize > UINT64_MAX / 2)
     return TALOS_RT_INVALID_ARGUMENT;
   uint64_t stride =
       request.elementPlaneSize * (request.elementFourState ? 2 : 1);
-  if (stride == 0 || header.capacity > (extent - sizeof(BufferHeader)) / stride)
+  if (stride == 0 || header.capacity > size / stride)
     return TALOS_RT_INVALID_HANDLE;
-  uint8_t *data = buffer + sizeof(BufferHeader);
   for (uint64_t ordinal = 0; ordinal != request.count; ++ordinal) {
     uint64_t physical = header.kind == TALOS_RT_CONTAINER_QUEUE
                             ? (header.head + ordinal) & (header.capacity - 1)
@@ -124,6 +118,17 @@ TALOS_RT_FEATURE_HELPER talos_rt_status packBuffer(void *opaque,
              static_cast<uint8_t *>(request.unknown));
   }
   return TALOS_RT_OK;
+}
+
+TALOS_RT_FEATURE_HELPER talos_rt_status packBuffer(void *opaque,
+                                                   uint8_t *buffer,
+                                                   uint64_t extent) {
+  if (extent < sizeof(BufferHeader) ||
+      reinterpret_cast<BufferHeader *>(buffer)->reserved)
+    return TALOS_RT_INVALID_HANDLE;
+  return packSequentialBytes(*static_cast<BufferRequest *>(opaque),
+                             buffer + sizeof(BufferHeader),
+                             extent - sizeof(BufferHeader));
 }
 
 struct AssocBufferRequest {
@@ -212,7 +217,8 @@ TALOS_RT_FEATURE_HELPER talos_rt_status packContainer(void *opaque,
       fourState != (request->elementFourState != 0) ||
       (sequential ? header->size < request->count
                   : header->size != request->count) ||
-      header->size > header->capacity || !header->buffer ||
+      header->size > header->capacity ||
+      (!header->buffer && !hasInlineQueueStorage(*header)) ||
       (header->kind == TALOS_RT_CONTAINER_QUEUE &&
        (header->capacity == 0 ||
         (header->capacity & (header->capacity - 1)) != 0 ||
@@ -229,6 +235,9 @@ TALOS_RT_FEATURE_HELPER talos_rt_status packContainer(void *opaque,
                                           packAssocOrder, &orderRequest);
   }
   BufferRequest bufferRequest{header, request};
+  if (hasInlineQueueStorage(*header))
+    return packSequentialBytes(bufferRequest, header->inlineElements,
+                               sizeof(header->inlineElements));
   return talos_rt_managed_object_access(header->buffer, TALOS_RT_MANAGED_BUFFER,
                                         packBuffer, &bufferRequest);
 }
@@ -586,7 +595,8 @@ TALOS_RT_RECURSIVE_BITSTREAM_HELPER talos_rt_status acquireRecursiveContainer(
   if ((!sequential && !associative) || header->kind != record.extent || !span ||
       *span != record.sourceSpan || header->element->value_size == 0 ||
       header->size > header->capacity ||
-      (header->size != 0 && !header->buffer) ||
+      (header->size != 0 && !header->buffer &&
+       !hasInlineQueueStorage(*header)) ||
       (header->kind == TALOS_RT_CONTAINER_QUEUE && header->capacity != 0 &&
        ((header->capacity & (header->capacity - 1)) != 0 ||
         header->head >= header->capacity)) ||
@@ -619,6 +629,12 @@ TALOS_RT_RECURSIVE_BITSTREAM_HELPER talos_rt_status acquireRecursiveContainer(
       return TALOS_RT_INVALID_HANDLE;
     lease.indices = reinterpret_cast<const uint64_t *>(lease.order.object +
                                                        sizeof(BufferHeader));
+  }
+  if (hasInlineQueueStorage(*header)) {
+    lease.stride = talos::runtime_detail::elementStride(header->element);
+    lease.valueOffset = 0;
+    lease.data = header->inlineElements;
+    return TALOS_RT_OK;
   }
   status = talos_rt_managed_object_acquire(
       request.lane, header->buffer, TALOS_RT_MANAGED_BUFFER, &lease.buffer);

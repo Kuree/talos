@@ -3930,9 +3930,8 @@ private:
 
 } // namespace
 
-bool talos_rt_managed_value_mutation_masked(
-    talos_rt_object_v1 *object) noexcept {
-  ObjectMetadata *metadata = metadataFor(object);
+static bool managedValueMutationMasked(ObjectMetadata *metadata,
+                                       talos_rt_object_v1 *object) noexcept {
   if (!metadata || metadata->kind != TALOS_RT_MANAGED_CONTAINER ||
       !metadata->heap)
     return false;
@@ -3973,6 +3972,38 @@ bool talos_rt_managed_value_mutation_masked(
     // Runtime mutation entry points are noexcept across this internal query.
   }
   return false;
+}
+
+bool talos_rt_managed_value_mutation_masked(
+    talos_rt_object_v1 *object) noexcept {
+  return managedValueMutationMasked(metadataFor(object), object);
+}
+
+talos_rt_status talos_rt_mutate_owned_container(talos_rt_gc_lane_v1 *lane,
+                                                talos_rt_object_v1 *container,
+                                                ManagedObjectAccess access,
+                                                void *environment,
+                                                bool &watched) {
+  watched = false;
+  if (!lane || !lane->heap || !container || !access)
+    return TALOS_RT_INVALID_ARGUMENT;
+  ObjectMetadata *metadata = metadataFor(container, lane->heap);
+  if (!metadata)
+    return TALOS_RT_INVALID_HANDLE;
+  if (managedValueMutationMasked(metadata, container))
+    return TALOS_RT_OK;
+  if (!lane->heap->activeOwner(lane))
+    return TALOS_RT_INVALID_ARGUMENT;
+  if (metadata->kind != TALOS_RT_MANAGED_CONTAINER)
+    return TALOS_RT_INVALID_HANDLE;
+  talos_rt_status status;
+  {
+    ObjectLock lock(metadata);
+    status = access(environment, static_cast<uint8_t *>(metadata->object),
+                    metadata->extent);
+  }
+  watched = metadata->hasManagedWatch.load(std::memory_order_acquire);
+  return status;
 }
 
 extern "C" talos_rt_status talos_rt_v1_object_read(talos_rt_object_v1 *object,

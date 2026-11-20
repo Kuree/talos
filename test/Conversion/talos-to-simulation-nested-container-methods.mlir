@@ -236,7 +236,8 @@ module {
 // CHECK: %[[BACK_ORIGINAL_QUEUE:.*]] = simulation.assoc.read %[[BACK_ORIGINAL_PARENT]],
 // CHECK: simulation.container.clone %{{.*}}
 // CHECK: ^{{bb[0-9]+}}(%[[BACK_MUTATED_QUEUE:.*]]: !simulation.queue<i32, 0>):
-// CHECK: simulation.container.write %[[BACK_MUTATED_QUEUE]],
+// CHECK-NOT: simulation.container.size %[[BACK_MUTATED_QUEUE]]
+// CHECK: simulation.queue.push_back {{.*}} into %[[BACK_MUTATED_QUEUE]]
 // CHECK: %[[BACK_FRESH_PARENT:.*]] = simulation.ref.load %[[BACK_PARENT_REF]]
 // CHECK: simulation.assoc.write %[[BACK_FRESH_PARENT]], {{.*}}, %[[BACK_MUTATED_QUEUE]]
 

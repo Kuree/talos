@@ -1034,7 +1034,8 @@ acquireContainer(Request &request, talos_rt_object_v1 *container,
   if ((!sequential && !associative) || header->kind != record.extent || !span ||
       *span != record.sourceSpan || header->element->value_size == 0 ||
       header->size > header->capacity ||
-      (header->size != 0 && !header->buffer) ||
+      (header->size != 0 && !header->buffer &&
+       !hasInlineQueueStorage(*header)) ||
       (header->kind == TALOS_RT_CONTAINER_QUEUE && header->capacity != 0 &&
        ((header->capacity & (header->capacity - 1)) != 0 ||
         header->head >= header->capacity)) ||
@@ -1069,6 +1070,12 @@ acquireContainer(Request &request, talos_rt_object_v1 *container,
       return TALOS_RT_INVALID_HANDLE;
     lease.indices = reinterpret_cast<const uint64_t *>(lease.order.object +
                                                        sizeof(BufferHeader));
+  }
+  if (hasInlineQueueStorage(*header)) {
+    lease.stride = talos::runtime_detail::elementStride(header->element);
+    lease.valueOffset = 0;
+    lease.data = header->inlineElements;
+    return TALOS_RT_OK;
   }
   status = talos_rt_managed_object_acquire(
       request.lane, header->buffer, TALOS_RT_MANAGED_BUFFER, &lease.buffer);

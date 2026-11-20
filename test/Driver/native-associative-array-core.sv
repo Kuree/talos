@@ -33,6 +33,7 @@ module native_associative_array_core;
     int empty_visits;
     bit empty_first;
     map_t defaults_a, defaults_b;
+    string formatted, same_key;
     empty_visits = 0;
     foreach (empty_a[key])
       empty_visits++;
@@ -67,6 +68,11 @@ module native_associative_array_core;
     $display("whole-delete=%p missing=%h", b, b[123]);
     b <= a;
     #1 $display("nba=%p caseeq=%0d", b, b === a);
+    formatted = $sformatf("long-key-%0d", b.num());
+    same_key = {"long-", "key-", $sformatf("%0d", b.num())};
+    $display("formatted=%s length=%0d", formatted, same_key.len());
+    text[formatted] = 19;
+    $display("lookup=%0d short=%0d", text[same_key], text["a"]);
   end
 
   // CHECK: empty eq=1 case=1 low=xxxxxxxx high=xxxxxxxx visits=0 first=0
@@ -88,6 +94,8 @@ module native_associative_array_core;
   // CHECK-NEXT: whole-delete='{} missing=7
   // CHECK-NEXT: nba='{-1:
   // CHECK-SAME: caseeq=1
+  // CHECK-NEXT: formatted=long-key-2 length=10
+  // CHECK-NEXT: lookup=19 short=1
   // SLANG: slang.expression.structured_assignment_pattern
   // SLANG-SAME: has_default_setter = true
   // SLANG-SAME: index_setter_count = 2

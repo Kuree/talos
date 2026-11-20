@@ -24,7 +24,7 @@ module {
       element_flags = #simulation.element_flags<four_state>, value_size = 8 : i64,
       alignment = 8 : i64, bit_width = 64 : i64,
       trace_offsets = array<i64>, trace_kinds = array<i32>,
-      container_kind = #simulation.container_kind<queue>, bound = 0 : i64
+      container_kind = #simulation.container_kind<queue>, bound = -1 : i64
     } : (i64) -> !simulation.queue<!simulation.covergroup_handle<@cg>, 0>
     return
   }

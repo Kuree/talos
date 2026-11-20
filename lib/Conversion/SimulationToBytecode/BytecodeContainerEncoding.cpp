@@ -226,9 +226,29 @@ Encoder::encodeContainerOperation(FunctionPlan &plan, Operation *operation) {
   if (auto op = dyn_cast<sim::SimQueueDeleteOp>(operation))
     return emitIntrinsic(plan, kIntrinsicQueueDelete,
                          {op.getQueue(), op.getIndex()}, {});
+  if (auto pop = dyn_cast<sim::SimQueuePopOp>(operation)) {
+    // Keep the existing bytecode contract and the captured index for both
+    // actions. An empty pop reads the element type's default (7.10.2.4--5).
+    if (failed(emitIntrinsic(plan, kIntrinsicContainerRead,
+                             {pop.getContainer(), pop.getIndex()},
+                             {pop.getResult()})))
+      return failure();
+    return emitIntrinsic(plan, kIntrinsicQueueDelete,
+                         {pop.getContainer(), pop.getIndex()}, {});
+  }
   if (auto op = dyn_cast<sim::SimQueueInsertOp>(operation))
     return emitIntrinsic(plan, kIntrinsicQueueInsert,
                          {op.getQueue(), op.getIndex(), op.getValue()}, {});
+  if (auto op = dyn_cast<sim::SimQueuePushBackOp>(operation)) {
+    uint32_t size = temporary(plan, IntegerType::get(op.getContext(), 64));
+    uint32_t queue = reg(plan, op.getContainer());
+    if (size == UINT32_MAX ||
+        failed(emitIntrinsicRegisters(plan, kIntrinsicContainerSize, {queue},
+                                      {size})))
+      return failure();
+    return emitIntrinsicRegisters(plan, kIntrinsicContainerWrite,
+                                  {queue, size, reg(plan, op.getValue())}, {});
+  }
   if (auto op = dyn_cast<sim::SimMailboxCreateOp>(operation)) {
     SmallVector<uint8_t> traceSlots;
     for (auto [offset, kind] :

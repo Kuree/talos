@@ -333,37 +333,37 @@ FailureOr<Value> UnitLowering::lowerArrayMethod(semantic::SVCallExpressionOp op,
             : FailureOr<Value>(failure());
     if (failed(converted))
       return failure();
+    if (!queue.getBound()) {
+      // 1800-2023 7.10.2.7: the method appends the evaluated argument to
+      // the tail. The tail index is internal to this mutation.
+      sim::SimQueuePushBackOp::create(builder, location, *receiver, *converted);
+      return mutatedResult(arith::ConstantOp::create(
+          builder, location, builder.getI1Type(), builder.getBoolAttr(false)));
+    }
     Value size = sim::SimContainerSizeOp::create(
         builder, location, builder.getI64Type(), *receiver);
-    Block *write = nullptr;
-    Block *resume = nullptr;
-    if (queue.getBound()) {
-      Value capacity = arith::ConstantOp::create(
-          builder, location, builder.getI64Type(),
-          builder.getI64IntegerAttr(static_cast<uint64_t>(queue.getBound()) +
-                                    1));
-      Value full = arith::CmpIOp::create(
-          builder, location, arith::CmpIPredicate::uge, size, capacity);
-      Block *discard = addBlock();
-      write = addBlock();
-      resume = addBlock();
-      cf::CondBranchOp::create(builder, location, full, discard, ValueRange{},
-                               write, ValueRange{});
-      setCurrent(discard);
-      // IEEE 1800-2017 7.10.5 requires a warning whenever an operation on a
-      // bounded queue discards an element beyond its bound. Keep formatting
-      // and I/O entirely on that exceptional path.
-      emitRuntimeWarning(location,
-                         "bounded queue push_back discarded an element");
-      cf::BranchOp::create(builder, location, resume);
-      setCurrent(write);
-    }
+    Value capacity = arith::ConstantOp::create(
+        builder, location, builder.getI64Type(),
+        builder.getI64IntegerAttr(static_cast<uint64_t>(queue.getBound()) + 1));
+    Value full = arith::CmpIOp::create(
+        builder, location, arith::CmpIPredicate::uge, size, capacity);
+    Block *discard = addBlock();
+    Block *write = addBlock();
+    Block *resume = addBlock();
+    cf::CondBranchOp::create(builder, location, full, discard, ValueRange{},
+                             write, ValueRange{});
+    setCurrent(discard);
+    // IEEE 1800-2023 7.10.5 requires a warning whenever an operation on a
+    // bounded queue discards an element beyond its bound. Keep formatting
+    // and I/O entirely on that exceptional path.
+    emitRuntimeWarning(location,
+                       "bounded queue push_back discarded an element");
+    cf::BranchOp::create(builder, location, resume);
+    setCurrent(write);
     sim::SimContainerWriteOp::create(builder, location, *receiver, size,
                                      *converted);
-    if (resume) {
-      cf::BranchOp::create(builder, location, resume);
-      setCurrent(resume);
-    }
+    cf::BranchOp::create(builder, location, resume);
+    setCurrent(resume);
     return mutatedResult(arith::ConstantOp::create(
         builder, location, builder.getI1Type(), builder.getBoolAttr(false)));
   }
@@ -415,50 +415,30 @@ FailureOr<Value> UnitLowering::lowerArrayMethod(semantic::SVCallExpressionOp op,
     return mutatedResult(arith::ConstantOp::create(
         builder, location, builder.getI1Type(), builder.getBoolAttr(false)));
   }
-  if (method == ArrayMethod::PopFront) {
+  if (method == ArrayMethod::PopFront || method == ArrayMethod::PopBack) {
     if (withClause || children.size() != 1)
-      return emitError(location) << "pop_front does not accept arguments",
+      return emitError(location) << methodName << " does not accept arguments",
              failure();
-    auto queue = dyn_cast<sim::QueueType>(receiverType);
-    if (!queue)
-      return emitError(location) << "pop_front requires a queue receiver",
+    if (!isa<sim::QueueType>(receiverType))
+      return emitError(location) << methodName << " requires a queue receiver",
              failure();
-    Value zero = arith::ConstantOp::create(
-        builder, location, builder.getI64Type(), builder.getI64IntegerAttr(0));
-    Value value = sim::SimContainerReadOp::create(builder, location,
-                                                  elementType, *receiver, zero);
-    sim::SimQueueDeleteOp::create(builder, location, *receiver, zero);
+    Value index;
+    if (method == ArrayMethod::PopFront) {
+      index = arith::ConstantIntOp::create(builder, location, 0, 64);
+    } else {
+      Value size = sim::SimContainerSizeOp::create(
+          builder, location, builder.getI64Type(), *receiver);
+      Value one = arith::ConstantIntOp::create(builder, location, 1, 64);
+      index = arith::SubIOp::create(builder, location, size, one);
+    }
+    Value value = sim::SimQueuePopOp::create(builder, location, elementType,
+                                             *receiver, index);
     FailureOr<Type> resultType = getNormalizedSemanticType(op);
     FailureOr<Value> result =
         failed(resultType)
             ? FailureOr<Value>(failure())
             : convert(value, *resultType, isSignedNode(op), location);
-    return failed(result) ? FailureOr<Value>(failure())
-                          : mutatedResult(*result);
-  }
-  if (method == ArrayMethod::PopBack) {
-    if (withClause || children.size() != 1)
-      return emitError(location) << "pop_back does not accept arguments",
-             failure();
-    auto queue = dyn_cast<sim::QueueType>(receiverType);
-    if (!queue)
-      return emitError(location) << "pop_back requires a queue receiver",
-             failure();
-    Value size = sim::SimContainerSizeOp::create(
-        builder, location, builder.getI64Type(), *receiver);
-    Value one = arith::ConstantOp::create(
-        builder, location, builder.getI64Type(), builder.getI64IntegerAttr(1));
-    Value index = arith::SubIOp::create(builder, location, size, one);
-    Value value = sim::SimContainerReadOp::create(
-        builder, location, elementType, *receiver, index);
-    sim::SimQueueDeleteOp::create(builder, location, *receiver, index);
-    FailureOr<Type> resultType = getNormalizedSemanticType(op);
-    FailureOr<Value> result =
-        failed(resultType)
-            ? FailureOr<Value>(failure())
-            : convert(value, *resultType, isSignedNode(op), location);
-    return failed(result) ? FailureOr<Value>(failure())
-                          : mutatedResult(*result);
+    return failed(result) ? FailureOr<Value>(failure()) : mutatedResult(*result);
   }
   if (method == ArrayMethod::Insert) {
     if (withClause || children.size() != 3)

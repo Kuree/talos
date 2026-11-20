@@ -3,14 +3,9 @@
 #ifndef TALOS_RUNTIME_LIB_CONTAINERSTORAGEINTERNAL_H
 #define TALOS_RUNTIME_LIB_CONTAINERSTORAGEINTERNAL_H
 
-#include "talos/Runtime/Runtime.h"
+#include "talos/Runtime/ContainerLayout.h"
 
 namespace talos::runtime_detail {
-
-struct BufferHeader {
-  const void *descriptor;
-  uint64_t reserved;
-};
 
 // Physical associative-slot prefix shared with the cold bit-stream exporter.
 // Keeping it beside the container header prevents the ordinary and feature
@@ -25,46 +20,30 @@ struct AssocSlot {
   };
 };
 
-struct ContainerHeader {
-  const void *descriptor;
-  talos_rt_container_kind_v1 kind;
-  // Mailboxes share queue storage but preserve a distinct object identity.
-  uint32_t isMailbox;
-  const talos_rt_element_type_v1 *element;
-  talos_rt_object_v1 *buffer;
-  talos_rt_object_v1 *ordered;
-  talos_rt_object_v1 *defaultValue;
-  uint64_t size;
-  uint64_t capacity;
-  uint64_t head;
-  uint64_t bound;
-  uint64_t epoch;
-  talos_rt_assoc_key_kind_v1 keyKind;
-  uint32_t hasDefault;
-  uint64_t keyWidth;
-  talos_rt_object_v1 *referenceBuffer;
-  uint64_t referenceCount;
-  uint64_t referenceCapacity;
-  // Open-addressed index into referenceBuffer. The registry owns weak handles;
-  // the index stores only hashes and ordinals, so it needs no element tracer.
-  talos_rt_object_v1 *referenceIndex;
-  uint64_t referenceIndexCapacity;
-  // An TALOS_RT_ASSOC_KEY_ELEMENT array's interned key element type and
-  // equality plan words; null for every other container.
-  const talos_rt_element_type_v1 *keyElement;
-  const uint64_t *keyPlan;
-  // Exact immutable source descriptor for a boxed value. Zero means the box
-  // predates VPI metadata; it never means a type inferred from element storage.
-  uint64_t boxTypeID;
-};
-
-static_assert(sizeof(BufferHeader) == 16);
 static_assert(sizeof(AssocSlot) == 32);
-static_assert(sizeof(ContainerHeader) == (sizeof(void *) == 8 ? 168 : 144));
 
 inline uint64_t elementStride(const talos_rt_element_type_v1 *element) {
   return element->value_size *
          ((element->flags & TALOS_RT_ELEMENT_FOUR_STATE) ? 2 : 1);
+}
+
+// Four small scalar elements and their optional X/Z planes fit in the space
+// used by associative key metadata. Traced elements keep a managed buffer.
+inline bool supportsInlineQueue(const ContainerHeader &header) {
+  const auto *element = header.element;
+  return header.kind == TALOS_RT_CONTAINER_QUEUE && !header.isMailbox &&
+         element && !element->trace &&
+         (element->kind == TALOS_RT_ELEMENT_BITS ||
+          element->kind == TALOS_RT_ELEMENT_LOGIC) &&
+         element->value_size &&
+         element->value_size <=
+             sizeof(header.inlineElements) / inlineQueueCapacity /
+                 ((element->flags & TALOS_RT_ELEMENT_FOUR_STATE) ? 2 : 1);
+}
+
+inline bool hasInlineQueueStorage(const ContainerHeader &header) {
+  return !header.buffer && header.capacity == inlineQueueCapacity &&
+         supportsInlineQueue(header);
 }
 
 inline uint64_t assocValueOffset(const talos_rt_element_type_v1 *element) {

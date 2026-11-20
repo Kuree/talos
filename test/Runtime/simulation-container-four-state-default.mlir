@@ -9,8 +9,9 @@
 // Invalid sequential-container reads and newly allocated four-state elements
 // have the SystemVerilog default value X. A null handle is the representation
 // of a default-initialized empty container and must produce the element default
-// for four-state, real, and string elements in both execution tiers.
-// CHECK: 1 1 1 1 1 1
+// for four-state, real, and string elements in both execution tiers. Popping
+// an empty queue returns the same typed default (1800-2023 7.10.2.4-5).
+// CHECK: 1 1 1 1 1 1 1
 
 module attributes {
   llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128",
@@ -83,6 +84,10 @@ module attributes {
           (!simulation.logic<32>, !simulation.logic<32>) -> i1
       %null_logic_ok = simulation.logic.compare case_eq %null_logic_value, %x :
           (!simulation.logic<32>, !simulation.logic<32>) -> i1
+      %popped = simulation.queue.pop %null_logic[%zero] :
+          !simulation.queue<!simulation.logic<32>, 0> -> !simulation.logic<32>
+      %popped_ok = simulation.logic.compare case_eq %popped, %x :
+          (!simulation.logic<32>, !simulation.logic<32>) -> i1
       %real_zero = arith.constant 0.000000e+00 : f64
       %null_real_ok = arith.cmpf oeq, %null_real_value, %real_zero : f64
       %null_string_length = simulation.string.length %null_string_value :
@@ -90,13 +95,13 @@ module attributes {
       %null_string_ok = arith.cmpi eq, %null_string_length, %zero : i64
       %queue_ok = arith.andi %empty_ok, %invalid_ok : i1
       %ok = arith.andi %queue_ok, %allocated_ok : i1
-      %format = simulation.bytes.constant "%0d %0d %0d %0d %0d %0d"
+      %format = simulation.bytes.constant "%0d %0d %0d %0d %0d %0d %0d"
       %stdout = arith.constant 1 : i32
       simulation.display %ctx to %stdout(
           %format, %empty_ok, %invalid_ok, %allocated_ok, %null_logic_ok,
-          %null_real_ok, %null_string_ok)
-          newline = true radix = <decimal> flags = [0, 0, 0, 0, 0, 0, 0] :
-          !simulation.bytes, i1, i1, i1, i1, i1, i1
+          %null_real_ok, %null_string_ok, %popped_ok)
+          newline = true radix = <decimal> flags = [0, 0, 0, 0, 0, 0, 0, 0] :
+          !simulation.bytes, i1, i1, i1, i1, i1, i1, i1
       simulation.return
     }
   }

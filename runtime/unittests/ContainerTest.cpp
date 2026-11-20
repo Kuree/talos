@@ -1445,6 +1445,39 @@ TEST_F(ManagedValueTest, QueueGrowsAcrossCapacitiesOnEveryInsertPath) {
   EXPECT_EQ(talos_rt_v1_gc_root_pop(lane, &queueRoot), TALOS_RT_OK);
 }
 
+TEST_F(ManagedValueTest, ShortQueuePreservesAllocationOrderAcrossGrowth) {
+  talos_rt_object_v1 *queue = nullptr;
+  ASSERT_EQ(talos_rt_v1_queue_create(lane, &byteElement, UINT64_MAX, &queue),
+            TALOS_RT_OK);
+  talos_rt_gc_root_v1 root{};
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &root, &queue), TALOS_RT_OK);
+  talos_rt_gc_statistics_v1 before{}, after{};
+  ASSERT_EQ(talos_rt_v1_gc_statistics(context, &before), TALOS_RT_OK);
+  for (uint8_t i = 0; i < 4; ++i)
+    ASSERT_EQ(talos_rt_v1_container_write(lane, queue, i, &i, nullptr),
+              TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_statistics(context, &after), TALOS_RT_OK);
+  EXPECT_EQ(after.allocated_objects, before.allocated_objects);
+
+  talos_rt_object_v1 *marker = nullptr;
+  ASSERT_EQ(talos_rt_v1_queue_create(lane, &byteElement, UINT64_MAX, &marker),
+            TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_object_id(marker), talos_rt_v1_object_id(queue) + 2);
+  uint8_t fifth = 4;
+  ASSERT_EQ(talos_rt_v1_queue_push(lane, queue, 0, &fifth, nullptr),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_statistics(context, &after), TALOS_RT_OK);
+  EXPECT_EQ(after.allocated_objects, before.allocated_objects + 2);
+  ASSERT_EQ(talos_rt_v1_gc_collect(lane), TALOS_RT_OK);
+  for (uint8_t i = 0; i <= fifth; ++i) {
+    uint8_t output = UINT8_MAX;
+    ASSERT_EQ(talos_rt_v1_container_read(queue, i, &output, nullptr),
+              TALOS_RT_OK);
+    EXPECT_EQ(output, i);
+  }
+  EXPECT_EQ(talos_rt_v1_gc_root_pop(lane, &root), TALOS_RT_OK);
+}
+
 TEST_F(ManagedValueTest, QueueRingOperationsPreserveLogicalOrder) {
   talos_rt_object_v1 *queue = nullptr;
   ASSERT_EQ(talos_rt_v1_queue_create(lane, &wordElement, UINT64_MAX, &queue),
@@ -1486,6 +1519,51 @@ TEST_F(ManagedValueTest, QueueRingOperationsPreserveLogicalOrder) {
   ASSERT_EQ(talos_rt_v1_container_delete(queue), TALOS_RT_OK);
   EXPECT_EQ(talos_rt_v1_container_size(queue), 0u);
   EXPECT_EQ(talos_rt_v1_gc_root_pop(lane, &queueRoot), TALOS_RT_OK);
+}
+
+TEST_F(ManagedValueTest, CheckedQueueEraseKeepsPlanesAndValidatesBeforeRemoval) {
+  talos_rt_object_v1 *queue = nullptr;
+  // A null handle represents an empty queue. The typed caller supplies the
+  // element default, including the X plane (IEEE 1800-2023 7.10.2.4-5).
+  uint64_t value = 0, unknown = 15;
+  for (int64_t index : {0, -1}) {
+    ASSERT_EQ(talos_rt_v1_queue_read_delete_checked(
+                  queue, index, &value, sizeof(value), &unknown, sizeof(unknown)),
+              TALOS_RT_OK);
+    EXPECT_EQ(value, 0u);
+    EXPECT_EQ(unknown, 15u);
+    EXPECT_EQ(talos_rt_v1_queue_delete_index(queue, index), TALOS_RT_OK);
+  }
+  ASSERT_EQ(talos_rt_v1_queue_create(lane, &logicElement, UINT64_MAX, &queue),
+            TALOS_RT_OK);
+  talos_rt_gc_root_v1 root{};
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &root, &queue), TALOS_RT_OK);
+  for (uint64_t i = 0; i < 9; ++i) {
+    uint64_t unknown = 1ULL << (i % 4);
+    ASSERT_EQ(talos_rt_v1_queue_push(lane, queue, 0, &i, &unknown),
+              TALOS_RT_OK);
+  }
+  EXPECT_EQ(talos_rt_v1_queue_read_delete_checked(queue, 1, &value, 0, &unknown,
+                                                  sizeof(unknown)),
+            TALOS_RT_INVALID_ARGUMENT);
+  EXPECT_EQ(talos_rt_v1_container_size(queue), 9u);
+  std::vector<uint64_t> expected{0, 1, 2, 3, 4, 5, 6, 7, 8};
+  for (size_t i : {1, 5, 0, 5, 2, 2, 1, 0, 0}) {
+    value = unknown = 0;
+    ASSERT_EQ(talos_rt_v1_queue_read_delete_checked(
+                  queue, i, &value, sizeof(value), &unknown, sizeof(unknown)),
+              TALOS_RT_OK);
+    EXPECT_EQ(value, expected[i]);
+    EXPECT_EQ(unknown, 1u << (expected[i] % 4));
+    expected.erase(expected.begin() + i);
+  }
+  ASSERT_EQ(talos_rt_v1_queue_read_delete_checked(
+                queue, 0, &value, sizeof(value), &unknown, sizeof(unknown)),
+            TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_container_size(queue), 0u);
+  EXPECT_EQ(value, 0u);
+  EXPECT_EQ(unknown, 15u);
+  EXPECT_EQ(talos_rt_v1_gc_root_pop(lane, &root), TALOS_RT_OK);
 }
 
 TEST_F(ManagedValueTest, CoverageSetSnapshotUsesLogicalContainerOrder) {

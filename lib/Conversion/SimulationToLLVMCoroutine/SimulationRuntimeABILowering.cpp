@@ -615,6 +615,10 @@ void declareNativeRuntimeABI(ModuleOp module) {
                            {managedPointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_queue_delete_index", managedI32,
                            {managedPointer, managedI64});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_queue_read_delete_checked",
+                           managedI32, {managedPointer, managedI64,
+                                        managedPointer, managedI64,
+                                        managedPointer, managedI64});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_queue_insert", managedI32,
                            {managedPointer, managedPointer, managedI64,
                             managedPointer, managedPointer});
@@ -838,6 +842,9 @@ void declareNativeRuntimeABI(ModuleOp module) {
   getOrDeclareLLVMFunction(
       module, "talos_rt_v1_container_read", managedI32,
       {managedPointer, managedI64, managedPointer, managedPointer});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_queue_push", managedI32,
+                           {managedPointer, managedPointer, managedI32,
+                            managedPointer, managedPointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_container_write", managedI32,
                            {managedPointer, managedPointer, managedI64,
                             managedPointer, managedPointer});

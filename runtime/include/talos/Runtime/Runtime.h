@@ -3299,6 +3299,11 @@ talos_rt_status talos_rt_v1_queue_insert(talos_rt_gc_lane_v1 *lane,
                                          const void *unknown);
 talos_rt_status talos_rt_v1_queue_delete_index(talos_rt_object_v1 *queue,
                                                int64_t index);
+// Read the element into independent result buffers, then delete that index.
+// An empty or out-of-range read supplies the element type's default.
+talos_rt_status talos_rt_v1_queue_read_delete_checked(
+    talos_rt_object_v1 *queue, int64_t index, void *out_value,
+    uint64_t value_size, void *out_unknown, uint64_t unknown_size);
 talos_rt_status
 talos_rt_v1_assoc_create(talos_rt_gc_lane_v1 *lane,
                          const talos_rt_element_type_v1 *element_type,
