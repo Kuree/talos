@@ -47,13 +47,21 @@ TEST_P(ReadySetCapacity, ClockKernelPublicationMaintainsGeneratedIndex) {
       EXPECT_EQ(ready.popFirst(), last);
     EXPECT_EQ(ready.findFirst(), none);
   }
+  uint32_t base = last - last % 64;
+  uint64_t mask = (uint64_t{1} << (last % 64)) | 1;
+  talos::runtime::publishClockKernelReadyWord(kernel, last / 64, mask);
+  EXPECT_EQ(ready.popFirst(), base);
+  if (last != base)
+    EXPECT_EQ(ready.popFirst(), last);
+  EXPECT_EQ(ready.findFirst(), none);
   // Old ABI clients still provide only leaves; no cache/summary may be touched.
   std::vector<uint64_t> raw(words + 1);
   raw.back() = 0xabcde;
   kernel.ingress_mask = raw.data();
   kernel.reserved = 0;
   talos::runtime::publishClockKernelReady(kernel, last);
-  EXPECT_EQ(raw[last / 64], uint64_t{1} << (last % 64));
+  talos::runtime::publishClockKernelReadyWord(kernel, last / 64, mask);
+  EXPECT_EQ(raw[last / 64], mask);
   EXPECT_EQ(raw.back(), 0xabcdeu);
 }
 
@@ -402,7 +410,7 @@ TEST_P(ReadySetCapacity, DirtyLevelsCoverEveryPendingBit) {
   };
   for (unsigned step = 0; step < 10000; ++step) {
     uint32_t bit = random() % capacity;
-    switch (random() % 4) {
+    switch (random() % 5) {
     case 0:
       EXPECT_EQ(ready.set(bit), reference.insert(bit).second);
       break;
@@ -418,6 +426,15 @@ TEST_P(ReadySetCapacity, DirtyLevelsCoverEveryPendingBit) {
       ASSERT_EQ(ready.findFirst(), expected);
       if (expected != none)
         ready.reset(expected), reference.erase(expected);
+      break;
+    }
+    case 4: {
+      uint32_t other = (bit & ~63u) + random() % 64;
+      uint64_t mask = (uint64_t{1} << (bit % 64)) |
+                      (uint64_t{1} << (other % 64));
+      talos::runtime::publishClockKernelReadyWord(kernel, bit / 64, mask);
+      reference.insert(bit);
+      reference.insert(other);
       break;
     }
     }

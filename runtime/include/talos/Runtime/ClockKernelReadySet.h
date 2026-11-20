@@ -29,6 +29,18 @@ inline DirtyReadySetLayout clockKernelDirtyReadySetLayout(uint32_t words) {
 inline void publishClockKernelReady(const talos_rt_native_clock_kernel &kernel,
                                     uint32_t bit) {
   if (kernel.reserved & dirtyClockKernelReadySet) {
+    const uint32_t words = kernel.ingress_word_count;
+    if (words <= 64 * DirtyReadySetLayout::flatWordLimit) {
+      // The dirty index has at most one summary level. Its first word
+      // follows all the leaves. No layout construction is needed per wake.
+      uint32_t leaf = bit / 64;
+      if (leaf < words) {
+        kernel.ingress_mask[leaf] |= uint64_t{1} << (bit % 64);
+        if (words > 1)
+          kernel.ingress_mask[words + leaf / 64] |= uint64_t{1} << (leaf % 64);
+      }
+      return;
+    }
     const DirtyReadySetLayout layout =
         clockKernelDirtyReadySetLayout(kernel.ingress_word_count);
     DirtyReadySetView(kernel.ingress_mask, layout).set(bit);
@@ -38,6 +50,28 @@ inline void publishClockKernelReady(const talos_rt_native_clock_kernel &kernel,
     ReadySetView(kernel.ingress_mask, layout).set(bit);
   } else {
     kernel.ingress_mask[bit / 64] |= uint64_t{1} << (bit % 64);
+  }
+}
+
+// A nonempty set of destinations in a single ingress word. Update the same
+// summaries as individual publications, including the cached minimum.
+inline void publishClockKernelReadyWord(
+    const talos_rt_native_clock_kernel &kernel, uint32_t word, uint64_t mask) {
+  if (kernel.reserved & dirtyClockKernelReadySet) {
+    uint32_t words = kernel.ingress_word_count;
+    if (words <= 64 * DirtyReadySetLayout::flatWordLimit) {
+      kernel.ingress_mask[word] |= mask;
+      if (words > 1)
+        kernel.ingress_mask[words + word / 64] |= uint64_t{1} << (word % 64);
+      return;
+    }
+    const auto layout = clockKernelDirtyReadySetLayout(words);
+    DirtyReadySetView(kernel.ingress_mask, layout).setWord(word, mask);
+  } else if (kernel.reserved & indexedClockKernelReadySet) {
+    const auto layout = clockKernelReadySetLayout(kernel.ingress_word_count);
+    ReadySetView(kernel.ingress_mask, layout).setWord(word, mask);
+  } else {
+    kernel.ingress_mask[word] |= mask;
   }
 }
 
