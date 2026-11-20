@@ -200,13 +200,13 @@ jobs:
             python -m pip install 'delocate>=0.13'
           fi
 
-      # Reserve cache space for compiled objects. Per-commit keys allow updates
+      # Reserve cache space for compiled objects. Per-attempt keys allow updates
       # to immutable entries; the prefix restores the latest compatible cache.
       - name: Restore compiler cache
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ matrix.ccache }}-${{ github.sha }}
+          key: ccache-${{ matrix.ccache }}-${{ github.sha }}-${{ github.run_attempt }}
           restore-keys: ccache-${{ matrix.ccache }}-
 
       # The macOS LLVM SDK contains bitcode, so ccache cannot reuse its links.
@@ -215,7 +215,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: build/lto.cache
-          key: host-lto-${{ matrix.ccache }}-${{ github.sha }}
+          key: host-lto-${{ matrix.ccache }}-${{ github.sha }}-${{ github.run_attempt }}
           restore-keys: host-lto-${{ matrix.ccache }}-
 
       - name: Prepare compiler cache
@@ -369,19 +369,20 @@ jobs:
           fi
 
       # PRs restore main's cache; branch-only saves would just compete for space.
+      # A failed build still saves: ccache never stores a failed compile.
       - name: Save compiler cache
-        if: always() && github.ref == 'refs/heads/main' && steps.build.outcome == 'success'
+        if: always() && github.ref == 'refs/heads/main' && (steps.build.outcome == 'success' || steps.build.outcome == 'failure')
         uses: actions/cache/save@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ matrix.ccache }}-${{ github.sha }}
+          key: ccache-${{ matrix.ccache }}-${{ github.sha }}-${{ github.run_attempt }}
 
       - name: Save host ThinLTO cache
-        if: always() && runner.os == 'macOS' && github.ref == 'refs/heads/main' && steps.build.outcome == 'success'
+        if: always() && runner.os == 'macOS' && github.ref == 'refs/heads/main' && (steps.build.outcome == 'success' || steps.build.outcome == 'failure')
         uses: actions/cache/save@v4
         with:
           path: build/lto.cache
-          key: host-lto-${{ matrix.ccache }}-${{ github.sha }}
+          key: host-lto-${{ matrix.ccache }}-${{ github.sha }}-${{ github.run_attempt }}
 
   publish-dev-wheels:
     name: Publish rolling development binaries
@@ -480,7 +481,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-wasm-${{ runner.os }}-${{ github.sha }}
+          key: ccache-wasm-${{ runner.os }}-${{ github.sha }}-${{ github.run_attempt }}
           restore-keys: ccache-wasm-${{ runner.os }}-
 
       - name: Prepare compiler cache
@@ -540,11 +541,11 @@ jobs:
             -e CCACHE_DIR=/ccache "$WASM_IMAGE" ccache --show-stats --verbose
 
       - name: Save compiler cache
-        if: always() && github.ref == 'refs/heads/main' && steps.build.outcome == 'success'
+        if: always() && github.ref == 'refs/heads/main' && (steps.build.outcome == 'success' || steps.build.outcome == 'failure')
         uses: actions/cache/save@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-wasm-${{ runner.os }}-${{ github.sha }}
+          key: ccache-wasm-${{ runner.os }}-${{ github.sha }}-${{ github.run_attempt }}
 
       - name: Assemble site
         run: |
