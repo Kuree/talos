@@ -71,22 +71,23 @@ void materializeNativeNBAMetadataExport(
     uint64_t compactMask = 0;
     for (uint32_t root : roots)
       compactMask |= uint64_t{1} << (root % 64);
-    Value bits = arith::AndIOp::create(
-        b, loc,
-        LLVM::LoadOp::create(b, loc, i64,
-                             byteGEP(b, loc, dirty, uint64_t{word} * 8), 8),
-        llvmConstant(b, loc, i64, compactMask));
+    // Hoist operands that build IR: argument evaluation order is
+    // unspecified (MSVC goes right to left) and tests pin the emitted order.
+    Value dirtyWord = LLVM::LoadOp::create(
+        b, loc, i64, byteGEP(b, loc, dirty, uint64_t{word} * 8), 8);
+    Value compact = llvmConstant(b, loc, i64, compactMask);
+    Value bits = arith::AndIOp::create(b, loc, dirtyWord, compact);
     Value shadowAddress = byteGEP(b, loc, exported, uint64_t{slot} * 8);
     Value previous = LLVM::LoadOp::create(b, loc, i64, shadowAddress, 8);
     Block *visit = new Block, *next = new Block;
     next->addArgument(i64, loc);
     function.getBody().push_back(visit);
     function.getBody().push_back(next);
+    Value changed = arith::OrIOp::create(b, loc, bits, previous);
+    Value zero = llvmConstant(b, loc, i64, 0);
     cf::CondBranchOp::create(
         b, loc,
-        arith::CmpIOp::create(b, loc, arith::CmpIPredicate::ne,
-                              arith::OrIOp::create(b, loc, bits, previous),
-                              llvmConstant(b, loc, i64, 0)),
+        arith::CmpIOp::create(b, loc, arith::CmpIPredicate::ne, changed, zero),
         visit, ValueRange{}, next, ValueRange{live});
     b.setInsertionPointToStart(visit);
     for (uint32_t root : roots) {
@@ -111,19 +112,23 @@ void materializeNativeNBAMetadataExport(
           arith::SelectOp::create(b, loc, present, mask,
                                   llvmConstant(b, loc, i64, 0)),
           maskAddress, 8);
+      Value valid = arith::ExtUIOp::create(b, loc, i32, present);
       LLVM::StoreOp::create(
-          b, loc, arith::ExtUIOp::create(b, loc, i32, present),
+          b, loc, valid,
           field(offsetof(talos_rt_generated_nba_accumulator_256, valid)), 4);
+      Value region =
+          llvmConstant(b, loc, i32, plan.generatedCommitRegions[root]);
       LLVM::StoreOp::create(
-          b, loc, llvmConstant(b, loc, i32, plan.generatedCommitRegions[root]),
+          b, loc, region,
           field(offsetof(talos_rt_generated_nba_accumulator_256, exec_region)),
           4);
       Value page = byteGEP(b, loc, summary, uint64_t{root / 4096} * 8);
       Value old = LLVM::LoadOp::create(b, loc, i64, page, 8);
-      Value added = arith::SelectOp::create(
-          b, loc, present,
-          llvmConstant(b, loc, i64, uint64_t{1} << ((root / 64) % 64)),
-          llvmConstant(b, loc, i64, 0));
+      Value pageBit =
+          llvmConstant(b, loc, i64, uint64_t{1} << ((root / 64) % 64));
+      Value noPageBit = llvmConstant(b, loc, i64, 0);
+      Value added =
+          arith::SelectOp::create(b, loc, present, pageBit, noPageBit);
       LLVM::StoreOp::create(b, loc, arith::OrIOp::create(b, loc, old, added),
                             page, 8);
     }
@@ -133,13 +138,12 @@ void materializeNativeNBAMetadataExport(
     b.setInsertionPointToStart(next);
     live = next->getArgument(0);
   }
-  LLVM::StoreOp::create(
-      b, loc,
-      arith::ExtUIOp::create(
-          b, loc, i8,
-          arith::CmpIOp::create(b, loc, arith::CmpIPredicate::ne, live,
-                                llvmConstant(b, loc, i64, 0))),
-      LLVM::AddressOfOp::create(b, loc, ptr, liveName), 1);
+  Value noneLive = llvmConstant(b, loc, i64, 0);
+  Value anyLive = arith::ExtUIOp::create(
+      b, loc, i8,
+      arith::CmpIOp::create(b, loc, arith::CmpIPredicate::ne, live, noneLive));
+  LLVM::StoreOp::create(b, loc, anyLive,
+                        LLVM::AddressOfOp::create(b, loc, ptr, liveName), 1);
   LLVM::ReturnOp::create(b, loc, ValueRange{});
   // Export while eval still owns its captures: on return, or immediately
   // before its exceptional canonical barrier. The runtime callback also

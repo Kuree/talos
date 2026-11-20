@@ -323,6 +323,13 @@ project(talos
 configure_file("${PROJECT_SOURCE_DIR}/include/talos/Version.h.in"
   "${PROJECT_BINARY_DIR}/include/talos/Version.h" @ONLY)
 
+# Neither Talos nor its C++20 dependencies (slang, Z3) use C++ modules. CMake
+# 4.5 builds the standard library's `std` module for every C++20 target it
+# scans, and on macOS the SDK's std.cppm does not compile against the system
+# libc++ headers. Older CMake ignores these.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+set(CMAKE_CXX_MODULE_STD OFF)
+
 set(MLIR_DIR "${TALOS_LLVM_DIST_DIR}/lib/cmake/mlir")
 set(LLVM_DIR "${TALOS_LLVM_DIST_DIR}/lib/cmake/llvm")
 list(PREPEND CMAKE_PREFIX_PATH "${TALOS_LLVM_DIST_DIR}")
@@ -559,6 +566,8 @@ if(TALOS_ENABLE_Z3)
   set(_talos_z3_cmake_args
       -DCMAKE_BUILD_TYPE=Release
       "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+      -DCMAKE_CXX_SCAN_FOR_MODULES=OFF
+      -DCMAKE_CXX_MODULE_STD=OFF
       -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
       -DCMAKE_POSITION_INDEPENDENT_CODE=ON
       -DZ3_BUILD_LIBZ3_SHARED=OFF
