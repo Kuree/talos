@@ -1,7 +1,6 @@
 // CLAUSE: Backward SAIF program_name
+// SINCE: 0.2.0
 // REQUIRES: upf
-// XFAIL: *
-// Talos has no SAIF writer or reader; --saif is the option this probe expects.
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top --saif=probe.saif -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe
 // RUN: %FileCheck %s --check-prefix=FILE0 --input-file=probe.saif

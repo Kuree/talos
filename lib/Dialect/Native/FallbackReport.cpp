@@ -9,7 +9,13 @@ using namespace mlir;
 
 namespace talos::native {
 namespace {
-std::mutex reportMutex;
+/// Never destroyed: the driver detaches its report file from a static
+/// destructor, and destruction order across translation units is unspecified
+/// (on macOS, locking a destroyed mutex throws).
+std::mutex &getReportMutex() {
+  static std::mutex *mutex = new std::mutex;
+  return *mutex;
+}
 llvm::raw_ostream *reportStream = nullptr;
 
 /// The first file position a location names, as "file:line:column".
@@ -52,7 +58,7 @@ void reportFallback(ModuleOp module, const FallbackRecord &record) {
   std::string line;
   llvm::raw_string_ostream os(line);
   os << llvm::json::Value(std::move(object)) << '\n';
-  std::lock_guard<std::mutex> lock(reportMutex);
+  std::lock_guard<std::mutex> lock(getReportMutex());
   // A report file holds plain JSON lines; stderr tags each line so it reads
   // among other diagnostics.
   if (reportStream) {
@@ -65,7 +71,7 @@ void reportFallback(ModuleOp module, const FallbackRecord &record) {
 }
 
 void setFallbackReportStream(llvm::raw_ostream *stream) {
-  std::lock_guard<std::mutex> lock(reportMutex);
+  std::lock_guard<std::mutex> lock(getReportMutex());
   reportStream = stream;
 }
 

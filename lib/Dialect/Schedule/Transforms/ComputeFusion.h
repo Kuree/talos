@@ -84,6 +84,22 @@ struct CombinationalFusionFailure {
   std::string getMessage() const;
 };
 
+/// Design-wide facts canInterleave needs: toggle-observable roots, watch
+/// resolvability and the change watchers per root. Built once; the planner
+/// asks per owner for thousands of growth candidates. Declared outside the
+/// analysis so its default member initializers are complete where the
+/// analysis's std::optional member checks default constructibility (MSVC STL).
+struct CombinationalFusionInterleaveIndex {
+  llvm::DenseSet<uint64_t> toggleRoots;
+  bool unknownWatch = false;
+  bool unresolvedWatch = false;
+  llvm::DenseMap<
+      uint64_t,
+      llvm::SmallVector<std::pair<mlir::StringAttr,
+                                  analysis::ActivationMemoryAnalysis::Range>>>
+      watchers;
+};
+
 /// Immutable, revision-local writer inventory for local ranked kernels.
 class CombinationalFusionAnalysis {
 public:
@@ -195,19 +211,7 @@ private:
   const analysis::HandleDataflowAnalysis *provenance = nullptr;
   mutable std::optional<llvm::DenseSet<uint64_t>> glitchInsensitive;
   mutable std::optional<llvm::DenseSet<uint64_t>> heldStateInsensitive;
-  /// Design-wide facts canInterleave needs: toggle-observable roots, watch
-  /// resolvability and the change watchers per root. Built once; the planner
-  /// asks per owner for thousands of growth candidates.
-  struct InterleaveIndex {
-    llvm::DenseSet<uint64_t> toggleRoots;
-    bool unknownWatch = false;
-    bool unresolvedWatch = false;
-    llvm::DenseMap<
-        uint64_t,
-        llvm::SmallVector<std::pair<mlir::StringAttr,
-                                    analysis::ActivationMemoryAnalysis::Range>>>
-        watchers;
-  };
+  using InterleaveIndex = CombinationalFusionInterleaveIndex;
   mutable std::optional<InterleaveIndex> interleaveIndex;
   mutable std::optional<RepeatableInputs> repeatableInputs;
   const InterleaveIndex &getInterleaveIndex() const;

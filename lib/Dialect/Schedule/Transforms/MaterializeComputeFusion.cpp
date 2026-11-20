@@ -4758,7 +4758,7 @@ void materializeRearmInterleavings(sim::SimDesignOp design) {
     SmallVector<sim::SimFuncOp> members;
     SmallVector<Encoding> alternatives;
   };
-  SmallVector<CohortPlan> cohortPlans;
+  SmallVector<CohortPlan, 1> cohortPlans;
   bool trace =
       native::has<native::DebugTiming>(design->getParentOfType<ModuleOp>());
   for (const auto &cohort :

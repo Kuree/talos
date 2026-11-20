@@ -388,7 +388,7 @@ void TalosSimFuseObservedProcessesPass::runOnOperation() {
   // fused process takes from its first member.
   using Key =
       std::tuple<uint64_t, unsigned, unsigned, unsigned, unsigned, Attribute>;
-  llvm::MapVector<Key, SmallVector<Member>> groups;
+  llvm::MapVector<Key, SmallVector<Member, 1>> groups;
   llvm::SmallSetVector<uint64_t, 8> risingClocks;
   for (sim::SimFuncOp function :
        design.getBody().front().getOps<sim::SimFuncOp>()) {
@@ -539,7 +539,7 @@ void TalosSimFuseObservedProcessesPass::runOnOperation() {
   unsigned kernels = 0, fused = 0;
   for (auto &group : groups) {
     const Key &key = group.first;
-    SmallVector<Member> &members = group.second;
+    SmallVector<Member, 1> &members = group.second;
     if (members.size() < 2) {
       reject("single member");
       continue;
