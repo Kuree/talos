@@ -1406,7 +1406,7 @@ def NativeNBAStageOp : ScheduleNativeOp<"nba.stage"> {
 // the invalid-index value and a write through it does nothing
 // (IEEE 1800-2023 7.4.5, 11.5.1, 11.5.2). A selection is a chain of these
 // operations above a root handle.
-def NativeHandleOffsetOp : ScheduleNativeOp<"handle.offset"> {
+def NativeHandleOffsetOp : ScheduleNativeOp<"handle.offset", [Pure]> {
   let summary = "offset a stable native state handle";
   let description = [{
     The handle of the bit `amount` (signed) bits after the one `handle`
@@ -1422,9 +1422,12 @@ def NativeHandleOffsetOp : ScheduleNativeOp<"handle.offset"> {
     field then neither carries nor borrows, so the result is the plain sum
     `handle + amount`.
 
-    Its memory effects are those of the runtime call it stands for, and like
-    that call it does not fold: producers offset constant operands when they
-    create the selection, and constant propagation leaves it opaque.
+    Being a total function of its operands, it is pure: it reads and writes
+    no state and has no failure to preserve, since an invalid selection is
+    the invalid-handle result that its readers and writers handle (IEEE
+    1800-2023 7.4.5, 11.5.1). It does not fold, like the runtime call it
+    stands for: producers offset constant operands when they create the
+    selection, and constant propagation leaves it opaque.
 
     Native lowering creates it; it becomes the runtime call, or the sum when
     `in_bounds`, once AOT planning has read the selections it is part of.

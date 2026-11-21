@@ -1,21 +1,25 @@
 // RUN: talos-opt %s --canonicalize | FileCheck %s
 
 // A handle offset does not fold, like the runtime call it stands for, even
-// with constant operands: producers offset constants when they create it.
+// with constant operands: producers offset constants when they create it. It
+// is pure (an invalid selection is its invalid-handle result, IEEE 1800-2023
+// 7.4.5, 11.5.1), so an unused one goes away.
 // CHECK-LABEL: func.func @offsets
 // CHECK-DAG: %[[ROOT:.*]] = arith.constant 4611686031312289797 : i64
 // CHECK-DAG: %[[FOUR:.*]] = arith.constant 4 : i64
 // CHECK-DAG: %[[ZERO:.*]] = arith.constant 0 : i64
 // CHECK: %[[CONSTANT:.*]] = schedule.handle.offset %[[ROOT]], %[[FOUR]]
 // CHECK: %[[SAME:.*]] = schedule.handle.offset %{{.*}}, %[[ZERO]]
+// CHECK-NOT: schedule.handle.offset
 // CHECK: return %[[CONSTANT]], %[[SAME]] :
-func.func @offsets(%handle: i64) -> (i64, i64) {
+func.func @offsets(%handle: i64, %amount: i64) -> (i64, i64) {
   // Static object 3 at offset 5.
   %root = arith.constant 4611686031312289797 : i64
   %four = arith.constant 4 : i64
   %zero = arith.constant 0 : i64
   %constant = schedule.handle.offset %root, %four
   %same = schedule.handle.offset %handle, %zero
+  %unused = schedule.handle.offset %handle, %amount
   return %constant, %same : i64, i64
 }
 
