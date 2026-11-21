@@ -1,5 +1,6 @@
 //===- SimulationAOTMaterialization.cpp - Native AOT LLVM plan --------===//
 
+#include "NativeRuntimeEntries.h"
 #include "NativeStateAccess.h"
 #include "SimulationAOTPlanning.h"
 #include "SimulationEvalNBAQueue.h"
@@ -934,12 +935,7 @@ materializeGenericNBAQueueWindows(ModuleOp module,
       if (auto call = dyn_cast<LLVM::CallOp>(op)) {
         auto name = call.getCallee();
         bool local =
-            name && (*name == "talos_rt_v1_scheduler_generic_nba_pending" ||
-                     *name == "talos_rt_v1_scheduler_nba" ||
-                     *name == "talos_rt_v1_scheduler_nba_scalar" ||
-                     *name == "talos_rt_v1_scheduler_nba_if_changed" ||
-                     *name == "talos_rt_v1_scheduler_fail" ||
-                     *name == "talos_rt_v1_native_handle_offset");
+            name && hasNativeRuntimeEffect(*name, native_runtime::QueueStable);
         return local ? WalkResult::advance() : WalkResult::interrupt();
       }
       if (auto transition = dyn_cast<schedule::NativeTransitionOp>(op))

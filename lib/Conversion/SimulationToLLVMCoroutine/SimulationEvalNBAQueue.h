@@ -14,11 +14,6 @@ namespace talos::detail {
 inline constexpr llvm::StringLiteral evalNBAQueueName =
     "__talos_eval_ordered_nba_queue_v1";
 
-inline bool isEvalNBAReserve(llvm::StringRef name) {
-  return name == "talos_rt_v1_eval_nba_reserve" ||
-         name == "talos_rt_v1_eval_nba_reserve_records";
-}
-
 // Use the target's struct layout, not host pointer offsets. These fields match
 // runtime::EvalNBAQueue; its records contain four consecutive i64 fields.
 inline mlir::Value evalNBAQueueField(mlir::OpBuilder &builder,

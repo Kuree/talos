@@ -1,3 +1,4 @@
+#include "NativeRuntimeEntries.h"
 #include "NativeStateAccess.h"
 #include "SimulationAOTPlanning.h"
 #include "SimulationEvalNBAQueue.h"
@@ -17,29 +18,14 @@ using namespace mlir;
 namespace talos::detail {
 
 bool isReadinessTransparentCallee(StringRef callee) {
-  // Runtime leaves: each formats, latches or allocates on runtime-owned
-  // storage that no ready set shares (the same leaves stay transparent to
-  // pending NBA captures).
+  // Runtime entries that are ReadinessTransparent format, latch or allocate
+  // on runtime-owned storage that no ready set shares.
   // Generated promotion queries: they read canonical X/Z state, proof tables
   // and hints and update only proof latches, hints, the promotion-pending mask
   // and a kernel's private retry count. They activate no process and select
   // only a value domain (IEEE 1800-2023 4.3, 4.5, 6.3.1), so they cannot
   // observe an activation.
-  return callee == "talos_rt_v1_eval_display" ||
-         callee == "talos_rt_v1_scheduler_fail" ||
-         ::talos::detail::isEvalNBAReserve(callee) ||
-         callee == "talos_rt_v1_scheduler_termination_requested" ||
-         callee == "talos_rt_v1_scheduler_time" ||
-         callee == "talos_rt_v1_coverage_point_hit" ||
-         callee == "talos_rt_v1_native_promotion_invalidate_ranges" ||
-         callee == "talos_rt_v1_native_promotion_recheck_ranges" ||
-         callee == "talos_rt_v1_native_promotion_invalidate_buckets" ||
-         callee == "talos_rt_v1_native_promotion_recheck_buckets" ||
-         callee == "talos_rt_v1_native_promotion_publish_window" ||
-         callee == "talos_rt_v1_native_promotion_slices_adjust" ||
-         callee == "talos_rt_v1_native_promotion_slices_recount" ||
-         callee == "talos_rt_v1_native_state_mark_unknown" ||
-         callee == "talos_rt_v1_native_state_refresh_unknown_summary" ||
+  return hasNativeRuntimeEffect(callee, native_runtime::ReadinessTransparent) ||
          callee == kernelPromotionReadyName ||
          callee == clockedKernelReadyName || callee == groupPromotionReadyName;
 }

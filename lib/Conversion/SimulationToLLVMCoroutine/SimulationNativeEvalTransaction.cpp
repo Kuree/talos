@@ -1,5 +1,6 @@
 //===- SimulationNativeEvalTransaction.cpp - Local NBA captures ---------===//
 
+#include "NativeRuntimeEntries.h"
 #include "SimulationAOTPlanning.h"
 #include "SimulationEvalNBAQueue.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
@@ -408,89 +409,67 @@ static LLVM::LLVMFuncOp moveBodyWithPointerArgument(LLVM::LLVMFuncOp original,
 
 // Calls that cannot inspect/stage pending NBA captures. The source writer
 // inventory separately excludes runtime Active writers of localized roots.
+// An entry that is PendingTransparent for every call qualifies; the others
+// only for the argument forms below.
 bool pendingRuntimeTransparent(LLVM::CallOp call,
                                const DenseMap<uint32_t, unsigned> &byRoot) {
   auto callee = call.getCallee();
   if (!callee)
     return false;
-  if (*callee == "talos_rt_v1_scheduler_prepare_eval_nba_local" ||
-      *callee == "talos_rt_v1_scheduler_prepare_eval_nba_local_write" ||
-      *callee == "talos_rt_v1_scheduler_complete_eval_nba" ||
-      *callee == "talos_rt_v1_static_nba_direct_commit_guard" ||
-      *callee == "talos_rt_v1_static_nba_account_generated_commits" ||
-      *callee == "talos_rt_v1_static_nba_batch_guard" ||
-      *callee == "talos_rt_v1_static_nba_prefix_guard" ||
-      *callee == "talos_rt_v1_static_nba_batch_knownness" ||
-      *callee == "talos_rt_v1_static_nba_batch_finish" ||
-      *callee == "talos_rt_v1_scheduler_priority_signal_pending" ||
-      *callee == "talos_rt_v1_scheduler_handoff_pending" ||
-      *callee == runtimeWorkPendingName ||
-      *callee == "talos_rt_v1_scheduler_termination_requested" ||
-      *callee == "talos_rt_v1_scheduler_time" ||
-      *callee == "talos_rt_v1_scheduler_fail" ||
-      // These leaves allocate only the separate ordered queue or update
-      // proof/coverage metadata. None consumes generated NBA accumulators,
-      // executes an actor or invokes foreign code (LRM 4.9.4, 10.4.2).
-      ::talos::detail::isEvalNBAReserve(*callee) ||
-      *callee == "talos_rt_v1_native_promotion_invalidate_ranges" ||
-      *callee == "talos_rt_v1_native_promotion_recheck_ranges" ||
-      *callee == "talos_rt_v1_native_promotion_invalidate_buckets" ||
-      *callee == "talos_rt_v1_native_promotion_recheck_buckets" ||
-      *callee == "talos_rt_v1_native_promotion_publish_window" ||
-      *callee == "talos_rt_v1_native_promotion_slices_adjust" ||
-      *callee == "talos_rt_v1_native_promotion_slices_recount" ||
-      // The unknown summary's rescan reads CURRENT unknown planes, which
-      // pending NBAs do not touch, and only changes summary bits.
-      *callee == "talos_rt_v1_native_state_refresh_unknown_summary" ||
-      *callee == "talos_rt_v1_native_state_mark_unknown" ||
-      *callee == "talos_rt_v1_coverage_point_hit" ||
-      *callee == "talos_rt_v1_strength_resolve_kind" ||
-      // eval_display formats its already captured arguments and writes to
-      // runtime-owned FILE streams. It neither reads pending accumulators nor
-      // calls the scheduler/VPI. Source CURRENT reads stay at their original
-      // evaluation position; no NBA is committed for display (LRM 4.9.4).
-      *callee == "talos_rt_v1_eval_display" ||
-      // An ordered prefix applies its explicit captured operands to CURRENT.
-      // It does not consume the separate pending generated accumulators.
-      // Keep its source-order publications, without exporting unrelated next
-      // values before each prefix update (LRM 4.6(b), 10.4.2).
-      *callee == "talos_rt_v1_static_nba_commit_ordered" ||
-      *callee == "talos_rt_v1_static_nba_commit_wide_ordered" ||
-      *callee == "talos_rt_v1_static_specialization_guard" ||
-      *callee == "talos_rt_v1_static_specialization_guard_roots" ||
-      *callee == "talos_rt_v1_static_nba_specialization_guard" ||
-      *callee == "talos_rt_v1_static_nba_specialization_guard_write" ||
-      callee->starts_with("llvm."))
+  if (callee->starts_with("llvm."))
     return true;
-  if (*callee == "talos_rt_v1_scheduler_wide_transition_owned" &&
-      call.getArgOperands().size() == 8 &&
-      call.getArgOperands()[1].getDefiningOp<LLVM::ConstantOp>() &&
-      call.getArgOperands()[2].getDefiningOp<LLVM::ConstantOp>() &&
-      call.getArgOperands()[3].getDefiningOp<LLVM::ConstantOp>())
+  std::optional<NativeRuntimeEntry> entry = getNativeRuntimeEntry(*callee);
+  if (!entry)
+    return false;
+  if (getNativeRuntimeEffects(*entry) & native_runtime::PendingTransparent)
     return true;
-  if (*callee == "talos_rt_v1_scheduler_static_transition_owned" &&
-      call.getArgOperands().size() == 9 &&
-      call.getArgOperands()[1].getDefiningOp<LLVM::ConstantOp>() &&
-      call.getArgOperands()[2].getDefiningOp<LLVM::ConstantOp>())
+  auto arguments = call.getArgOperands();
+  auto constant = [&](unsigned index) {
+    return static_cast<bool>(
+        arguments[index].getDefiningOp<LLVM::ConstantOp>());
+  };
+  switch (*entry) {
+  case NativeRuntimeEntry::SchedulerWideTransitionOwned:
+    return arguments.size() == 8 && constant(1) && constant(2) && constant(3);
+  case NativeRuntimeEntry::SchedulerStaticTransitionOwned:
     // The verified publication bridge delivers waits but cannot execute a
     // waiting actor or consume pending captures. CURRENT publication still
     // occurs at this call (LRM 4.6(a), 9.4.2).
-    return true;
-  if ((*callee == "talos_rt_v1_static_nba_claim" ||
-       *callee == "talos_rt_v1_static_nba_stage_wide") &&
-      call.getArgOperands().size() >= 2) {
-    APInt index;
+    return arguments.size() == 9 && constant(1) && constant(2);
+  case NativeRuntimeEntry::StaticNbaClaim:
+  case NativeRuntimeEntry::StaticNbaStageWide: {
     // These ABIs validate and stage only the explicit root. Staging an
     // unrelated root does not expose this transaction's private captures.
-    return matchPattern(call.getArgOperands()[1], m_ConstantInt(&index)) &&
+    APInt index;
+    return arguments.size() >= 2 &&
+           matchPattern(arguments[1], m_ConstantInt(&index)) &&
            index.getActiveBits() <= 32 &&
            !byRoot.contains(index.getZExtValue());
   }
-  if (*callee == "talos_rt_v1_scheduler_static_nba")
+  case NativeRuntimeEntry::SchedulerStaticNba:
     if (auto root =
             schedule::get<schedule::Field::EvalPendingRuntimeRoot>(call))
       return !byRoot.contains(root.getValue().getZExtValue());
-  return false;
+    return false;
+  default:
+    return false;
+  }
+}
+
+// Calls a register body may make while the generic NBA queue's view stays
+// shared: they update at most the queue and its membership words. A
+// generic capture qualifies only when it is not delayed.
+static bool queueCaptureOnly(LLVM::CallOp call) {
+  std::optional<StringRef> callee = call.getCallee();
+  std::optional<NativeRuntimeEntry> entry =
+      callee ? getNativeRuntimeEntry(*callee) : std::nullopt;
+  if (!entry ||
+      !(getNativeRuntimeEffects(*entry) & native_runtime::QueueCaptureOnly))
+    return false;
+  if (*entry != NativeRuntimeEntry::SchedulerNba &&
+      *entry != NativeRuntimeEntry::SchedulerNbaIfChanged)
+    return true;
+  return call.getArgOperands().size() == 9 && zero(call.getArgOperands()[6]);
 }
 
 // Ordinary generated plane and stack reads/writes cannot rebind the queue.
@@ -550,15 +529,6 @@ static void shareGenericQueueView(ModuleOp module) {
            call.getOpBundleSizes().empty() && !call.getVarCalleeType() &&
            call.getTailCallKind() == LLVM::tailcallkind::TailCallKind::None;
   };
-  auto captureOnly = [](LLVM::CallOp call, StringRef name) {
-    return name == "talos_rt_v1_scheduler_nba_scalar" ||
-           name == "talos_rt_v1_native_handle_offset" ||
-           name == "talos_rt_v1_scheduler_fail" ||
-           ((name == "talos_rt_v1_scheduler_nba" ||
-             name == "talos_rt_v1_scheduler_nba_if_changed") &&
-            call.getArgOperands().size() == 9 &&
-            zero(call.getArgOperands()[6]));
-  };
   // Check the actual executable closure, including the two-state selector
   // and its four-state alternative. A cold foreign call still ends the view.
   std::function<Body(LLVM::LLVMFuncOp)> inspect =
@@ -604,7 +574,7 @@ static void shareGenericQueueView(ModuleOp module) {
         if (!address || address.getGlobalName() != "__talos_current_context")
           return WalkResult::interrupt();
         include(id.getZExtValue());
-      } else if (!captureOnly(call, *callee)) {
+      } else if (!queueCaptureOnly(call)) {
         Body child = inspect(symbols.lookup<LLVM::LLVMFuncOp>(*callee));
         if (!child.closed)
           return WalkResult::interrupt();
@@ -794,19 +764,7 @@ void reuseQuietNBACuts(ModuleOp module) {
     auto name = call.getCallee();
     if (!name)
       return false;
-    if (::talos::detail::isEvalNBAReserve(*name) ||
-        *name == "talos_rt_v1_scheduler_fail" ||
-        *name == "talos_rt_v1_scheduler_priority_signal_pending" ||
-        *name == "talos_rt_v1_scheduler_priority_signal_flag" ||
-        *name == "talos_rt_v1_native_promotion_invalidate_ranges" ||
-        *name == "talos_rt_v1_native_promotion_recheck_ranges" ||
-        *name == "talos_rt_v1_native_promotion_invalidate_buckets" ||
-        *name == "talos_rt_v1_native_promotion_recheck_buckets" ||
-        *name == "talos_rt_v1_native_promotion_publish_window" ||
-        *name == "talos_rt_v1_native_promotion_slices_adjust" ||
-        *name == "talos_rt_v1_native_promotion_slices_recount" ||
-        *name == "talos_rt_v1_native_state_refresh_unknown_summary" ||
-        *name == "talos_rt_v1_native_state_mark_unknown")
+    if (hasNativeRuntimeEffect(*name, native_runtime::CutQuiet))
       return true;
     auto fn = symbols.lookup<LLVM::LLVMFuncOp>(*name);
     if (!fn || fn == dispatch || fn.isExternal())

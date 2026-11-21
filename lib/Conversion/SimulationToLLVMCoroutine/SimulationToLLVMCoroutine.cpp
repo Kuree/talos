@@ -2,6 +2,7 @@
 
 #include "talos/Conversion/SimulationToLLVMCoroutine.h"
 #include "../SimulationToSchedule/NativePipeline.h"
+#include "NativeRuntimeEntries.h"
 #include "NativeStateAccess.h"
 #include "SimulationEvalNBAQueue.h"
 #include "talos/Dialect/Native/NativeDialect.h"
@@ -216,173 +217,104 @@ using detail::threadProcessStateThroughCFG;
 
 // Runtime calls admitted to a generated eval activation's call closure.
 // None executes actors, suspends, or advances time, so the activation and its
-// route bodies retain them; any other runtime call is a checkpoint leaf.
+// route bodies retain them; any other runtime call is a checkpoint leaf. An
+// entry that is EvalInline for every call stays; the others stay only for the
+// argument forms and contexts below.
 bool isEvalClosureRuntimeCall(LLVM::CallOp call, LLVM::LLVMFuncOp function,
                               ModuleOp module) {
   std::optional<StringRef> callee = call.getCallee();
-  if (!callee)
+  std::optional<detail::NativeRuntimeEntry> entry =
+      callee ? detail::getNativeRuntimeEntry(*callee) : std::nullopt;
+  if (!entry)
     return false;
-  // This query only reads the scheduler's priority-handoff latch.  Generated
-  // coordinators use it to leave the hot closure before a Reactive
-  // concurrent-disable observer runs; it cannot mutate or re-enter the
-  // scheduler like the runtime calls rejected below.
-  constexpr StringLiteral prioritySignalQuery =
-      "talos_rt_v1_scheduler_priority_signal_pending";
-  // Pure Table 28-8 strength combination takes only value arguments and has
-  // no scheduler/context edge. Gate-region eval bodies may therefore retain
-  // it just like an ordinary outlined arithmetic helper; ThinLTO can inline
-  // the small resolver in production builds.
-  constexpr StringLiteral strengthResolveQuery =
-      "talos_rt_v1_strength_resolve_kind";
-  // A line hit is a relaxed atomic increment through the context argument
-  // already present on every generated eval body. It cannot allocate, lock,
-  // re-enter the scheduler, or alter design state, so worker-lane eval bodies
-  // may retain it as an explicit observable side effect.
-  constexpr StringLiteral coveragePointHit = "talos_rt_v1_coverage_point_hit";
-  // This read-only dependency/override query cannot execute HDL or
-  // mutate readiness. Only full VPI emits these scheduling guards;
-  // off/read retain their original generated execution paths.
-  if ((*callee == "talos_rt_v1_static_specialization_guard" ||
-       *callee == "talos_rt_v1_static_specialization_guard_roots") &&
-      function.getSymName().starts_with("__talos_eval_write_guard_"))
+  if (detail::getNativeRuntimeEffects(*entry) &
+      detail::native_runtime::EvalInline)
     return true;
-  if (*callee == prioritySignalQuery || *callee == strengthResolveQuery ||
-      *callee == coveragePointHit ||
-      // A value helper's post-call termination poll only reads the
-      // context's finish latch. It cannot execute actors, publish
-      // state, advance time or request termination itself.
-      *callee == "talos_rt_v1_scheduler_termination_requested" ||
-      // Generated run_until updates the canonical scheduler time
-      // before dispatch. This query only reads that same timestamp.
-      *callee == "talos_rt_v1_scheduler_time" ||
-      *callee == "talos_rt_v1_eval_display" ||
-      // $error only latches the final exit status and lets simulation
-      // continue (IEEE 1800-2023 20.10). It never schedules or executes an
-      // actor, so its report stays inline like the direct display above.
-      // In VPI builds it also delivers cbError callbacks (38.36.3), whose VPI
-      // accesses are those of a context DPI call (two-tier V11).
-      *callee == "talos_rt_v1_scheduler_error" ||
-      // $random and $dist_* (IEEE 1800-2023 20.14, Annex N) only run the
-      // normative algorithm on a context-global or explicit seed. Random
-      // stability (18.14) lists neither, so they need no process identity
-      // and these draws stay inline, in statement order (4.6(a)).
-      *callee == "talos_rt_v1_random_legacy" ||
-      *callee == "talos_rt_v1_random_distribution" ||
-      // Assertion control (IEEE 1800-2023 20.11) only affects subsequent
-      // attempts; an attempt reads the current state from the runtime's
-      // table without scheduling, executing or suspending anything.
-      *callee == "talos_rt_v1_assertion_enabled" ||
-      *callee == "talos_rt_v1_assertion_action_state" ||
-      // Cold allocation of private generated NBA storage. This never
-      // executes actors, changes design state or re-enters scheduling.
-      ::talos::detail::isEvalNBAReserve(*callee) ||
-      // The reserve failure block latches an error and returns from
-      // the activation. It cannot schedule or execute an actor.
-      *callee == "talos_rt_v1_scheduler_fail" ||
-      // Exact proof-state publication over compiler-verified tables.
-      // The helper cannot allocate, execute actors, access canonical
-      // state, advance time, or re-enter the scheduler.
-      *callee == "talos_rt_v1_native_promotion_invalidate_ranges" ||
-      *callee == "talos_rt_v1_native_promotion_recheck_ranges" ||
-      *callee == "talos_rt_v1_native_promotion_invalidate_buckets" ||
-      *callee == "talos_rt_v1_native_promotion_recheck_buckets" ||
-      *callee == "talos_rt_v1_native_promotion_publish_window" ||
-      *callee == "talos_rt_v1_native_promotion_slices_adjust" ||
-      *callee == "talos_rt_v1_native_promotion_slices_recount" ||
-      // The unknown summary's rescan reads the generated unknown
-      // plane and clears summary bits; marking only sets them.
-      // Neither executes actors, publishes, or re-enters scheduling.
-      *callee == "talos_rt_v1_native_state_refresh_unknown_summary" ||
-      *callee == "talos_rt_v1_native_state_mark_unknown" ||
-      // The yield query only reads runtime queues (IEEE 1800-2023 4.5).
-      *callee == detail::runtimeWorkPendingName)
-    return true;
-  // An epoch-armed deferred report (IEEE 1800-2023 12.4.2.1, 12.5.3.1,
-  // 16.4.1) only queues its ticket, outside any runtime process; its flush
-  // point is the compiler-maintained epoch (16.4.2). A pending generated
-  // report makes the runtime take its region handoff before the Observed
-  // region, where the report's evaluator runs.
-  if ((*callee == "talos_rt_v1_deferred_enqueue" ||
-       *callee == "talos_rt_v1_deferred_enqueue_for_assertion") &&
-      ::talos::schedule::has<::talos::schedule::Field::EvalDirectOutput>(call))
-    return true;
-  // LRM 4.6(a), 9.4.2: the hybrid calendar's bounded publication
-  // bridge preserves the source actor identity and delivers waits
-  // without executing actors or advancing time. Its actor/root are
-  // fixed by the installed generated plan; scheduling stays outside
-  // this non-suspending activation.
-  // The generic queue captures the RHS and destination here. Its barrier
-  // belongs to the shared runtime calendar, which applies updates in enqueue
-  // order after Active/Inactive quiesce (1800-2023 4.5, 4.6(b), 10.4.2).
-  if ((*callee == "talos_rt_v1_scheduler_generic_nba_pending" ||
-       *callee == "talos_rt_v1_scheduler_generic_nba_words") &&
-      schedule::has<schedule::Field::ForceGenericNBA>(module) &&
-      schedule::has<schedule::Field::EvalRuntimeCalendar>(module) &&
-      call.getArgOperands().size() == 2 &&
-      call.getArgOperands()[1].getDefiningOp<LLVM::ConstantOp>())
-    return true;
-  if ((*callee == "talos_rt_v1_scheduler_nba" ||
-       *callee == "talos_rt_v1_scheduler_nba_if_changed") &&
-      schedule::has<schedule::Field::ForceGenericNBA>(module) &&
-      schedule::has<schedule::Field::EvalRuntimeCalendar>(module) &&
-      call.getArgOperands().size() == 9) {
+  bool runtimeCalendar =
+      schedule::has<schedule::Field::EvalRuntimeCalendar>(module);
+  bool genericQueue = schedule::has<schedule::Field::ForceGenericNBA>(module) &&
+                      runtimeCalendar;
+  auto arguments = call.getArgOperands();
+  auto constant = [&](unsigned index) {
+    return static_cast<bool>(
+        arguments[index].getDefiningOp<LLVM::ConstantOp>());
+  };
+  // IEEE 1800-2023 4.5, 9.4.2: a root whose runtime observers are all
+  // runtime-routed static fanout waits keeps the same bridge in any
+  // calendar. Periodic handoff declines while such a wait is live and a
+  // shared calendar drains it in every slot, so a delivered waiter always
+  // runs in this time slot. The NBA barrier hands the same runtime-routed
+  // waits to the runtime as node activations (4.5, 10.4.2).
+  bool runtimeRouted =
+      schedule::has<schedule::Field::EvalRuntimeRoutedPublication>(call);
+  using Entry = detail::NativeRuntimeEntry;
+  switch (*entry) {
+  case Entry::StaticSpecializationGuard:
+  case Entry::StaticSpecializationGuardRoots:
+    // Only full VPI emits these scheduling guards; off/read retain their
+    // original generated execution paths.
+    return function.getSymName().starts_with("__talos_eval_write_guard_");
+  case Entry::DeferredEnqueue:
+  case Entry::DeferredEnqueueForAssertion:
+    // An epoch-armed deferred report (IEEE 1800-2023 12.4.2.1, 12.5.3.1,
+    // 16.4.1) only queues its ticket, outside any runtime process; its flush
+    // point is the compiler-maintained epoch (16.4.2). A pending generated
+    // report makes the runtime take its region handoff before the Observed
+    // region, where the report's evaluator runs.
+    return ::talos::schedule::has<::talos::schedule::Field::EvalDirectOutput>(
+        call);
+  case Entry::SchedulerGenericNbaPending:
+  case Entry::SchedulerGenericNbaWords:
+    // The generic queue captures the RHS and destination here. Its barrier
+    // belongs to the shared runtime calendar, which applies updates in
+    // enqueue order after Active/Inactive quiesce (1800-2023 4.5, 4.6(b),
+    // 10.4.2).
+    return genericQueue && arguments.size() == 2 && constant(1);
+  case Entry::SchedulerNba:
+  case Entry::SchedulerNbaIfChanged: {
     APInt delay;
-    return matchPattern(call.getArgOperands()[6], m_ConstantInt(&delay)) &&
-           delay.isZero();
+    return genericQueue && arguments.size() == 9 &&
+           matchPattern(arguments[6], m_ConstantInt(&delay)) && delay.isZero();
   }
-  if (*callee == "talos_rt_v1_scheduler_nba_scalar" &&
-      schedule::has<schedule::Field::ForceGenericNBA>(module) &&
-      schedule::has<schedule::Field::EvalRuntimeCalendar>(module) &&
-      call.getArgOperands().size() == 8) {
+  case Entry::SchedulerNbaScalar: {
     APInt width;
-    return matchPattern(call.getArgOperands()[5], m_ConstantInt(&width)) &&
+    return genericQueue && arguments.size() == 8 &&
+           matchPattern(arguments[5], m_ConstantInt(&width)) &&
            width.getLimitedValue() != 0 && width.getLimitedValue() <= 64;
   }
-  if (*callee == "talos_rt_v1_scheduler_packed_slice_nba" &&
-      schedule::has<schedule::Field::ForceGenericNBA>(module) &&
-      schedule::has<schedule::Field::EvalRuntimeCalendar>(module) &&
-      call.getArgOperands().size() == 14) {
+  case Entry::SchedulerPackedSliceNba: {
     // IEEE 1800-2023 10.4.2, 11.5.1. Clipping the selected portion and
     // capturing both planes only appends an ordinary NBA. A static site,
     // delayed capture or clocking output has a different scheduling owner.
     APInt delay, site, clocking;
-    auto args = call.getArgOperands();
-    return matchPattern(args[9], m_ConstantInt(&delay)) && delay.isZero() &&
-           matchPattern(args[10], m_ConstantInt(&site)) && site.isAllOnes() &&
-           matchPattern(args[11], m_ConstantInt(&clocking)) &&
+    return genericQueue && arguments.size() == 14 &&
+           matchPattern(arguments[9], m_ConstantInt(&delay)) &&
+           delay.isZero() &&
+           matchPattern(arguments[10], m_ConstantInt(&site)) &&
+           site.isAllOnes() &&
+           matchPattern(arguments[11], m_ConstantInt(&clocking)) &&
            clocking.isAllOnes();
   }
-  if ((*callee == "talos_rt_v1_scheduler_wide_transition_owned" ||
-       *callee == "talos_rt_v1_scheduler_wide_transition_projected") &&
-      call.getArgOperands().size() == 8 &&
-      call.getArgOperands()[1].getDefiningOp<LLVM::ConstantOp>() &&
-      call.getArgOperands()[2].getDefiningOp<LLVM::ConstantOp>() &&
-      call.getArgOperands()[3].getDefiningOp<LLVM::ConstantOp>() &&
-      schedule::has<schedule::Field::EvalRuntimeCalendar>(module))
-    return true;
-  if ((*callee == "talos_rt_v1_scheduler_static_transition_owned" ||
-       *callee == "talos_rt_v1_scheduler_static_transition_projected") &&
-      ::talos::schedule::has<::talos::schedule::Field::EvalRuntimeCalendar>(
-          module) &&
-      call.getArgOperands().size() == 9 &&
-      call.getArgOperands()[1].getDefiningOp<LLVM::ConstantOp>() &&
-      call.getArgOperands()[2].getDefiningOp<LLVM::ConstantOp>())
-    return true;
-  // IEEE 1800-2023 4.5, 9.4.2: a root whose runtime observers are
-  // all runtime-routed static fanout waits keeps the same bridge in
-  // any calendar. Periodic handoff declines while such a wait is
-  // live and a shared calendar drains it in every slot, so a
-  // delivered waiter always runs in this time slot.
-  // The NBA barrier hands the same runtime-routed waits to the runtime as
-  // node activations (IEEE 1800-2023 4.5, 10.4.2).
-  if ((*callee == "talos_rt_v1_scheduler_static_transition_owned" ||
-       *callee == "talos_rt_v1_scheduler_static_transition_projected" ||
-       *callee == "talos_rt_v1_scheduler_static_transition" ||
-       *callee == "talos_rt_v1_scheduler_activate_static_nodes") &&
-      ::talos::schedule::has<
-          ::talos::schedule::Field::EvalRuntimeRoutedPublication>(call))
-    return true;
-  return false;
+  case Entry::SchedulerWideTransitionOwned:
+  case Entry::SchedulerWideTransitionProjected:
+    // LRM 4.6(a), 9.4.2: the hybrid calendar's bounded publication bridge
+    // preserves the source actor identity and delivers waits without
+    // executing actors or advancing time. Its actor/root are fixed by the
+    // installed generated plan; scheduling stays outside this non-suspending
+    // activation.
+    return arguments.size() == 8 && constant(1) && constant(2) && constant(3) &&
+           runtimeCalendar;
+  case Entry::SchedulerStaticTransitionOwned:
+  case Entry::SchedulerStaticTransitionProjected:
+    return (runtimeCalendar && arguments.size() == 9 && constant(1) &&
+            constant(2)) ||
+           runtimeRouted;
+  case Entry::SchedulerStaticTransition:
+  case Entry::SchedulerActivateStaticNodes:
+    return runtimeRouted;
+  default:
+    return false;
+  }
 }
 
 LogicalResult verifyGeneratedEvalCallClosures(ModuleOp module) {

@@ -1,5 +1,6 @@
 //===- SimulationToLLVMCoroutineUtils.cpp - Shared lowering support -----===//
 
+#include "NativeRuntimeEntries.h"
 #include "NativeStateAccess.h"
 #include "SimulationEvalNBAQueue.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
@@ -603,7 +604,7 @@ LLVM::LLVMFuncOp getOrDeclareLLVMFunction(ModuleOp module, StringRef name,
   // Generated code reaches queue growth only from a capacity test, so the
   // optimizer lays that arm out of line. (The failure latch is not cold: it
   // is called unconditionally with a status and tests it itself.)
-  if (::talos::detail::isEvalNBAReserve(name))
+  if (hasNativeRuntimeEffect(name, native_runtime::Cold))
     function.setPassthroughAttr(
         builder.getArrayAttr({builder.getStringAttr("cold")}));
   return function;

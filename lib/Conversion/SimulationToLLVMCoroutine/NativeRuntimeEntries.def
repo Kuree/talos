@@ -1,0 +1,235 @@
+//===- NativeRuntimeEntries.def - Native runtime entry effects -*- C++ -*-===//
+//
+// The native runtime entries whose effects native passes depend on, one row
+// each: TALOS_NATIVE_RUNTIME(Enum, C symbol, effects). The effects are the
+// facts of native_runtime::Effect (NativeRuntimeEntries.h). An entry a pass
+// admits only for certain arguments has the facts it holds for every call;
+// the pass checks those arguments itself.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef TALOS_NATIVE_RUNTIME
+#error "define TALOS_NATIVE_RUNTIME(Enum, symbol, effects)"
+#endif
+
+// Scheduler queries. They only read the scheduler: the priority-handoff latch,
+// which coordinators use to leave the hot closure before a Reactive
+// concurrent-disable observer runs; the finish latch that a value helper polls
+// after a call; the timestamp that generated run_until updates before
+// dispatch; and the runtime queues the coordinator's yield checks
+// (IEEE 1800-2023 4.5). None mutates or re-enters the scheduler.
+TALOS_NATIVE_RUNTIME(SchedulerPrioritySignalPending,
+                     talos_rt_v1_scheduler_priority_signal_pending,
+                     EvalInline | PendingTransparent | CutQuiet)
+TALOS_NATIVE_RUNTIME(SchedulerPrioritySignalFlag,
+                     talos_rt_v1_scheduler_priority_signal_flag, CutQuiet)
+TALOS_NATIVE_RUNTIME(SchedulerTerminationRequested,
+                     talos_rt_v1_scheduler_termination_requested,
+                     EvalInline | PendingTransparent | ReadinessTransparent)
+TALOS_NATIVE_RUNTIME(SchedulerTime, talos_rt_v1_scheduler_time,
+                     EvalInline | PendingTransparent | ReadinessTransparent)
+TALOS_NATIVE_RUNTIME(SchedulerRuntimeWorkPending,
+                     talos_rt_v1_scheduler_runtime_work_pending,
+                     EvalInline | PendingTransparent)
+TALOS_NATIVE_RUNTIME(SchedulerHandoffPending,
+                     talos_rt_v1_scheduler_handoff_pending, PendingTransparent)
+
+// Pure Table 28-8 strength combination: value arguments only, no scheduler
+// or context edge, like an outlined arithmetic helper.
+TALOS_NATIVE_RUNTIME(StrengthResolveKind, talos_rt_v1_strength_resolve_kind,
+                     EvalInline | PendingTransparent)
+// A line hit is a relaxed atomic increment through the context argument. It
+// cannot allocate, lock, re-enter the scheduler or alter design state.
+TALOS_NATIVE_RUNTIME(CoveragePointHit, talos_rt_v1_coverage_point_hit,
+                     EvalInline | PendingTransparent | ReadinessTransparent)
+// eval_display formats its already captured arguments and writes to
+// runtime-owned FILE streams. It reads no pending accumulator and calls
+// neither the scheduler nor VPI; no NBA is committed for display (4.9.4).
+TALOS_NATIVE_RUNTIME(EvalDisplay, talos_rt_v1_eval_display,
+                     EvalInline | PendingTransparent | ReadinessTransparent)
+// $error only latches the final exit status and lets simulation continue
+// (20.10). It never schedules or executes an actor. In VPI builds it also
+// delivers cbError callbacks (38.36.3), whose VPI accesses are those of a
+// context DPI call.
+TALOS_NATIVE_RUNTIME(SchedulerError, talos_rt_v1_scheduler_error, EvalInline)
+// $random and $dist_* (20.14, Annex N) only run the normative algorithm on a
+// context-global or explicit seed. Random stability (18.14) lists neither, so
+// these draws need no process identity and stay in statement order (4.6(a)).
+TALOS_NATIVE_RUNTIME(RandomLegacy, talos_rt_v1_random_legacy, EvalInline)
+TALOS_NATIVE_RUNTIME(RandomDistribution, talos_rt_v1_random_distribution,
+                     EvalInline)
+// Assertion control (20.11) only affects subsequent attempts; an attempt
+// reads the current state from the runtime's table without scheduling,
+// executing or suspending anything.
+TALOS_NATIVE_RUNTIME(AssertionEnabled, talos_rt_v1_assertion_enabled,
+                     EvalInline)
+TALOS_NATIVE_RUNTIME(AssertionActionState, talos_rt_v1_assertion_action_state,
+                     EvalInline)
+
+// Growth of the private ordered NBA queue. Generated code reaches it only
+// from a capacity test. It allocates only that queue: it never executes
+// actors, changes design state, consumes generated NBA accumulators or
+// re-enters scheduling (4.9.4, 10.4.2).
+TALOS_NATIVE_RUNTIME(EvalNbaReserve, talos_rt_v1_eval_nba_reserve,
+                     EvalInline | PendingTransparent | ReadinessTransparent |
+                         CutQuiet | Cold)
+TALOS_NATIVE_RUNTIME(EvalNbaReserveRecords,
+                     talos_rt_v1_eval_nba_reserve_records,
+                     EvalInline | PendingTransparent | ReadinessTransparent |
+                         CutQuiet | Cold)
+// The failure latch records an error status and the caller returns from the
+// activation. It cannot schedule or execute an actor.
+TALOS_NATIVE_RUNTIME(SchedulerFail, talos_rt_v1_scheduler_fail,
+                     EvalInline | PendingTransparent | ReadinessTransparent |
+                         CutQuiet | QueueStable | QueueCaptureOnly)
+
+// Exact proof-state publication over compiler-verified tables. They read
+// canonical X/Z state, proof tables and hints, and update only proof
+// latches, hints, the promotion-pending mask and a kernel's private retry
+// count. They cannot allocate, execute actors, access pending NBAs, advance
+// time or re-enter the scheduler, and select only a value domain (4.3, 4.5,
+// 6.3.1).
+TALOS_NATIVE_RUNTIME(NativePromotionInvalidateRanges,
+                     talos_rt_v1_native_promotion_invalidate_ranges,
+                     EvalInline | PendingTransparent | ReadinessTransparent |
+                         CutQuiet)
+TALOS_NATIVE_RUNTIME(NativePromotionRecheckRanges,
+                     talos_rt_v1_native_promotion_recheck_ranges,
+                     EvalInline | PendingTransparent | ReadinessTransparent |
+                         CutQuiet)
+TALOS_NATIVE_RUNTIME(NativePromotionInvalidateBuckets,
+                     talos_rt_v1_native_promotion_invalidate_buckets,
+                     EvalInline | PendingTransparent | ReadinessTransparent |
+                         CutQuiet)
+TALOS_NATIVE_RUNTIME(NativePromotionRecheckBuckets,
+                     talos_rt_v1_native_promotion_recheck_buckets,
+                     EvalInline | PendingTransparent | ReadinessTransparent |
+                         CutQuiet)
+TALOS_NATIVE_RUNTIME(NativePromotionPublishWindow,
+                     talos_rt_v1_native_promotion_publish_window,
+                     EvalInline | PendingTransparent | ReadinessTransparent |
+                         CutQuiet)
+TALOS_NATIVE_RUNTIME(NativePromotionSlicesAdjust,
+                     talos_rt_v1_native_promotion_slices_adjust,
+                     EvalInline | PendingTransparent | ReadinessTransparent |
+                         CutQuiet)
+TALOS_NATIVE_RUNTIME(NativePromotionSlicesRecount,
+                     talos_rt_v1_native_promotion_slices_recount,
+                     EvalInline | PendingTransparent | ReadinessTransparent |
+                         CutQuiet)
+// The unknown summary's rescan reads the CURRENT unknown planes, which
+// pending NBAs do not touch, and clears summary bits; marking only sets them.
+// Neither executes actors, publishes or re-enters scheduling.
+TALOS_NATIVE_RUNTIME(NativeStateRefreshUnknownSummary,
+                     talos_rt_v1_native_state_refresh_unknown_summary,
+                     EvalInline | PendingTransparent | ReadinessTransparent |
+                         CutQuiet)
+TALOS_NATIVE_RUNTIME(NativeStateMarkUnknown,
+                     talos_rt_v1_native_state_mark_unknown,
+                     EvalInline | PendingTransparent | ReadinessTransparent |
+                         CutQuiet)
+
+// Read-only dependency/override queries. They cannot execute HDL or mutate
+// readiness; an eval activation keeps them only in a writable-VPI write
+// guard, the only place full VPI emits them.
+TALOS_NATIVE_RUNTIME(StaticSpecializationGuard,
+                     talos_rt_v1_static_specialization_guard,
+                     PendingTransparent)
+TALOS_NATIVE_RUNTIME(StaticSpecializationGuardRoots,
+                     talos_rt_v1_static_specialization_guard_roots,
+                     PendingTransparent)
+
+// An epoch-armed deferred report (12.4.2.1, 12.5.3.1, 16.4.1) only queues its
+// ticket; an eval activation keeps it for a direct generated output.
+TALOS_NATIVE_RUNTIME(DeferredEnqueue, talos_rt_v1_deferred_enqueue, None)
+TALOS_NATIVE_RUNTIME(DeferredEnqueueForAssertion,
+                     talos_rt_v1_deferred_enqueue_for_assertion, None)
+
+// The generic NBA queue (4.5, 4.6(b), 10.4.2). Its queries read the queue's
+// membership; its captures append the RHS and destination. Neither changes
+// which bitmap describes the queue. An eval activation keeps them under the
+// shared runtime calendar for the argument forms it checks.
+TALOS_NATIVE_RUNTIME(SchedulerGenericNbaPending,
+                     talos_rt_v1_scheduler_generic_nba_pending, QueueStable)
+TALOS_NATIVE_RUNTIME(SchedulerGenericNbaWords,
+                     talos_rt_v1_scheduler_generic_nba_words, None)
+TALOS_NATIVE_RUNTIME(SchedulerNba, talos_rt_v1_scheduler_nba,
+                     QueueStable | QueueCaptureOnly)
+TALOS_NATIVE_RUNTIME(SchedulerNbaIfChanged,
+                     talos_rt_v1_scheduler_nba_if_changed,
+                     QueueStable | QueueCaptureOnly)
+TALOS_NATIVE_RUNTIME(SchedulerNbaScalar, talos_rt_v1_scheduler_nba_scalar,
+                     QueueStable | QueueCaptureOnly)
+// Clipping the selected portion and capturing both planes only appends an
+// ordinary NBA (10.4.2, 11.5.1).
+TALOS_NATIVE_RUNTIME(SchedulerPackedSliceNba,
+                     talos_rt_v1_scheduler_packed_slice_nba, None)
+// Stable-handle arithmetic; it touches no queue.
+TALOS_NATIVE_RUNTIME(NativeHandleOffset, talos_rt_v1_native_handle_offset,
+                     QueueStable | QueueCaptureOnly)
+
+// The verified publication bridge (4.6(a), 9.4.2) delivers waits without
+// executing actors or advancing time; its actor and root are fixed by the
+// installed generated plan for the argument forms passes check.
+TALOS_NATIVE_RUNTIME(SchedulerWideTransitionOwned,
+                     talos_rt_v1_scheduler_wide_transition_owned, None)
+TALOS_NATIVE_RUNTIME(SchedulerWideTransitionProjected,
+                     talos_rt_v1_scheduler_wide_transition_projected, None)
+TALOS_NATIVE_RUNTIME(SchedulerStaticTransitionOwned,
+                     talos_rt_v1_scheduler_static_transition_owned, None)
+TALOS_NATIVE_RUNTIME(SchedulerStaticTransitionProjected,
+                     talos_rt_v1_scheduler_static_transition_projected, None)
+TALOS_NATIVE_RUNTIME(SchedulerStaticTransition,
+                     talos_rt_v1_scheduler_static_transition, None)
+TALOS_NATIVE_RUNTIME(SchedulerActivateStaticNodes,
+                     talos_rt_v1_scheduler_activate_static_nodes, None)
+
+// The generated NBA barrier's runtime services. Preparation, completion,
+// guards and knownness queries manage the runtime's side of a barrier
+// without consuming the separate pending generated accumulators. An ordered
+// prefix applies its explicit captured operands to CURRENT; the generated
+// accumulators stay pending (4.6(b), 10.4.2).
+TALOS_NATIVE_RUNTIME(SchedulerPrepareEvalNbaLocal,
+                     talos_rt_v1_scheduler_prepare_eval_nba_local,
+                     PendingTransparent)
+TALOS_NATIVE_RUNTIME(SchedulerPrepareEvalNbaLocalWrite,
+                     talos_rt_v1_scheduler_prepare_eval_nba_local_write,
+                     PendingTransparent)
+TALOS_NATIVE_RUNTIME(SchedulerCompleteEvalNba,
+                     talos_rt_v1_scheduler_complete_eval_nba,
+                     PendingTransparent)
+TALOS_NATIVE_RUNTIME(StaticNbaDirectCommitGuard,
+                     talos_rt_v1_static_nba_direct_commit_guard,
+                     PendingTransparent)
+TALOS_NATIVE_RUNTIME(StaticNbaAccountGeneratedCommits,
+                     talos_rt_v1_static_nba_account_generated_commits,
+                     PendingTransparent)
+TALOS_NATIVE_RUNTIME(StaticNbaBatchGuard, talos_rt_v1_static_nba_batch_guard,
+                     PendingTransparent)
+TALOS_NATIVE_RUNTIME(StaticNbaPrefixGuard, talos_rt_v1_static_nba_prefix_guard,
+                     PendingTransparent)
+TALOS_NATIVE_RUNTIME(StaticNbaBatchKnownness,
+                     talos_rt_v1_static_nba_batch_knownness,
+                     PendingTransparent)
+TALOS_NATIVE_RUNTIME(StaticNbaBatchFinish, talos_rt_v1_static_nba_batch_finish,
+                     PendingTransparent)
+TALOS_NATIVE_RUNTIME(StaticNbaCommitOrdered,
+                     talos_rt_v1_static_nba_commit_ordered, PendingTransparent)
+TALOS_NATIVE_RUNTIME(StaticNbaCommitWideOrdered,
+                     talos_rt_v1_static_nba_commit_wide_ordered,
+                     PendingTransparent)
+TALOS_NATIVE_RUNTIME(StaticNbaSpecializationGuard,
+                     talos_rt_v1_static_nba_specialization_guard,
+                     PendingTransparent)
+TALOS_NATIVE_RUNTIME(StaticNbaSpecializationGuardWrite,
+                     talos_rt_v1_static_nba_specialization_guard_write,
+                     PendingTransparent)
+// Runtime-routed stages validate and stage only their explicit root; passes
+// check that root against the captures they keep private.
+TALOS_NATIVE_RUNTIME(StaticNbaClaim, talos_rt_v1_static_nba_claim, None)
+TALOS_NATIVE_RUNTIME(StaticNbaStageWide, talos_rt_v1_static_nba_stage_wide,
+                     None)
+TALOS_NATIVE_RUNTIME(SchedulerStaticNba, talos_rt_v1_scheduler_static_nba,
+                     None)
+
+#undef TALOS_NATIVE_RUNTIME
