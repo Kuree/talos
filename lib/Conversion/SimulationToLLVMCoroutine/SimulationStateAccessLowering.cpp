@@ -98,8 +98,8 @@ Value loadBulkStatePlane(ConversionPatternRewriter &rewriter, Location location,
         llvmConstant(rewriter, location, i64, (width + 7) / 8), false);
     return output;
   }
-  schedule::NativeStateLoadHandleOp::create(rewriter, location, plane, handle,
-                                            output, stateBitCount, width);
+  schedule::NativeStateLoadHandleBytesOp::create(
+      rewriter, location, plane, handle, output, stateBitCount, width);
   return output;
 }
 
@@ -107,9 +107,9 @@ void storeBulkStatePlane(ConversionPatternRewriter &rewriter, Location location,
                          Value handle, Value input, uint64_t width,
                          schedule::StatePlane plane, uint64_t stateBitCount,
                          Value changed, bool continuous) {
-  schedule::NativeStateStoreHandleOp::create(rewriter, location, input, plane,
-                                             handle, changed, stateBitCount,
-                                             width, continuous);
+  schedule::NativeStateStoreHandleBytesOp::create(
+      rewriter, location, input, plane, handle, changed, stateBitCount, width,
+      continuous);
 }
 
 // Copy a canonical byte buffer directly into a certified state plane. Only

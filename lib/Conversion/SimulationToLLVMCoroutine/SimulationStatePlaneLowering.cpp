@@ -871,16 +871,11 @@ Value loadStatePlane(ConversionPatternRewriter &rewriter, Location location,
                                         unknownFallback, accessUnit);
 
   auto emitGeneric = [&]() -> Value {
-    // The runtime reads through the handle into a temporary. A bit the handle
-    // does not name reads as X (IEEE 1800-2023 7.4.5, 11.5.1), which is the
+    // The runtime reads through the handle. A bit the handle does not name
+    // reads as X (IEEE 1800-2023 7.4.5, 11.5.1), which is the
     // `unknownFallback` every caller passes for the direct paths above.
-    Value out = beginTemporary(rewriter, location, resultType, 1);
-    schedule::NativeStateLoadHandleOp::create(rewriter, location, statePlane,
-                                              handle, out, stateBitCount,
-                                              resultType.getWidth());
-    Value loaded = LLVM::LoadOp::create(rewriter, location, resultType, out, 1);
-    endTemporary(rewriter, location, out);
-    return loaded;
+    return schedule::NativeStateLoadHandleOp::create(
+        rewriter, location, resultType, statePlane, handle, stateBitCount);
   };
   if ((!range || !range->guarded) && (!dynamicRange || !dynamicRange->guarded))
     return emitGeneric();
@@ -972,22 +967,9 @@ Value storeStatePlane(ConversionPatternRewriter &rewriter, Location location,
                                   range->containerWidth, range->accessUnit);
 
   auto emitGeneric = [&]() -> Value {
-    IntegerType i8 = rewriter.getI8Type();
-    Value in = beginTemporary(rewriter, location, inputType, 1);
-    LLVM::StoreOp::create(rewriter, location, input, in, 1);
-    Value changed = beginTemporary(rewriter, location, i8, 1);
-    LLVM::StoreOp::create(rewriter, location,
-                          llvmConstant(rewriter, location, i8, 0), changed, 1);
-    schedule::NativeStateStoreHandleOp::create(
-        rewriter, location, in, statePlane, handle, changed, stateBitCount,
-        inputType.getWidth(), continuous);
-    Value changedByte =
-        LLVM::LoadOp::create(rewriter, location, i8, changed, 1);
-    endTemporary(rewriter, location, in);
-    endTemporary(rewriter, location, changed);
-    return arith::CmpIOp::create(rewriter, location, arith::CmpIPredicate::ne,
-                                 changedByte,
-                                 llvmConstant(rewriter, location, i8, 0));
+    return schedule::NativeStateStoreHandleOp::create(
+        rewriter, location, input, statePlane, handle, stateBitCount,
+        continuous);
   };
   if (continuous || !range || !range->guarded)
     return emitGeneric();
@@ -1377,15 +1359,29 @@ bool emitDirectDynamicPackedStore(
 
 } // namespace detail
 
+bool isNativeStateHandleAccess(Operation *op) {
+  return isa<
+      schedule::NativeStateLoadHandleOp, schedule::NativeStateLoadHandleBytesOp,
+      schedule::NativeStateStoreHandleOp,
+      schedule::NativeStateStoreHandleBytesOp,
+      schedule::NativeStateFrameStoreOp, schedule::NativeStateLoadAutomaticOp>(
+      op);
+}
+
 NativeRuntimeEntry getNativeStateHandleAccessEntry(Operation *access) {
   if (isa<schedule::NativeStateLoadHandleOp,
+          schedule::NativeStateLoadHandleBytesOp,
           schedule::NativeStateLoadAutomaticOp>(access))
     return NativeRuntimeEntry::NativeStateLoadPlane;
   if (isa<schedule::NativeStateFrameStoreOp>(access))
     return NativeRuntimeEntry::NativeFrameStore;
-  return cast<schedule::NativeStateStoreHandleOp>(access).getContinuous()
-             ? NativeRuntimeEntry::NativeStateStoreContinuousPlane
-             : NativeRuntimeEntry::NativeStateStorePlane;
+  auto store = dyn_cast<schedule::NativeStateStoreHandleOp>(access);
+  bool continuous = store
+                        ? store.getContinuous()
+                        : cast<schedule::NativeStateStoreHandleBytesOp>(access)
+                              .getContinuous();
+  return continuous ? NativeRuntimeEntry::NativeStateStoreContinuousPlane
+                    : NativeRuntimeEntry::NativeStateStorePlane;
 }
 
 namespace {
@@ -1397,8 +1393,8 @@ Value loadNativeRuntimeContext(OpBuilder &builder, Location location) {
 }
 
 // The runtime's frame store takes 64-bit words.
-LLVM::CallOp lowerFrameStore(OpBuilder &builder,
-                             schedule::NativeStateFrameStoreOp store) {
+void lowerFrameStore(OpBuilder &builder,
+                     schedule::NativeStateFrameStoreOp store) {
   Location location = store.getLoc();
   IntegerType i32 = builder.getI32Type();
   IntegerType i64 = builder.getI64Type();
@@ -1434,7 +1430,7 @@ LLVM::CallOp lowerFrameStore(OpBuilder &builder,
       detail::llvmConstant(builder, location, i32, flags),
       word(store.getValue()),
       unknown};
-  return LLVM::CallOp::create(
+  LLVM::CallOp::create(
       builder, location, TypeRange{},
       getNativeRuntimeCallee(builder.getContext(),
                              getNativeStateHandleAccessEntry(store)),
@@ -1443,8 +1439,8 @@ LLVM::CallOp lowerFrameStore(OpBuilder &builder,
 
 // A read of an automatic variable passes no design state: its buffer stands
 // in for the plane and the state has no bits.
-LLVM::CallOp lowerAutomaticLoad(OpBuilder &builder,
-                                schedule::NativeStateLoadAutomaticOp load) {
+void lowerAutomaticLoad(OpBuilder &builder,
+                        schedule::NativeStateLoadAutomaticOp load) {
   Location location = load.getLoc();
   IntegerType i32 = builder.getI32Type();
   IntegerType i64 = builder.getI64Type();
@@ -1463,64 +1459,100 @@ LLVM::CallOp lowerAutomaticLoad(OpBuilder &builder,
                              getNativeStateHandleAccessEntry(load)),
       arguments);
   load.getStatus().replaceAllUsesWith(call.getResult());
-  return call;
+}
+
+// The call of a load or store entry on `plane` at `handle`, moving `width`
+// bits through `buffer`; a store sets the byte at `changed`.
+void createHandleAccessCall(OpBuilder &builder, Location location,
+                            NativeRuntimeEntry entry,
+                            schedule::StatePlane plane, Value handle,
+                            uint64_t stateBits, uint64_t width, Value buffer,
+                            Value changed) {
+  IntegerType i32 = builder.getI32Type();
+  IntegerType i64 = builder.getI64Type();
+  bool unknown = plane == schedule::StatePlane::Unknown;
+  Value base = schedule::NativeStateAddressOp::create(builder, location, plane);
+  SmallVector<Value, 8> arguments{
+      loadNativeRuntimeContext(builder, location),
+      base,
+      detail::llvmConstant(builder, location, i64, stateBits),
+      handle,
+      detail::llvmConstant(builder, location, i64, width),
+      detail::llvmConstant(builder, location, i32, unknown)};
+  if (!changed) {
+    // A bit the handle does not name reads as X: 0 in the value plane and 1
+    // in the unknown plane (IEEE 1800-2023 7.4.5, 11.5.1).
+    arguments.push_back(detail::llvmConstant(builder, location, i32, unknown));
+    arguments.push_back(buffer);
+  } else {
+    arguments.push_back(buffer);
+    arguments.push_back(changed);
+  }
+  LLVM::CallOp::create(builder, location, TypeRange{i32},
+                       getNativeRuntimeCallee(builder.getContext(), entry),
+                       arguments);
 }
 } // namespace
 
-LLVM::CallOp lowerNativeStateHandleAccess(Operation *access) {
+void lowerNativeStateHandleAccess(Operation *access) {
   OpBuilder builder(access);
-  LLVM::CallOp call;
+  Location location = access->getLoc();
+  NativeRuntimeEntry entry = getNativeStateHandleAccessEntry(access);
   if (auto store = dyn_cast<schedule::NativeStateFrameStoreOp>(access)) {
-    call = lowerFrameStore(builder, store);
+    lowerFrameStore(builder, store);
   } else if (auto automatic =
                  dyn_cast<schedule::NativeStateLoadAutomaticOp>(access)) {
-    call = lowerAutomaticLoad(builder, automatic);
+    lowerAutomaticLoad(builder, automatic);
+  } else if (auto load = dyn_cast<schedule::NativeStateLoadHandleOp>(access)) {
+    // The runtime reads into a temporary.
+    Value out = detail::beginTemporary(builder, location, load.getType(), 1);
+    createHandleAccessCall(builder, location, entry, load.getPlane(),
+                           load.getHandle(), load.getStateBits(),
+                           load.getWidth(), out, Value());
+    Value loaded =
+        LLVM::LoadOp::create(builder, location, load.getType(), out, 1);
+    detail::endTemporary(builder, location, out);
+    load.getResult().replaceAllUsesWith(loaded);
+  } else if (auto store =
+                 dyn_cast<schedule::NativeStateStoreHandleOp>(access)) {
+    // The runtime writes from a temporary and reports a change through a
+    // byte it leaves 0 when nothing changed.
+    IntegerType i8 = builder.getI8Type();
+    Value in = detail::beginTemporary(builder, location,
+                                      store.getValue().getType(), 1);
+    LLVM::StoreOp::create(builder, location, store.getValue(), in, 1);
+    Value changed = detail::beginTemporary(builder, location, i8, 1);
+    LLVM::StoreOp::create(builder, location,
+                          detail::llvmConstant(builder, location, i8, 0),
+                          changed, 1);
+    createHandleAccessCall(builder, location, entry, store.getPlane(),
+                           store.getHandle(), store.getStateBits(),
+                           store.getWidth(), in, changed);
+    Value changedByte = LLVM::LoadOp::create(builder, location, i8, changed, 1);
+    detail::endTemporary(builder, location, in);
+    detail::endTemporary(builder, location, changed);
+    store.getChanged().replaceAllUsesWith(arith::CmpIOp::create(
+        builder, location, arith::CmpIPredicate::ne, changedByte,
+        detail::llvmConstant(builder, location, i8, 0)));
+  } else if (auto load =
+                 dyn_cast<schedule::NativeStateLoadHandleBytesOp>(access)) {
+    createHandleAccessCall(builder, location, entry, load.getPlane(),
+                           load.getHandle(), load.getStateBits(),
+                           load.getWidth(), load.getBuffer(), Value());
   } else {
-    Location location = access->getLoc();
-    IntegerType i32 = builder.getI32Type();
-    IntegerType i64 = builder.getI64Type();
-    auto load = dyn_cast<schedule::NativeStateLoadHandleOp>(access);
-    auto store = dyn_cast<schedule::NativeStateStoreHandleOp>(access);
-    schedule::StatePlane plane = load ? load.getPlane() : store.getPlane();
-    bool unknown = plane == schedule::StatePlane::Unknown;
-    Value base =
-        schedule::NativeStateAddressOp::create(builder, location, plane);
-    SmallVector<Value, 8> arguments{
-        loadNativeRuntimeContext(builder, location),
-        base,
-        detail::llvmConstant(builder, location, i64,
-                             load ? load.getStateBits() : store.getStateBits()),
-        load ? load.getHandle() : store.getHandle(),
-        detail::llvmConstant(builder, location, i64,
-                             load ? load.getWidth() : store.getWidth()),
-        detail::llvmConstant(builder, location, i32, unknown)};
-    if (load) {
-      // A bit the handle does not name reads as X: 0 in the value plane and
-      // 1 in the unknown plane (IEEE 1800-2023 7.4.5, 11.5.1).
-      arguments.push_back(
-          detail::llvmConstant(builder, location, i32, unknown));
-      arguments.push_back(load.getBuffer());
-    } else {
-      arguments.push_back(store.getBuffer());
-      arguments.push_back(store.getChanged());
-    }
-    call = LLVM::CallOp::create(
-        builder, location, TypeRange{i32},
-        getNativeRuntimeCallee(builder.getContext(),
-                               getNativeStateHandleAccessEntry(access)),
-        arguments);
+    auto bytes = cast<schedule::NativeStateStoreHandleBytesOp>(access);
+    createHandleAccessCall(builder, location, entry, bytes.getPlane(),
+                           bytes.getHandle(), bytes.getStateBits(),
+                           bytes.getWidth(), bytes.getBuffer(),
+                           bytes.getChanged());
   }
   access->erase();
-  return call;
 }
 
 void lowerNativeStateHandleAccesses(ModuleOp module) {
   SmallVector<Operation *> accesses;
   module.walk([&](Operation *op) {
-    if (isa<schedule::NativeStateLoadHandleOp,
-            schedule::NativeStateStoreHandleOp,
-            schedule::NativeStateFrameStoreOp,
-            schedule::NativeStateLoadAutomaticOp>(op))
+    if (isNativeStateHandleAccess(op))
       accesses.push_back(op);
   });
   for (Operation *access : accesses)

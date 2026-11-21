@@ -87,6 +87,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/Support/Error.h"
 
@@ -1342,12 +1343,14 @@ LogicalResult declareNativeImports(ModuleOp module) {
           getNativeRuntimeCallee(context, NativeRuntimeEntry::SchedulerFail));
       return;
     }
-    FlatSymbolRefAttr handlePlane;
-    if (auto load = dyn_cast<schedule::NativeStateLoadHandleOp>(operation))
-      handlePlane = load.getGlobalAttr();
-    else if (auto store =
-                 dyn_cast<schedule::NativeStateStoreHandleOp>(operation))
-      handlePlane = store.getGlobalAttr();
+    FlatSymbolRefAttr handlePlane =
+        TypeSwitch<Operation *, FlatSymbolRefAttr>(operation)
+            .Case<schedule::NativeStateLoadHandleOp,
+                  schedule::NativeStateLoadHandleBytesOp,
+                  schedule::NativeStateStoreHandleOp,
+                  schedule::NativeStateStoreHandleBytesOp>(
+                [](auto access) { return access.getGlobalAttr(); })
+            .Default(FlatSymbolRefAttr());
     if (handlePlane) {
       // A handle-addressed access passes its plane's address and the current
       // context to its runtime entry; see lowerNativeStateHandleAccesses.

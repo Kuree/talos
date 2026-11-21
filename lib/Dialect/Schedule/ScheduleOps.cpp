@@ -472,11 +472,10 @@ static LogicalResult verifyHandleAccess(Operation *op, StringRef global,
 }
 
 void NativeStateLoadHandleOp::build(OpBuilder &builder, OperationState &state,
-                                    StatePlane plane, Value handle,
-                                    Value buffer, uint64_t stateBits,
-                                    uint64_t width) {
-  build(builder, state, getStatePlaneGlobalName(plane), handle, buffer,
-        stateBits, width);
+                                    Type type, StatePlane plane, Value handle,
+                                    uint64_t stateBits) {
+  build(builder, state, type, getStatePlaneGlobalName(plane), handle,
+        stateBits);
 }
 StatePlane NativeStateLoadHandleOp::getPlane() {
   return *getStatePlaneOfGlobal(getGlobal());
@@ -489,13 +488,31 @@ NativeStateLoadHandleOp::verifySymbolUses(SymbolTableCollection &tables) {
   return verifyStatePlaneUse(*this, getGlobalAttr(), tables);
 }
 
+void NativeStateLoadHandleBytesOp::build(OpBuilder &builder,
+                                         OperationState &state,
+                                         StatePlane plane, Value handle,
+                                         Value buffer, uint64_t stateBits,
+                                         uint64_t width) {
+  build(builder, state, getStatePlaneGlobalName(plane), handle, buffer,
+        stateBits, width);
+}
+StatePlane NativeStateLoadHandleBytesOp::getPlane() {
+  return *getStatePlaneOfGlobal(getGlobal());
+}
+LogicalResult NativeStateLoadHandleBytesOp::verify() {
+  return verifyHandleAccess(*this, getGlobal(), getWidth());
+}
+LogicalResult
+NativeStateLoadHandleBytesOp::verifySymbolUses(SymbolTableCollection &tables) {
+  return verifyStatePlaneUse(*this, getGlobalAttr(), tables);
+}
+
 void NativeStateStoreHandleOp::build(OpBuilder &builder, OperationState &state,
-                                     Value buffer, StatePlane plane,
-                                     Value handle, Value changed,
-                                     uint64_t stateBits, uint64_t width,
+                                     Value value, StatePlane plane,
+                                     Value handle, uint64_t stateBits,
                                      bool continuous) {
-  build(builder, state, buffer, getStatePlaneGlobalName(plane), handle, changed,
-        stateBits, width, continuous);
+  build(builder, state, builder.getI1Type(), value,
+        getStatePlaneGlobalName(plane), handle, stateBits, continuous);
 }
 StatePlane NativeStateStoreHandleOp::getPlane() {
   return *getStatePlaneOfGlobal(getGlobal());
@@ -505,6 +522,25 @@ LogicalResult NativeStateStoreHandleOp::verify() {
 }
 LogicalResult
 NativeStateStoreHandleOp::verifySymbolUses(SymbolTableCollection &tables) {
+  return verifyStatePlaneUse(*this, getGlobalAttr(), tables);
+}
+
+void NativeStateStoreHandleBytesOp::build(OpBuilder &builder,
+                                          OperationState &state, Value buffer,
+                                          StatePlane plane, Value handle,
+                                          Value changed, uint64_t stateBits,
+                                          uint64_t width, bool continuous) {
+  build(builder, state, buffer, getStatePlaneGlobalName(plane), handle, changed,
+        stateBits, width, continuous);
+}
+StatePlane NativeStateStoreHandleBytesOp::getPlane() {
+  return *getStatePlaneOfGlobal(getGlobal());
+}
+LogicalResult NativeStateStoreHandleBytesOp::verify() {
+  return verifyHandleAccess(*this, getGlobal(), getWidth());
+}
+LogicalResult
+NativeStateStoreHandleBytesOp::verifySymbolUses(SymbolTableCollection &tables) {
   return verifyStatePlaneUse(*this, getGlobalAttr(), tables);
 }
 

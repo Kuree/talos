@@ -5,7 +5,8 @@
 // plane's address and the current context, the call's status unused. A bit a
 // read's handle does not name reads as X, 0 in the value plane and 1 in the
 // unknown plane (IEEE 1800-2023 7.4.5, 11.5.1). A continuous store calls the
-// entry that keeps the contribution for a release (10.6.2).
+// entry that keeps the contribution for a release (10.6.2). A scalar access
+// moves its value through an entry-block temporary live only around the call.
 module {
   llvm.mlir.global internal @__talos_state_value(dense<0> : tensor<16xi8>) : !llvm.array<16 x i8>
   llvm.mlir.global internal @__talos_state_unknown(dense<0> : tensor<16xi8>) : !llvm.array<16 x i8>
@@ -15,7 +16,7 @@ module {
   llvm.func @talos_rt_v1_native_state_store_continuous_plane(!llvm.ptr, !llvm.ptr, i64, i64, i64, i32, !llvm.ptr, !llvm.ptr) -> i32
   llvm.func @talos_rt_v1_native_frame_store(!llvm.ptr, !llvm.ptr, !llvm.ptr, i64, i64, i32, i32, i64, i64)
 
-  // CHECK-LABEL: llvm.func @load(
+  // CHECK-LABEL: llvm.func @load_bytes(
   // CHECK-SAME: %[[HANDLE:.*]]: i64, %[[BUFFER:.*]]: !llvm.ptr)
   // CHECK-NEXT: %[[BASE:.*]] = schedule.state.address @__talos_state_value
   // CHECK-NEXT: %[[CURRENT:.*]] = llvm.mlir.addressof @__talos_current_context
@@ -30,13 +31,13 @@ module {
   // CHECK-NEXT: %[[FALLBACK:.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK-NEXT: llvm.call @talos_rt_v1_native_state_load_plane(%{{.*}}, %[[BASE]], %{{.*}}, %[[HANDLE]], %{{.*}}, %[[PLANE]], %[[FALLBACK]], %[[BUFFER]])
   // CHECK-NEXT: llvm.return
-  llvm.func @load(%handle: i64, %buffer: !llvm.ptr) {
-    schedule.state.load_handle @__talos_state_value[%handle] into %buffer {state_bits = 128 : i64, width = 7 : i64}
-    schedule.state.load_handle @__talos_state_unknown[%handle] into %buffer {state_bits = 128 : i64, width = 7 : i64}
+  llvm.func @load_bytes(%handle: i64, %buffer: !llvm.ptr) {
+    schedule.state.load_handle_bytes @__talos_state_value[%handle] into %buffer {state_bits = 128 : i64, width = 7 : i64}
+    schedule.state.load_handle_bytes @__talos_state_unknown[%handle] into %buffer {state_bits = 128 : i64, width = 7 : i64}
     llvm.return
   }
 
-  // CHECK-LABEL: llvm.func @store(
+  // CHECK-LABEL: llvm.func @store_bytes(
   // CHECK-SAME: %[[HANDLE:.*]]: i64, %[[BUFFER:.*]]: !llvm.ptr, %[[CHANGED:.*]]: !llvm.ptr)
   // CHECK-NEXT: %[[BASE:.*]] = schedule.state.address @__talos_state_unknown
   // CHECK-NEXT: %[[CURRENT:.*]] = llvm.mlir.addressof @__talos_current_context
@@ -49,10 +50,89 @@ module {
   // CHECK: %[[PLANE:.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK-NEXT: llvm.call @talos_rt_v1_native_state_store_continuous_plane(%{{.*}}, %[[BASE]], %{{.*}}, %[[HANDLE]], %{{.*}}, %[[PLANE]], %[[BUFFER]], %[[CHANGED]])
   // CHECK-NEXT: llvm.return
-  llvm.func @store(%handle: i64, %buffer: !llvm.ptr, %changed: !llvm.ptr) {
-    schedule.state.store_handle %buffer, @__talos_state_unknown[%handle] changed %changed {state_bits = 128 : i64, width = 200 : i64}
-    schedule.state.store_handle %buffer, @__talos_state_value[%handle] changed %changed continuous {state_bits = 128 : i64, width = 200 : i64}
+  llvm.func @store_bytes(%handle: i64, %buffer: !llvm.ptr, %changed: !llvm.ptr) {
+    schedule.state.store_handle_bytes %buffer, @__talos_state_unknown[%handle] changed %changed {state_bits = 128 : i64, width = 200 : i64}
+    schedule.state.store_handle_bytes %buffer, @__talos_state_value[%handle] changed %changed continuous {state_bits = 128 : i64, width = 200 : i64}
     llvm.return
+  }
+
+  // A scalar read passes a temporary for the runtime to write and reads its
+  // value from it.
+  // CHECK-LABEL: llvm.func @load(
+  // CHECK-SAME: %[[HANDLE:.*]]: i64)
+  // CHECK-NEXT: %[[COUNT:.*]] = llvm.mlir.constant(1 : i64) : i64
+  // CHECK-NEXT: %[[OUT:.*]] = llvm.alloca %[[COUNT]] x i7 {alignment = 1 : i64}
+  // CHECK-NEXT: llvm.intr.lifetime.start %[[OUT]]
+  // CHECK-NEXT: %[[BASE:.*]] = schedule.state.address @__talos_state_unknown
+  // CHECK-NEXT: %[[CURRENT:.*]] = llvm.mlir.addressof @__talos_current_context
+  // CHECK-NEXT: %[[CONTEXT:.*]] = llvm.load %[[CURRENT]]
+  // CHECK-NEXT: %[[STATE:.*]] = llvm.mlir.constant(128 : i64) : i64
+  // CHECK-NEXT: %[[WIDTH:.*]] = llvm.mlir.constant(7 : i64) : i64
+  // CHECK-NEXT: %[[PLANE:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-NEXT: %[[FALLBACK:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-NEXT: llvm.call @talos_rt_v1_native_state_load_plane(%[[CONTEXT]], %[[BASE]], %[[STATE]], %[[HANDLE]], %[[WIDTH]], %[[PLANE]], %[[FALLBACK]], %[[OUT]])
+  // CHECK-NEXT: %[[LOADED:.*]] = llvm.load %[[OUT]] {alignment = 1 : i64} : !llvm.ptr -> i7
+  // CHECK-NEXT: llvm.intr.lifetime.end %[[OUT]]
+  // CHECK-NEXT: llvm.return %[[LOADED]] : i7
+  llvm.func @load(%handle: i64) -> i7 {
+    %value = schedule.state.load_handle @__talos_state_unknown[%handle] {state_bits = 128 : i64} : i7
+    llvm.return %value : i7
+  }
+
+  // CHECK-LABEL: llvm.func @load_value(
+  // CHECK: %[[BASE:.*]] = schedule.state.address @__talos_state_value
+  // CHECK: %[[PLANE:.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-NEXT: %[[FALLBACK:.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-NEXT: llvm.call @talos_rt_v1_native_state_load_plane(%{{.*}}, %[[BASE]], %{{.*}}, %{{.*}}, %{{.*}}, %[[PLANE]], %[[FALLBACK]], %[[OUT:[^)]*]])
+  // CHECK-NEXT: %[[LOADED:.*]] = llvm.load %[[OUT]] {alignment = 1 : i64} : !llvm.ptr -> i65
+  // CHECK-NEXT: llvm.intr.lifetime.end %[[OUT]]
+  // CHECK-NEXT: llvm.return %[[LOADED]] : i65
+  llvm.func @load_value(%handle: i64) -> i65 {
+    %value = schedule.state.load_handle @__talos_state_value[%handle] {state_bits = 128 : i64} : i65
+    llvm.return %value : i65
+  }
+
+  // A scalar write passes its value in one temporary and a change byte,
+  // cleared before the call, in another; it changed the state when the
+  // runtime set that byte (IEEE 1800-2023 9.4.2).
+  // CHECK-LABEL: llvm.func @store(
+  // CHECK-SAME: %[[HANDLE:.*]]: i64, %[[VALUE:.*]]: i200)
+  // CHECK-NEXT: %[[COUNT:.*]] = llvm.mlir.constant(1 : i64) : i64
+  // CHECK-NEXT: %[[CHANGED:.*]] = llvm.alloca %[[COUNT]] x i8 {alignment = 1 : i64}
+  // CHECK-NEXT: %[[COUNT:.*]] = llvm.mlir.constant(1 : i64) : i64
+  // CHECK-NEXT: %[[IN:.*]] = llvm.alloca %[[COUNT]] x i200 {alignment = 1 : i64}
+  // CHECK-NEXT: llvm.intr.lifetime.start %[[IN]]
+  // CHECK-NEXT: llvm.store %[[VALUE]], %[[IN]] {alignment = 1 : i64} : i200, !llvm.ptr
+  // CHECK-NEXT: llvm.intr.lifetime.start %[[CHANGED]]
+  // CHECK-NEXT: %[[CLEAR:.*]] = llvm.mlir.constant(0 : i8) : i8
+  // CHECK-NEXT: llvm.store %[[CLEAR]], %[[CHANGED]] {alignment = 1 : i64} : i8, !llvm.ptr
+  // CHECK-NEXT: %[[BASE:.*]] = schedule.state.address @__talos_state_value
+  // CHECK-NEXT: %[[CURRENT:.*]] = llvm.mlir.addressof @__talos_current_context
+  // CHECK-NEXT: %[[CONTEXT:.*]] = llvm.load %[[CURRENT]]
+  // CHECK-NEXT: %[[STATE:.*]] = llvm.mlir.constant(128 : i64) : i64
+  // CHECK-NEXT: %[[WIDTH:.*]] = llvm.mlir.constant(200 : i64) : i64
+  // CHECK-NEXT: %[[PLANE:.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-NEXT: llvm.call @talos_rt_v1_native_state_store_continuous_plane(%[[CONTEXT]], %[[BASE]], %[[STATE]], %[[HANDLE]], %[[WIDTH]], %[[PLANE]], %[[IN]], %[[CHANGED]])
+  // CHECK-NEXT: %[[BYTE:.*]] = llvm.load %[[CHANGED]] {alignment = 1 : i64} : !llvm.ptr -> i8
+  // CHECK-NEXT: llvm.intr.lifetime.end %[[IN]]
+  // CHECK-NEXT: llvm.intr.lifetime.end %[[CHANGED]]
+  // CHECK-NEXT: %[[ZERO:.*]] = llvm.mlir.constant(0 : i8) : i8
+  // CHECK-NEXT: %[[RESULT:.*]] = arith.cmpi ne, %[[BYTE]], %[[ZERO]] : i8
+  // CHECK-NEXT: llvm.return %[[RESULT]] : i1
+  llvm.func @store(%handle: i64, %value: i200) -> i1 {
+    %changed = schedule.state.store_handle %value, @__talos_state_value[%handle] continuous {state_bits = 128 : i64} : i200
+    llvm.return %changed : i1
+  }
+
+  // CHECK-LABEL: llvm.func @store_unknown(
+  // CHECK: %[[BASE:.*]] = schedule.state.address @__talos_state_unknown
+  // CHECK: %[[PLANE:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-NEXT: llvm.call @talos_rt_v1_native_state_store_plane(%{{.*}}, %[[BASE]], %{{.*}}, %{{.*}}, %{{.*}}, %[[PLANE]], %{{.*}}, %{{.*}})
+  // CHECK: %[[RESULT:.*]] = arith.cmpi ne
+  // CHECK-NEXT: llvm.return %[[RESULT]] : i1
+  llvm.func @store_unknown(%handle: i64, %value: i8) -> i1 {
+    %changed = schedule.state.store_handle %value, @__talos_state_unknown[%handle] {state_bits = 128 : i64} : i8
+    llvm.return %changed : i1
   }
 
   // A frame store passes the planes it writes, both of a four-state
