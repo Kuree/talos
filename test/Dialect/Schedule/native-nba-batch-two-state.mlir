@@ -11,7 +11,7 @@
 // CHECK-NOT: !llvm.array<136 x i8>
 // CHECK: llvm.func @specialized
 
-#batch = #schedule.nba_batch_layout<plan = @plan, value = @value, unknown = @__talos_eval_nba_unknown_0, dirty = @dirty, summary = @summary, ingress = @ingress, bitCount = 256, rootCount = 1, capacity = 1>
+#batch = #schedule.nba_batch_layout<plan = @plan, value = @value, unknown = @__talos_state_unknown, dirty = @dirty, summary = @summary, ingress = @ingress, bitCount = 256, rootCount = 1, capacity = 1>
 #root = #schedule.nba_commit_layout<offset = 0, width = 256, accumulator = @__talos_aot_nba_accumulator_0, slots = [], consumers = []>
 module attributes {
   native.two_state,
@@ -19,7 +19,6 @@ module attributes {
 } {
   llvm.mlir.global external @plan() : i8
   llvm.mlir.global external @value() : !llvm.array<40 x i8>
-  llvm.mlir.global external @__talos_eval_nba_unknown_0() : !llvm.array<40 x i8>
   llvm.mlir.global external @dirty() : i64
   llvm.mlir.global external @summary() : i64
   llvm.mlir.global external @ingress() : i64

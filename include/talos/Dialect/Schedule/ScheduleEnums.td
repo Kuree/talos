@@ -341,6 +341,23 @@ def NBAIndexEnum
   let genSpecializedAttr = 0;
 }
 
+// A fixed NBA capture slot of generated eval staging keeps each field in a
+// global of its own: the staged destination bit offset, the staged value and
+// X/Z words, the valid word, and the transitions the commit records.
+def NBASlotFieldOffset : I32EnumAttrCase<"Offset", 0, "offset">;
+def NBASlotFieldValue : I32EnumAttrCase<"Value", 1, "value">;
+def NBASlotFieldUnknown : I32EnumAttrCase<"Unknown", 2, "unknown">;
+def NBASlotFieldValid : I32EnumAttrCase<"Valid", 3, "valid">;
+def NBASlotFieldTransition : I32EnumAttrCase<"Transition", 4, "transition">;
+def NBASlotFieldEnum
+    : I32EnumAttr<"NBASlotField", "fixed NBA capture slot field", [
+        NBASlotFieldOffset, NBASlotFieldValue, NBASlotFieldUnknown,
+        NBASlotFieldValid, NBASlotFieldTransition
+      ]> {
+  let cppNamespace = "::talos::schedule";
+  let genSpecializedAttr = 0;
+}
+
 // The generated eval ready sets, in runtime::DirtyReadySetLayout: the model
 // ingress holds the pending evaluation events of the eval model's owners
 // (IEEE 1800-2023 4.3, 4.5); the held wakes hold the owners that NBA updates

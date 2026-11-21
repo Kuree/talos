@@ -27,6 +27,12 @@ def NBASlotLayoutAttr : ScheduleAttr<"NBASlotLayout", "nba_slot_layout"> {
       OptionalParameter<"::mlir::IntegerAttr">:$constantOffset);
   let assemblyFormat = "`<` struct(params) `>`";
 }
+// The field of fixed NBA capture slot `site` that a global holds.
+def NBASlotAttr : ScheduleAttr<"NBASlot", "nba_slot"> {
+  let parameters = (ins "uint64_t":$site,
+      EnumParameter<NBASlotFieldEnum>:$field);
+  let assemblyFormat = "`<` struct(params) `>`";
+}
 def NBAConsumerAttr : ScheduleAttr<"NBAConsumer", "nba_consumer"> {
   let parameters = (ins "uint64_t":$low, "uint64_t":$width, "uint32_t":$bit);
   let assemblyFormat = "`<` struct(params) `>`";

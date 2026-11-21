@@ -278,6 +278,11 @@ def NbaHoldRanges : ScheduleField<"NbaHoldRanges", "schedule.nba.hold_ranges",
     "::mlir::DenseI64ArrayAttr">;
 def NbaTransientObservable : ScheduleField<"NbaTransientObservable", "schedule.nba.transient_observable",
     "::mlir::DenseI64ArrayAttr">;
+// The fixed NBA capture slot field an llvm.mlir.global holds. AOT
+// materialization marks the slot globals it creates; the two-state X/Z plane
+// elimination reads the marks and removes them.
+def NbaSlot : ScheduleField<"NbaSlot", "schedule.nba.slot",
+    "::talos::schedule::NBASlotAttr">;
 def BoundedLoopHeader : ScheduleField<"BoundedLoopHeader", "schedule.bounded_loop_header",
     "::mlir::UnitAttr">;
 def BoundedLoopLatch : ScheduleField<"BoundedLoopLatch", "schedule.bounded_loop_latch",

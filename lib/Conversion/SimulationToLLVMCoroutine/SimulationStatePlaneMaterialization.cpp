@@ -3,6 +3,7 @@
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Analysis/NativeStorageLayout.h"
 #include "talos/Dialect/Native/NativeDialect.h"
+#include "talos/Dialect/Schedule/ScheduleAttrs.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleOps.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
@@ -381,21 +382,28 @@ void assignUnknownSummary(ModuleOp module, NativeStateLayout &layout) {
 // In particular, a derived unknown pointer must become null too: keeping a
 // GEP of null would give the runtime a non-null, invalid plane address.
 void eliminateTwoStateUnknownPlane(ModuleOp module) {
-  if (!native::get<native::TwoState>(module))
-    return;
-  // The unknown plane and the NBA batches' private unknown buffers. Functions
-  // address the plane through typed state operations; global initializers,
-  // like the schedule plan's, take its address as a constant, which becomes
-  // null with the plane.
+  bool twoState = static_cast<bool>(native::get<native::TwoState>(module));
+  // The unknown plane and the X/Z words of the fixed NBA capture slots.
+  // Functions address the plane through typed state operations; global
+  // initializers, like the schedule plan's and the slot tables, take an
+  // address as a constant, which becomes null with the global. The slot marks
+  // have no reader after this point.
   SmallVector<LLVM::GlobalOp> globals;
   llvm::DenseSet<StringRef> names;
-  for (auto global : module.getOps<LLVM::GlobalOp>())
-    if (global.getSymName() ==
-            schedule::getStatePlaneGlobalName(schedule::StatePlane::Unknown) ||
-        global.getSymName().starts_with("__talos_eval_nba_unknown_")) {
+  for (auto global : module.getOps<LLVM::GlobalOp>()) {
+    auto slot = schedule::get<schedule::Field::NbaSlot>(global);
+    if (slot)
+      schedule::remove<schedule::Field::NbaSlot>(global);
+    if (twoState &&
+        (global.getSymName() ==
+             schedule::getStatePlaneGlobalName(schedule::StatePlane::Unknown) ||
+         (slot && slot.getField() == schedule::NBASlotField::Unknown))) {
       globals.push_back(global);
       names.insert(global.getSymName());
     }
+  }
+  if (!twoState)
+    return;
   // The X/Z planes: the canonical unknown plane, and the unknown plane of
   // the retained continuous contributions, which is all zero too.
   auto unknownPlane = [](schedule::StatePlane plane) {

@@ -3186,14 +3186,19 @@ FailureOr<bool> makeNativeEvalPlan(
                   (Twine("__talos_eval_nba_unknown_") + Twine(slotSite)).str();
               entry.validName =
                   (Twine("__talos_eval_nba_valid_") + Twine(slotSite)).str();
-              auto makeZero = [&, &nbaStage = nbaStage](StringRef name,
-                                                        Type type,
-                                                        unsigned alignment) {
+              // Each field's global names its slot and field, so later
+              // passes do not recover them from the global's name.
+              auto makeZero = [&, &nbaStage = nbaStage](
+                                  StringRef name, Type type, unsigned alignment,
+                                  schedule::NBASlotField field) {
                 OpBuilder globalBuilder =
                     OpBuilder::atBlockBegin(module.getBody());
                 auto global = LLVM::GlobalOp::create(
                     globalBuilder, nbaStage.getLoc(), type, false,
                     LLVM::Linkage::Internal, name, Attribute{}, alignment);
+                schedule::set<schedule::Field::NbaSlot>(
+                    global,
+                    schedule::NBASlotAttr::get(context, slotSite, field));
                 Block *initializer = new Block;
                 global.getInitializerRegion().push_back(initializer);
                 OpBuilder initBuilder = OpBuilder::atBlockBegin(initializer);
@@ -3201,14 +3206,16 @@ FailureOr<bool> makeNativeEvalPlan(
                     initBuilder, nbaStage.getLoc(),
                     LLVM::ZeroOp::create(initBuilder, nbaStage.getLoc(), type));
               };
-              makeZero(entry.offsetName, i64, 8);
-              makeZero(entry.valueName, i64, 8);
-              makeZero(entry.unknownName, i64, 8);
-              makeZero(entry.validName, i32, 4);
+              makeZero(entry.offsetName, i64, 8,
+                       schedule::NBASlotField::Offset);
+              makeZero(entry.valueName, i64, 8, schedule::NBASlotField::Value);
+              makeZero(entry.unknownName, i64, 8,
+                       schedule::NBASlotField::Unknown);
+              makeZero(entry.validName, i32, 4, schedule::NBASlotField::Valid);
               makeZero(entry.validName + ".transition",
                        LLVM::LLVMArrayType::get(
                            i64, native::get<native::TwoState>(module) ? 2 : 4),
-                       8);
+                       8, schedule::NBASlotField::Transition);
               dynamicEvalNBAs.push_back(std::move(entry));
               existing = std::prev(dynamicEvalNBAs.end());
             }
