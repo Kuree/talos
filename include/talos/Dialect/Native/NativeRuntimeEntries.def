@@ -6,7 +6,10 @@
 // V is void, Ptr any pointer). The effects are the facts of
 // native_runtime::Effect (NativeRuntimeEntries.h). An entry a pass admits
 // only for certain arguments has the facts it holds for every call; the pass
-// checks those arguments itself.
+// checks those arguments itself. Rows whose symbol has no prototype in the
+// public runtime headers (runtime/include) sit inside
+// `#ifndef TALOS_NATIVE_RUNTIME_PROTOTYPED_ONLY`; the build-time prototype
+// check (test/Support/NativeRuntimePrototypeTest.cpp) skips them.
 //
 //===----------------------------------------------------------------------===//
 
@@ -154,9 +157,12 @@ TALOS_NATIVE_RUNTIME(NativeStateMarkUnknown,
 TALOS_NATIVE_RUNTIME(StaticSpecializationGuard,
                      talos_rt_v1_static_specialization_guard,
                      SIG(I32, Ptr, I32, I32, I32), PendingTransparent)
+// Declared by the runtime library internally, not in its public headers.
+#ifndef TALOS_NATIVE_RUNTIME_PROTOTYPED_ONLY
 TALOS_NATIVE_RUNTIME(StaticSpecializationGuardRoots,
                      talos_rt_v1_static_specialization_guard_roots,
                      SIG(I32, Ptr, Ptr, I64), PendingTransparent)
+#endif
 
 // An epoch-armed deferred report (12.4.2.1, 12.5.3.1, 16.4.1) only queues its
 // ticket; an eval activation keeps it for a direct generated output. The
@@ -301,9 +307,12 @@ TALOS_NATIVE_RUNTIME(ProcessEventPending, talos_rt_v1_process_event_pending,
                      SIG(I32, Ptr, I64, Ptr), ObservesThread)
 TALOS_NATIVE_RUNTIME(ProcessInstanceCreate, talos_rt_v1_process_instance_create,
                      SIG(I32, Ptr, Ptr), ObservesThread)
+// Declared by the runtime library internally, not in its public headers.
+#ifndef TALOS_NATIVE_RUNTIME_PROTOTYPED_ONLY
 TALOS_NATIVE_RUNTIME(ProcessInstanceCreateForContext,
                      talos_rt_v1_process_instance_create_for_context,
                      SIG(I32, Ptr, Ptr, Ptr), ObservesThread)
+#endif
 TALOS_NATIVE_RUNTIME(ProcessInstanceDestroy,
                      talos_rt_v1_process_instance_destroy, SIG(I32, Ptr),
                      ObservesThread)
@@ -383,13 +392,8 @@ TALOS_NATIVE_RUNTIME(BufferRelease, talos_rt_v1_buffer_release, SIG(V, Ptr),
 TALOS_NATIVE_RUNTIME(BytecodeExecuteBounded,
                      talos_rt_v1_bytecode_execute_bounded,
                      SIG(I32, Ptr, Ptr, Ptr, I64, I32, I64, Ptr), None)
-TALOS_NATIVE_RUNTIME(ClassBitstreamBytecodeLinkAnchor,
-                     talos_rt_v1_class_bitstream_bytecode_link_anchor, SIG(V),
-                     None)
 TALOS_NATIVE_RUNTIME(ClassBitstreamFinalize,
                      talos_rt_v1_class_bitstream_finalize, SIG(I32, Ptr), None)
-TALOS_NATIVE_RUNTIME(ClassBitstreamLinkAnchor,
-                     talos_rt_v1_class_bitstream_link_anchor, SIG(V), None)
 TALOS_NATIVE_RUNTIME(ClassRegister, talos_rt_v1_class_register,
                      SIG(I32, Ptr, Ptr), None)
 TALOS_NATIVE_RUNTIME(ClockOccurrenceConsume,
@@ -403,8 +407,6 @@ TALOS_NATIVE_RUNTIME(ClockingOutputCurrent, talos_rt_v1_clocking_output_current,
                      SIG(I32, Ptr, I64, I64, I32), None)
 TALOS_NATIVE_RUNTIME(ClockingOutputTrack, talos_rt_v1_clocking_output_track,
                      SIG(I32, Ptr, I64, I64, I32), None)
-TALOS_NATIVE_RUNTIME(ContainerBitstreamLinkAnchor,
-                     talos_rt_v1_container_bitstream_link_anchor, SIG(V), None)
 TALOS_NATIVE_RUNTIME(ContainerClone, talos_rt_v1_container_clone,
                      SIG(I32, Ptr, Ptr, Ptr), None)
 TALOS_NATIVE_RUNTIME(ContainerCreateLike, talos_rt_v1_container_create_like,
@@ -559,8 +561,6 @@ TALOS_NATIVE_RUNTIME(DpiAggregateUnpack, talos_rt_v1_dpi_aggregate_unpack,
                      None)
 TALOS_NATIVE_RUNTIME(DpiCurrentContext, talos_rt_v1_dpi_current_context,
                      SIG(Ptr), None)
-TALOS_NATIVE_RUNTIME(DpiExportBytecodeLinkAnchor,
-                     talos_rt_v1_dpi_export_bytecode_link_anchor, SIG(V), None)
 TALOS_NATIVE_RUNTIME(DpiExportPackVector, talos_rt_v1_dpi_export_pack_vector,
                      SIG(V, Ptr, Ptr, Ptr, I32, I32), None)
 TALOS_NATIVE_RUNTIME(DpiExportStatus, talos_rt_v1_dpi_export_status,
@@ -574,8 +574,6 @@ TALOS_NATIVE_RUNTIME(DpiExportTaskRun, talos_rt_v1_dpi_export_task_run,
 TALOS_NATIVE_RUNTIME(DpiExportUnpackVector,
                      talos_rt_v1_dpi_export_unpack_vector,
                      SIG(V, Ptr, Ptr, Ptr, I32, I32), None)
-TALOS_NATIVE_RUNTIME(DpiImportBytecodeLinkAnchor,
-                     talos_rt_v1_dpi_import_bytecode_link_anchor, SIG(V), None)
 TALOS_NATIVE_RUNTIME(DpiOpenArrayAggregatePack,
                      talos_rt_v1_dpi_open_array_aggregate_pack,
                      SIG(I32, Ptr, Ptr, I64, I64, I32, I32, I64, I32, Ptr, I32,
@@ -627,15 +625,11 @@ TALOS_NATIVE_RUNTIME(DumpTimescale, talos_rt_v1_dump_timescale,
                      SIG(I32, Ptr, I32), None)
 TALOS_NATIVE_RUNTIME(DumpVars, talos_rt_v1_dump_vars,
                      SIG(I32, Ptr, I64, Ptr, I64), None)
-TALOS_NATIVE_RUNTIME(DynamicScanLinkAnchor,
-                     talos_rt_v1_dynamic_scan_link_anchor, SIG(V), None)
 TALOS_NATIVE_RUNTIME(ElementTypeDefineDefault,
                      talos_rt_v1_element_type_define_default,
                      SIG(I32, Ptr, I64, Ptr, I64), None)
 TALOS_NATIVE_RUNTIME(EventSnapshotFlush, talos_rt_v1_event_snapshot_flush,
                      SIG(I32, Ptr), None)
-TALOS_NATIVE_RUNTIME(EventSnapshotLinkAnchor,
-                     talos_rt_v1_event_snapshot_link_anchor, SIG(V), None)
 TALOS_NATIVE_RUNTIME(EventSnapshotMask, talos_rt_v1_event_snapshot_mask,
                      SIG(I32, Ptr, Ptr), None)
 TALOS_NATIVE_RUNTIME(EventSnapshotRegister, talos_rt_v1_event_snapshot_register,
@@ -943,8 +937,6 @@ TALOS_NATIVE_RUNTIME(RandomSolveWideModesState,
                      SIG(I32, Ptr, Ptr, I64, Ptr, Ptr, I64, I64, I64, I64, I64,
                          Ptr, I64, Ptr, I64, Ptr, Ptr, Ptr),
                      None)
-TALOS_NATIVE_RUNTIME(RecursiveBitstreamLinkAnchor,
-                     talos_rt_v1_recursive_bitstream_link_anchor, SIG(V), None)
 TALOS_NATIVE_RUNTIME(RecursiveExportBitstream,
                      talos_rt_v1_recursive_export_bitstream,
                      SIG(I32, Ptr, Ptr, Ptr, I64, I64, I32, Ptr, Ptr, I64, I64,
@@ -1309,5 +1301,27 @@ TALOS_NATIVE_RUNTIME(V2RecursiveExportBitstream,
                      SIG(I32, Ptr, I64, Ptr, Ptr, I64, I64, I32, Ptr, Ptr, I64,
                          I64, I32, I32, Ptr, Ptr),
                      None)
+
+// Link anchors: the generated main calls one to pull an optional runtime unit
+// into the link. The unit defines it; no public header declares it.
+#ifndef TALOS_NATIVE_RUNTIME_PROTOTYPED_ONLY
+TALOS_NATIVE_RUNTIME(ClassBitstreamBytecodeLinkAnchor,
+                     talos_rt_v1_class_bitstream_bytecode_link_anchor, SIG(V),
+                     None)
+TALOS_NATIVE_RUNTIME(ClassBitstreamLinkAnchor,
+                     talos_rt_v1_class_bitstream_link_anchor, SIG(V), None)
+TALOS_NATIVE_RUNTIME(ContainerBitstreamLinkAnchor,
+                     talos_rt_v1_container_bitstream_link_anchor, SIG(V), None)
+TALOS_NATIVE_RUNTIME(DpiExportBytecodeLinkAnchor,
+                     talos_rt_v1_dpi_export_bytecode_link_anchor, SIG(V), None)
+TALOS_NATIVE_RUNTIME(DpiImportBytecodeLinkAnchor,
+                     talos_rt_v1_dpi_import_bytecode_link_anchor, SIG(V), None)
+TALOS_NATIVE_RUNTIME(DynamicScanLinkAnchor,
+                     talos_rt_v1_dynamic_scan_link_anchor, SIG(V), None)
+TALOS_NATIVE_RUNTIME(EventSnapshotLinkAnchor,
+                     talos_rt_v1_event_snapshot_link_anchor, SIG(V), None)
+TALOS_NATIVE_RUNTIME(RecursiveBitstreamLinkAnchor,
+                     talos_rt_v1_recursive_bitstream_link_anchor, SIG(V), None)
+#endif
 
 #undef TALOS_NATIVE_RUNTIME

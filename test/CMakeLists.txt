@@ -464,10 +464,15 @@ add_llvm_executable(TalosAnalysisOracleTests EXCLUDE_FROM_ALL
   Support/ActivationOracleTest.cpp
   Support/BoundedLoopOracleTest.cpp
   Support/ContextCacheTest.cpp
+  Support/NativeRuntimePrototypeTest.cpp
   Support/OrderedDenseAnalysisTest.cpp
   Support/ParallelWalkTest.cpp
 )
 llvm_update_compile_flags(TalosAnalysisOracleTests)
+# The native runtime prototype check reads the public runtime headers.
+target_include_directories(TalosAnalysisOracleTests PRIVATE
+  "${PROJECT_SOURCE_DIR}/runtime/include"
+)
 target_link_libraries(TalosAnalysisOracleTests PRIVATE
   TalosSimulationAnalysis
   TalosSimulationIR
@@ -546,12 +551,15 @@ endif()
 
 # Repository and build-graph lints inspect sources, archives, and an isolated
 # CMake graph rather than compiler behavior, so they run outside the lit
-# regression suite: ODS custom-assembly coverage, the pay-for-play runtime
-# feature layout, and incremental native-support rebuilds.
+# regression suite: ODS custom-assembly coverage, runtime symbols named only
+# through the native runtime entry catalog, the pay-for-play runtime feature
+# layout, and incremental native-support rebuilds.
 set(_talos_lint_dir "${PROJECT_SOURCE_DIR}/utils/lint")
 add_custom_target(check-talos-lint
   COMMAND "${Python_EXECUTABLE}" "${_talos_lint_dir}/check-assembly-formats.py"
     "${TALOS_LLVM_DIST_DIR}" "${PROJECT_SOURCE_DIR}" "${PROJECT_BINARY_DIR}"
+  COMMAND "${Python_EXECUTABLE}" "${_talos_lint_dir}/check-runtime-symbols.py"
+    "${PROJECT_SOURCE_DIR}"
   DEPENDS talos_rt
   COMMENT "Running the Talos repository and build-graph lints"
   USES_TERMINAL
