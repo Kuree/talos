@@ -1292,11 +1292,30 @@ LogicalResult declareNativeImports(ModuleOp module) {
       reference = load.getGlobalAttr();
     else if (auto store = dyn_cast<schedule::NativeNBAIndexStoreOp>(operation))
       reference = store.getGlobalAttr();
-    if (!reference || symbols.lookupSymbolIn(design, reference))
+    auto import = [&](FlatSymbolRefAttr reference) {
+      if (!reference || symbols.lookupSymbolIn(design, reference))
+        return;
+      Operation *definition = moduleSymbols.lookup(reference.getValue());
+      if (definition && seen.insert({design, definition}).second)
+        imports.emplace_back(design, definition);
+    };
+    if (auto stage = dyn_cast<schedule::NativeNBAStageOp>(operation)) {
+      // A stage the runtime keeps passes the state planes to the static NBA
+      // entry and checks its status; see lowerNativeNBAStages.
+      MLIRContext *context = operation->getContext();
+      auto plane = [&](schedule::StatePlane plane) {
+        return FlatSymbolRefAttr::get(context,
+                                      schedule::getStatePlaneGlobalName(plane));
+      };
+      import(plane(schedule::StatePlane::Value));
+      if (stage.getUnknown())
+        import(plane(schedule::StatePlane::Unknown));
+      import(
+          FlatSymbolRefAttr::get(context, "talos_rt_v1_scheduler_static_nba"));
+      import(FlatSymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"));
       return;
-    Operation *definition = moduleSymbols.lookup(reference.getValue());
-    if (definition && seen.insert({design, definition}).second)
-      imports.emplace_back(design, definition);
+    }
+    import(reference);
   });
   OpBuilder builder(module.getContext());
   for (auto [design, definition] : imports) {
@@ -2012,42 +2031,42 @@ LogicalResult NativePipelineAnalysis::materialize() {
         return detail::makeProcessSpawnBody(pending.first, *pending.second);
       })))
     return failure();
-  if (useAOT) {
-    if (evalScheduler) {
-      FailureOr<bool> evalPlan = makeNativeEvalPlan(
-          module, dataLayout, aotEligibility.getActorSlots().size(),
-          executableNodes, *resolvedEval, *stateLayout, staticNBAPlan,
-          staticFanoutPlan, staticActorRoots, writableVPIUnscopedActors,
-          *directFragments, evalOwnership, threeTierPlan.sourceGraph,
-          periodicClocks, periodicAliases, directStaticState, staticNBA,
-          staticControl, staticFanout, cleanSuperstep,
-          aotEligibility.isFullyEligible() && !staticEvalIsland,
-          staticEvalIsland, rootSlotZero, constantDPIQueryExports, vpi);
-      if (failed(evalPlan))
-        return failure();
-      if (!*evalPlan) {
-        if (detailedTiming)
-          llvm::errs() << "generated eval disabled: LLVM eligibility proof\n";
-        // Direct fragments and their four-/two-state route shells are
-        // materialized before the final LLVM-level eligibility proof.  A
-        // declined proof therefore takes the same certified legacy handoff
-        // as a source-level ordered-NBA owner: the ordinary coroutine keeps
-        // the runtime NBA call, and unused Eval route shells are ignored.
-        ::talos::schedule::set<evalRuntimeNBAFallbackAttr>(
-            module, UnitAttr::get(context));
-        evalScheduler = false;
-      }
-    }
-    if (!evalScheduler &&
-        failed(makeNativeAOTPlanLegacy(
-            module, dataLayout, aotEligibility.getActorSlots().size(),
-            executableNodes, *stateLayout, staticNBAPlan, staticFanoutPlan,
-            staticActorRoots, directStaticState, staticNBA, staticControl,
-            staticFanout, cleanSuperstep, aotEligibility.isFullyEligible(),
-            rootSlotZero, vpi))) {
+  if (useAOT && evalScheduler) {
+    FailureOr<bool> evalPlan = makeNativeEvalPlan(
+        module, dataLayout, aotEligibility.getActorSlots().size(),
+        executableNodes, *resolvedEval, *stateLayout, staticNBAPlan,
+        staticFanoutPlan, staticActorRoots, writableVPIUnscopedActors,
+        *directFragments, evalOwnership, threeTierPlan.sourceGraph,
+        periodicClocks, periodicAliases, directStaticState, staticNBA,
+        staticControl, staticFanout, cleanSuperstep,
+        aotEligibility.isFullyEligible() && !staticEvalIsland, staticEvalIsland,
+        rootSlotZero, constantDPIQueryExports, vpi);
+    if (failed(evalPlan))
       return failure();
+    if (!*evalPlan) {
+      if (detailedTiming)
+        llvm::errs() << "generated eval disabled: LLVM eligibility proof\n";
+      // Direct fragments and their four-/two-state route shells are
+      // materialized before the final LLVM-level eligibility proof.  A
+      // declined proof therefore takes the same certified legacy handoff
+      // as a source-level ordered-NBA owner: the ordinary coroutine keeps
+      // the runtime NBA call, and unused Eval route shells are ignored.
+      ::talos::schedule::set<evalRuntimeNBAFallbackAttr>(
+          module, UnitAttr::get(context));
+      evalScheduler = false;
     }
   }
+  // A static NBA stage the eval plan did not rewrite is a runtime call from
+  // here on, including to the legacy plan.
+  lowerNativeNBAStages(module);
+  if (useAOT && !evalScheduler &&
+      failed(makeNativeAOTPlanLegacy(
+          module, dataLayout, aotEligibility.getActorSlots().size(),
+          executableNodes, *stateLayout, staticNBAPlan, staticFanoutPlan,
+          staticActorRoots, directStaticState, staticNBA, staticControl,
+          staticFanout, cleanSuperstep, aotEligibility.isFullyEligible(),
+          rootSlotZero, vpi)))
+    return failure();
   markTiming("native schedule plan materialization");
   if (failed(makeSchedulerMain(module, *stateLayout, useAOT, evalScheduler,
                                hasLanguageObserver)))

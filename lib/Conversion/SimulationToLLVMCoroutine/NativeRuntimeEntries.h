@@ -14,6 +14,10 @@
 #include <cstdint>
 #include <optional>
 
+namespace mlir {
+class Operation;
+} // namespace mlir
+
 namespace talos::detail {
 
 enum class NativeRuntimeEntry : uint16_t {
@@ -55,6 +59,10 @@ uint32_t getNativeRuntimeEffects(NativeRuntimeEntry entry);
 /// Whether every call to `callee` has `effect`; false for another callee.
 bool hasNativeRuntimeEffect(llvm::StringRef callee,
                             native_runtime::Effect effect);
+/// Whether `op` is a native runtime call with `effect`: an LLVM call to an
+/// entry, or a typed operation that lowers to calls of entries that all have
+/// it. False for another operation.
+bool hasNativeRuntimeEffect(mlir::Operation *op, native_runtime::Effect effect);
 
 } // namespace talos::detail
 

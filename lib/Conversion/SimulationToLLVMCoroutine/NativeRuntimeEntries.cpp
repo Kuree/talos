@@ -2,6 +2,10 @@
 
 #include "NativeRuntimeEntries.h"
 
+#include "talos/Dialect/Schedule/ScheduleOps.h"
+
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+
 #include "llvm/ADT/StringSwitch.h"
 
 namespace talos::detail {
@@ -39,6 +43,20 @@ uint32_t getNativeRuntimeEffects(NativeRuntimeEntry entry) {
 bool hasNativeRuntimeEffect(llvm::StringRef callee, Effect effect) {
   std::optional<NativeRuntimeEntry> entry = getNativeRuntimeEntry(callee);
   return entry && (getNativeRuntimeEffects(*entry) & effect) == effect;
+}
+
+bool hasNativeRuntimeEffect(mlir::Operation *op, Effect effect) {
+  if (auto call = llvm::dyn_cast<mlir::LLVM::CallOp>(op)) {
+    std::optional<llvm::StringRef> callee = call.getCallee();
+    return callee && hasNativeRuntimeEffect(*callee, effect);
+  }
+  // A static NBA stage the runtime keeps lowers to the static NBA entry and
+  // the failure check of its status.
+  if (llvm::isa<schedule::NativeNBAStageOp>(op))
+    return (getNativeRuntimeEffects(NativeRuntimeEntry::SchedulerStaticNba) &
+            getNativeRuntimeEffects(NativeRuntimeEntry::SchedulerFail) &
+            effect) == effect;
+  return false;
 }
 
 } // namespace talos::detail

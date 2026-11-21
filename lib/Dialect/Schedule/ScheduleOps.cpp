@@ -406,6 +406,14 @@ NativeNBAIndexStoreOp::verifySymbolUses(SymbolTableCollection &tables) {
   return verifyIndexUse(*this, getGlobalAttr(), tables);
 }
 
+LogicalResult NativeNBAStageOp::verify() {
+  if (!getOperation()->getParentOfType<FunctionOpInterface>())
+    return emitOpError("must be in a function");
+  if (getWidth() == 0)
+    return emitOpError("stages no bits");
+  return success();
+}
+
 uint64_t getNBAAccumulatorFieldBytes(NBAAccumulatorField field) {
   switch (field) {
   case NBAAccumulatorField::Value:

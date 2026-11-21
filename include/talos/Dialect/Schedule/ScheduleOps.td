@@ -1216,6 +1216,34 @@ def NativeNBAIndexStoreOp : ScheduleNativeOp<"nba.index.store", [
   let hasVerifier = 1;
 }
 
+def NativeNBAStageOp : ScheduleNativeOp<"nba.stage"> {
+  let summary = "stage a nonblocking assignment at a static NBA site";
+  let description = [{
+    Stages the update of a nonblocking assignment at static NBA site `site`
+    for the runtime context `runtime_context`:
+    `width` bits of the RHS that `value` points to, with the X/Z bits that
+    `unknown` points to when the RHS has any, for the destination `handle`
+    in the state of `state_bits` bits. The RHS and the destination were
+    evaluated when the assignment executed; the update is applied in the NBA
+    region (IEEE 1800-2023 4.9.4, 10.4.2). `root` is the static NBA root
+    the plan maps the site to.
+
+    Native lowering emits this for the runtime's static NBA entry. AOT
+    materialization replaces it with generated staging where it can; any
+    other becomes the runtime call and its failure check. Its memory
+    effects are those of that runtime call.
+  }];
+  let arguments = (ins LLVM_DefaultPointer:$runtime_context, I64:$handle,
+                       LLVM_DefaultPointer:$value,
+                       Optional<LLVM_DefaultPointer>:$unknown,
+                       I64Attr:$site, I64Attr:$state_bits, I64Attr:$width,
+                       I32Attr:$root);
+  let assemblyFormat = [{
+    $runtime_context `,` $handle `,` $value (`,` $unknown^)? attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
 def NativeByteAddressOp : ScheduleNativeOp<"bytes.address", [Pure]> {
   let summary = "immutable bytes awaiting executable reachability";
   let arguments = (ins StrAttr:$name, StrAttr:$value, I64Attr:$alignment);

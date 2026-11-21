@@ -1806,23 +1806,23 @@ public:
           (staticPlan->mergeSafeRoots[rootIndex] || orderedEvalQueue) &&
           adaptor.getDelay().empty() && !site.getTiming() &&
           site.getStorage() != schedule::ComputeNBAStorageKind::DynamicFrontier;
-      SmallVector<Value> arguments{
-          runtimeContext,
-          valuePlane,
-          unknownPlane,
-          llvmConstant(rewriter, location, i64, stateBitCount),
-          adaptor.getDestination().front(),
-          llvmConstant(rewriter, location, i64, *width)};
-      if (staticallyStaged)
-        arguments.insert(arguments.begin() + 1,
-                         llvmConstant(rewriter, location, i64, site.getId()));
-      else
-        arguments.push_back(delay);
-      arguments.push_back(value);
-      arguments.push_back(unknown);
-      if (auto clockingOutput = op.getClockingOutputAttr())
-        arguments.push_back(llvmConstant(
-            rewriter, location, i64, clockingOutput.getValue().getZExtValue()));
+      // A statically staged site keeps its operands on the typed stage.
+      SmallVector<Value> arguments;
+      if (!staticallyStaged) {
+        arguments = {runtimeContext,
+                     valuePlane,
+                     unknownPlane,
+                     llvmConstant(rewriter, location, i64, stateBitCount),
+                     adaptor.getDestination().front(),
+                     llvmConstant(rewriter, location, i64, *width),
+                     delay,
+                     value,
+                     unknown};
+        if (auto clockingOutput = op.getClockingOutputAttr())
+          arguments.push_back(
+              llvmConstant(rewriter, location, i64,
+                           clockingOutput.getValue().getZExtValue()));
+      }
       Block *continuation = nullptr;
       // A held-value comparison does not stage an accumulator. In forced
       // FIFO eval a bounded packed aggregate can compare its complete value
@@ -1913,6 +1913,14 @@ public:
             ValueRange{runtimeContext, valuePlane, unknownPlane, arguments[3],
                        adaptor.getDestination().front(), arguments[5],
                        word(adaptor.getValue().front()), x});
+      } else if (staticallyStaged) {
+        // A static site's stage stays typed until AOT materialization
+        // chooses its route (IEEE 1800-2023 4.9.4, 10.4.2).
+        schedule::NativeNBAStageOp::create(
+            rewriter, location, runtimeContext,
+            adaptor.getDestination().front(), value,
+            adaptor.getValue().size() == 2 ? unknown : Value(), site.getId(),
+            stateBitCount, *width, rootIndex);
       } else {
         Value status =
             LLVM::CallOp::create(
@@ -1924,7 +1932,6 @@ public:
                               ? "talos_rt_v1_scheduler_clocking_driver_nba"
                               : "talos_rt_v1_scheduler_clocking_nba"
                     : driverDestination ? "talos_rt_v1_scheduler_driver_nba"
-                    : staticallyStaged  ? "talos_rt_v1_scheduler_static_nba"
                     : genericHold       ? "talos_rt_v1_scheduler_nba_if_changed"
                                         : "talos_rt_v1_scheduler_nba"),
                 arguments)
@@ -2016,6 +2023,46 @@ void populateNBAToLLVMConversionPatterns(
   patterns.add<ImmediateNBAConversion>(converter, patterns.getContext(),
                                        stateBitCount, staticPlan, stateLayout,
                                        staticSitesEnabled, guardedClaims);
+}
+
+void lowerNativeNBAStages(ModuleOp module) {
+  SmallVector<schedule::NativeNBAStageOp> stages;
+  module.walk(
+      [&](schedule::NativeNBAStageOp stage) { stages.push_back(stage); });
+  for (schedule::NativeNBAStageOp stage : stages) {
+    OpBuilder builder(stage);
+    Location location = stage.getLoc();
+    Type i32 = builder.getI32Type(), i64 = builder.getI64Type();
+    auto pointer = LLVM::LLVMPointerType::get(builder.getContext());
+    // The runtime reads the unknown planes only for a value with X/Z bits.
+    Value unknown = stage.getUnknown();
+    Value unknownPlane =
+        unknown ? detail::createStatePlaneAddress(builder, location,
+                                                  schedule::StatePlane::Unknown)
+                : LLVM::ZeroOp::create(builder, location, pointer).getResult();
+    if (!unknown)
+      unknown = LLVM::ZeroOp::create(builder, location, pointer);
+    auto status = LLVM::CallOp::create(
+        builder, location, TypeRange{i32},
+        SymbolRefAttr::get(builder.getContext(),
+                           "talos_rt_v1_scheduler_static_nba"),
+        ValueRange{stage.getRuntimeContext(),
+                   llvmConstant(builder, location, i64, stage.getSite()),
+                   detail::createStatePlaneAddress(builder, location,
+                                                   schedule::StatePlane::Value),
+                   unknownPlane,
+                   llvmConstant(builder, location, i64, stage.getStateBits()),
+                   stage.getHandle(),
+                   llvmConstant(builder, location, i64, stage.getWidth()),
+                   stage.getValue(), unknown});
+    schedule::set<schedule::Field::EvalPendingRuntimeRoot>(
+        status, builder.getI32IntegerAttr(stage.getRoot()));
+    LLVM::CallOp::create(
+        builder, location, TypeRange{},
+        SymbolRefAttr::get(builder.getContext(), "talos_rt_v1_scheduler_fail"),
+        ValueRange{stage.getRuntimeContext(), status.getResult()});
+    stage.erase();
+  }
 }
 
 } // namespace talos::detail

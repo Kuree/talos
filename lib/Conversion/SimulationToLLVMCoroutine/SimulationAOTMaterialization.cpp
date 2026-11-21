@@ -228,16 +228,16 @@ static std::string makeWholeNBASlot(ModuleOp module, Location loc,
 // can supply its exact comparison against CURRENT. After a second write the
 // stored mask instead describes transitions *between captures*, so both a
 // cold interposed writer and the barrier may compare against their own image.
-static void emitWholeNBACapture(OpBuilder &builder, LLVM::CallOp call,
+static void emitWholeNBACapture(OpBuilder &builder, Operation *nbaStage,
                                 StringRef bank, uint32_t root, unsigned width,
                                 Value enabled, Value source,
                                 Value sourceUnknown,
                                 ArrayRef<Value> initialChanges) {
-  Location loc = call.getLoc();
+  Location loc = nbaStage->getLoc();
   Type scalar = IntegerType::get(builder.getContext(), width);
   Type i32 = builder.getI32Type();
-  Block *before = call->getBlock();
-  Block *after = before->splitBlock(call->getIterator());
+  Block *before = nbaStage->getBlock();
+  Block *after = before->splitBlock(nbaStage->getIterator());
   auto newBlock = [&] {
     Block *next = new Block;
     after->getParent()->getBlocks().insert(after->getIterator(), next);
@@ -481,12 +481,9 @@ struct DynamicEvalNBAProofAnalysis {
     for (const auto &[root, origins] : rootOrigins)
       rootSites[root].semanticCount = origins.size();
     for (auto function : functions)
-      function.walk([&](LLVM::CallOp call) {
-        if (call.getCallee() != "talos_rt_v1_scheduler_static_nba" ||
-            call.getArgOperands().size() != 9)
-          return;
-        if (auto site = constantU64(call.getArgOperands()[1]))
-          ++semanticSiteCalls[{function.getOperation(), semanticOrigin(*site)}];
+      function.walk([&](schedule::NativeNBAStageOp stage) {
+        ++semanticSiteCalls[{function.getOperation(),
+                             semanticOrigin(stage.getSite())}];
       });
 
     // A route can enter its ordinary merged record and its periodic owner.
@@ -694,22 +691,19 @@ getDynamicNBACommitRegion(sim::SimFuncOp function,
 }
 
 static FailureOr<DynamicEvalNBAProof>
-proveDynamicEvalNBA(LLVM::CallOp call,
+proveDynamicEvalNBA(schedule::NativeNBAStageOp stage,
                     const DynamicEvalNBAProofContext &proofContext,
                     const DynamicEvalNBAProofAnalysis &proofAnalysis,
                     bool enclosingExecutesAtMostOnce,
                     const analysis::WriteExecutionBounds &execution) {
-  ValueRange arguments = call.getArgOperands();
-  if (arguments.size() != 9)
-    return call.emitError("malformed static NBA ABI"), failure();
   const NativeStaticNBAPlan &staticNBAPlan = proofContext.staticNBAPlan;
-  std::optional<uint64_t> site = constantU64(arguments[1]);
-  std::optional<uint64_t> width = constantU64(arguments[6]);
-  auto root = site ? staticNBAPlan.siteRoots.find(*site)
-                   : staticNBAPlan.siteRoots.end();
-  auto offsetCall = arguments[5].getDefiningOp<LLVM::CallOp>();
+  std::optional<uint64_t> site = stage.getSite();
+  std::optional<uint64_t> width = stage.getWidth();
+  auto root = staticNBAPlan.siteRoots.find(*site);
+  Value handle = stage.getHandle();
+  auto offsetCall = handle.getDefiningOp<LLVM::CallOp>();
   if (!offsetCall) {
-    Operation *selected = arguments[5].getDefiningOp();
+    Operation *selected = handle.getDefiningOp();
     if (isa_and_nonnull<arith::SelectOp, LLVM::SelectOp>(selected)) {
       std::optional<uint64_t> trueConstant =
           constantU64(selected->getOperand(1));
@@ -723,7 +717,7 @@ proveDynamicEvalNBA(LLVM::CallOp call,
   }
 
   DynamicEvalNBAProof proof;
-  sim::SimFuncOp enclosing = call->getParentOfType<sim::SimFuncOp>();
+  sim::SimFuncOp enclosing = stage->getParentOfType<sim::SimFuncOp>();
   proof.commitRegion = enclosing
                            ? getDynamicNBACommitRegion(enclosing, proofContext)
                            : UINT32_MAX;
@@ -766,11 +760,11 @@ proveDynamicEvalNBA(LLVM::CallOp call,
   }
   proof.siteExecutesAtMostOnce =
       matchingSiteCalls == 1 && enclosingExecutesAtMostOnce &&
-      execution.executesAtMostOnce(call.getOperation());
+      execution.executesAtMostOnce(stage.getOperation());
 
-  auto fixedHandle = constantU64(arguments[5]);
+  auto fixedHandle = constantU64(handle);
   if (!fixedHandle)
-    fixedHandle = resolveCFGConstantInteger(arguments[5]);
+    fixedHandle = resolveCFGConstantInteger(handle);
   talos_rt_stable_handle_v1 fixedDestination{};
   bool fixedRoot =
       fixedHandle && root != staticNBAPlan.siteRoots.end() &&
@@ -876,7 +870,7 @@ proveDynamicEvalNBA(LLVM::CallOp call,
       root->second < proofContext.orderedRootClosed.size() &&
       proofContext.orderedRootClosed[root->second] &&
       !schedule::has<schedule::Field::EvalRuntimeCalendar>(
-          call->getParentOfType<ModuleOp>()) &&
+          stage->getParentOfType<ModuleOp>()) &&
       proof.commitRegion == TALOS_RT_REGION_NBA;
   // The generated queue records every enqueue and drains in execution order,
   // including overlapping sites and repeated executions of the same site.
@@ -932,12 +926,10 @@ materializeGenericNBAQueueWindows(ModuleOp module,
     // change the binding or introduce another writer between captures.
     // Recheck authority at each original query in such a body.
     WalkResult window = function.walk([&](Operation *op) {
-      if (auto call = dyn_cast<LLVM::CallOp>(op)) {
-        auto name = call.getCallee();
-        bool local =
-            name && hasNativeRuntimeEffect(*name, native_runtime::QueueStable);
-        return local ? WalkResult::advance() : WalkResult::interrupt();
-      }
+      if (isa<LLVM::CallOp, schedule::NativeNBAStageOp>(op))
+        return hasNativeRuntimeEffect(op, native_runtime::QueueStable)
+                   ? WalkResult::advance()
+                   : WalkResult::interrupt();
       if (auto transition = dyn_cast<schedule::NativeTransitionOp>(op))
         if (fanout.runtimeTransitionStates.contains(
                 transition.getStaticState()))
@@ -1237,17 +1229,12 @@ FailureOr<bool> makeNativeEvalPlan(
       if (!::talos::schedule::has<::talos::schedule::Field::EvalDirectFragment>(
               function))
         continue;
-      function.walk([&](LLVM::CallOp call) {
-        if (!call.getCallee() ||
-            *call.getCallee() != "talos_rt_v1_scheduler_static_nba" ||
-            call.getArgOperands().size() != 9)
-          return;
-        auto site = constantU64(call.getArgOperands()[1]);
-        auto root = site ? staticNBAPlan.siteRoots.find(*site)
-                         : staticNBAPlan.siteRoots.end();
+      function.walk([&](schedule::NativeNBAStageOp stage) {
+        auto root = staticNBAPlan.siteRoots.find(stage.getSite());
         if (root != staticNBAPlan.siteRoots.end() &&
             root->second < generatedOrigins.size())
-          generatedOrigins[root->second].insert(semanticOrigin(*site));
+          generatedOrigins[root->second].insert(
+              semanticOrigin(stage.getSite()));
       });
     }
     SmallVector<uint8_t> orderedRootClosed(staticNBAPlan.roots.size(), 1);
@@ -1319,6 +1306,10 @@ FailureOr<bool> makeNativeEvalPlan(
       auto design = function->getParentOfType<sim::SimDesignOp>();
       SmallVector<Operation *> calls;
       function.walk([&](Operation *op) {
+        if (isa<schedule::NativeNBAStageOp>(op)) {
+          calls.push_back(op);
+          return;
+        }
         StringRef calleeName;
         if (auto call = dyn_cast<sim::SimCallOp>(op))
           calleeName = call.getCallee();
@@ -1332,8 +1323,7 @@ FailureOr<bool> makeNativeEvalPlan(
                           ? symbols.lookupSymbolIn<sim::SimFuncOp>(
                                 design, StringAttr::get(context, calleeName))
                           : sim::SimFuncOp{};
-        if (calleeName == "talos_rt_v1_scheduler_static_nba" ||
-            (callee && evalClosureSet.contains(callee)))
+        if (callee && evalClosureSet.contains(callee))
           calls.push_back(op);
       });
       // The call closure below checks re-entry and multiplicity. This local
@@ -1360,13 +1350,8 @@ FailureOr<bool> makeNativeEvalPlan(
                 ::talos::schedule::Field::EvalDirectFragment>(function))
           return;
         bool hasDynamicNBA = function
-                                 .walk([](LLVM::CallOp call) {
-                                   return call.getCallee() &&
-                                                  *call.getCallee() ==
-                                                      "talos_rt_v1_scheduler_"
-                                                      "static_nba"
-                                              ? WalkResult::interrupt()
-                                              : WalkResult::advance();
+                                 .walk([](schedule::NativeNBAStageOp) {
+                                   return WalkResult::interrupt();
                                  })
                                  .wasInterrupted();
         if (hasDynamicNBA)
@@ -1406,9 +1391,8 @@ FailureOr<bool> makeNativeEvalPlan(
       bool directBody =
           ::talos::schedule::has<::talos::schedule::Field::EvalDirectFragment>(
               function);
-      function.walk([&](LLVM::CallOp call) {
-        if (failed(valid) || !call.getCallee() ||
-            *call.getCallee() != "talos_rt_v1_scheduler_static_nba")
+      function.walk([&](schedule::NativeNBAStageOp stage) {
+        if (failed(valid))
           return;
         if (!directBody) {
           // Shared helpers may execute through multiple call sites or the
@@ -1422,14 +1406,14 @@ FailureOr<bool> makeNativeEvalPlan(
           return;
         }
         FailureOr<DynamicEvalNBAProof> proof = proveDynamicEvalNBA(
-            call, proofContext, proofAnalysis,
+            stage, proofContext, proofAnalysis,
             closureExecutesAtMostOnce(function), boundsFor(function));
         if (failed(proof)) {
           valid = failure();
           return;
         }
         if (!proof->eligible) {
-          call.emitRemark("dynamic NBA is ineligible for generated eval")
+          stage.emitRemark("dynamic NBA is ineligible for generated eval")
               << " (commit-region=" << proof->commitRegion
               << ", periodic-entry=" << static_cast<bool>(proof->periodicRecord)
               << ", exclusive-periodic-ingress="
@@ -1442,12 +1426,10 @@ FailureOr<bool> makeNativeEvalPlan(
               << ", unique-semantic-root-site=" << proof->uniqueSemanticRootSite
               << ", site-once=" << proof->siteExecutesAtMostOnce << ")";
           if (native::has<native::DebugTiming>(module)) {
-            auto site = constantU64(call.getArgOperands()[1]);
-            auto root = site ? staticNBAPlan.siteRoots.find(*site)
-                             : staticNBAPlan.siteRoots.end();
+            auto root = staticNBAPlan.siteRoots.find(stage.getSite());
             llvm::errs() << "eval LLVM rejection: NBA function="
-                         << function.getSymName()
-                         << " site=" << site.value_or(UINT64_MAX) << " root="
+                         << function.getSymName() << " site=" << stage.getSite()
+                         << " root="
                          << (root == staticNBAPlan.siteRoots.end()
                                  ? UINT32_MAX
                                  : root->second)
@@ -1457,7 +1439,7 @@ FailureOr<bool> makeNativeEvalPlan(
           }
         }
         needsRuntimeFallback |= !proof->eligible;
-        dynamicNBAProofs.try_emplace(call.getOperation(), std::move(*proof));
+        dynamicNBAProofs.try_emplace(stage.getOperation(), std::move(*proof));
       });
     }
     if (failed(valid))
@@ -1552,16 +1534,14 @@ FailureOr<bool> makeNativeEvalPlan(
   llvm::SmallDenseSet<uint32_t, 8> separateCaptureRoots;
   for (auto &[operation, proof] : dynamicNBAProofs)
     if (!proof.coalescedWholeRoot) {
-      auto call = cast<LLVM::CallOp>(operation);
       separateCaptureRoots.insert(staticNBAPlan.siteRoots.lookup(
-          *constantU64(call.getArgOperands()[1])));
+          cast<schedule::NativeNBAStageOp>(operation).getSite()));
     }
   llvm::SmallDenseSet<uint32_t, 8> coalescedRoots;
   for (auto &[operation, proof] : dynamicNBAProofs)
     if (proof.coalescedWholeRoot) {
-      auto call = cast<LLVM::CallOp>(operation);
       uint32_t root = staticNBAPlan.siteRoots.lookup(
-          *constantU64(call.getArgOperands()[1]));
+          cast<schedule::NativeNBAStageOp>(operation).getSite());
       if (separateCaptureRoots.contains(root)) {
         proof.coalescedWholeRoot = false;
         proof.orderedWide = !proof.periodicWideLatch;
@@ -1575,9 +1555,8 @@ FailureOr<bool> makeNativeEvalPlan(
   llvm::SmallDenseSet<uint32_t, 8> orderedNBARoots;
   for (auto &[operation, proof] : dynamicNBAProofs)
     if (proof.orderedWide) {
-      auto call = cast<LLVM::CallOp>(operation);
       orderedNBARoots.insert(staticNBAPlan.siteRoots.lookup(
-          *constantU64(call.getArgOperands()[1])));
+          cast<schedule::NativeNBAStageOp>(operation).getSite()));
     }
   // Every implementation and cold source site of a whole-value bank
   // captures the same complete root. A dynamic selection or a different
@@ -1591,17 +1570,14 @@ FailureOr<bool> makeNativeEvalPlan(
         staticNBAPlan.generatedAccumulators[root].empty())
       bankCandidates.insert(root);
   for (auto &[operation, proof] : dynamicNBAProofs) {
-    auto call = cast<LLVM::CallOp>(operation);
-    auto args = call.getArgOperands();
-    auto site = constantU64(args[1]);
-    auto root = site ? staticNBAPlan.siteRoots.find(*site)
-                     : staticNBAPlan.siteRoots.end();
+    auto stage = cast<schedule::NativeNBAStageOp>(operation);
+    auto root = staticNBAPlan.siteRoots.find(stage.getSite());
     if (root == staticNBAPlan.siteRoots.end() ||
         !bankCandidates.contains(root->second))
       continue;
     const auto &target = nbaRoots[root->second];
-    auto handle = constantU64(args[5]);
-    if (!proof.eligible || constantU64(args[6]) != target.bit_width ||
+    auto handle = constantU64(stage.getHandle());
+    if (!proof.eligible || stage.getWidth() != target.bit_width ||
         handle != talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_STATIC,
                                                 target.static_state, 0))
       bankCandidates.erase(root->second);
@@ -2708,50 +2684,30 @@ FailureOr<bool> makeNativeEvalPlan(
     // latch. This is the common register-file shape: the clock body records
     // offset/value locally and the generated NBA epilogue publishes it after
     // the activation returns, without constructing a runtime NBA object.
-    SmallVector<std::pair<LLVM::CallOp, bool>> runtimeEscapes;
+    SmallVector<std::pair<schedule::NativeNBAStageOp, bool>> runtimeEscapes;
     ::talos::detail::walkNativeFunctions<sim::SimFuncOp>(
         module, [&](sim::SimFuncOp function) {
           if (!isGeneratedEvalBody(function, selectedRawBodies))
             return;
           bool twoState = ::talos::schedule::has<
               ::talos::schedule::Field::EvalSelectedTwoState>(function);
-          function.walk([&](LLVM::CallOp call) {
-            if (!call.getCallee())
-              return;
-            bool staticNBA =
-                *call.getCallee() == "talos_rt_v1_scheduler_static_nba";
-            bool staticNBAFailure = false;
-            if (*call.getCallee() == "talos_rt_v1_scheduler_fail" &&
-                call.getArgOperands().size() == 2)
-              if (auto source =
-                      call.getArgOperands()[1].getDefiningOp<LLVM::CallOp>())
-                staticNBAFailure =
-                    source.getCallee() &&
-                    *source.getCallee() == "talos_rt_v1_scheduler_static_nba";
-            // A generic NBA call retained for an unsafe root still needs its
-            // scheduler_fail companion. Only remove the companion for a static
-            // call that this pass replaces with a generated stage.
-            if (staticNBA || staticNBAFailure)
-              runtimeEscapes.push_back({call, twoState});
+          function.walk([&](schedule::NativeNBAStageOp stage) {
+            runtimeEscapes.push_back({stage, twoState});
           });
         });
-    for (auto [call, twoState] : runtimeEscapes) {
+    for (auto [nbaStage, twoState] : runtimeEscapes) {
       LLVM::CallOp handleOffsetToErase;
       Operation *handleSelectToErase = nullptr;
-      if (call.getCallee() &&
-          *call.getCallee() == "talos_rt_v1_scheduler_static_nba") {
-        ValueRange arguments = call.getArgOperands();
-        if (arguments.size() != 9)
-          return call.emitError("malformed static NBA ABI"), failure();
-        std::optional<uint64_t> site = constantU64(arguments[1]);
-        std::optional<uint64_t> width = constantU64(arguments[6]);
-        auto root = site ? staticNBAPlan.siteRoots.find(*site)
-                         : staticNBAPlan.siteRoots.end();
-        auto offsetCall = arguments[5].getDefiningOp<LLVM::CallOp>();
+      {
+        std::optional<uint64_t> site = nbaStage.getSite();
+        std::optional<uint64_t> width = nbaStage.getWidth();
+        auto root = staticNBAPlan.siteRoots.find(*site);
+        Value handle = nbaStage.getHandle();
+        auto offsetCall = handle.getDefiningOp<LLVM::CallOp>();
         Value dynamicValid;
         bool invertDynamicValid = false;
         if (!offsetCall) {
-          Operation *selected = arguments[5].getDefiningOp();
+          Operation *selected = handle.getDefiningOp();
           if (isa_and_nonnull<arith::SelectOp, LLVM::SelectOp>(selected)) {
             handleSelectToErase = selected;
             std::optional<uint64_t> trueConstant =
@@ -2770,13 +2726,13 @@ FailureOr<bool> makeNativeEvalPlan(
             }
           }
         }
-        auto proof = dynamicNBAProofs.find(call.getOperation());
+        auto proof = dynamicNBAProofs.find(nbaStage.getOperation());
         if (proof == dynamicNBAProofs.end() || !proof->second.eligible) {
           const DynamicEvalNBAProof emptyProof;
           const DynamicEvalNBAProof &details =
               proof == dynamicNBAProofs.end() ? emptyProof : proof->second;
-          auto diagnostic =
-              call.emitError("runtime-free eval cannot lower dynamic NBA site");
+          auto diagnostic = nbaStage.emitError(
+              "runtime-free eval cannot lower dynamic NBA site");
           diagnostic
               << " (site=" << static_cast<bool>(site)
               << ", width=" << (width ? *width : 0) << ", root="
@@ -2821,43 +2777,45 @@ FailureOr<bool> makeNativeEvalPlan(
                                       ? proof->second.firstRootSite
                                       : *site;
         handleOffsetToErase = offsetCall;
-        OpBuilder nbaBuilder(call);
+        OpBuilder nbaBuilder(nbaStage);
         Value dynamicBit =
             offsetCall ? offsetCall.getArgOperands()[1]
-                       : llvmConstant(nbaBuilder, call.getLoc(), i64, 0);
+                       : llvmConstant(nbaBuilder, nbaStage.getLoc(), i64, 0);
         // Load record chunk `index` (bits [64 * index, 64 * index + 64)) of
         // the staged payload. A payload of at most 64 bits is one chunk.
-        auto loadChunk = [&, &call = call](Value payload,
-                                           uint64_t index) -> Value {
+        auto loadChunk = [&, &nbaStage = nbaStage](Value payload,
+                                                   uint64_t index) -> Value {
           uint64_t chunkWidth = std::min<uint64_t>(64, *width - index * 64);
           Value address = index == 0
                               ? payload
-                              : byteGEP(nbaBuilder, call.getLoc(), payload,
+                              : byteGEP(nbaBuilder, nbaStage.getLoc(), payload,
                                         index * sizeof(uint64_t));
           Value chunk = LLVM::LoadOp::create(
-              nbaBuilder, call.getLoc(), IntegerType::get(context, chunkWidth),
-              address, 1);
-          return chunkWidth == 64 ? chunk
-                                  : LLVM::ZExtOp::create(
-                                        nbaBuilder, call.getLoc(), i64, chunk)
-                                        .getResult();
+              nbaBuilder, nbaStage.getLoc(),
+              IntegerType::get(context, chunkWidth), address, 1);
+          return chunkWidth == 64
+                     ? chunk
+                     : LLVM::ZExtOp::create(nbaBuilder, nbaStage.getLoc(), i64,
+                                            chunk)
+                           .getResult();
         };
         // A locally promoted executor can still contain four-state literals
         // or values unrelated to its promoted inputs. The NBA ABI, not the
         // enclosing function's domain, determines whether this value carries
-        // an unknown plane. ImmediateNBAConversion supplies null only for a
-        // genuinely two-state value.
-        bool stagedHasUnknown = !arguments[8].getDefiningOp<LLVM::ZeroOp>();
-        auto loadUnknownChunk = [&, &call = call](uint64_t index) -> Value {
+        // an unknown plane. ImmediateNBAConversion omits the stage's unknown
+        // operand only for a genuinely two-state value.
+        bool stagedHasUnknown = static_cast<bool>(nbaStage.getUnknown());
+        auto loadUnknownChunk = [&, &nbaStage =
+                                        nbaStage](uint64_t index) -> Value {
           return stagedHasUnknown
-                     ? loadChunk(arguments[8], index)
-                     : llvmConstant(nbaBuilder, call.getLoc(), i64, 0);
+                     ? loadChunk(nbaStage.getUnknown(), index)
+                     : llvmConstant(nbaBuilder, nbaStage.getLoc(), i64, 0);
         };
         // Wide payloads use consecutive fixed slots when the activation
         // count and independent-write proofs hold, otherwise ordered records.
         Value staged64, stagedUnknown64;
         if (*width <= 64) {
-          staged64 = loadChunk(arguments[7], 0);
+          staged64 = loadChunk(nbaStage.getValue(), 0);
           stagedUnknown64 = loadUnknownChunk(0);
         }
 
@@ -2867,57 +2825,58 @@ FailureOr<bool> makeNativeEvalPlan(
         // contrary to IEEE 1800-2017 4.6 and 10.4.2.
         uint64_t rootWidth = staticNBAPlan.roots[root->second].bit_width;
         Value encodedBase =
-            offsetCall ? offsetCall.getArgOperands()[0] : arguments[5];
+            offsetCall ? offsetCall.getArgOperands()[0] : handle;
         uint64_t expectedPrefix =
             TALOS_RT_STABLE_HANDLE_STATIC_TAG |
             (uint64_t{staticNBAPlan.roots[root->second].static_state} << 32);
-        Value basePrefix =
-            arith::AndIOp::create(nbaBuilder, call.getLoc(), encodedBase,
-                                  llvmConstant(nbaBuilder, call.getLoc(), i64,
-                                               UINT64_C(0xffffffff00000000)));
+        Value basePrefix = arith::AndIOp::create(
+            nbaBuilder, nbaStage.getLoc(), encodedBase,
+            llvmConstant(nbaBuilder, nbaStage.getLoc(), i64,
+                         UINT64_C(0xffffffff00000000)));
         Value baseValid = arith::CmpIOp::create(
-            nbaBuilder, call.getLoc(), arith::CmpIPredicate::eq, basePrefix,
-            llvmConstant(nbaBuilder, call.getLoc(), i64, expectedPrefix));
+            nbaBuilder, nbaStage.getLoc(), arith::CmpIPredicate::eq, basePrefix,
+            llvmConstant(nbaBuilder, nbaStage.getLoc(), i64, expectedPrefix));
         Value baseOffset = LLVM::SExtOp::create(
-            nbaBuilder, call.getLoc(), i64,
-            LLVM::TruncOp::create(nbaBuilder, call.getLoc(), i32, encodedBase));
+            nbaBuilder, nbaStage.getLoc(), i64,
+            LLVM::TruncOp::create(nbaBuilder, nbaStage.getLoc(), i32,
+                                  encodedBase));
         // Compare the dynamic amount against base-adjusted bounds instead of
         // first adding it to the signed 32-bit base.  Thus even an extreme
         // representable source index cannot overflow before being rejected.
-        Value lower =
-            arith::SubIOp::create(nbaBuilder, call.getLoc(),
-                                  llvmConstant(nbaBuilder, call.getLoc(), i64,
-                                               -static_cast<int64_t>(*width)),
-                                  baseOffset);
+        Value lower = arith::SubIOp::create(
+            nbaBuilder, nbaStage.getLoc(),
+            llvmConstant(nbaBuilder, nbaStage.getLoc(), i64,
+                         -static_cast<int64_t>(*width)),
+            baseOffset);
         Value upper = arith::SubIOp::create(
-            nbaBuilder, call.getLoc(),
-            llvmConstant(nbaBuilder, call.getLoc(), i64, rootWidth),
+            nbaBuilder, nbaStage.getLoc(),
+            llvmConstant(nbaBuilder, nbaStage.getLoc(), i64, rootWidth),
             baseOffset);
         Value overlaps = arith::AndIOp::create(
-            nbaBuilder, call.getLoc(),
-            arith::CmpIOp::create(nbaBuilder, call.getLoc(),
+            nbaBuilder, nbaStage.getLoc(),
+            arith::CmpIOp::create(nbaBuilder, nbaStage.getLoc(),
                                   arith::CmpIPredicate::sgt, dynamicBit, lower),
-            arith::CmpIOp::create(nbaBuilder, call.getLoc(),
+            arith::CmpIOp::create(nbaBuilder, nbaStage.getLoc(),
                                   arith::CmpIPredicate::slt, dynamicBit,
                                   upper));
-        overlaps = arith::AndIOp::create(nbaBuilder, call.getLoc(), baseValid,
-                                         overlaps);
+        overlaps = arith::AndIOp::create(nbaBuilder, nbaStage.getLoc(),
+                                         baseValid, overlaps);
         if (dynamicValid) {
           if (invertDynamicValid)
-            dynamicValid =
-                arith::XOrIOp::create(nbaBuilder, call.getLoc(), dynamicValid,
-                                      llvmConstant(nbaBuilder, call.getLoc(),
-                                                   nbaBuilder.getI1Type(), 1));
-          overlaps = arith::AndIOp::create(nbaBuilder, call.getLoc(),
+            dynamicValid = arith::XOrIOp::create(
+                nbaBuilder, nbaStage.getLoc(), dynamicValid,
+                llvmConstant(nbaBuilder, nbaStage.getLoc(),
+                             nbaBuilder.getI1Type(), 1));
+          overlaps = arith::AndIOp::create(nbaBuilder, nbaStage.getLoc(),
                                            dynamicValid, overlaps);
         }
-        Value zero64 = llvmConstant(nbaBuilder, call.getLoc(), i64, 0);
+        Value zero64 = llvmConstant(nbaBuilder, nbaStage.getLoc(), i64, 0);
         Value safeDynamic = arith::SelectOp::create(
-            nbaBuilder, call.getLoc(), overlaps, dynamicBit,
-            arith::SubIOp::create(nbaBuilder, call.getLoc(), zero64,
+            nbaBuilder, nbaStage.getLoc(), overlaps, dynamicBit,
+            arith::SubIOp::create(nbaBuilder, nbaStage.getLoc(), zero64,
                                   baseOffset));
-        Value requestedStart = arith::AddIOp::create(nbaBuilder, call.getLoc(),
-                                                     safeDynamic, baseOffset);
+        Value requestedStart = arith::AddIOp::create(
+            nbaBuilder, nbaStage.getLoc(), safeDynamic, baseOffset);
         // Compare the entire captured RHS (both planes) before staging its
         // first chunk. In the shared calendar even a one-word ordered record
         // marks its root dirty, so an equal second write still restores the
@@ -2941,9 +2900,9 @@ FailureOr<bool> makeNativeEvalPlan(
           for (uint64_t chunk = 0; chunk < (*width + 63) / 64; ++chunk) {
             unsigned bits = std::min<uint64_t>(64, *width - chunk * 64);
             Value delta = buildNativeNBAChange(
-                nbaBuilder, call.getLoc(), offset + chunk * 64, bits,
-                loadChunk(arguments[7], chunk), loadUnknownChunk(chunk));
-            difference = arith::OrIOp::create(nbaBuilder, call.getLoc(),
+                nbaBuilder, nbaStage.getLoc(), offset + chunk * 64, bits,
+                loadChunk(nbaStage.getValue(), chunk), loadUnknownChunk(chunk));
+            difference = arith::OrIOp::create(nbaBuilder, nbaStage.getLoc(),
                                               difference, delta);
             if ((!changeBanks[root->second].empty() &&
                  staticNBAPlan.unchangedSafeRoots[root->second]) ||
@@ -2953,19 +2912,19 @@ FailureOr<bool> makeNativeEvalPlan(
               orderedChunkDifferences.push_back(delta);
           }
           Value dirty = loadNBAIndex(
-              nbaBuilder, call.getLoc(), schedule::NBAIndex::DirtyRoots,
+              nbaBuilder, nbaStage.getLoc(), schedule::NBAIndex::DirtyRoots,
               root->second / 64, root->second, /*canonicalCapture=*/true);
           Value pending = arith::AndIOp::create(
-              nbaBuilder, call.getLoc(), dirty,
-              llvmConstant(nbaBuilder, call.getLoc(), i64,
+              nbaBuilder, nbaStage.getLoc(), dirty,
+              llvmConstant(nbaBuilder, nbaStage.getLoc(), i64,
                            uint64_t{1} << (root->second % 64)));
           if (orderedWide &&
               !schedule::has<schedule::Field::EvalRuntimeCalendar>(module))
             pending = arith::OrIOp::create(
-                nbaBuilder, call.getLoc(), pending,
+                nbaBuilder, nbaStage.getLoc(), pending,
                 arith::ExtUIOp::create(
-                    nbaBuilder, call.getLoc(), i64,
-                    evalNBAQueueSize(nbaBuilder, call.getLoc())));
+                    nbaBuilder, nbaStage.getLoc(), i64,
+                    evalNBAQueueSize(nbaBuilder, nbaStage.getLoc())));
           if (!orderedWide && proof->second.coalescedWholeRoot) {
             // Unlike a once-per-barrier slot, this slot may already contain a
             // different value. An equal-to-current capture must overwrite it.
@@ -2974,27 +2933,28 @@ FailureOr<bool> makeNativeEvalPlan(
             std::string validName =
                 (Twine("__talos_eval_nba_valid_") + Twine(firstSite)).str();
             Value valid = LLVM::LoadOp::create(
-                nbaBuilder, call.getLoc(), i32,
-                LLVM::AddressOfOp::create(nbaBuilder, call.getLoc(), pointer,
-                                          validName),
+                nbaBuilder, nbaStage.getLoc(), i32,
+                LLVM::AddressOfOp::create(nbaBuilder, nbaStage.getLoc(),
+                                          pointer, validName),
                 4);
             pending = arith::OrIOp::create(
-                nbaBuilder, call.getLoc(), pending,
-                arith::ExtUIOp::create(nbaBuilder, call.getLoc(), i64, valid));
+                nbaBuilder, nbaStage.getLoc(), pending,
+                arith::ExtUIOp::create(nbaBuilder, nbaStage.getLoc(), i64,
+                                       valid));
           }
           pendingBeforeCapture = pending;
           Value needed = arith::CmpIOp::create(
-              nbaBuilder, call.getLoc(), arith::CmpIPredicate::ne,
-              arith::OrIOp::create(nbaBuilder, call.getLoc(), difference,
+              nbaBuilder, nbaStage.getLoc(), arith::CmpIPredicate::ne,
+              arith::OrIOp::create(nbaBuilder, nbaStage.getLoc(), difference,
                                    pending),
               zero64);
-          overlaps = arith::AndIOp::create(nbaBuilder, call.getLoc(), overlaps,
-                                           needed);
+          overlaps = arith::AndIOp::create(nbaBuilder, nbaStage.getLoc(),
+                                           overlaps, needed);
         }
         if (!changeBanks[root->second].empty()) {
-          emitWholeNBACapture(nbaBuilder, call, changeBanks[root->second],
-                              root->second, *width, overlaps, arguments[7],
-                              stagedHasUnknown ? arguments[8] : Value{},
+          emitWholeNBACapture(nbaBuilder, nbaStage, changeBanks[root->second],
+                              root->second, *width, overlaps,
+                              nbaStage.getValue(), nbaStage.getUnknown(),
                               orderedChunkDifferences);
         } else if (orderedWide) {
           uint64_t chunks = (*width + 63) / 64;
@@ -3028,8 +2988,8 @@ FailureOr<bool> makeNativeEvalPlan(
           // Preserve each activation, including repeated writes to one lane.
           // The hot path is only direct record stores. Storage growth is cold
           // and cannot execute actors or re-enter the scheduler.
-          Block *before = call->getBlock();
-          Block *continuation = before->splitBlock(call->getIterator());
+          Block *before = nbaStage->getBlock();
+          Block *continuation = before->splitBlock(nbaStage->getIterator());
           Region *region = before->getParent();
           auto block = [&]() {
             auto *result = new Block;
@@ -3042,7 +3002,7 @@ FailureOr<bool> makeNativeEvalPlan(
           // publish the new tail and dirty bit once (1800-2023 4.6(b),
           // 4.9.4, 10.4.2). An equal later assignment can still restore
           // lanes overwritten by earlier records of this same root.
-          Location loc = call.getLoc();
+          Location loc = nbaStage.getLoc();
           Block *check = block(), *grow = block(), *stage = block();
           Block *failed = block();
           nbaBuilder.setInsertionPointToEnd(before);
@@ -3076,8 +3036,9 @@ FailureOr<bool> makeNativeEvalPlan(
                                    stage, ValueRange{});
           nbaBuilder.setInsertionPointToStart(grow);
           SmallVector<Value> growArgs{
-              arguments[0], LLVM::AddressOfOp::create(nbaBuilder, loc, pointer,
-                                                      evalNBAQueueName)};
+              nbaStage.getRuntimeContext(),
+              LLVM::AddressOfOp::create(nbaBuilder, loc, pointer,
+                                        evalNBAQueueName)};
           StringRef growName = "talos_rt_v1_eval_nba_reserve";
           if (fullRecords > 1) {
             // A sparse capture need not allocate its worst-case size; in
@@ -3108,7 +3069,7 @@ FailureOr<bool> makeNativeEvalPlan(
           LLVM::CallOp::create(
               nbaBuilder, loc, TypeRange{},
               SymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"),
-              ValueRange{arguments[0], status});
+              ValueRange{nbaStage.getRuntimeContext(), status});
           cf::BranchOp::create(nbaBuilder, loc, continuation);
           nbaBuilder.setInsertionPointToStart(stage);
           Value data = LLVM::LoadOp::create(
@@ -3128,7 +3089,7 @@ FailureOr<bool> makeNativeEvalPlan(
                                   runtime::packedWideNBATag | *site));
             field(1, requestedStart);
             for (uint64_t lane = 0; lane != chunks; ++lane) {
-              field(2 + lane, loadChunk(arguments[7], lane));
+              field(2 + lane, loadChunk(nbaStage.getValue(), lane));
               field(2 + chunks + lane, loadUnknownChunk(lane));
             }
           } else {
@@ -3155,7 +3116,7 @@ FailureOr<bool> makeNativeEvalPlan(
                   LLVM::GEPOp::create(nbaBuilder, loc, pointer, recordType,
                                       data, ValueRange{recordIndex});
               Value value =
-                  chunks == 1 ? staged64 : loadChunk(arguments[7], lane);
+                  chunks == 1 ? staged64 : loadChunk(nbaStage.getValue(), lane);
               Value unknown =
                   chunks == 1 ? stagedUnknown64 : loadUnknownChunk(lane);
               Value start = arith::AddIOp::create(
@@ -3191,22 +3152,22 @@ FailureOr<bool> makeNativeEvalPlan(
         } else if (wideSlots) {
           Block *inertContinuation = nullptr;
           if (inertCandidate) {
-            Block *before = call->getBlock();
-            inertContinuation = before->splitBlock(call->getIterator());
+            Block *before = nbaStage->getBlock();
+            inertContinuation = before->splitBlock(nbaStage->getIterator());
             auto *stage = new Block;
             before->getParent()->getBlocks().insert(
                 Region::iterator(inertContinuation), stage);
             nbaBuilder.setInsertionPointToEnd(before);
-            cf::CondBranchOp::create(nbaBuilder, call.getLoc(), overlaps, stage,
-                                     ValueRange{}, inertContinuation,
+            cf::CondBranchOp::create(nbaBuilder, nbaStage.getLoc(), overlaps,
+                                     stage, ValueRange{}, inertContinuation,
                                      ValueRange{});
             nbaBuilder.setInsertionPointToStart(stage);
           }
           uint64_t chunks = (*width + 63) / 64;
           bool runtimeCalendar = ::talos::schedule::has<
               ::talos::schedule::Field::EvalRuntimeCalendar>(module);
-          Value validBit =
-              LLVM::ZExtOp::create(nbaBuilder, call.getLoc(), i32, overlaps);
+          Value validBit = LLVM::ZExtOp::create(nbaBuilder, nbaStage.getLoc(),
+                                                i32, overlaps);
           for (uint64_t index = 0; index != chunks; ++index) {
             uint64_t slotSite =
                 chunks == 1 ? slotSourceSite
@@ -3234,19 +3195,20 @@ FailureOr<bool> makeNativeEvalPlan(
                   (Twine("__talos_eval_nba_unknown_") + Twine(slotSite)).str();
               entry.validName =
                   (Twine("__talos_eval_nba_valid_") + Twine(slotSite)).str();
-              auto makeZero = [&, &call = call](StringRef name, Type type,
-                                                unsigned alignment) {
+              auto makeZero = [&, &nbaStage = nbaStage](StringRef name,
+                                                        Type type,
+                                                        unsigned alignment) {
                 OpBuilder globalBuilder =
                     OpBuilder::atBlockBegin(module.getBody());
                 auto global = LLVM::GlobalOp::create(
-                    globalBuilder, call.getLoc(), type, false,
+                    globalBuilder, nbaStage.getLoc(), type, false,
                     LLVM::Linkage::Internal, name, Attribute{}, alignment);
                 Block *initializer = new Block;
                 global.getInitializerRegion().push_back(initializer);
                 OpBuilder initBuilder = OpBuilder::atBlockBegin(initializer);
                 LLVM::ReturnOp::create(
-                    initBuilder, call.getLoc(),
-                    LLVM::ZeroOp::create(initBuilder, call.getLoc(), type));
+                    initBuilder, nbaStage.getLoc(),
+                    LLVM::ZeroOp::create(initBuilder, nbaStage.getLoc(), type));
               };
               makeZero(entry.offsetName, i64, 8);
               makeZero(entry.valueName, i64, 8);
@@ -3259,24 +3221,26 @@ FailureOr<bool> makeNativeEvalPlan(
               dynamicEvalNBAs.push_back(std::move(entry));
               existing = std::prev(dynamicEvalNBAs.end());
             }
-            auto storeGlobal = [&, &call = call](StringRef name, Value value,
-                                                 unsigned alignment) {
-              LLVM::StoreOp::create(nbaBuilder, call.getLoc(), value,
+            auto storeGlobal = [&, &nbaStage = nbaStage](StringRef name,
+                                                         Value value,
+                                                         unsigned alignment) {
+              LLVM::StoreOp::create(nbaBuilder, nbaStage.getLoc(), value,
                                     LLVM::AddressOfOp::create(nbaBuilder,
-                                                              call.getLoc(),
+                                                              nbaStage.getLoc(),
                                                               pointer, name),
                                     alignment);
             };
             Value chunkStart =
                 index == 0 ? requestedStart
                            : arith::AddIOp::create(
-                                 nbaBuilder, call.getLoc(), requestedStart,
-                                 llvmConstant(nbaBuilder, call.getLoc(), i64,
-                                              index * 64))
+                                 nbaBuilder, nbaStage.getLoc(), requestedStart,
+                                 llvmConstant(nbaBuilder, nbaStage.getLoc(),
+                                              i64, index * 64))
                                  .getResult();
             storeGlobal(existing->offsetName, chunkStart, 8);
             storeGlobal(existing->valueName,
-                        chunks == 1 ? staged64 : loadChunk(arguments[7], index),
+                        chunks == 1 ? staged64
+                                    : loadChunk(nbaStage.getValue(), index),
                         8);
             storeGlobal(existing->unknownName,
                         chunks == 1 ? stagedUnknown64 : loadUnknownChunk(index),
@@ -3288,15 +3252,16 @@ FailureOr<bool> makeNativeEvalPlan(
             // (evalDynamicNBAPendingName, created with the coordinator plan).
             // A later store of a clear valid word leaves the summary set;
             // that only costs an empty commit.
-            Value summary = LLVM::AddressOfOp::create(
-                nbaBuilder, call.getLoc(), pointer, evalDynamicNBAPendingName);
-            Value prior =
-                LLVM::LoadOp::create(nbaBuilder, call.getLoc(), i32, summary, 4);
-            LLVM::StoreOp::create(
-                nbaBuilder, call.getLoc(),
-                arith::OrIOp::create(nbaBuilder, call.getLoc(), prior,
-                                     validBit),
-                summary, 4);
+            Value summary =
+                LLVM::AddressOfOp::create(nbaBuilder, nbaStage.getLoc(),
+                                          pointer, evalDynamicNBAPendingName);
+            Value prior = LLVM::LoadOp::create(nbaBuilder, nbaStage.getLoc(),
+                                               i32, summary, 4);
+            LLVM::StoreOp::create(nbaBuilder, nbaStage.getLoc(),
+                                  arith::OrIOp::create(nbaBuilder,
+                                                       nbaStage.getLoc(), prior,
+                                                       validBit),
+                                  summary, 4);
           } else {
             // Fixed slots share the canonical barrier's sparse root index.
             // No runtime staging call or event allocation is needed.
@@ -3304,16 +3269,18 @@ FailureOr<bool> makeNativeEvalPlan(
             // The fixed-slot ABI retains canonical ownership. Its producer
             // RMW does not query private captures elsewhere in this page
             // (LRM 4.9.4/10.4.2).
-            auto setBit = [&, &call = call](schedule::NBAIndex index,
-                                            uint32_t word, uint64_t mask) {
+            auto setBit = [&, &nbaStage = nbaStage](schedule::NBAIndex index,
+                                                    uint32_t word,
+                                                    uint64_t mask) {
               Value previous =
-                  loadNBAIndex(nbaBuilder, call.getLoc(), index, word,
+                  loadNBAIndex(nbaBuilder, nbaStage.getLoc(), index, word,
                                root->second, /*canonicalCapture=*/true);
               Value selected = arith::SelectOp::create(
-                  nbaBuilder, call.getLoc(), overlaps,
-                  llvmConstant(nbaBuilder, call.getLoc(), i64, mask), zero64);
-              storeNBAIndex(nbaBuilder, call.getLoc(),
-                            arith::OrIOp::create(nbaBuilder, call.getLoc(),
+                  nbaBuilder, nbaStage.getLoc(), overlaps,
+                  llvmConstant(nbaBuilder, nbaStage.getLoc(), i64, mask),
+                  zero64);
+              storeNBAIndex(nbaBuilder, nbaStage.getLoc(),
+                            arith::OrIOp::create(nbaBuilder, nbaStage.getLoc(),
                                                  previous, selected),
                             index, word, root->second,
                             /*canonicalCapture=*/true);
@@ -3324,60 +3291,63 @@ FailureOr<bool> makeNativeEvalPlan(
                    uint64_t{1} << (word % 64));
           }
           if (inertContinuation) {
-            cf::BranchOp::create(nbaBuilder, call.getLoc(), inertContinuation);
+            cf::BranchOp::create(nbaBuilder, nbaStage.getLoc(),
+                                 inertContinuation);
             nbaBuilder.setInsertionPointToStart(inertContinuation);
           }
         } else {
-          Value below = arith::CmpIOp::create(nbaBuilder, call.getLoc(),
+          Value below = arith::CmpIOp::create(nbaBuilder, nbaStage.getLoc(),
                                               arith::CmpIPredicate::slt,
                                               requestedStart, zero64);
-          Value start = arith::SelectOp::create(nbaBuilder, call.getLoc(),
+          Value start = arith::SelectOp::create(nbaBuilder, nbaStage.getLoc(),
                                                 below, zero64, requestedStart);
           Value requestedEnd = arith::AddIOp::create(
-              nbaBuilder, call.getLoc(), requestedStart,
-              llvmConstant(nbaBuilder, call.getLoc(), i64, *width));
+              nbaBuilder, nbaStage.getLoc(), requestedStart,
+              llvmConstant(nbaBuilder, nbaStage.getLoc(), i64, *width));
           Value rootWidthValue =
-              llvmConstant(nbaBuilder, call.getLoc(), i64, rootWidth);
-          Value above = arith::CmpIOp::create(nbaBuilder, call.getLoc(),
+              llvmConstant(nbaBuilder, nbaStage.getLoc(), i64, rootWidth);
+          Value above = arith::CmpIOp::create(nbaBuilder, nbaStage.getLoc(),
                                               arith::CmpIPredicate::sgt,
                                               requestedEnd, rootWidthValue);
-          Value end = arith::SelectOp::create(nbaBuilder, call.getLoc(), above,
-                                              rootWidthValue, requestedEnd);
+          Value end =
+              arith::SelectOp::create(nbaBuilder, nbaStage.getLoc(), above,
+                                      rootWidthValue, requestedEnd);
           Value overlapWidth =
-              arith::SubIOp::create(nbaBuilder, call.getLoc(), end, start);
-          Value sourceStart = arith::SubIOp::create(nbaBuilder, call.getLoc(),
-                                                    start, requestedStart);
+              arith::SubIOp::create(nbaBuilder, nbaStage.getLoc(), end, start);
+          Value sourceStart = arith::SubIOp::create(
+              nbaBuilder, nbaStage.getLoc(), start, requestedStart);
           Value safeWidth = arith::SelectOp::create(
-              nbaBuilder, call.getLoc(), overlaps, overlapWidth, zero64);
+              nbaBuilder, nbaStage.getLoc(), overlaps, overlapWidth, zero64);
           Value safeSource = arith::SelectOp::create(
-              nbaBuilder, call.getLoc(), overlaps, sourceStart, zero64);
+              nbaBuilder, nbaStage.getLoc(), overlaps, sourceStart, zero64);
           Value safeDestination = arith::SelectOp::create(
-              nbaBuilder, call.getLoc(), overlaps, start, zero64);
+              nbaBuilder, nbaStage.getLoc(), overlaps, start, zero64);
           Value widthIs64 = arith::CmpIOp::create(
-              nbaBuilder, call.getLoc(), arith::CmpIPredicate::eq, safeWidth,
-              llvmConstant(nbaBuilder, call.getLoc(), i64, 64));
+              nbaBuilder, nbaStage.getLoc(), arith::CmpIPredicate::eq,
+              safeWidth, llvmConstant(nbaBuilder, nbaStage.getLoc(), i64, 64));
           Value maskShift = arith::SelectOp::create(
-              nbaBuilder, call.getLoc(), widthIs64,
-              llvmConstant(nbaBuilder, call.getLoc(), i64, 63), safeWidth);
+              nbaBuilder, nbaStage.getLoc(), widthIs64,
+              llvmConstant(nbaBuilder, nbaStage.getLoc(), i64, 63), safeWidth);
           Value lowMask = arith::SubIOp::create(
-              nbaBuilder, call.getLoc(),
+              nbaBuilder, nbaStage.getLoc(),
               arith::ShLIOp::create(
-                  nbaBuilder, call.getLoc(),
-                  llvmConstant(nbaBuilder, call.getLoc(), i64, 1), maskShift),
-              llvmConstant(nbaBuilder, call.getLoc(), i64, 1));
+                  nbaBuilder, nbaStage.getLoc(),
+                  llvmConstant(nbaBuilder, nbaStage.getLoc(), i64, 1),
+                  maskShift),
+              llvmConstant(nbaBuilder, nbaStage.getLoc(), i64, 1));
           lowMask = arith::SelectOp::create(
-              nbaBuilder, call.getLoc(), widthIs64,
-              llvmConstant(nbaBuilder, call.getLoc(), i64, UINT64_MAX),
+              nbaBuilder, nbaStage.getLoc(), widthIs64,
+              llvmConstant(nbaBuilder, nbaStage.getLoc(), i64, UINT64_MAX),
               lowMask);
-          Value mask = arith::ShLIOp::create(nbaBuilder, call.getLoc(), lowMask,
-                                             safeDestination);
-          auto position = [&, &call = call](Value source) {
+          Value mask = arith::ShLIOp::create(nbaBuilder, nbaStage.getLoc(),
+                                             lowMask, safeDestination);
+          auto position = [&, &nbaStage = nbaStage](Value source) {
             return arith::AndIOp::create(
-                nbaBuilder, call.getLoc(),
+                nbaBuilder, nbaStage.getLoc(),
                 arith::ShLIOp::create(
-                    nbaBuilder, call.getLoc(),
-                    arith::ShRUIOp::create(nbaBuilder, call.getLoc(), source,
-                                           safeSource),
+                    nbaBuilder, nbaStage.getLoc(),
+                    arith::ShRUIOp::create(nbaBuilder, nbaStage.getLoc(),
+                                           source, safeSource),
                     safeDestination),
                 mask);
           };
@@ -3392,102 +3362,99 @@ FailureOr<bool> makeNativeEvalPlan(
             Block *continuation =
                 before->splitBlock(nbaBuilder.getInsertionPoint());
             nbaBuilder.setInsertionPointToEnd(before);
-            emitGeneratedNBAUnknownHandoff(nbaBuilder, call.getLoc(),
-                                            root->second, positionedUnknown,
-                                            continuation);
+            emitGeneratedNBAUnknownHandoff(nbaBuilder, nbaStage.getLoc(),
+                                           root->second, positionedUnknown,
+                                           continuation);
           }
           Value accumulator = schedule::NativeNBAAccumulatorAddressOp::create(
-              nbaBuilder, call.getLoc(),
+              nbaBuilder, nbaStage.getLoc(),
               staticNBAPlan.generatedAccumulators[root->second]);
           if (root->second < staticNBAPlan.trackTransients.size() &&
               staticNBAPlan.trackTransients[root->second])
-            emitGeneratedNBATransient(nbaBuilder, call.getLoc(), accumulator, 0,
-                                      mask, positionedValue,
+            emitGeneratedNBATransient(nbaBuilder, nbaStage.getLoc(),
+                                      accumulator, 0, mask, positionedValue,
                                       positionedUnknown);
-          auto mergeField = [&, &call = call](NBAField field,
-                                              Value positioned) {
+          auto mergeField = [&, &nbaStage = nbaStage](NBAField field,
+                                                      Value positioned) {
             Value previous = schedule::NativeNBAAccumulatorLoadOp::create(
-                nbaBuilder, call.getLoc(), i64, accumulator, field, 0, 8);
+                nbaBuilder, nbaStage.getLoc(), i64, accumulator, field, 0, 8);
             Value merged = arith::OrIOp::create(
-                nbaBuilder, call.getLoc(),
+                nbaBuilder, nbaStage.getLoc(),
                 arith::AndIOp::create(
-                    nbaBuilder, call.getLoc(), previous,
-                    arith::XOrIOp::create(nbaBuilder, call.getLoc(), mask,
+                    nbaBuilder, nbaStage.getLoc(), previous,
+                    arith::XOrIOp::create(nbaBuilder, nbaStage.getLoc(), mask,
                                           llvmConstant(nbaBuilder,
-                                                       call.getLoc(), i64,
+                                                       nbaStage.getLoc(), i64,
                                                        UINT64_MAX))),
                 positioned);
             schedule::NativeNBAAccumulatorStoreOp::create(
-                nbaBuilder, call.getLoc(), merged, accumulator, field, 0, 8);
+                nbaBuilder, nbaStage.getLoc(), merged, accumulator, field, 0,
+                8);
           };
           mergeField(NBAField::Value, positionedValue);
           mergeField(NBAField::Unknown, positionedUnknown);
           Value previousMask = schedule::NativeNBAAccumulatorLoadOp::create(
-              nbaBuilder, call.getLoc(), i64, accumulator, NBAField::WriteMask,
-              0, 8);
+              nbaBuilder, nbaStage.getLoc(), i64, accumulator,
+              NBAField::WriteMask, 0, 8);
           schedule::NativeNBAAccumulatorStoreOp::create(
-              nbaBuilder, call.getLoc(),
-              arith::OrIOp::create(nbaBuilder, call.getLoc(), previousMask,
+              nbaBuilder, nbaStage.getLoc(),
+              arith::OrIOp::create(nbaBuilder, nbaStage.getLoc(), previousMask,
                                    mask),
               accumulator, NBAField::WriteMask, 0, 8);
           Value previousValid = schedule::NativeNBAAccumulatorLoadOp::create(
-              nbaBuilder, call.getLoc(), i32, accumulator, NBAField::Valid, 0,
-              4);
+              nbaBuilder, nbaStage.getLoc(), i32, accumulator, NBAField::Valid,
+              0, 4);
           schedule::NativeNBAAccumulatorStoreOp::create(
-              nbaBuilder, call.getLoc(),
-              arith::OrIOp::create(nbaBuilder, call.getLoc(), previousValid,
+              nbaBuilder, nbaStage.getLoc(),
+              arith::OrIOp::create(nbaBuilder, nbaStage.getLoc(), previousValid,
                                    LLVM::ZExtOp::create(nbaBuilder,
-                                                        call.getLoc(), i32,
+                                                        nbaStage.getLoc(), i32,
                                                         overlaps)),
               accumulator, NBAField::Valid, 0, 4);
           schedule::NativeNBAAccumulatorStoreOp::create(
-              nbaBuilder, call.getLoc(),
-              llvmConstant(nbaBuilder, call.getLoc(), i32,
+              nbaBuilder, nbaStage.getLoc(),
+              llvmConstant(nbaBuilder, nbaStage.getLoc(), i32,
                            proof->second.commitRegion),
               accumulator, NBAField::ExecRegion, 0, 4);
           uint32_t dirtyWord = root->second / 64;
           Value previousDirty = loadNBAIndex(
-              nbaBuilder, call.getLoc(), schedule::NBAIndex::DirtyRoots,
+              nbaBuilder, nbaStage.getLoc(), schedule::NBAIndex::DirtyRoots,
               dirtyWord, root->second, /*canonicalCapture=*/true);
           Value dirtyBit = arith::SelectOp::create(
-              nbaBuilder, call.getLoc(), overlaps,
-              llvmConstant(nbaBuilder, call.getLoc(), i64,
+              nbaBuilder, nbaStage.getLoc(), overlaps,
+              llvmConstant(nbaBuilder, nbaStage.getLoc(), i64,
                            uint64_t{1} << (root->second % 64)),
               zero64);
-          storeNBAIndex(nbaBuilder, call.getLoc(),
-                        arith::OrIOp::create(nbaBuilder, call.getLoc(),
+          storeNBAIndex(nbaBuilder, nbaStage.getLoc(),
+                        arith::OrIOp::create(nbaBuilder, nbaStage.getLoc(),
                                              previousDirty, dirtyBit),
                         schedule::NBAIndex::DirtyRoots, dirtyWord, root->second,
                         /*canonicalCapture=*/true);
           Value previousSummary = loadNBAIndex(
-              nbaBuilder, call.getLoc(), schedule::NBAIndex::DirtySummary,
+              nbaBuilder, nbaStage.getLoc(), schedule::NBAIndex::DirtySummary,
               dirtyWord / 64, root->second, /*canonicalCapture=*/true);
           Value summaryBit = arith::SelectOp::create(
-              nbaBuilder, call.getLoc(), overlaps,
-              llvmConstant(nbaBuilder, call.getLoc(), i64,
+              nbaBuilder, nbaStage.getLoc(), overlaps,
+              llvmConstant(nbaBuilder, nbaStage.getLoc(), i64,
                            uint64_t{1} << (dirtyWord % 64)),
               zero64);
-          storeNBAIndex(nbaBuilder, call.getLoc(),
-                        arith::OrIOp::create(nbaBuilder, call.getLoc(),
+          storeNBAIndex(nbaBuilder, nbaStage.getLoc(),
+                        arith::OrIOp::create(nbaBuilder, nbaStage.getLoc(),
                                              previousSummary, summaryBit),
                         schedule::NBAIndex::DirtySummary, dirtyWord / 64,
                         root->second, /*canonicalCapture=*/true);
         }
       }
-      if (call.getNumResults() != 0) {
-        if (call.getNumResults() != 1 || call.getResult().getType() != i32)
-          return call.emitError("unsupported eval runtime escape ABI"),
-                 failure();
-        OpBuilder escapeBuilder(call);
-        call.getResult().replaceAllUsesWith(
-            llvmConstant(escapeBuilder, call.getLoc(), i32, TALOS_RT_OK));
-      }
-      call.erase();
+      nbaStage.erase();
       if (handleSelectToErase && handleSelectToErase->use_empty())
         handleSelectToErase->erase();
       if (handleOffsetToErase && handleOffsetToErase->use_empty())
         handleOffsetToErase.erase();
     }
+    // Every stage of a generated body is lowered above. A stage the runtime
+    // keeps is a runtime call to the rest of the plan, e.g. a ranked group's
+    // closed-body test.
+    lowerNativeNBAStages(module);
     // Lower a dynamic selection within one proven packed root directly into
     // the canonical state plane. The generic state ABI must decode arbitrary
     // stable handles and consult runtime overlays; a generated eval body has
