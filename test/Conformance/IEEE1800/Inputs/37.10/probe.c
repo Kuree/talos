@@ -1,5 +1,6 @@
 #include "sv_vpi_user.h"
 #include <stdio.h>
+#include <string.h>
 static void instance(const char *label, const char *path) {
   vpiHandle h = vpi_handle_by_name((PLI_BYTE8 *)path, 0);
   printf("%s type=%s", label, vpi_get_str(vpiType, h));
@@ -7,11 +8,25 @@ static void instance(const char *label, const char *path) {
   printf(" vpiTop=%d auto=%d unit=%d precision=%d\n", vpi_get(vpiTop, h), vpi_get(vpiAutomatic, h),
          vpi_get(vpiTimeUnit, h), vpi_get(vpiTimePrecision, h));
 }
-static const char *full(vpiHandle h) { return h ? vpi_get_str(vpiFullName, h) : "null"; }
+static const char *full(vpiHandle h) {
+  const char *name = h ? vpi_get_str(vpiFullName, h) : NULL;
+  return name ? name : "null";
+}
 static void owner(const char *label, const char *path) {
   vpiHandle h = vpi_handle_by_name((PLI_BYTE8 *)path, 0);
   printf("%s instance=%s", label, full(vpi_handle(vpiInstance, h)));
   printf(" module=%s\n", full(vpi_handle(vpiModule, h)));
+}
+static void count_unit_packages(vpiHandle unit, int *primary, int *extra) {
+  vpiHandle scopes = vpi_iterate(vpiInternalScope, unit);
+  for (vpiHandle scope; scopes && (scope = vpi_scan(scopes));) {
+    if (vpi_get(vpiType, scope) == vpiPackage) {
+      const char *name = full(scope);
+      *primary += !strcmp(name, "pkg::");
+      *extra += !strcmp(name, "extra::");
+    }
+    vpi_release_handle(scope);
+  }
 }
 void probe(void) {
   instance("top", "top");
@@ -22,15 +37,35 @@ void probe(void) {
   // Detail 5: a package's full name ends in "::" and its members start with that prefix.
   vpiHandle it = vpi_iterate(vpiInstance, 0);
   vpiHandle package = 0;
+  int top = 0, units = 0, primary = 0, extra = 0, nested = 0;
+  int unit_primary = 0, unit_extra = 0;
   for (vpiHandle object; it && (object = vpi_scan(it));) {
-    if (vpi_get(vpiType, object) == vpiPackage && !vpi_get(vpiUnit, object))
-      package = object;
-    else
-      vpi_release_handle(object);
+    if (vpi_get(vpiType, object) == vpiPackage) {
+      if (vpi_get(vpiUnit, object)) {
+        ++units;
+        count_unit_packages(object, &unit_primary, &unit_extra);
+      } else if (!strcmp(full(object), "pkg::")) {
+        ++primary;
+        if (!package) {
+          package = object;
+          continue;
+        }
+      } else if (!strcmp(full(object), "extra::"))
+        ++extra;
+    } else {
+      const char *name = full(object);
+      top += !strcmp(name, "top");
+      nested += !strcmp(name, "top.u") || !strcmp(name, "top.p");
+    }
+    vpi_release_handle(object);
   }
+  printf("root top=%d unit=%d pkg=%d extra=%d nested=%d\n", top, units != 0,
+         primary, extra, nested);
+  printf("unit packages pkg=%d extra=%d\n", unit_primary, unit_extra);
   if (package) {
     printf("package type=%s", vpi_get_str(vpiType, package));
     printf(" full=%s unit=%d\n", vpi_get_str(vpiFullName, package), vpi_get(vpiUnit, package));
+    vpi_release_handle(package);
   }
   vpiHandle pv = vpi_handle_by_name("pkg::pv", 0);
   if (pv) {

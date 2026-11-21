@@ -194,8 +194,9 @@ ArrayRef<StringLiteral> getRuntimeVPIEntryPoints() {
       "vpi_get_time", "vpi_get_userdata", "vpi_get_value",
       "vpi_get_value_array", "vpi_get_vlog_info", "vpi_handle",
       "vpi_handle_by_index", "vpi_handle_by_multi_index", "vpi_handle_by_name",
-      "vpi_handle_multi", "vpi_iterate", "vpi_mcd_name", "vpi_printf",
-      "vpi_put_userdata", "vpi_put_value", "vpi_register_cb",
+      "vpi_handle_multi", "vpi_iterate", "vpi_mcd_close", "vpi_mcd_flush",
+      "vpi_mcd_name", "vpi_mcd_open", "vpi_mcd_printf", "vpi_mcd_vprintf",
+      "vpi_printf", "vpi_put_userdata", "vpi_put_value", "vpi_register_cb",
       "vpi_register_systf", "vpi_release_handle", "vpi_remove_cb", "vpi_scan",
       "vpi_vprintf",
       // Talos's object-model query for VPI applications.

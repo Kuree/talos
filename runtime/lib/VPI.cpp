@@ -36,9 +36,13 @@
 #define TALOS_RT_VPI_DYNAMIC_STARTUP 1
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
-#include <filesystem>
-#include <system_error>
+#include <io.h>
 #include <windows.h>
+#endif
+
+#if !defined(_WIN32)
+#include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 // IEEE 1800-2023 38.36.3 cbSignal needs POSIX signal actions.
@@ -51,18 +55,22 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <cerrno>
 #include <cmath>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <filesystem>
 #include <limits>
 #include <memory>
 #include <new>
 #include <set>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
@@ -15302,10 +15310,322 @@ vpi_chk_error(p_vpi_error_info destination) {
   return level;
 }
 
+namespace {
+
+constexpr PLI_UINT32 vpiFileDescriptorBit = PLI_UINT32{1} << 31;
+
+struct MCDFileID {
+  uint64_t volume;
+  std::array<uint64_t, 2> index;
+
+  bool hasFileIndex() const { return index[0] || index[1]; }
+  bool operator==(const MCDFileID &other) const {
+    return volume == other.volume && index == other.index;
+  }
+};
+
+// A provider can expose a file without supplying an index. Resolve the two
+// existing pathnames so dot components and symlinks follow filesystem rules.
+bool sameMCDPath(std::string_view left, std::string_view right) noexcept {
+  if (left == right)
+    return true;
+  TALOS_RT_TRY {
+    std::error_code error;
+    auto first = std::filesystem::canonical(left, error);
+    if (error)
+      return false;
+    auto second = std::filesystem::canonical(right, error);
+    return !error && first == second;
+  }
+  TALOS_RT_CATCH_ALL { return false; }
+}
+
+#if defined(_WIN32)
+std::optional<MCDFileID> mcdFileID(HANDLE handle) {
+  if (handle == INVALID_HANDLE_VALUE)
+    return std::nullopt;
+  // ReFS needs all 128 bits to distinguish files on the same volume.
+  FILE_ID_INFO info{};
+  if (GetFileInformationByHandleEx(handle, FileIdInfo, &info, sizeof(info))) {
+    MCDFileID id{info.VolumeSerialNumber, {}};
+    static_assert(sizeof(id.index) == sizeof(info.FileId.Identifier));
+    std::memcpy(id.index.data(), info.FileId.Identifier, sizeof(id.index));
+    return id;
+  }
+  DWORD error = GetLastError();
+  if (error != ERROR_NOT_SUPPORTED && error != ERROR_INVALID_PARAMETER &&
+      error != ERROR_INVALID_FUNCTION)
+    return std::nullopt;
+  BY_HANDLE_FILE_INFORMATION legacy{};
+  if (!GetFileInformationByHandle(handle, &legacy))
+    return std::nullopt;
+  uint64_t index =
+      (uint64_t{legacy.nFileIndexHigh} << 32) | legacy.nFileIndexLow;
+  return MCDFileID{legacy.dwVolumeSerialNumber, {index, 0}};
+}
+
+std::optional<MCDFileID> mcdFileID(const char *path) {
+  HANDLE file =
+      CreateFileA(path, FILE_READ_ATTRIBUTES,
+                  FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                  nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) {
+    DWORD error = GetLastError();
+    if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)
+      return std::nullopt;
+    return MCDFileID{};
+  }
+  auto id = mcdFileID(file);
+  CloseHandle(file);
+  return id.value_or(MCDFileID{});
+}
+
+std::optional<MCDFileID> mcdFileID(FILE *stream) {
+  return mcdFileID(reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(stream))));
+}
+#else
+std::optional<MCDFileID> mcdFileID(const char *path) {
+  struct stat info;
+  if (::stat(path, &info) != 0) {
+    if (errno == ENOENT || errno == ENOTDIR)
+      return std::nullopt;
+    return MCDFileID{};
+  }
+  return MCDFileID{static_cast<uint64_t>(info.st_dev),
+                   {static_cast<uint64_t>(info.st_ino), 0}};
+}
+
+std::optional<MCDFileID> mcdFileID(FILE *stream) {
+  struct stat info;
+  if (::fstat(fileno(stream), &info) != 0)
+    return std::nullopt;
+  return MCDFileID{static_cast<uint64_t>(info.st_dev),
+                   {static_cast<uint64_t>(info.st_ino), 0}};
+}
+#endif
+
+// Bit zero of the mask selects both stdout and the active log.
+// Keep the streams locked through the operation so an SV close cannot
+// invalidate a FILE between checking the descriptor and using it.
+template <typename Action>
+PLI_INT32 visitMCDOutputs(VPIState *state, PLI_UINT32 mcd, bool flush,
+                          Action action) {
+  if (!mcd || (mcd & vpiFileDescriptorBit)) {
+    setError(state, "expected a VPI multichannel output descriptor");
+    return EOF;
+  }
+  ContextMutexLock lock(state->context);
+  auto &channels = state->context->mcd;
+  bool log = (mcd & 1) && state->context->logFile &&
+             (flush || !state->context->logPaused);
+  bool broadcast = log || (mcd & (mcd - 1));
+  bool failed = false;
+  int result = 0;
+  auto visit = [&](FILE *stream) {
+    if (!stream || (result = action(stream, broadcast)) < 0)
+      failed = true;
+  };
+  for (size_t bit = 0; bit < channels.size(); ++bit)
+    if (mcd & (PLI_UINT32{1} << bit))
+      visit(channels[bit].stream);
+  if (log)
+    visit(state->context->logFile);
+  if (failed) {
+    setError(state, "could not write or flush a VPI output channel");
+    return EOF;
+  }
+  return result;
+}
+
+using MCDText = std::unique_ptr<char, decltype(&std::free)>;
+
+// Render a broadcast once because %n can change the data formatted by %s.
+// Every selected channel must receive the same bytes.
+int formatMCDBroadcast(MCDText &text, const char *format, va_list arguments) {
+#if defined(_WIN32)
+  // An enabled %n needs a single pass on Windows too. Open exclusively in
+  // the user's temporary directory and have the CRT delete the file on close.
+  wchar_t name[L_tmpnam_s];
+  if (_wtmpnam_s(name, L_tmpnam_s) != 0)
+    return EOF;
+  FILE *buffer = _wfopen(name, L"w+bxTDN");
+#else
+  char *bytes = nullptr;
+  size_t size = 0;
+  FILE *buffer = open_memstream(&bytes, &size);
+#endif
+  if (!buffer)
+    return EOF;
+  va_list copy;
+  va_copy(copy, arguments);
+  int count = std::vfprintf(buffer, format, copy);
+  va_end(copy);
+#if defined(_WIN32)
+  if (count > 0) {
+    size_t size = static_cast<size_t>(count);
+    text.reset(static_cast<char *>(std::malloc(size)));
+    if (!text || std::fseek(buffer, 0, SEEK_SET) != 0 ||
+        std::fread(text.get(), 1, size, buffer) != size)
+      count = EOF;
+  }
+#endif
+  if (std::fclose(buffer) != 0)
+    count = EOF;
+#if !defined(_WIN32)
+  text.reset(bytes);
+  if (count >= 0 &&
+      (static_cast<size_t>(count) != size || (count > 0 && !text)))
+    return EOF;
+#endif
+  return count;
+}
+
+} // namespace
+
+extern "C" TALOS_VPI_EXPORT PLI_UINT32 vpi_mcd_open(PLI_BYTE8 *fileName) {
+  VPICallScope vpiCallScope;
+  VPIState *state = requireState();
+  if (!state)
+    return 0;
+  if (!fileName || !*fileName) {
+    setError(state, "VPI file name is missing");
+    return 0;
+  }
+  std::string_view name(fileName);
+  ContextMutexLock lock(state->context);
+  // 38.27 preserves the descriptor of a file already open through $fopen,
+  // including its FD tag. Match the open file even through a pathname alias.
+  if (auto id = mcdFileID(fileName)) {
+    auto matches = [&](const FileEntry &entry) {
+      if (!entry.stream)
+        return false;
+      if (id->hasFileIndex()) {
+        auto openID = mcdFileID(entry.stream);
+        if (openID && openID->hasFileIndex())
+          return *openID == *id;
+      }
+      return sameMCDPath(entry.name, name);
+    };
+    for (size_t bit = 1; bit < state->context->mcd.size(); ++bit)
+      if (matches(state->context->mcd[bit]))
+        return PLI_UINT32{1} << bit;
+    for (size_t index = 3; index < state->context->files.size(); ++index)
+      if (matches(state->context->files[index]))
+        return vpiFileDescriptorBit | static_cast<PLI_UINT32>(index);
+  }
+  uint32_t descriptor = 0;
+  if (talos_rt_v1_file_open_mcd(state->context, name.data(), name.size(),
+                                &descriptor) != TALOS_RT_OK)
+    setError(state, "could not open VPI output file");
+  return descriptor;
+}
+
+extern "C" TALOS_VPI_EXPORT PLI_UINT32 vpi_mcd_close(PLI_UINT32 descriptor) {
+  VPICallScope vpiCallScope;
+  VPIState *state = requireState();
+  if (!state)
+    return descriptor;
+  talos_rt_context *context = state->context;
+  ContextMutexLock lock(context);
+  PLI_UINT32 unclosed = 0;
+  bool closeError = false;
+  auto closeOne = [&](PLI_UINT32 selected, const FileEntry &file) {
+    // Preserve the live descriptor if buffered output could not be flushed.
+    if (!file.stream ||
+        (file.writable &&
+         talos_rt_v1_file_flush(context, selected) != TALOS_RT_OK)) {
+      unclosed |= selected;
+      return;
+    }
+    if (talos_rt_v1_file_close(context, selected) != TALOS_RT_OK) {
+      closeError = true;
+      // fclose can report an error after consuming the stream. Only a slot
+      // that still owns its stream can be retried by the caller.
+      if (file.stream)
+        unclosed |= selected;
+    }
+  };
+  if (descriptor & vpiFileDescriptorBit) {
+    size_t index = descriptor & ~vpiFileDescriptorBit;
+    if (index < 3 || index >= context->files.size())
+      unclosed = descriptor;
+    else
+      closeOne(descriptor, context->files[index]);
+  } else {
+    // 38.24 returns exactly the unclosed bits, including reserved channel 1.
+    unclosed = descriptor & 1;
+    for (size_t bit = 1; bit < context->mcd.size(); ++bit) {
+      PLI_UINT32 channel = PLI_UINT32{1} << bit;
+      if (descriptor & channel)
+        closeOne(channel, context->mcd[bit]);
+    }
+  }
+  if (unclosed || closeError)
+    setError(state, "error closing one or more VPI file channels");
+  return unclosed;
+}
+
+extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_mcd_flush(PLI_UINT32 mcd) {
+  VPICallScope vpiCallScope;
+  VPIState *state = requireState();
+  if (!state)
+    return EOF;
+  return visitMCDOutputs(state, mcd, /*flush=*/true, [](FILE *stream, bool) {
+    return std::fflush(stream);
+  });
+}
+
+extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_mcd_vprintf(PLI_UINT32 mcd,
+                                                      PLI_BYTE8 *format,
+                                                      va_list arguments) {
+  VPICallScope vpiCallScope;
+  VPIState *state = requireState();
+  if (!state)
+    return EOF;
+  if (!format) {
+    setError(state, "VPI output format is null");
+    return EOF;
+  }
+  MCDText text(nullptr, &std::free);
+  int length = 0;
+  bool formatted = false;
+  return visitMCDOutputs(
+      state, mcd, /*flush=*/false, [&](FILE *stream, bool broadcast) {
+#if defined(_WIN32)
+        broadcast =
+            broadcast && _get_printf_count_output() && std::strchr(format, 'n');
+#endif
+        if (broadcast) {
+          if (!formatted) {
+            formatted = true;
+            length = formatMCDBroadcast(text, format, arguments);
+          }
+          if (length <= 0)
+            return length;
+          size_t size = static_cast<size_t>(length);
+          return std::fwrite(text.get(), 1, size, stream) == size ? length
+                                                                  : EOF;
+        }
+        va_list copy;
+        va_copy(copy, arguments);
+        int count = std::vfprintf(stream, format, copy);
+        va_end(copy);
+        return count;
+      });
+}
+
+extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_mcd_printf(PLI_UINT32 mcd,
+                                                     PLI_BYTE8 *format, ...) {
+  va_list arguments;
+  va_start(arguments, format);
+  int result = vpi_mcd_vprintf(mcd, format, arguments);
+  va_end(arguments);
+  return result;
+}
+
 extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_vprintf(PLI_BYTE8 *format,
                                                   va_list arguments) {
-  VPICallScope vpiCallScope;
-  return requireState() && format ? std::vprintf(format, arguments) : -1;
+  return vpi_mcd_vprintf(1, format, arguments);
 }
 
 extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_printf(PLI_BYTE8 *format, ...) {

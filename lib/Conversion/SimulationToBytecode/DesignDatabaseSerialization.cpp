@@ -2707,8 +2707,12 @@ SmallVector<uint8_t> serializeDesignDatabase(
     DenseMap<std::pair<Operation *, uint32_t>, uint32_t> lexicalOrdinals;
     DenseMap<uint32_t, uint32_t> rootOrdinals;
     for (sim::SimVPIObjectAnchorOp anchor : anchors) {
-      if (!anchor.getParentAttr()) {
-        ImageObjectRef target = anchorRefs.lookup(anchor);
+      auto parentSymbol = anchor.getParentAttr();
+      ImageObjectRef target = anchorRefs.lookup(anchor);
+      // A named package is a root vpiInstance (37.10). Its compilation
+      // unit also owns it lexically, so emit both relationships.
+      if (!parentSymbol ||
+          target.vpiKind == static_cast<uint32_t>(VPIObjectKind::Package)) {
         uint32_t selector = static_cast<uint32_t>(VPIRelationKind::InstanceRel);
         const VPITraversalDescriptor *rootEdge =
             findVPITraversal(0, selector, VPITraversalMode::Iterate);
@@ -2724,16 +2728,16 @@ SmallVector<uint8_t> serializeDesignDatabase(
                 selector, VPITraversalMode::Iterate, target.table, target.index,
                 target.vpiKind, rootOrdinals[selector]++)))
           return {};
-        continue;
+        if (!parentSymbol)
+          continue;
       }
-      Operation *parent = lookupLexicalOwner(anchor.getParentAttr());
+      Operation *parent = lookupLexicalOwner(parentSymbol);
       if (!parent) {
         anchor.emitOpError(
             "lexical parent was not preserved for serialization");
         return {};
       }
       ImageObjectRef source = lexicalOwnerRef(parent);
-      ImageObjectRef target = anchorRefs.lookup(anchor);
       if (target.vpiKind == static_cast<uint32_t>(VPIObjectKind::PrimTerm)) {
         if (failed(addRelation(
                 anchor, target.table, target.index, target.vpiKind,

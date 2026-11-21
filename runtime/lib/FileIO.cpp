@@ -699,11 +699,12 @@ extern "C" talos_rt_status talos_rt_v1_file_close(talos_rt_context *context,
                              "invalid or already closed file descriptor");
         return TALOS_RT_INVALID_HANDLE;
       }
+      // Add the slot first so an allocation failure leaves the descriptor open.
+      context->freeFiles.push_back(index);
       errno = 0;
       int result = std::fclose(entry->stream);
       entry->stream = nullptr;
       entry->name.clear();
-      context->freeFiles.push_back(index);
       if (result != 0) {
         recordIOError(context, *entry, "fclose failed");
         return TALOS_RT_IO_ERROR;
@@ -721,13 +722,14 @@ extern "C" talos_rt_status talos_rt_v1_file_close(talos_rt_context *context,
       if ((descriptor & (uint32_t{1} << bit)) == 0)
         continue;
       errno = 0;
-      if (std::fclose(context->mcd[bit].stream) != 0) {
-        recordIOError(context, context->mcd[bit], "fclose failed");
-        status = TALOS_RT_IO_ERROR;
-      }
+      int result = std::fclose(context->mcd[bit].stream);
       context->mcd[bit].stream = nullptr;
       context->mcd[bit].name.clear();
       context->freeMCDs.push_back(bit);
+      if (result != 0) {
+        recordIOError(context, context->mcd[bit], "fclose failed");
+        status = TALOS_RT_IO_ERROR;
+      }
     }
     return status;
   });
