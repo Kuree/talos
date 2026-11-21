@@ -294,13 +294,13 @@ LogicalResult lowerNativeDPICall(sim::SimDPICallOp operation,
           unpackedDimensions
               ? entryAlloca(rewriter, location, i64, sourceRanges.size(), 8)
               : null;
-      for (auto [word, constant] : llvm::enumerate(sourceRanges))
-        LLVM::StoreOp::create(rewriter, location,
-                              llvmConstant(rewriter, location, i64,
-                                           static_cast<uint64_t>(constant)),
-                              byteGEP(rewriter, location, unpackedRanges,
-                                      word * sizeof(uint64_t)),
-                              8);
+      for (auto [word, constant] : llvm::enumerate(sourceRanges)) {
+        Value bound = llvmConstant(rewriter, location, i64,
+                                   static_cast<uint64_t>(constant));
+        Value slot = byteGEP(rewriter, location, unpackedRanges,
+                             word * sizeof(uint64_t));
+        LLVM::StoreOp::create(rewriter, location, bound, slot, 8);
+      }
       Value data =
           entryAlloca(rewriter, location, i8, std::max<uint64_t>(capacity, 1),
                       layout.getElementCAlignment());
