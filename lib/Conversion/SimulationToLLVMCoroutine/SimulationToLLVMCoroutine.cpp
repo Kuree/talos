@@ -1380,15 +1380,17 @@ LogicalResult declareNativeImports(ModuleOp module) {
   for (auto [design, definition] : imports) {
     builder.setInsertionPointToStart(&design.getBody().front());
     if (auto function = dyn_cast<LLVM::LLVMFuncOp>(definition)) {
+      if (function.isExternal()) {
+        // A declaration is imported as itself: code inside the design sees
+        // the same runtime entry, `cold` and other function attributes as
+        // after flattening.
+        builder.clone(*function);
+        continue;
+      }
       auto declaration = LLVM::LLVMFuncOp::create(builder, function.getLoc(),
                                                   function.getSymName(),
                                                   function.getFunctionType());
       declaration.setCConv(function.getCConv());
-      // The import declares the same runtime entry. Like the other function
-      // attributes, `cold` is not copied.
-      if (native::RuntimeEntryAttr entry =
-              native::get<native::RuntimeEntry>(function))
-        native::set<native::RuntimeEntry>(declaration, entry);
     } else if (auto global = dyn_cast<LLVM::GlobalOp>(definition)) {
       LLVM::GlobalOp::create(builder, global.getLoc(), global.getGlobalType(),
                              global.getConstant(), LLVM::Linkage::External,
