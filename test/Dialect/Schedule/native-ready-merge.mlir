@@ -8,26 +8,28 @@
 // per-leaf SSA expansion. Empty eight-word groups of a large source are
 // skipped with one test. The runtime companion compares ascending merges
 // against DirtyReadySetView for empty, sparse, dense, partial and aliased
-// sources.
+// sources. Every merge names the model ingress, which the companion defines
+// large enough for the largest layout and its sources.
 module {
-  llvm.func @merge_1(%base: !llvm.ptr, %source: !llvm.ptr) {
-    schedule.ready.merge %base, %source {capacity = 1 : i64} : (!llvm.ptr, !llvm.ptr) -> ()
+  llvm.mlir.global external @__talos_aot_model_ingress_v1() : !llvm.array<8400 x i64>
+  llvm.func @merge_1(%source: !llvm.ptr) {
+    schedule.ready.merge @__talos_aot_model_ingress_v1, %source {capacity = 1 : i64}
     llvm.return
   }
-  llvm.func @merge_63(%base: !llvm.ptr, %source: !llvm.ptr) {
-    schedule.ready.merge %base, %source {capacity = 63 : i64} : (!llvm.ptr, !llvm.ptr) -> ()
+  llvm.func @merge_63(%source: !llvm.ptr) {
+    schedule.ready.merge @__talos_aot_model_ingress_v1, %source {capacity = 63 : i64}
     llvm.return
   }
-  llvm.func @merge_64(%base: !llvm.ptr, %source: !llvm.ptr) {
-    schedule.ready.merge %base, %source {capacity = 64 : i64} : (!llvm.ptr, !llvm.ptr) -> ()
+  llvm.func @merge_64(%source: !llvm.ptr) {
+    schedule.ready.merge @__talos_aot_model_ingress_v1, %source {capacity = 64 : i64}
     llvm.return
   }
-  llvm.func @merge_65(%base: !llvm.ptr, %source: !llvm.ptr) {
-    schedule.ready.merge %base, %source {capacity = 65 : i64} : (!llvm.ptr, !llvm.ptr) -> ()
+  llvm.func @merge_65(%source: !llvm.ptr) {
+    schedule.ready.merge @__talos_aot_model_ingress_v1, %source {capacity = 65 : i64}
     llvm.return
   }
-  llvm.func @merge_128(%base: !llvm.ptr, %source: !llvm.ptr) {
-    schedule.ready.merge %base, %source {capacity = 128 : i64} : (!llvm.ptr, !llvm.ptr) -> ()
+  llvm.func @merge_128(%source: !llvm.ptr) {
+    schedule.ready.merge @__talos_aot_model_ingress_v1, %source {capacity = 128 : i64}
     llvm.return
   }
   // Fewer than two eight-word groups of unmasked words are merged word by
@@ -35,16 +37,16 @@ module {
   // CHECK-LABEL: llvm.func @merge_1023(
   // CHECK-NOT: vector
   // CHECK: llvm.return
-  llvm.func @merge_1023(%base: !llvm.ptr, %source: !llvm.ptr) {
-    schedule.ready.merge %base, %source {capacity = 1023 : i64} : (!llvm.ptr, !llvm.ptr) -> ()
+  llvm.func @merge_1023(%source: !llvm.ptr) {
+    schedule.ready.merge @__talos_aot_model_ingress_v1, %source {capacity = 1023 : i64}
     llvm.return
   }
   // CHECK-LABEL: llvm.func @merge_1024(
   // CHECK: llvm.load {{.*}} -> vector<8xi64>
   // CHECK-NOT: -> vector<
   // CHECK: llvm.return
-  llvm.func @merge_1024(%base: !llvm.ptr, %source: !llvm.ptr) {
-    schedule.ready.merge %base, %source {capacity = 1024 : i64} : (!llvm.ptr, !llvm.ptr) -> ()
+  llvm.func @merge_1024(%source: !llvm.ptr) {
+    schedule.ready.merge @__talos_aot_model_ingress_v1, %source {capacity = 1024 : i64}
     llvm.return
   }
   // CHECK-LABEL: llvm.func @merge_1216(
@@ -53,20 +55,20 @@ module {
   // CHECK: llvm.load {{.*}} -> vector<3xi64>
   // CHECK-NOT: -> vector<
   // CHECK: llvm.return
-  llvm.func @merge_1216(%base: !llvm.ptr, %source: !llvm.ptr) {
-    schedule.ready.merge %base, %source {capacity = 1216 : i64} : (!llvm.ptr, !llvm.ptr) -> ()
+  llvm.func @merge_1216(%source: !llvm.ptr) {
+    schedule.ready.merge @__talos_aot_model_ingress_v1, %source {capacity = 1216 : i64}
     llvm.return
   }
-  llvm.func @merge_2048(%base: !llvm.ptr, %source: !llvm.ptr) {
-    schedule.ready.merge %base, %source {capacity = 2048 : i64} : (!llvm.ptr, !llvm.ptr) -> ()
+  llvm.func @merge_2048(%source: !llvm.ptr) {
+    schedule.ready.merge @__talos_aot_model_ingress_v1, %source {capacity = 2048 : i64}
     llvm.return
   }
-  llvm.func @merge_2049(%base: !llvm.ptr, %source: !llvm.ptr) {
-    schedule.ready.merge %base, %source {capacity = 2049 : i64} : (!llvm.ptr, !llvm.ptr) -> ()
+  llvm.func @merge_2049(%source: !llvm.ptr) {
+    schedule.ready.merge @__talos_aot_model_ingress_v1, %source {capacity = 2049 : i64}
     llvm.return
   }
-  llvm.func @merge_4096(%base: !llvm.ptr, %source: !llvm.ptr) {
-    schedule.ready.merge %base, %source {capacity = 4096 : i64} : (!llvm.ptr, !llvm.ptr) -> ()
+  llvm.func @merge_4096(%source: !llvm.ptr) {
+    schedule.ready.merge @__talos_aot_model_ingress_v1, %source {capacity = 4096 : i64}
     llvm.return
   }
   // Groups of eight words are tested at once, then the words after the last
@@ -75,17 +77,18 @@ module {
   // holds for an aliased source too. The last word, whose bits above capacity
   // are ignored, is masked once and added after every lower word.
   // CHECK-LABEL: llvm.func @merge_7553(
+  // CHECK: %[[SET:.*]] = llvm.mlir.addressof @__talos_aot_model_ingress_v1
   // CHECK-NOT: llvm.call
   // CHECK: cf.br ^[[GROUP:bb[0-9]+]]({{.*}} : i64)
   // CHECK: ^[[LAST:bb[0-9]+]]:
   // CHECK: %[[LASTINDEX:.*]] = llvm.mlir.constant(118 : i64)
-  // CHECK: llvm.getelementptr %arg1[%[[LASTINDEX]]]
+  // CHECK: llvm.getelementptr %arg0[%[[LASTINDEX]]]
   // CHECK: %[[LASTWORD:.*]] = llvm.load
   // CHECK: %[[LASTBITS:.*]] = arith.andi %[[LASTWORD]],
   // CHECK: %[[LASTEMPTY:.*]] = arith.cmpi eq, %[[LASTBITS]],
   // CHECK: cf.cond_br %[[LASTEMPTY]], ^[[DONE:bb[0-9]+]], ^[[ADDLAST:bb[0-9]+]]
   // CHECK: ^[[ADDLAST]]:
-  // CHECK: llvm.getelementptr %arg0[%[[LASTINDEX]]]
+  // CHECK: llvm.getelementptr %[[SET]][%[[LASTINDEX]]]
   // CHECK: arith.ori {{.*}}, %[[LASTBITS]]
   // CHECK: llvm.store
   // CHECK: arith.shrui %[[LASTINDEX]],
@@ -96,14 +99,14 @@ module {
   // CHECK: %[[GROUPSDONE:.*]] = arith.cmpi uge, %[[START]], %[[WHOLEEND]]
   // CHECK: cf.cond_br %[[GROUPSDONE]], ^[[REST:bb[0-9]+]], ^[[SCAN:bb[0-9]+]]
   // CHECK: ^[[HEAD:bb[0-9]+]](%[[WORD:.*]]: i64, %[[END:.*]]: i64):
-  // CHECK: llvm.getelementptr %arg1[%[[WORD]]]
+  // CHECK: llvm.getelementptr %arg0[%[[WORD]]]
   // CHECK: %[[SOURCE:.*]] = llvm.load {{.*}} -> i64
   // CHECK-NOT: arith.select
   // CHECK: %[[EMPTY:.*]] = arith.cmpi eq, %[[SOURCE]],
   // CHECK: cf.cond_br %[[EMPTY]], ^[[ADVANCE:bb[0-9]+]], ^[[UPDATE:bb[0-9]+]]
   // Every add sets its dirty bit, without testing the leaf.
   // CHECK: ^[[UPDATE]]:
-  // CHECK: llvm.getelementptr %arg0[%[[WORD]]]
+  // CHECK: llvm.getelementptr %[[SET]][%[[WORD]]]
   // CHECK: llvm.load
   // CHECK: llvm.store
   // CHECK-NOT: cf.cond_br
@@ -116,7 +119,7 @@ module {
   // CHECK: cf.cond_br %[[MORE]], ^[[HEAD]](%[[FOLLOWING]], %[[END]] : i64, i64), ^[[GROUP]](%[[END]] : i64)
   // CHECK: ^[[SCAN]]:
   // CHECK: %[[NEXT:.*]] = arith.addi %[[START]],
-  // CHECK: %[[FIRST:.*]] = llvm.getelementptr %arg1[%[[START]]]
+  // CHECK: %[[FIRST:.*]] = llvm.getelementptr %arg0[%[[START]]]
   // CHECK: %[[WORDS:.*]] = llvm.load %[[FIRST]] {{.*}} -> vector<8xi64>
   // CHECK: %[[ANY:.*]] = "llvm.intr.vector.reduce.or"(%[[WORDS]])
   // CHECK: %[[NONE:.*]] = arith.cmpi eq, %[[ANY]],
@@ -133,8 +136,8 @@ module {
   // CHECK: ^[[DONE]]:
   // CHECK-NOT: schedule.ready
   // CHECK: llvm.return
-  llvm.func @merge_7553(%base: !llvm.ptr, %source: !llvm.ptr) {
-    schedule.ready.merge %base, %source {capacity = 7553 : i64} : (!llvm.ptr, !llvm.ptr) -> ()
+  llvm.func @merge_7553(%source: !llvm.ptr) {
+    schedule.ready.merge @__talos_aot_model_ingress_v1, %source {capacity = 7553 : i64}
     llvm.return
   }
   // Every add sets its dirty bit at both levels, without testing the leaf.
@@ -162,11 +165,10 @@ module {
   // CHECK-NOT: arith.cmpi uge
   // CHECK-NOT: llvm.call
   // CHECK: llvm.return
-  llvm.func @merge_262145(%base: !llvm.ptr, %source: !llvm.ptr) {
-    schedule.ready.merge %base, %source {capacity = 262145 : i64} : (!llvm.ptr, !llvm.ptr) -> ()
+  llvm.func @merge_262145(%source: !llvm.ptr) {
+    schedule.ready.merge @__talos_aot_model_ingress_v1, %source {capacity = 262145 : i64}
     llvm.return
   }
-  llvm.mlir.global external @ready_merge_observed() : !llvm.array<3 x i64>
   llvm.func @ready_merge_observe(!llvm.ptr)
   // A merge observes pending scalar updates, and its effects are visible to
   // callbacks and subsequent reads. It is a boundary for ready.region too.
@@ -180,14 +182,14 @@ module {
   // OBS-NOT: schedule.ready
   // OBS: llvm.return
   llvm.func @merge_observed(%source: !llvm.ptr) -> i64 {
-    %base = llvm.mlir.addressof @ready_merge_observed : !llvm.ptr
+    %base = llvm.mlir.addressof @__talos_aot_model_ingress_v1 : !llvm.ptr
     %one = arith.constant 1 : i64
     %eight = arith.constant 8 : i64
-    schedule.ready.update %base, %one {capacity = 128 : i64, word = 0 : i64, consume = false} : (!llvm.ptr, i64) -> ()
-    schedule.ready.merge %base, %source {capacity = 128 : i64} : (!llvm.ptr, !llvm.ptr) -> ()
+    schedule.ready.update @__talos_aot_model_ingress_v1[0], %one {capacity = 128 : i64, consume = false}
+    schedule.ready.merge @__talos_aot_model_ingress_v1, %source {capacity = 128 : i64}
     llvm.call @ready_merge_observe(%base) : (!llvm.ptr) -> ()
-    schedule.ready.update %base, %eight {capacity = 128 : i64, word = 1 : i64, consume = false} : (!llvm.ptr, i64) -> ()
-    %result = schedule.ready.read %base {capacity = 128 : i64, word = 1 : i64} : (!llvm.ptr) -> i64
+    schedule.ready.update @__talos_aot_model_ingress_v1[1], %eight {capacity = 128 : i64, consume = false}
+    %result = schedule.ready.read @__talos_aot_model_ingress_v1[1] {capacity = 128 : i64}
     llvm.return %result : i64
   }
 }

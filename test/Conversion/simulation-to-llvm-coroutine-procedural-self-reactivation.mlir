@@ -158,8 +158,8 @@ module attributes {
 // CHECK-LABEL: llvm.func @__talos_direct_fragment_{{[0-9]+}}_1.__talos_execute(
 // CHECK-SAME: schedule.eval.tier2_convergence
 // CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1
-// CHECK: llvm.switch
 // CHECK: %[[INGRESS:.*]] = llvm.mlir.addressof @__talos_aot_model_ingress_v1
+// CHECK: llvm.switch
 // CHECK: %[[QUEUED:.*]] = llvm.load %[[INGRESS]]
 // CHECK: %[[CLEARED:.*]] = llvm.and %[[QUEUED]],
 // CHECK: llvm.store %[[CLEARED]], %[[INGRESS]]

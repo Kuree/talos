@@ -39,29 +39,14 @@ struct Key {
            std::tie(other.global, other.capacity, other.word);
   }
 };
-std::optional<Key> keyFor(Operation *op,
-                          const schedule::NativeGlobalLookup &globals) {
-  Value base;
-  uint64_t capacity, word;
-  if (auto update = dyn_cast<schedule::NativeReadyUpdateOp>(op)) {
-    base = update.getBase();
-    capacity = update.getCapacity();
-    word = update.getWord();
-  } else if (auto commit = dyn_cast<schedule::NativeReadyCommitOp>(op)) {
-    base = commit.getBase();
-    capacity = commit.getCapacity();
-    word = commit.getWord();
-  } else if (auto read = dyn_cast<schedule::NativeReadyReadOp>(op)) {
-    base = read.getBase();
-    capacity = read.getCapacity();
-    word = read.getWord();
-  } else {
-    return std::nullopt;
-  }
-  auto address = base.getDefiningOp<LLVM::AddressOfOp>();
-  if (!address || !globals(address))
-    return std::nullopt;
-  return Key{address.getGlobalName(), capacity, word};
+std::optional<Key> keyFor(Operation *op) {
+  if (auto update = dyn_cast<schedule::NativeReadyUpdateOp>(op))
+    return Key{update.getSet(), update.getCapacity(), update.getWord()};
+  if (auto commit = dyn_cast<schedule::NativeReadyCommitOp>(op))
+    return Key{commit.getSet(), commit.getCapacity(), commit.getWord()};
+  if (auto read = dyn_cast<schedule::NativeReadyReadOp>(op))
+    return Key{read.getSet(), read.getCapacity(), read.getWord()};
+  return std::nullopt;
 }
 
 bool readinessTransparentCall(Operation *op) {
@@ -86,7 +71,8 @@ bool isBoundary(Operation *op, const std::map<Key, unsigned> &keys,
       root = gep.getBase();
     if (root.getDefiningOp<LLVM::AllocaOp>())
       return true;
-    // A state plane's base names its global; another address must resolve.
+    // A state plane's base names its global; another address must resolve:
+    // an alias may name a ready set.
     FlatSymbolRefAttr global = detail::getAddressedGlobal(root);
     if (auto address = root.getDefiningOp<LLVM::AddressOfOp>();
         address && !globals(address))
@@ -124,7 +110,8 @@ bool isBoundary(Operation *op, const std::map<Key, unsigned> &keys,
 } // namespace
 
 void lowerNativeReadyRegion(schedule::NativeReadyRegionOp region,
-                            const schedule::NativeGlobalLookup &globals) {
+                            const schedule::NativeGlobalLookup &globals,
+                            ReadySetAddresses &addresses) {
   std::map<Key, unsigned> keys;
   SmallVector<Operation *> operations;
   llvm::StringMap<uint64_t> capacities;
@@ -132,7 +119,7 @@ void lowerNativeReadyRegion(schedule::NativeReadyRegionOp region,
   for (Block &block : region.getBody())
     for (Operation &op : block) {
       operations.push_back(&op);
-      if (auto key = keyFor(&op, globals)) {
+      if (auto key = keyFor(&op)) {
         ++keys[*key];
         auto [prior, inserted] =
             capacities.try_emplace(key->global, key->capacity);
@@ -147,7 +134,7 @@ void lowerNativeReadyRegion(schedule::NativeReadyRegionOp region,
       ++it;
   // Bound generated flush code for bodies with many opaque call boundaries.
   unsigned boundaries = llvm::count_if(operations, [&](Operation *op) {
-    auto key = keyFor(op, globals);
+    auto key = keyFor(op);
     return !(key && keys.count(*key)) && isBoundary(op, keys, globals);
   });
   if (keys.size() > 64 || keys.size() * uint64_t(boundaries + 1) > 4096)
@@ -162,7 +149,7 @@ void lowerNativeReadyRegion(schedule::NativeReadyRegionOp region,
   DenseMap<Operation *, uint64_t> additions;
   llvm::SmallPtrSet<Operation *, 16> barriers;
   for (Operation *op : operations) {
-    auto key = keyFor(op, globals);
+    auto key = keyFor(op);
     if (key && keys.count(*key)) {
       if (!isa<schedule::NativeReadyReadOp>(op))
         additions[op] = uint64_t{1} << keys.at(*key);
@@ -209,11 +196,10 @@ void lowerNativeReadyRegion(schedule::NativeReadyRegionOp region,
   OpBuilder b(region);
   auto loc = region.getLoc();
   auto i64 = b.getI64Type();
-  auto ptr = LLVM::LLVMPointerType::get(b.getContext());
   Value zero = llvmConstant(b, loc, i64, 0);
   Value ones = llvmConstant(b, loc, i64, UINT64_MAX);
   struct Pending {
-    Value base, remove, add;
+    Value remove, add;
   };
   std::map<Key, Pending> pending;
   SmallVector<PromotableAllocationOpInterface> allocations;
@@ -226,7 +212,6 @@ void lowerNativeReadyRegion(schedule::NativeReadyRegionOp region,
   for (auto &[key, id] : keys) {
     if (!(profitable & (uint64_t{1} << id)))
       continue;
-    Value base = LLVM::AddressOfOp::create(b, loc, ptr, key.global);
     Value remove = entryAlloca(b, loc, i64, 1, 8);
     Value add = entryAlloca(b, loc, i64, 1, 8);
     for (Value slot : {remove, add})
@@ -234,26 +219,27 @@ void lowerNativeReadyRegion(schedule::NativeReadyRegionOp region,
           cast<PromotableAllocationOpInterface>(slot.getDefiningOp()));
     store(zero, remove);
     store(zero, add);
-    pending.emplace(key, Pending{base, remove, add});
+    pending.emplace(key, Pending{remove, add});
   }
   auto flush = [&](uint64_t mask) {
     for (auto &[key, value] : pending) {
       if (!(mask & (uint64_t{1} << keys.at(key))))
         continue;
-      schedule::NativeReadyCommitOp::create(
-          b, loc, value.base, load(value.remove), load(value.add),
-          b.getI64IntegerAttr(key.capacity), b.getI64IntegerAttr(key.word));
+      schedule::NativeReadyCommitOp::create(b, loc, key.global,
+                                            load(value.remove), load(value.add),
+                                            key.capacity, key.word);
       store(zero, value.remove);
       store(zero, value.add);
     }
   };
   for (Operation *op : operations) {
     b.setInsertionPoint(op);
-    auto key = keyFor(op, globals);
+    auto key = keyFor(op);
     if (key && pending.count(*key)) {
       auto &value = pending.at(*key);
       if (auto read = dyn_cast<schedule::NativeReadyReadOp>(op)) {
-        Value previous = loadOwnerWord(b, loc, value.base, key->word);
+        Value previous = loadOwnerWord(
+            b, loc, addresses.get(read, read.getSetAttr()), key->word);
         if (auto owner =
                 schedule::get<schedule::Field::EvalActivationEntry>(read))
           schedule::set<schedule::Field::EvalActivationEntry>(

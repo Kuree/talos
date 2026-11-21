@@ -178,11 +178,12 @@ public:
     }
     Value pending = c(0);
     if (!ready.empty()) {
-      Value ingress = address(layout.getIngress());
       EvalReadySetLayout readyLayout(layout.getCapacity());
       for (auto &[word, scratch] : ready) {
         Value mask = load(scratch);
-        updateEvalReadyWord(b, loc, ingress, readyLayout, word, mask);
+        schedule::NativeReadyUpdateOp::create(
+            b, loc, layout.getIngress().getValue(), mask, readyLayout.capacity,
+            word, /*consume=*/false);
         pending = bor(pending, mask);
       }
     }

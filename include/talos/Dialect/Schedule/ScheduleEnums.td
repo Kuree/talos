@@ -341,4 +341,19 @@ def NBAIndexEnum
   let genSpecializedAttr = 0;
 }
 
+// The generated eval ready sets, in runtime::DirtyReadySetLayout: the model
+// ingress holds the pending evaluation events of the eval model's owners
+// (IEEE 1800-2023 4.3, 4.5); the held wakes hold the owners that NBA updates
+// performed early make pending, until the NBA region's updates are complete
+// (4.4.2.4, 4.6).
+def ReadySetIngress : I32EnumAttrCase<"Ingress", 0, "ingress">;
+def ReadySetHeldWakes : I32EnumAttrCase<"HeldWakes", 1, "held_wakes">;
+def ReadySetEnum
+    : I32EnumAttr<"ReadySet", "generated eval ready set", [
+        ReadySetIngress, ReadySetHeldWakes
+      ]> {
+  let cppNamespace = "::talos::schedule";
+  let genSpecializedAttr = 0;
+}
+
 #endif

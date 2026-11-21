@@ -320,6 +320,23 @@ std::optional<NBAIndex> getNBAIndexOfGlobal(StringRef name) {
       .Default(std::nullopt);
 }
 
+StringRef getReadySetGlobalName(ReadySet set) {
+  switch (set) {
+  case ReadySet::Ingress:
+    return "__talos_aot_model_ingress_v1";
+  case ReadySet::HeldWakes:
+    return "__talos_eval_nba_held_wakes_v1";
+  }
+  llvm_unreachable("unknown ready set");
+}
+
+std::optional<ReadySet> getReadySetOfGlobal(StringRef name) {
+  return llvm::StringSwitch<std::optional<ReadySet>>(name)
+      .Case("__talos_aot_model_ingress_v1", ReadySet::Ingress)
+      .Case("__talos_eval_nba_held_wakes_v1", ReadySet::HeldWakes)
+      .Default(std::nullopt);
+}
+
 // A root's own access is to the dirty word that holds its bit, or to the
 // summary word that holds its dirty word's bit.
 static LogicalResult verifyIndexAccess(Operation *op, StringRef global,
@@ -936,84 +953,134 @@ LogicalResult NativeTransitionOp::verify() {
   }
   return success();
 }
-LogicalResult NativeReadyUpdateOp::verify() {
-  if (getCapacity() < 1 || getCapacity() > UINT32_MAX)
-    return emitOpError("ready capacity must be between 1 and UINT32_MAX");
-  if (getWordAttr().getValue().isNegative() ||
-      getWord() >= (getCapacity() + 63) / 64)
-    return emitOpError("ready word must name a leaf within capacity");
+// A ready action names a generated eval ready set and, unless it merges a
+// whole bitmap, one of its leaves within capacity.
+static LogicalResult verifyReadyAction(Operation *op, StringRef set,
+                                       uint64_t capacity,
+                                       std::optional<IntegerAttr> word) {
+  if (!getReadySetOfGlobal(set))
+    return op->emitOpError("names '") << set << "', no generated ready set";
+  if (capacity < 1 || capacity > UINT32_MAX)
+    return op->emitOpError("ready capacity must be between 1 and UINT32_MAX");
+  if (word && ((*word).getValue().isNegative() ||
+               (*word).getValue().getZExtValue() >= (capacity + 63) / 64))
+    return op->emitOpError("ready word must name a leaf within capacity");
   return success();
+}
+
+// The set's global holds whole 64-bit words, at least the leaves an action
+// accesses. Producers may freeze different capacities for one set (a ranked
+// group's is at least 64), so only those leaves are required.
+static LogicalResult verifyReadySetUse(Operation *op, FlatSymbolRefAttr set,
+                                       uint64_t words,
+                                       SymbolTableCollection &tables) {
+  auto global = tables.lookupNearestSymbolFrom<LLVM::GlobalOp>(op, set);
+  auto array =
+      global ? dyn_cast<LLVM::LLVMArrayType>(global.getType()) : nullptr;
+  if (!array || !array.getElementType().isInteger(64))
+    return op->emitOpError("must reference the llvm.mlir.global of its ready "
+                           "set, an array of i64 words");
+  if (array.getNumElements() < words)
+    return op->emitOpError("accesses word ")
+           << words - 1 << " of a ready set of " << array.getNumElements()
+           << " words";
+  return success();
+}
+
+// Read and write the named set, and inspect or change the pending
+// activations it holds.
+static void
+addReadySetEffects(FlatSymbolRefAttr set, bool writes,
+                   SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), set,
+                       SideEffects::DefaultResource::get());
+  if (writes)
+    effects.emplace_back(MemoryEffects::Write::get(), set,
+                         SideEffects::DefaultResource::get());
+  effects.emplace_back(MemoryEffects::Read::get(),
+                       sim::SchedulerResource::get());
+  if (writes)
+    effects.emplace_back(MemoryEffects::Write::get(),
+                         sim::SchedulerResource::get());
+}
+
+void NativeReadyUpdateOp::build(OpBuilder &builder, OperationState &state,
+                                ReadySet set, Value mask, uint64_t capacity,
+                                uint64_t word, bool consume) {
+  build(builder, state, getReadySetGlobalName(set), mask, capacity, word,
+        consume);
+}
+ReadySet NativeReadyUpdateOp::getReadySet() {
+  return *getReadySetOfGlobal(getSet());
+}
+LogicalResult NativeReadyUpdateOp::verify() {
+  return verifyReadyAction(*this, getSet(), getCapacity(), getWordAttr());
+}
+LogicalResult
+NativeReadyUpdateOp::verifySymbolUses(SymbolTableCollection &tables) {
+  return verifyReadySetUse(*this, getSetAttr(), getWord() + 1, tables);
 }
 void NativeReadyUpdateOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
-  effects.emplace_back(MemoryEffects::Read::get(),
-                       &getOperation()->getOpOperand(0),
-                       SideEffects::DefaultResource::get());
-  effects.emplace_back(MemoryEffects::Write::get(),
-                       &getOperation()->getOpOperand(0),
-                       SideEffects::DefaultResource::get());
-  effects.emplace_back(MemoryEffects::Read::get(),
-                       sim::SchedulerResource::get());
-  effects.emplace_back(MemoryEffects::Write::get(),
-                       sim::SchedulerResource::get());
+  addReadySetEffects(getSetAttr(), /*writes=*/true, effects);
+}
+
+ReadySet NativeReadyCommitOp::getReadySet() {
+  return *getReadySetOfGlobal(getSet());
 }
 LogicalResult NativeReadyCommitOp::verify() {
-  if (getCapacity() < 1 || getCapacity() > UINT32_MAX)
-    return emitOpError("ready capacity must be between 1 and UINT32_MAX");
-  if (getWordAttr().getValue().isNegative() ||
-      getWord() >= (getCapacity() + 63) / 64)
-    return emitOpError("ready word must name a leaf within capacity");
-  return success();
+  return verifyReadyAction(*this, getSet(), getCapacity(), getWordAttr());
+}
+LogicalResult
+NativeReadyCommitOp::verifySymbolUses(SymbolTableCollection &tables) {
+  return verifyReadySetUse(*this, getSetAttr(), getWord() + 1, tables);
+}
+void NativeReadyCommitOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  addReadySetEffects(getSetAttr(), /*writes=*/true, effects);
+}
+
+void NativeReadyReadOp::build(OpBuilder &builder, OperationState &state,
+                              ReadySet set, uint64_t capacity, uint64_t word) {
+  build(builder, state, builder.getI64Type(), getReadySetGlobalName(set),
+        capacity, word);
+}
+ReadySet NativeReadyReadOp::getReadySet() {
+  return *getReadySetOfGlobal(getSet());
 }
 LogicalResult NativeReadyReadOp::verify() {
-  if (getCapacity() < 1 || getCapacity() > UINT32_MAX)
-    return emitOpError("ready capacity must be between 1 and UINT32_MAX");
-  if (getWordAttr().getValue().isNegative() ||
-      getWord() >= (getCapacity() + 63) / 64)
-    return emitOpError("ready word must name a leaf within capacity");
-  return success();
+  return verifyReadyAction(*this, getSet(), getCapacity(), getWordAttr());
+}
+LogicalResult
+NativeReadyReadOp::verifySymbolUses(SymbolTableCollection &tables) {
+  return verifyReadySetUse(*this, getSetAttr(), getWord() + 1, tables);
+}
+void NativeReadyReadOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  addReadySetEffects(getSetAttr(), /*writes=*/false, effects);
+}
+
+void NativeReadyMergeOp::build(OpBuilder &builder, OperationState &state,
+                               ReadySet set, Value source, uint64_t capacity) {
+  build(builder, state, getReadySetGlobalName(set), source, capacity);
+}
+ReadySet NativeReadyMergeOp::getReadySet() {
+  return *getReadySetOfGlobal(getSet());
 }
 LogicalResult NativeReadyMergeOp::verify() {
-  if (getCapacity() < 1 || getCapacity() > UINT32_MAX)
-    return emitOpError("ready capacity must be between 1 and UINT32_MAX");
-  return success();
+  return verifyReadyAction(*this, getSet(), getCapacity(), std::nullopt);
+}
+LogicalResult
+NativeReadyMergeOp::verifySymbolUses(SymbolTableCollection &tables) {
+  return verifyReadySetUse(*this, getSetAttr(), (getCapacity() + 63) / 64,
+                           tables);
 }
 void NativeReadyMergeOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
   effects.emplace_back(MemoryEffects::Read::get(),
-                       &getOperation()->getOpOperand(1),
-                       SideEffects::DefaultResource::get());
-  effects.emplace_back(MemoryEffects::Read::get(),
                        &getOperation()->getOpOperand(0),
                        SideEffects::DefaultResource::get());
-  effects.emplace_back(MemoryEffects::Write::get(),
-                       &getOperation()->getOpOperand(0),
-                       SideEffects::DefaultResource::get());
-  effects.emplace_back(MemoryEffects::Read::get(),
-                       sim::SchedulerResource::get());
-  effects.emplace_back(MemoryEffects::Write::get(),
-                       sim::SchedulerResource::get());
-}
-void NativeReadyReadOp::getEffects(
-    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
-  effects.emplace_back(MemoryEffects::Read::get(),
-                       &getOperation()->getOpOperand(0),
-                       SideEffects::DefaultResource::get());
-  effects.emplace_back(MemoryEffects::Read::get(),
-                       sim::SchedulerResource::get());
-}
-void NativeReadyCommitOp::getEffects(
-    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
-  effects.emplace_back(MemoryEffects::Read::get(),
-                       &getOperation()->getOpOperand(0),
-                       SideEffects::DefaultResource::get());
-  effects.emplace_back(MemoryEffects::Write::get(),
-                       &getOperation()->getOpOperand(0),
-                       SideEffects::DefaultResource::get());
-  effects.emplace_back(MemoryEffects::Read::get(),
-                       sim::SchedulerResource::get());
-  effects.emplace_back(MemoryEffects::Write::get(),
-                       sim::SchedulerResource::get());
+  addReadySetEffects(getSetAttr(), /*writes=*/true, effects);
 }
 SuccessorOperands NativeSuspendDelayOp::getSuccessorOperands(unsigned index) {
   assert(index == 0);

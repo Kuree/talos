@@ -13,6 +13,7 @@
 // store and reach the transition, which applies the edge rules of Table 9-2.
 
 // CHECK-LABEL: llvm.func @writer.__talos_eval_body_0(
+// CHECK: %[[HELD:[0-9]+]] = llvm.mlir.addressof @__talos_eval_nba_held_wakes_v1
 // CHECK-NOT: llvm.store
 // CHECK: %[[SV:[0-9]+]] = llvm.load %{{[0-9]+}} {alignment = 1 : i64} : !llvm.ptr -> i8
 // CHECK-NOT: llvm.store
@@ -32,7 +33,7 @@
 // CHECK: llvm.mlir.addressof @__talos_state_unknown
 // CHECK: llvm.store %[[SU]], %{{[0-9]+}} {alignment = 1 : i64} : i8, !llvm.ptr
 // CHECK: llvm.call preserve_mostcc @__talos_eval_promotion_publish_window_v1
-// CHECK: llvm.mlir.addressof @__talos_eval_nba_held_wakes_v1
+// CHECK: llvm.store %{{[0-9]+}}, %[[HELD]]
 // CHECK: ^[[DONE]]:
 // The two-state copy compares the value plane only and never stores X/Z.
 // CHECK-LABEL: llvm.func @writer.__talos_eval_body_0.__talos_two_state_0(

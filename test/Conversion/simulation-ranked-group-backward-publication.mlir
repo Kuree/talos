@@ -22,42 +22,41 @@
 module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", native.debug_timing} {
   llvm.mlir.global internal @__talos_state_value(dense<0> : tensor<2xi8>) : !llvm.array<2 x i8>
   llvm.mlir.global internal @__talos_eval_promotion_pending_mask_v1(dense<0> : tensor<1xi64>) : !llvm.array<1 x i64>
-  llvm.mlir.global internal @ready(dense<2> : tensor<1xi64>) : !llvm.array<1 x i64>
+  llvm.mlir.global internal @__talos_aot_model_ingress_v1(dense<2> : tensor<1xi64>) : !llvm.array<1 x i64>
   llvm.mlir.global internal @slow(0 : i32) : i32
 
-  llvm.func @feedback() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready} {
+  llvm.func @feedback() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.group_ingress = @__talos_aot_model_ingress_v1} {
     %p = llvm.mlir.addressof @slow : !llvm.ptr
     %one = llvm.mlir.constant(1 : i32) : i32
     llvm.store %one, %p : i32, !llvm.ptr
     llvm.return
   }
-  llvm.func @feedback_candidate() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.unconditional_members = array<i32: 0, 1>, schedule.eval.group_ingress = @ready, schedule.eval.dataflow_candidate = @feedback} {
-    %ready = llvm.mlir.addressof @ready : !llvm.ptr
+  llvm.func @feedback_candidate() attributes {schedule.eval.ranked_members = array<i32: 0, 1>, schedule.eval.unconditional_members = array<i32: 0, 1>, schedule.eval.group_ingress = @__talos_aot_model_ingress_v1, schedule.eval.dataflow_candidate = @feedback} {
     %zero = llvm.mlir.constant(0 : i64) : i64
     %first = llvm.mlir.constant(1 : i64) : i64
     %second = llvm.mlir.constant(2 : i64) : i64
     %value = llvm.mlir.constant(7 : i8) : i8
 
-    %a = schedule.ready.read %ready {capacity = 64 : i64, word = 0 : i64, schedule.eval.activation_entry = 0 : i32} : (!llvm.ptr) -> i64
-    schedule.ready.update %ready, %first {capacity = 64 : i64, word = 0 : i64, consume = true} : (!llvm.ptr, i64) -> ()
+    %a = schedule.ready.read @__talos_aot_model_ingress_v1[0] {capacity = 64 : i64, schedule.eval.activation_entry = 0 : i32}
+    schedule.ready.update @__talos_aot_model_ingress_v1[0], %first {capacity = 64 : i64, consume = true}
     %old = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
     schedule.state.store %old, @__talos_state_value[1] {alignment = 1 : i64} : i8
-    schedule.ready.update %ready, %second {capacity = 64 : i64, word = 0 : i64, consume = false} : (!llvm.ptr, i64) -> ()
+    schedule.ready.update @__talos_aot_model_ingress_v1[0], %second {capacity = 64 : i64, consume = false}
 
-    %b = schedule.ready.read %ready {capacity = 64 : i64, word = 0 : i64, schedule.eval.activation_entry = 1 : i32} : (!llvm.ptr) -> i64
-    schedule.ready.update %ready, %second {capacity = 64 : i64, word = 0 : i64, consume = true} : (!llvm.ptr, i64) -> ()
+    %b = schedule.ready.read @__talos_aot_model_ingress_v1[0] {capacity = 64 : i64, schedule.eval.activation_entry = 1 : i32}
+    schedule.ready.update @__talos_aot_model_ingress_v1[0], %second {capacity = 64 : i64, consume = true}
     %before = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
     %changed = llvm.icmp "ne" %before, %value : i8
     schedule.state.store %value, @__talos_state_value[0] {alignment = 1 : i64} : i8
     %backward = llvm.select %changed, %first, %zero : i1, i64
-    schedule.ready.update %ready, %backward {capacity = 64 : i64, word = 0 : i64, consume = false} : (!llvm.ptr, i64) -> ()
+    schedule.ready.update @__talos_aot_model_ingress_v1[0], %backward {capacity = 64 : i64, consume = false}
     llvm.return
   }
 
   // The caller must see pending work after the first sweep, then the second
   // sweep must settle the output and clear that work without another event.
   llvm.func @main() -> i32 {
-    %ready = llvm.mlir.addressof @ready : !llvm.ptr
+    %ready = llvm.mlir.addressof @__talos_aot_model_ingress_v1 : !llvm.ptr
     %slow = llvm.mlir.addressof @slow : !llvm.ptr
     %zero = llvm.mlir.constant(0 : i64) : i64
     %first = llvm.mlir.constant(1 : i64) : i64

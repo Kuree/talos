@@ -206,18 +206,18 @@ materializeEvalReadyWords(mlir::OpBuilder &builder, mlir::Location loc,
 }
 
 inline void updateEvalReadyWord(mlir::OpBuilder &builder, mlir::Location loc,
-                                mlir::Value base,
+                                schedule::ReadySet set,
                                 const EvalReadySetLayout &layout, unsigned word,
                                 mlir::Value mask, bool clear = false) {
-  schedule::NativeReadyUpdateOp::create(
-      builder, loc, base, mask, builder.getI64IntegerAttr(layout.capacity),
-      builder.getI64IntegerAttr(word), builder.getBoolAttr(clear));
+  schedule::NativeReadyUpdateOp::create(builder, loc, set, mask,
+                                        layout.capacity, word, clear);
 }
 
+// Add the words of `mask`, selected by `condition` when given, to the owner
+// words at `base`, or remove them with `clear`.
 inline void updateOwnerMask(mlir::OpBuilder &builder, mlir::Location loc,
                             mlir::Value base, const llvm::APInt &mask,
-                            bool clear = false, mlir::Value condition = {},
-                            const EvalReadySetLayout *readyLayout = nullptr) {
+                            bool clear = false, mlir::Value condition = {}) {
   auto i64 = builder.getI64Type();
   for (unsigned word = 0; word != mask.getNumWords(); ++word) {
     uint64_t bits = ownerMaskWord(mask, word);
@@ -228,13 +228,61 @@ inline void updateOwnerMask(mlir::OpBuilder &builder, mlir::Location loc,
       selected =
           mlir::arith::SelectOp::create(builder, loc, condition, selected,
                                         llvmConstant(builder, loc, i64, 0));
-    if (readyLayout)
-      updateEvalReadyWord(builder, loc, base, *readyLayout, word, selected,
-                          clear);
-    else
-      updateOwnerWord(builder, loc, base, word, selected, clear);
+    updateOwnerWord(builder, loc, base, word, selected, clear);
   }
 }
+
+// The same for the words of a generated eval ready set, as ready updates.
+inline void updateReadyMask(mlir::OpBuilder &builder, mlir::Location loc,
+                            schedule::ReadySet set,
+                            const EvalReadySetLayout &layout,
+                            const llvm::APInt &mask, bool clear = false,
+                            mlir::Value condition = {}) {
+  auto i64 = builder.getI64Type();
+  for (unsigned word = 0; word != mask.getNumWords(); ++word) {
+    uint64_t bits = ownerMaskWord(mask, word);
+    if (!bits)
+      continue;
+    mlir::Value selected = llvmConstant(builder, loc, i64, bits);
+    if (condition)
+      selected =
+          mlir::arith::SelectOp::create(builder, loc, condition, selected,
+                                        llvmConstant(builder, loc, i64, 0));
+    updateEvalReadyWord(builder, loc, set, layout, word, selected, clear);
+  }
+}
+
+/// The addresses of the ready sets that lowered ready actions access, as
+/// canonicalization leaves them: one per set and function, at the start of
+/// its entry block. An address the function already has there is reused.
+class ReadySetAddresses {
+public:
+  mlir::Value get(mlir::Operation *user, mlir::FlatSymbolRefAttr set) {
+    mlir::Region *body =
+        &user->getParentWithTrait<mlir::OpTrait::IsIsolatedFromAbove>()
+             ->getRegion(0);
+    auto [found, inserted] = addresses.try_emplace({body, set.getAttr()});
+    if (!inserted)
+      return found->second;
+    mlir::Block &entry = body->front();
+    for (mlir::Operation &operation : entry) {
+      if (!operation.hasTrait<mlir::OpTrait::ConstantLike>())
+        break;
+      auto address = mlir::dyn_cast<mlir::LLVM::AddressOfOp>(operation);
+      if (address && address.getGlobalNameAttr() == set)
+        return found->second = address;
+    }
+    auto builder = mlir::OpBuilder::atBlockBegin(&entry);
+    return found->second = mlir::LLVM::AddressOfOp::create(
+               builder, user->getLoc(),
+               mlir::LLVM::LLVMPointerType::get(user->getContext()),
+               set.getValue());
+  }
+
+private:
+  llvm::DenseMap<std::pair<mlir::Region *, mlir::StringAttr>, mlir::Value>
+      addresses;
+};
 
 } // namespace talos::detail
 #endif

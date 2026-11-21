@@ -3,21 +3,22 @@
 // RUN: talos-opt %t --convert-native-schedule-actions-to-llvm | FileCheck %s --check-prefix=LOWER
 // Pending-mask union must respect consume, alias, observation and publication.
 module {
-  llvm.func @updates(%base: !llvm.ptr, %ctx: !llvm.ptr) -> i64 {
+  llvm.mlir.global external @__talos_aot_model_ingress_v1() : !llvm.array<2 x i64>
+  llvm.func @updates(%alias: !llvm.ptr, %ctx: !llvm.ptr) -> i64 {
     %one = arith.constant 1 : i64
     %two = arith.constant 2 : i64
     %zero = arith.constant 0 : i64
     // CHECK: %[[REMOVE:.*]] = arith.constant 1 : i64
     // CHECK: %[[ADD:.*]] = arith.constant 2 : i64
-    // CHECK: schedule.ready.commit %{{.*}}, %[[REMOVE]], %[[ADD]]
-    schedule.ready.update %base, %one {capacity = 128 : i64, word = 0 : i64, consume = false} : (!llvm.ptr, i64) -> ()
-    schedule.ready.update %base, %two {capacity = 128 : i64, word = 0 : i64, consume = false} : (!llvm.ptr, i64) -> ()
-    schedule.ready.update %base, %one {capacity = 128 : i64, word = 0 : i64, consume = true} : (!llvm.ptr, i64) -> ()
+    // CHECK: schedule.ready.commit @__talos_aot_model_ingress_v1[0], %[[REMOVE]], %[[ADD]]
+    schedule.ready.update @__talos_aot_model_ingress_v1[0], %one {capacity = 128 : i64, consume = false}
+    schedule.ready.update @__talos_aot_model_ingress_v1[0], %two {capacity = 128 : i64, consume = false}
+    schedule.ready.update @__talos_aot_model_ingress_v1[0], %one {capacity = 128 : i64, consume = true}
     // CHECK: llvm.load
-    schedule.ready.update %base, %two {capacity = 128 : i64, word = 0 : i64, consume = false} : (!llvm.ptr, i64) -> ()
-    %observed = llvm.load %base : !llvm.ptr -> i64
+    schedule.ready.update @__talos_aot_model_ingress_v1[0], %two {capacity = 128 : i64, consume = false}
+    %observed = llvm.load %alias : !llvm.ptr -> i64
     // CHECK: schedule.ready.update
-    schedule.ready.update %base, %one {capacity = 128 : i64, word = 0 : i64, consume = false} : (!llvm.ptr, i64) -> ()
+    schedule.ready.update @__talos_aot_model_ingress_v1[0], %one {capacity = 128 : i64, consume = false}
     // CHECK: schedule.transition
     // CHECK: schedule.transition
     // LOWER-COUNT-2: llvm.call @talos_rt_v1_scheduler_static_transition

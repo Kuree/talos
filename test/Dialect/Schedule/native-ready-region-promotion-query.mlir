@@ -4,7 +4,7 @@
 // local across it: the consume and the publication commit once, after it. An
 // ordinary call can observe the ready set and still materializes them first.
 module {
-  llvm.mlir.global internal @ready() : !llvm.array<66 x i64> {
+  llvm.mlir.global internal @__talos_aot_model_ingress_v1() : !llvm.array<66 x i64> {
     %zero = llvm.mlir.zero : !llvm.array<66 x i64>
     llvm.return %zero : !llvm.array<66 x i64>
   }
@@ -20,16 +20,15 @@ module {
   // CHECK: llvm.store
   // CHECK: llvm.return
   llvm.func @query() -> i1 {
-    %base = llvm.mlir.addressof @ready : !llvm.ptr
     %one = arith.constant 1 : i64
     %two = arith.constant 2 : i64
     %owner = arith.constant 7 : i64
     %known = schedule.ready.region {
-      schedule.ready.update %base, %one {capacity = 4096 : i64, word = 0 : i64, consume = true} : (!llvm.ptr, i64) -> ()
+      schedule.ready.update @__talos_aot_model_ingress_v1[0], %one {capacity = 4096 : i64, consume = true}
       %member = llvm.call @__talos_eval_kernel_promotion_ready_v1(%owner) : (i64) -> i1
-      schedule.ready.update %base, %two {capacity = 4096 : i64, word = 0 : i64, consume = false} : (!llvm.ptr, i64) -> ()
+      schedule.ready.update @__talos_aot_model_ingress_v1[0], %two {capacity = 4096 : i64, consume = false}
       %group = llvm.call @__talos_eval_group_promotion_ready_v1(%owner) : (i64) -> i1
-      schedule.ready.update %base, %one {capacity = 4096 : i64, word = 0 : i64, consume = false} : (!llvm.ptr, i64) -> ()
+      schedule.ready.update @__talos_aot_model_ingress_v1[0], %one {capacity = 4096 : i64, consume = false}
       %both = arith.andi %member, %group : i1
       schedule.ready.yield %both : i1
     } : i1
@@ -42,14 +41,13 @@ module {
   // CHECK: llvm.store
   // CHECK: llvm.return
   llvm.func @opaque() {
-    %base = llvm.mlir.addressof @ready : !llvm.ptr
     %one = arith.constant 1 : i64
     %two = arith.constant 2 : i64
     schedule.ready.region {
-      schedule.ready.update %base, %one {capacity = 4096 : i64, word = 0 : i64, consume = true} : (!llvm.ptr, i64) -> ()
+      schedule.ready.update @__talos_aot_model_ingress_v1[0], %one {capacity = 4096 : i64, consume = true}
       llvm.call @observe() : () -> ()
-      schedule.ready.update %base, %two {capacity = 4096 : i64, word = 0 : i64, consume = false} : (!llvm.ptr, i64) -> ()
-      schedule.ready.update %base, %one {capacity = 4096 : i64, word = 0 : i64, consume = false} : (!llvm.ptr, i64) -> ()
+      schedule.ready.update @__talos_aot_model_ingress_v1[0], %two {capacity = 4096 : i64, consume = false}
+      schedule.ready.update @__talos_aot_model_ingress_v1[0], %one {capacity = 4096 : i64, consume = false}
       schedule.ready.yield
     }
     llvm.return

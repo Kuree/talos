@@ -218,12 +218,17 @@ def NativeTransitionOp
       I64Attr:$width, OptionalAttr<ScheduleSourceOwnerAttr>:$source_owner);
   let hasVerifier = 1;
 }
+// The generated eval ready sets (ReadySet) are named by their globals. A
+// ready action names its set and the leaf word it updates or reads; its
+// capacity freezes the set's DirtyReadySetLayout.
 def NativeReadyUpdateOp
-    : ScheduleNativeOp<"ready.update", [DeclareOpInterfaceMethods<
-                                           MemoryEffectsOpInterface>]> {
+    : ScheduleNativeOp<"ready.update", [
+          DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+          DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
   let summary = "add or consume an exact word of pending fine activations";
   let description = [{
-    Updates the authoritative DirtyReadySetLayout leaf and its dirty levels.
+    Updates the authoritative DirtyReadySetLayout leaf `word` of the ready
+    set `set` and its dirty levels.
     With consume=false it unions mask and, when mask may be nonzero, sets the
     leaf's dirty bit at every level; with consume=true it removes mask from
     the leaf only (dirty bits are cleared by the reader that sees the child
@@ -234,61 +239,92 @@ def NativeReadyUpdateOp
     observer, callback, opaque alias, or handoff can observe intermediate
     storage. All leaves/indexes must be materialized at those boundaries.
   }];
-  let arguments = (ins LLVM_AnyPointer:$base, I64:$mask, I64Attr:$capacity,
+  let arguments = (ins FlatSymbolRefAttr:$set, I64:$mask, I64Attr:$capacity,
       I64Attr:$word, BoolAttr:$consume);
+  let assemblyFormat = "$set `[` $word `]` `,` $mask attr-dict";
+  let builders = [OpBuilder<(ins "::talos::schedule::ReadySet":$set,
+                                 "::mlir::Value":$mask, "uint64_t":$capacity,
+                                 "uint64_t":$word, "bool":$consume)>];
+  let extraClassDeclaration = [{
+    ::talos::schedule::ReadySet getReadySet();
+  }];
   let hasVerifier = 1;
 }
 def NativeReadyCommitOp
-    : ScheduleNativeOp<"ready.commit", [DeclareOpInterfaceMethods<
-                                           MemoryEffectsOpInterface>]> {
+    : ScheduleNativeOp<"ready.commit", [
+          DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+          DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
   let summary = "materialize one SSA pending-word update and its indexes";
   let description = [{
-    Replaces a certified unobserved sequence of ordered add/consume actions.
+    Replaces a certified unobserved sequence of ordered add/consume actions
+    on leaf `word` of the ready set `set`.
     The resulting pending word is (previous & ~remove_mask) | add_mask.
     SSA masks include every intervening consume; event publications remain
     distinct ordered effects. Materializes the authoritative leaf and derived
     indexes together before any selection, observer or handoff boundary.
   }];
-  let arguments = (ins LLVM_AnyPointer:$base, I64:$remove_mask, I64:$add_mask,
-      I64Attr:$capacity, I64Attr:$word);
+  let arguments = (ins FlatSymbolRefAttr:$set, I64:$remove_mask,
+      I64:$add_mask, I64Attr:$capacity, I64Attr:$word);
+  let assemblyFormat =
+      "$set `[` $word `]` `,` $remove_mask `,` $add_mask attr-dict";
+  let extraClassDeclaration = [{
+    ::talos::schedule::ReadySet getReadySet();
+  }];
   let hasVerifier = 1;
 }
 def NativeReadyMergeOp
-    : ScheduleNativeOp<"ready.merge", [DeclareOpInterfaceMethods<
-                                          MemoryEffectsOpInterface>]> {
+    : ScheduleNativeOp<"ready.merge", [
+          DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+          DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
   let summary = "add an ascending bitmap to a pending set and its indexes";
   let description = [{
     Reads ceil(capacity / 64) i64 words from source in ascending order. Each
     word is read immediately before adding its bits to the corresponding
-    DirtyReadySetLayout leaf at base and setting that leaf's dirty bits. Bits
-    above capacity in the last source word are ignored. Source may overlap
-    base; earlier leaf/dirty writes are visible to later source reads. Both
-    operands address storage aligned to at least eight bytes. The lowering
-    may first test a group of consecutive words for emptiness and skip an
-    empty group: a skipped group adds nothing, so the result equals the
-    word-by-word merge.
+    DirtyReadySetLayout leaf of the ready set `set` and setting that leaf's
+    dirty bits. Bits above capacity in the last source word are ignored.
+    Source may overlap the set; earlier leaf/dirty writes are visible to later
+    source reads. Source addresses storage aligned to at least eight bytes.
+    The lowering may first test a group of consecutive words for emptiness and
+    skip an empty group: a skipped group adds nothing, so the result equals
+    the word-by-word merge.
 
     This is an ordered scheduler effect, with no actor, callback, selection or
     checkpoint inside it. Pending ready updates must be materialized before
     the merge, and its leaves and dirty bits are visible to every subsequent
     observer. It does not consume the source.
   }];
-  let arguments = (ins LLVM_AnyPointer:$base, LLVM_AnyPointer:$source,
+  let arguments = (ins FlatSymbolRefAttr:$set, LLVM_DefaultPointer:$source,
       I64Attr:$capacity);
+  let assemblyFormat = "$set `,` $source attr-dict";
+  let builders = [OpBuilder<(ins "::talos::schedule::ReadySet":$set,
+                                 "::mlir::Value":$source,
+                                 "uint64_t":$capacity)>];
+  let extraClassDeclaration = [{
+    ::talos::schedule::ReadySet getReadySet();
+  }];
   let hasVerifier = 1;
 }
 def NativeReadyReadOp : ScheduleNativeOp<"ready.read", [
-    DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+    DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
   let summary = "inspect the current pending leaf, including region-local updates";
   let description = [{
-    Reads one authoritative pending word without consuming it. Within a
+    Reads the authoritative pending leaf `word` of the ready set `set` without
+    consuming it. Within a
     ready.region the result includes all preceding ordered add/consume actions
     in that region; it does not require materializing derived indexes. Opaque
     accesses, calls and handoffs still require coherent physical storage.
     This reads pending activation state, not event history (LRM 4.3--4.7).
   }];
-  let arguments = (ins LLVM_AnyPointer:$base, I64Attr:$capacity, I64Attr:$word);
+  let arguments = (ins FlatSymbolRefAttr:$set, I64Attr:$capacity,
+      I64Attr:$word);
   let results = (outs I64:$value);
+  let assemblyFormat = "$set `[` $word `]` attr-dict";
+  let builders = [OpBuilder<(ins "::talos::schedule::ReadySet":$set,
+                                 "uint64_t":$capacity, "uint64_t":$word)>];
+  let extraClassDeclaration = [{
+    ::talos::schedule::ReadySet getReadySet();
+  }];
   let hasVerifier = 1;
 }
 def NativeReadyRegionOp : ScheduleNativeOp<"ready.region", [RecursiveMemoryEffects]> {

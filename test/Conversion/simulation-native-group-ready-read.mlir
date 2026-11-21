@@ -9,12 +9,11 @@
 // readiness read. Neither a premature flush nor an old physical leaf snapshot
 // is needed. Both consumes and the intervening addition collapse to one store.
 module {
-  llvm.mlir.global internal @ready(1 : i64) : i64
+  llvm.mlir.global internal @__talos_aot_model_ingress_v1(dense<1> : tensor<1xi64>) : !llvm.array<1 x i64>
   llvm.mlir.global internal @observed(0 : i32) : i32
   llvm.func @producer() attributes {schedule.eval.infallible} {
-    %base = llvm.mlir.addressof @ready : !llvm.ptr
     %two = llvm.mlir.constant(2 : i64) : i64
-    schedule.ready.update %base, %two {capacity = 64 : i64, word = 0 : i64, consume = false} : (!llvm.ptr, i64) -> ()
+    schedule.ready.update @__talos_aot_model_ingress_v1[0], %two {capacity = 64 : i64, consume = false}
     llvm.return
   }
   llvm.func @consumer() attributes {schedule.eval.infallible} {
@@ -31,25 +30,24 @@ module {
   // CHECK-NOT: llvm.store
   // CHECK: llvm.return
   llvm.func @group() attributes {schedule.eval.ranked_members = array<i32: 0, 1>} {
-    %base = llvm.mlir.addressof @ready : !llvm.ptr
     %zero = llvm.mlir.constant(0 : i64) : i64
     %one = llvm.mlir.constant(1 : i64) : i64
     %two = llvm.mlir.constant(2 : i64) : i64
-    %first = schedule.ready.read %base {capacity = 64 : i64, word = 0 : i64} : (!llvm.ptr) -> i64
+    %first = schedule.ready.read @__talos_aot_model_ingress_v1[0] {capacity = 64 : i64}
     %bit0 = llvm.and %first, %one : i64
     %active0 = llvm.icmp "ne" %bit0, %zero : i64
     llvm.cond_br %active0, ^first, ^next
   ^first:
-    schedule.ready.update %base, %one {capacity = 64 : i64, word = 0 : i64, consume = true} : (!llvm.ptr, i64) -> ()
+    schedule.ready.update @__talos_aot_model_ingress_v1[0], %one {capacity = 64 : i64, consume = true}
     llvm.call @producer() {schedule.eval.group_member = 0 : i32} : () -> ()
     llvm.br ^next
   ^next:
-    %second = schedule.ready.read %base {capacity = 64 : i64, word = 0 : i64} : (!llvm.ptr) -> i64
+    %second = schedule.ready.read @__talos_aot_model_ingress_v1[0] {capacity = 64 : i64}
     %bit1 = llvm.and %second, %two : i64
     %active1 = llvm.icmp "ne" %bit1, %zero : i64
     llvm.cond_br %active1, ^second, ^done
   ^second:
-    schedule.ready.update %base, %two {capacity = 64 : i64, word = 0 : i64, consume = true} : (!llvm.ptr, i64) -> ()
+    schedule.ready.update @__talos_aot_model_ingress_v1[0], %two {capacity = 64 : i64, consume = true}
     llvm.call @consumer() {schedule.eval.group_member = 1 : i32} : () -> ()
     llvm.br ^done
   ^done:
@@ -58,7 +56,7 @@ module {
   // CHECK-LABEL: llvm.func @main()
   llvm.func @main() -> i32 {
     llvm.call @group() : () -> ()
-    %base = llvm.mlir.addressof @ready : !llvm.ptr
+    %base = llvm.mlir.addressof @__talos_aot_model_ingress_v1 : !llvm.ptr
     %out = llvm.mlir.addressof @observed : !llvm.ptr
     %ready = llvm.load %base : !llvm.ptr -> i64
     %seen = llvm.load %out : !llvm.ptr -> i32

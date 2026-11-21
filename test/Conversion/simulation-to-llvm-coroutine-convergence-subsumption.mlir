@@ -96,12 +96,12 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
 // CHECK-LABEL: llvm.func @__talos_direct_fragment_1_1.__talos_execute(
 // CHECK-SAME: schedule.eval.tier2_convergence
 // CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1
+// CHECK: %[[INGRESS:.*]] = llvm.mlir.addressof @__talos_aot_model_ingress_v1
 // CHECK: llvm.switch
-// CHECK: %[[OLD_INGRESS:.*]] = llvm.mlir.addressof @__talos_aot_model_ingress_v1
-// CHECK: %[[OLD_READY:.*]] = llvm.load %[[OLD_INGRESS]]
+// CHECK: %[[OLD_READY:.*]] = llvm.load %[[INGRESS]]
 // CHECK: %[[CLEAR_BOTH:.*]] = llvm.mlir.constant(-4 : i64)
 // CHECK: %[[WITHOUT_OLD:.*]] = llvm.and %[[OLD_READY]], %[[CLEAR_BOTH]]
-// CHECK: llvm.store %[[WITHOUT_OLD]], %[[OLD_INGRESS]]
+// CHECK: llvm.store %[[WITHOUT_OLD]], %[[INGRESS]]
 // CHECK: llvm.call @__talos_direct_fragment_1_1.__talos_execute
 // CHECK: %[[AFTER_CALL_INGRESS:.*]] = llvm.mlir.addressof @__talos_aot_model_ingress_v1
 // CHECK: %[[AFTER_CALL_READY:.*]] = llvm.load %[[AFTER_CALL_INGRESS]]
@@ -114,4 +114,4 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
 // CHECK: %[[CLEAR_MEMBER_FOLDED:.*]] = llvm.mlir.constant(-3 : i64)
 // CHECK: %[[AFTER_MEMBER_CLEAR:.*]] = llvm.and {{.*}}, %[[CLEAR_MEMBER_FOLDED]]
 // CHECK: %[[REPUBLISH_READY:.*]] = llvm.or {{.*}}, %[[REPUBLISH]]
-// CHECK: llvm.store %[[REPUBLISH_READY]],
+// CHECK: llvm.store %[[REPUBLISH_READY]], %[[INGRESS]]

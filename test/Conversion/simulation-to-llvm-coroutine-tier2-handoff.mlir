@@ -229,11 +229,11 @@ module attributes {
 // CHECK-LABEL: llvm.func @__talos_aot_schedule_run_v1
 // CHECK: llvm.call @talos_rt_v1_scheduler_prepare_periodic_aot
 // CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1
+// CHECK: %[[INGRESS:.*]] = llvm.mlir.addressof @__talos_aot_model_ingress_v1
 // CHECK: llvm.call @talos_rt_v1_scheduler_prepare_eval_nba
 // CHECK: llvm.call @talos_rt_v1_scheduler_complete_eval_nba
 // CHECK-NOT: llvm.call @talos_rt_
 // CHECK: llvm.switch
-// CHECK: %[[INGRESS:.*]] = llvm.mlir.addressof @__talos_aot_model_ingress_v1
 // CHECK: %[[QUEUED:.*]] = llvm.load %[[INGRESS]]
 // CHECK: %[[CLEARED:.*]] = llvm.and %[[QUEUED]],
 // CHECK: llvm.store %[[CLEARED]], %[[INGRESS]]
@@ -280,8 +280,8 @@ module attributes {
 // suppressing its self wakeup without retaining a runtime transition callback.
 // EVENT-LABEL: llvm.func @loop.__talos_eval_body_0(
 // EVENT: %[[INGRESS:.*]] = llvm.mlir.addressof @__talos_aot_model_ingress_v1
-// EVENT-DAG: %[[OTHER:.*]] = llvm.mlir.constant(2 : i64)
-// EVENT-DAG: %[[NONE:.*]] = llvm.mlir.constant(0 : i64)
+// EVENT: %[[OTHER:.*]] = llvm.mlir.constant(2 : i64)
+// EVENT-NEXT: %[[NONE:.*]] = llvm.mlir.constant(0 : i64)
 // EVENT-NEXT: %[[BITS:.*]] = llvm.select %{{.*}}, %[[OTHER]], %[[NONE]]
 // EVENT-NEXT: %[[QUEUED:.*]] = llvm.load %[[INGRESS]]
 // EVENT-NEXT: %[[MERGED:.*]] = llvm.or %[[QUEUED]], %[[BITS]]

@@ -1294,6 +1294,14 @@ LogicalResult declareNativeImports(ModuleOp module) {
       reference = load.getGlobalAttr();
     else if (auto store = dyn_cast<schedule::NativeNBAIndexStoreOp>(operation))
       reference = store.getGlobalAttr();
+    else if (auto update = dyn_cast<schedule::NativeReadyUpdateOp>(operation))
+      reference = update.getSetAttr();
+    else if (auto commit = dyn_cast<schedule::NativeReadyCommitOp>(operation))
+      reference = commit.getSetAttr();
+    else if (auto read = dyn_cast<schedule::NativeReadyReadOp>(operation))
+      reference = read.getSetAttr();
+    else if (auto merge = dyn_cast<schedule::NativeReadyMergeOp>(operation))
+      reference = merge.getSetAttr();
     else if (isa<schedule::NativeHandleOffsetOp>(operation))
       // It becomes the runtime's handle offset; see lowerNativeHandleOps.
       reference = FlatSymbolRefAttr::get(operation->getContext(),

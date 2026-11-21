@@ -12,20 +12,21 @@
 // CHECK-COUNT-4: llvm.mlir.global internal @__talos_aot_model_active_v1_{{[0-3]}}()
 // CHECK-NOT: llvm.mlir.global internal @__talos_aot_model_active_v1_
 // CHECK-LABEL: llvm.func @__talos_aot_schedule_run_v1(
+// CHECK: %[[INGRESS:[0-9]+]] = llvm.mlir.addressof @__talos_aot_model_ingress_v1
 // CHECK: llvm.call @writer{{[0-9]}}.__talos_eval_body_0.__talos_two_state_0(
 // CHECK-NEXT: llvm.mlir.constant(0 : i32)
-// CHECK-NEXT: llvm.mlir.addressof @__talos_aot_model_ingress_v1
-// CHECK-NOT: llvm.mlir.addressof
+// CHECK: llvm.store %{{[0-9]+}}, %[[INGRESS]]
+// CHECK-NOT: llvm.store %{{[0-9]+}}, %[[INGRESS]]
 // CHECK: llvm.br
 // CHECK: llvm.call @writer{{[0-9]}}.__talos_eval_body_0.__talos_two_state_0(
 // CHECK-NEXT: llvm.mlir.constant(0 : i32)
-// CHECK-NEXT: llvm.mlir.addressof @__talos_aot_model_ingress_v1
-// CHECK-NOT: llvm.mlir.addressof
+// CHECK: llvm.store %{{[0-9]+}}, %[[INGRESS]]
+// CHECK-NOT: llvm.store %{{[0-9]+}}, %[[INGRESS]]
 // CHECK: llvm.br
 // CHECK: llvm.call @writer{{[0-9]}}.__talos_eval_body_0.__talos_two_state_0(
 // CHECK-NEXT: llvm.mlir.constant(0 : i32)
-// CHECK-NEXT: llvm.mlir.addressof @__talos_aot_model_ingress_v1
-// CHECK-NOT: llvm.mlir.addressof
+// CHECK: llvm.store %{{[0-9]+}}, %[[INGRESS]]
+// CHECK-NOT: llvm.store %{{[0-9]+}}, %[[INGRESS]]
 // CHECK: llvm.br
 
 !bit = !simulation.logic<1>

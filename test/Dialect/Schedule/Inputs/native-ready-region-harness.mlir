@@ -2,7 +2,7 @@
 // both O0 and O3. The oracle uses ordinary LLVM memory operations and asserts;
 // it does not run the schedule transformations being tested.
 module {
-  llvm.mlir.global external @ready() : !llvm.array<65 x i64>
+  llvm.mlir.global external @__talos_aot_model_ingress_v1() : !llvm.array<65 x i64>
   llvm.mlir.global external @ordinary(0 : i64) : i64
   llvm.mlir.global external @seen_before(0 : i64) : i64
   llvm.mlir.global external @seen_after(0 : i64) : i64
@@ -11,7 +11,7 @@ module {
   llvm.func @alias_updates()
 
   llvm.func @observe(%n: i64) {
-    %base = llvm.mlir.addressof @ready : !llvm.ptr
+    %base = llvm.mlir.addressof @__talos_aot_model_ingress_v1 : !llvm.ptr
     %last = llvm.getelementptr %base[63] : (!llvm.ptr) -> !llvm.ptr, i64
     %summary = llvm.getelementptr %base[64] : (!llvm.ptr) -> !llvm.ptr, i64
     %expected = llvm.mlir.addressof @expected : !llvm.ptr
@@ -51,7 +51,7 @@ module {
   }
 
   llvm.func @main() -> i32 {
-    %base = llvm.mlir.addressof @ready : !llvm.ptr
+    %base = llvm.mlir.addressof @__talos_aot_model_ingress_v1 : !llvm.ptr
     %last = llvm.getelementptr %base[63] : (!llvm.ptr) -> !llvm.ptr, i64
     %summary = llvm.getelementptr %base[64] : (!llvm.ptr) -> !llvm.ptr, i64
     %ordinary = llvm.mlir.addressof @ordinary : !llvm.ptr

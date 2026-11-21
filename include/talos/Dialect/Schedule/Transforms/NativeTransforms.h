@@ -47,9 +47,10 @@ llvm::DenseSet<mlir::StringAttr> collectRepeatableCombinationalActivations(
         record = {});
 
 /// Resolves the module global an address-of names, like
-/// `AddressOfOp::getGlobal`. Serial callers cache lazily through a
-/// SymbolTableCollection; concurrent workers share one prebuilt module table,
-/// which stays valid while they add or remove no symbols.
+/// `AddressOfOp::getGlobal`; an alias or a function is no global. Serial
+/// callers cache lazily through a SymbolTableCollection; concurrent workers
+/// share one prebuilt module table, which stays valid while they add or
+/// remove no symbols.
 class NativeGlobalLookup {
 public:
   NativeGlobalLookup(mlir::SymbolTableCollection &symbols)
@@ -64,11 +65,8 @@ private:
 };
 
 // Function-local executable scheduling rewrites; no fallback/frame facts are
-// recomputed by these actions. Callers rewriting many functions of one module
-// pass one symbol cache rather than rebuilding the module table per function.
+// recomputed by these actions.
 void coalesceNativeReadyUpdates(mlir::Operation *operation);
-void coalesceNativeReadyUpdates(mlir::Operation *operation,
-                                const NativeGlobalLookup &globals);
 void specializeNativeValueFunctions(mlir::ModuleOp module);
 void cacheNativePureCones(mlir::ModuleOp module, uint64_t minimumCost = 256,
                           uint64_t maximumCost = 4096,

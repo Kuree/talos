@@ -54,12 +54,37 @@ inline uint64_t nativeOperationCost(mlir::Operation *operation) {
              : nativeLoweredSize(operation);
 }
 
+/// The operations nested in `root` cost. Ready actions name their set; in
+/// LLVM IR a function shares one address of each set (ReadySetAddresses), so
+/// a set that `root` addresses only through ready actions is charged that
+/// address once.
 inline uint64_t nativeInlineCost(mlir::Operation *root) {
   uint64_t cost = 0;
+  llvm::SmallVector<mlir::StringAttr, 2> readySets, addressed;
   root->walk([&](mlir::Operation *operation) {
-    if (operation != root)
-      cost += nativeOperationCost(operation);
+    if (operation == root)
+      return;
+    cost += nativeOperationCost(operation);
+    mlir::FlatSymbolRefAttr set;
+    if (auto update = mlir::dyn_cast<schedule::NativeReadyUpdateOp>(operation))
+      set = update.getSetAttr();
+    else if (auto commit =
+                 mlir::dyn_cast<schedule::NativeReadyCommitOp>(operation))
+      set = commit.getSetAttr();
+    else if (auto read = mlir::dyn_cast<schedule::NativeReadyReadOp>(operation))
+      set = read.getSetAttr();
+    else if (auto merge =
+                 mlir::dyn_cast<schedule::NativeReadyMergeOp>(operation))
+      set = merge.getSetAttr();
+    auto address = mlir::dyn_cast<mlir::LLVM::AddressOfOp>(operation);
+    if (address && schedule::getReadySetOfGlobal(address.getGlobalName()) &&
+        !llvm::is_contained(addressed, address.getGlobalNameAttr().getAttr()))
+      addressed.push_back(address.getGlobalNameAttr().getAttr());
+    if (set && !llvm::is_contained(readySets, set.getAttr()))
+      readySets.push_back(set.getAttr());
   });
+  for (mlir::StringAttr set : readySets)
+    cost += !llvm::is_contained(addressed, set);
   return cost;
 }
 

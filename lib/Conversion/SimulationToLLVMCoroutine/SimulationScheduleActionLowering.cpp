@@ -22,7 +22,8 @@ void declareSpecializedNBABatchRuntime(ModuleOp module);
 void lowerSpecializedNBABatch(schedule::NativeNBABatchOp op,
                               bool declareRuntime);
 void lowerNativeReadyRegion(schedule::NativeReadyRegionOp op,
-                            const schedule::NativeGlobalLookup &globals);
+                            const schedule::NativeGlobalLookup &globals,
+                            ReadySetAddresses &addresses);
 } // namespace detail
 namespace {
 // Preserve the existing generated pending-set representation and publication
@@ -30,9 +31,11 @@ namespace {
 // this operation, and it does not coalesce source events. Preserve ascending
 // read/add order even when source aliases the ready set. In particular, do not
 // defer dirty-level writes past a later source read.
-void materializeReadyMerge(schedule::NativeReadyMergeOp merge) {
+void materializeReadyMerge(schedule::NativeReadyMergeOp merge,
+                           detail::ReadySetAddresses &addresses) {
   OpBuilder builder(merge);
   Location loc = merge.getLoc();
+  Value base = addresses.get(merge, merge.getSetAttr());
   detail::EvalReadySetLayout layout(merge.getCapacity());
   auto i64 = builder.getI64Type();
   auto constant = [&](uint64_t value) {
@@ -75,7 +78,7 @@ void materializeReadyMerge(schedule::NativeReadyMergeOp merge) {
 
   // Add one nonempty source word to its leaf and dirty bits.
   auto add = [&](Value index, Value selected) {
-    Value leaf = address(merge.getBase(), index);
+    Value leaf = address(base, index);
     LLVM::StoreOp::create(
         builder, loc, arith::OrIOp::create(builder, loc, load(leaf), selected),
         leaf, 8);
@@ -87,7 +90,7 @@ void materializeReadyMerge(schedule::NativeReadyMergeOp merge) {
       Value parent = arith::ShRUIOp::create(builder, loc, child, constant(6));
       Value slotIndex = arith::AddIOp::create(builder, loc, parent,
                                               constant(layout.offsets[level]));
-      Value slot = address(merge.getBase(), slotIndex);
+      Value slot = address(base, slotIndex);
       Value bit = arith::ShLIOp::create(
           builder, loc, constant(1),
           arith::AndIOp::create(builder, loc, child, constant(63)));
@@ -203,11 +206,11 @@ void materializeReadyMerge(schedule::NativeReadyMergeOp merge) {
 }
 
 // Keep readiness semantic until conversion. Only speculatable, effect-free
-// operations may separate actions sharing one proven base and ready universe.
+// operations may separate actions sharing one ready set and ready universe.
 // In particular a ready read, ordinary load, transition, call or alias action
 // ends a batch, even when its result is unused.
 void materializeReadyBatches(Operation *operation,
-                             const schedule::NativeGlobalLookup &globals) {
+                             detail::ReadySetAddresses &addresses) {
   SmallVector<SmallVector<Operation *>> batches;
   SmallVector<Block *> blocks;
   llvm::SmallPtrSet<Block *, 16> seen;
@@ -216,37 +219,30 @@ void materializeReadyBatches(Operation *operation,
         seen.insert(op->getBlock()).second)
       blocks.push_back(op->getBlock());
   });
-  auto baseAndCapacity = [](Operation *op) -> std::pair<Value, uint64_t> {
+  auto setAndCapacity =
+      [](Operation *op) -> std::pair<FlatSymbolRefAttr, uint64_t> {
     if (auto update = dyn_cast<schedule::NativeReadyUpdateOp>(op))
-      return {update.getBase(), update.getCapacity()};
+      return {update.getSetAttr(), update.getCapacity()};
     if (auto commit = dyn_cast<schedule::NativeReadyCommitOp>(op))
-      return {commit.getBase(), commit.getCapacity()};
+      return {commit.getSetAttr(), commit.getCapacity()};
     return {};
-  };
-  auto sameBase = [&](Value a, Value b) {
-    if (a == b)
-      return true;
-    auto lhs = a.getDefiningOp<LLVM::AddressOfOp>();
-    auto rhs = b.getDefiningOp<LLVM::AddressOfOp>();
-    // Distinct aliases or opaque pointers do not prove a shared base.
-    return lhs && rhs && globals(lhs) && globals(lhs) == globals(rhs);
   };
   for (Block *block : blocks) {
     SmallVector<Operation *> pending;
-    Value base;
+    FlatSymbolRefAttr set;
     uint64_t capacity = 0;
     auto flush = [&]() {
       if (pending.size() > 1)
         batches.push_back(std::move(pending));
       pending.clear();
-      base = {};
+      set = {};
     };
     for (Operation &op : *block) {
-      auto [current, count] = baseAndCapacity(&op);
+      auto [current, count] = setAndCapacity(&op);
       if (current) {
-        if (base && (capacity != count || !sameBase(base, current)))
+        if (set && (capacity != count || set != current))
           flush();
-        base = current;
+        set = current;
         capacity = count;
         pending.push_back(&op);
       } else if (!isMemoryEffectFree(&op) || !isSpeculatable(&op)) {
@@ -258,7 +254,8 @@ void materializeReadyBatches(Operation *operation,
   for (const auto &batch : batches) {
     OpBuilder builder(batch.back());
     auto loc = batch.back()->getLoc();
-    auto [base, capacity] = baseAndCapacity(batch.back());
+    auto [set, capacity] = setAndCapacity(batch.back());
+    Value base = addresses.get(batch.back(), set);
     Value zero = detail::llvmConstant(builder, loc, builder.getI64Type(), 0);
     SmallVector<detail::EvalReadyWordChange> changes;
     for (Operation *op : batch) {
@@ -346,15 +343,16 @@ bool materializeLocalScheduleActions(
     Operation *operation, bool coalesce, bool preserveReadiness,
     const schedule::NativeGlobalLookup &globals, bool declareRuntime) {
   if (coalesce && !preserveReadiness)
-    schedule::coalesceNativeReadyUpdates(operation, globals);
+    schedule::coalesceNativeReadyUpdates(operation);
+  detail::ReadySetAddresses addresses;
   SmallVector<schedule::NativeReadyRegionOp> readyRegions;
   if (!preserveReadiness)
     readyRegions =
         analysis::collectInWalkOrder<schedule::NativeReadyRegionOp>(operation);
   for (auto region : readyRegions)
-    detail::lowerNativeReadyRegion(region, globals);
+    detail::lowerNativeReadyRegion(region, globals, addresses);
   if (coalesce && !preserveReadiness)
-    materializeReadyBatches(operation, globals);
+    materializeReadyBatches(operation, addresses);
   SmallVector<schedule::NativeReadyUpdateOp> updates;
   SmallVector<schedule::NativeTransitionOp> transitions;
   SmallVector<schedule::NativeReadyCommitOp> commits;
@@ -388,7 +386,8 @@ bool materializeLocalScheduleActions(
   }
   for (auto read : reads) {
     OpBuilder builder(read);
-    Value value = detail::loadOwnerWord(builder, read.getLoc(), read.getBase(),
+    Value value = detail::loadOwnerWord(builder, read.getLoc(),
+                                        addresses.get(read, read.getSetAttr()),
                                         read.getWord());
     if (auto owner = schedule::get<schedule::Field::EvalActivationEntry>(read))
       schedule::set<schedule::Field::EvalActivationEntry>(value.getDefiningOp(),
@@ -399,17 +398,18 @@ bool materializeLocalScheduleActions(
   for (auto update : updates) {
     OpBuilder builder(update);
     detail::EvalReadySetLayout layout(update.getCapacity());
-    detail::materializeEvalReadyWord(builder, update.getLoc(), update.getBase(),
-                                     layout, update.getWord(), update.getMask(),
-                                     update.getConsume());
+    detail::materializeEvalReadyWord(
+        builder, update.getLoc(), addresses.get(update, update.getSetAttr()),
+        layout, update.getWord(), update.getMask(), update.getConsume());
     update.erase();
   }
   for (auto commit : commits) {
     OpBuilder builder(commit);
     auto loc = commit.getLoc();
     detail::EvalReadySetLayout layout(commit.getCapacity());
+    Value base = addresses.get(commit, commit.getSetAttr());
     Value previous =
-        detail::loadOwnerWord(builder, loc, commit.getBase(), commit.getWord());
+        detail::loadOwnerWord(builder, loc, base, commit.getWord());
     Value inverse = builder.createOrFold<arith::XOrIOp>(
         loc, commit.getRemoveMask(),
         detail::llvmConstant(builder, loc, builder.getI64Type(), UINT64_MAX));
@@ -417,16 +417,15 @@ bool materializeLocalScheduleActions(
         builder.createOrFold<arith::AndIOp>(loc, previous, inverse);
     Value next =
         builder.createOrFold<arith::OrIOp>(loc, retained, commit.getAddMask());
-    LLVM::StoreOp::create(builder, loc, next,
-                          detail::ownerWordAddress(
-                              builder, loc, commit.getBase(), commit.getWord()),
-                          8);
-    detail::materializeEvalReadyIndexes(builder, loc, commit.getBase(), layout,
+    LLVM::StoreOp::create(
+        builder, loc, next,
+        detail::ownerWordAddress(builder, loc, base, commit.getWord()), 8);
+    detail::materializeEvalReadyIndexes(builder, loc, base, layout,
                                         commit.getWord(), commit.getAddMask());
     commit.erase();
   }
   for (auto merge : merges)
-    materializeReadyMerge(merge);
+    materializeReadyMerge(merge, addresses);
   for (auto transition : transitions) {
     OpBuilder builder(transition);
     auto call = LLVM::CallOp::create(

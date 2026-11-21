@@ -101,7 +101,9 @@ planNativeRankedGroups(ModuleOp module, const NativeEvalCoordinatorPlan &plan,
     bool safe = true;
     uint64_t cost = 0;
     function.walk([&](Operation *op) {
-      ++cost;
+      // A wake names its ready set; it stands for the set's address and the
+      // update, as its LLVM form computes the address at the wake.
+      cost += isa<schedule::NativeReadyUpdateOp>(op) ? 2 : 1;
       safe &=
           !isa_and_nonnull<runtime::TalosRuntimeDialect>(op->getDialect()) &&
           !isa<sim::SimCallOp, sim::SimStatusCheckOp, LLVM::CallOp,
@@ -512,8 +514,6 @@ materializeNativeRankedGroups(ModuleOp module,
         group, builder.getUnitAttr());
     Block *entry = group.addEntryBlock(builder);
     builder.setInsertionPointToStart(entry);
-    Value ready =
-        LLVM::AddressOfOp::create(builder, loc, pointer, evalModelIngressName);
     Value promotion = LLVM::AddressOfOp::create(
         builder, loc, pointer, "__talos_eval_promotion_pending_mask_v1");
     auto rawCall = [&](StringRef body, uint32_t owner) {
@@ -557,7 +557,8 @@ materializeNativeRankedGroups(ModuleOp module,
       uint32_t owner = node->owner;
       Value bit = llvmConstant(builder, loc, i64, uint64_t{1} << (owner % 64));
       Value ingress = schedule::NativeReadyReadOp::create(
-          builder, loc, i64, ready, readyLayout.capacity, owner / 64);
+          builder, loc, schedule::ReadySet::Ingress, readyLayout.capacity,
+          owner / 64);
       ::talos::schedule::set<::talos::schedule::Field::EvalActivationEntry>(
           ingress.getDefiningOp(), builder.getI32IntegerAttr(owner));
       Value dirty = arith::AndIOp::create(builder, loc, ingress, bit);
@@ -573,8 +574,8 @@ materializeNativeRankedGroups(ModuleOp module,
       // Consume before execution. Later members may republish this owner;
       // that backward work must survive the sweep (LRM 4.4--4.7). Self-reading
       // sources are excluded by the activation certificate.
-      updateEvalReadyWord(builder, loc, ready, readyLayout, owner / 64, bit,
-                          /*clear=*/true);
+      updateEvalReadyWord(builder, loc, schedule::ReadySet::Ingress,
+                          readyLayout, owner / 64, bit, /*clear=*/true);
       bool twoState =
           !node->twoStateBody.empty() && !plan.twoStateExecutors[owner].empty();
       Block *four = execute;
@@ -654,15 +655,14 @@ materializeNativeRankedGroups(ModuleOp module,
           candidate, builder.getUnitAttr());
       entry = candidate.addEntryBlock(builder);
       builder.setInsertionPointToStart(entry);
-      ready = LLVM::AddressOfOp::create(builder, loc, pointer,
-                                        evalModelIngressName);
       SmallVector<int32_t> unconditional;
       auto emitMember = [&](const NativeRankedEvalNode *node, bool speculate) {
         uint32_t owner = node->owner;
         Value bit =
             llvmConstant(builder, loc, i64, uint64_t{1} << (owner % 64));
         Value ingress = schedule::NativeReadyReadOp::create(
-            builder, loc, i64, ready, readyLayout.capacity, owner / 64);
+            builder, loc, schedule::ReadySet::Ingress, readyLayout.capacity,
+            owner / 64);
         ::talos::schedule::set<::talos::schedule::Field::EvalActivationEntry>(
             ingress.getDefiningOp(), builder.getI32IntegerAttr(owner));
         Value dirty = arith::AndIOp::create(builder, loc, ingress, bit);
@@ -698,8 +698,8 @@ materializeNativeRankedGroups(ModuleOp module,
         cf::CondBranchOp::create(builder, loc, active, execute, ValueRange{},
                                  next, ValueRange{});
         builder.setInsertionPointToStart(execute);
-        updateEvalReadyWord(builder, loc, ready, readyLayout, owner / 64, bit,
-                            /*clear=*/true);
+        updateEvalReadyWord(builder, loc, schedule::ReadySet::Ingress,
+                            readyLayout, owner / 64, bit, /*clear=*/true);
         if (canonicalTwoState) {
           // The canonical executor is already in the requested two-state
           // domain. Retain its barrier bookkeeping on the selected path.
@@ -722,7 +722,8 @@ materializeNativeRankedGroups(ModuleOp module,
           Value dirty;
           for (auto [word, mask] : masks) {
             Value readyWord = schedule::NativeReadyReadOp::create(
-                builder, loc, i64, ready, readyLayout.capacity, word);
+                builder, loc, schedule::ReadySet::Ingress, readyLayout.capacity,
+                word);
             Value bits = arith::AndIOp::create(
                 builder, loc, readyWord, llvmConstant(builder, loc, i64, mask));
             dirty =
@@ -884,9 +885,8 @@ unsigned elideUnconditionalMemberPublications(LLVM::LLVMFuncOp function) {
     // A held wake (an NBA-equivalent store's, see evalNBAHeldWakesName) to a
     // member that still runs later in this sweep is redundant as well: the
     // member reads the stored value there.
-    auto base = update.getBase().getDefiningOp<LLVM::AddressOfOp>();
-    if (!base || (base.getGlobalName() != ingress.getValue() &&
-                  base.getGlobalName() != evalNBAHeldWakesName))
+    if (update.getSet() != ingress.getValue() &&
+        update.getReadySet() != schedule::ReadySet::HeldWakes)
       return;
     std::optional<uint64_t> bits = constantBits(update.getMask());
     auto word = unconditional.find(update.getWord());

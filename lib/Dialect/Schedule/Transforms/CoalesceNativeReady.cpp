@@ -25,16 +25,11 @@ LLVM::GlobalOp NativeGlobalLookup::operator()(LLVM::AddressOfOp address) const {
       module->lookup(address.getGlobalNameAttr().getAttr()));
 }
 namespace {
-using Key = std::tuple<Value, SymbolRefAttr, uint64_t, uint64_t>;
-Key readyKey(NativeReadyUpdateOp update, const NativeGlobalLookup &globals) {
-  Value base = update.getBase();
-  SymbolRefAttr global;
-  if (auto address = base.getDefiningOp<LLVM::AddressOfOp>();
-      address && globals(address)) {
-    global = address.getGlobalNameAttr();
-    base = {};
-  }
-  return {base, global, update.getCapacity(), update.getWord()};
+// A pending leaf: its set, the set's capacity and the leaf word.
+using Key = std::tuple<StringAttr, uint64_t, uint64_t>;
+Key readyKey(NativeReadyUpdateOp update) {
+  return {update.getSetAttr().getAttr(), update.getCapacity(),
+          update.getWord()};
 }
 using Pending = llvm::DenseMap<Key, Operation *>;
 } // namespace
@@ -56,10 +51,7 @@ static void formReadyRegion(Operation *operation) {
     for (Operation &op : block) {
       if (op.getNumRegions())
         supported = false;
-      if (auto update = dyn_cast<NativeReadyUpdateOp>(op))
-        updates += bool(update.getBase().getDefiningOp<LLVM::AddressOfOp>());
-      if (auto commit = dyn_cast<NativeReadyCommitOp>(op))
-        updates += bool(commit.getBase().getDefiningOp<LLVM::AddressOfOp>());
+      updates += isa<NativeReadyUpdateOp, NativeReadyCommitOp>(op);
     }
     auto *end = block.getTerminator();
     if (end->hasTrait<OpTrait::ReturnLike>() &&
@@ -92,28 +84,22 @@ static void formReadyRegion(Operation *operation) {
     end->erase();
   }
 }
-/// Ready updates of one function and their symbol-resolved keys.
+/// Ready updates of one function.
 struct FunctionReadyUpdates {
   Operation *function = nullptr;
   SmallVector<NativeReadyUpdateOp> updates;
-  DenseMap<Operation *, Key> keys;
 };
-static FunctionReadyUpdates
-collectReadyUpdates(Operation *operation, const NativeGlobalLookup &globals) {
+static FunctionReadyUpdates collectReadyUpdates(Operation *operation) {
   FunctionReadyUpdates result;
   result.function = operation;
   operation->walk(
       [&](NativeReadyUpdateOp op) { result.updates.push_back(op); });
-  if (result.updates.size() >= 2)
-    for (auto update : result.updates)
-      result.keys.try_emplace(update, readyKey(update, globals));
   return result;
 }
 /// Rewrites only `input.function`, so distinct functions are independent.
 static void coalesceFunction(FunctionReadyUpdates &input) {
   Operation *operation = input.function;
   auto &updates = input.updates;
-  auto &keys = input.keys;
   if (updates.size() < 2)
     return;
   // A chain links an update only to the pending update of its key earlier in
@@ -134,18 +120,14 @@ static void coalesceFunction(FunctionReadyUpdates &input) {
           pending.clear();
         continue;
       }
-      auto key = keys.lookup(update);
-      auto [base, global, capacity, word] = key;
-      // Distinct globals cannot alias. Opaque pointers and inconsistent
-      // layouts require materialization rather than a guessed disjoint range.
-      if (llvm::any_of(pending, [&, &global = global, &base = base,
+      Key key = readyKey(update);
+      auto [set, capacity, word] = key;
+      // Distinct sets cannot alias. Inconsistent layouts of one set require
+      // materialization rather than a guessed disjoint range.
+      if (llvm::any_of(pending, [&, &set = set,
                                  &capacity = capacity](const auto &entry) {
-            auto [otherBase, otherGlobal, otherCapacity, otherWord] =
-                entry.first;
-            if (global && otherGlobal && global != otherGlobal)
-              return false;
-            return base != otherBase || global != otherGlobal ||
-                   capacity != otherCapacity;
+            auto [otherSet, otherCapacity, otherWord] = entry.first;
+            return set == otherSet && capacity != otherCapacity;
           }))
         pending.clear();
       if (Operation *previous = pending.lookup(key))
@@ -202,7 +184,7 @@ static void coalesceFunction(FunctionReadyUpdates &input) {
         add = builder.createOrFold<arith::OrIOp>(loc, add, op.getMask());
       }
     }
-    NativeReadyCommitOp::create(builder, loc, last.getBase(), remove, add,
+    NativeReadyCommitOp::create(builder, loc, last.getSetAttr(), remove, add,
                                 last.getCapacityAttr(), last.getWordAttr());
     for (auto op : chain)
       op.erase();
@@ -210,25 +192,19 @@ static void coalesceFunction(FunctionReadyUpdates &input) {
   formReadyRegion(operation);
 }
 void coalesceNativeReadyUpdates(Operation *operation) {
-  SymbolTableCollection symbols;
-  coalesceNativeReadyUpdates(operation, symbols);
-}
-void coalesceNativeReadyUpdates(Operation *operation,
-                                const NativeGlobalLookup &globals) {
   // Inventories are cheap; allocate solver state only for functions that
   // actually have executable ready actions, not millions of unrelated LLVM ops.
   if (isa<FunctionOpInterface>(operation)) {
-    FunctionReadyUpdates input = collectReadyUpdates(operation, globals);
+    FunctionReadyUpdates input = collectReadyUpdates(operation);
     return coalesceFunction(input);
   }
-  // Resolve keys serially with one symbol cache. Each function's chains and
-  // ready regions then stay inside its own body, so large generated bodies
-  // are solved concurrently.
+  // Each function's chains and ready regions stay inside its own body, so
+  // large generated bodies are solved concurrently.
   SmallVector<FunctionReadyUpdates> inputs;
   operation->walk([&](Operation *op) {
     if (!isa<FunctionOpInterface>(op))
       return;
-    FunctionReadyUpdates input = collectReadyUpdates(op, globals);
+    FunctionReadyUpdates input = collectReadyUpdates(op);
     if (input.updates.size() >= 2)
       inputs.push_back(std::move(input));
   });

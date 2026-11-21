@@ -2264,8 +2264,7 @@ FailureOr<bool> makeNativeEvalPlan(
     // first use) for an NBA-equivalent store. The held set has the ingress
     // layout, so a held publication is the same ready update and coalesces
     // the same way; its dirty bits tell the coordinator what to merge.
-    auto wakeBase = [&](OpBuilder &wakeBuilder, Location wakeLocation,
-                        bool held) -> Value {
+    auto wakeSet = [&](bool held) {
       if (held && !module.lookupSymbol(evalNBAHeldWakesName)) {
         OpBuilder globalBuilder = OpBuilder::atBlockBegin(module.getBody());
         Type type = LLVM::LLVMArrayType::get(i64, readyLayout.storageWords);
@@ -2279,17 +2278,14 @@ FailureOr<bool> makeNativeEvalPlan(
             initializerBuilder, location,
             LLVM::ZeroOp::create(initializerBuilder, location, type));
       }
-      return LLVM::AddressOfOp::create(wakeBuilder, wakeLocation, pointer,
-                                       held ? StringRef(evalNBAHeldWakesName)
-                                            : StringRef(evalModelIngressName));
+      return held ? schedule::ReadySet::HeldWakes : schedule::ReadySet::Ingress;
     };
     auto publishWake = [&](OpBuilder &wakeBuilder, Location wakeLocation,
-                           bool held, Value base, unsigned word,
-                           Value selected) {
+                           bool held, unsigned word, Value selected) {
       if (held)
         heldWords.insert(static_cast<int32_t>(word));
-      updateEvalReadyWord(wakeBuilder, wakeLocation, base, readyLayout, word,
-                          selected);
+      updateEvalReadyWord(wakeBuilder, wakeLocation, wakeSet(held), readyLayout,
+                          word, selected);
     };
     auto packedMask = [](uint64_t width) {
       return width >= 64 ? UINT64_MAX : (uint64_t{1} << width) - 1;
@@ -2461,7 +2457,6 @@ FailureOr<bool> makeNativeEvalPlan(
               constant(uint64_t{1} << (entry.merged_bit % 64)), constant(0));
           bool entryHeld = held && !sourceBits.contains(entry.merged_bit);
           publishWake(transitionBuilder, call.getLoc(), entryHeld,
-                      wakeBase(transitionBuilder, call.getLoc(), entryHeld),
                       entry.merged_bit / 64, selected);
         }
         if (!hasRuntimeOwnedObserver)
@@ -2614,14 +2609,12 @@ FailureOr<bool> makeNativeEvalPlan(
             transitionBuilder, call.getLoc(), arith::CmpIPredicate::ne,
             observed, llvmConstant(transitionBuilder, call.getLoc(), i64, 0));
         bool publicationHeld = held && !publication.toSource;
-        Value base =
-            wakeBase(transitionBuilder, call.getLoc(), publicationHeld);
         Value selected = arith::SelectOp::create(
             transitionBuilder, call.getLoc(), triggered,
             llvmConstant(transitionBuilder, call.getLoc(), i64,
                          uint64_t{1} << (publication.bit % 64)),
             llvmConstant(transitionBuilder, call.getLoc(), i64, 0));
-        publishWake(transitionBuilder, call.getLoc(), publicationHeld, base,
+        publishWake(transitionBuilder, call.getLoc(), publicationHeld,
                     publication.bit / 64, selected);
       }
       if (!hasRuntimeOwnedObserver)
@@ -4803,10 +4796,8 @@ FailureOr<bool> makeNativeEvalPlan(
         initialMask.setBit(mergedFragments[index].bit);
     }
     if (initialMask != 0) {
-      Value ingress = LLVM::AddressOfOp::create(builder, location, pointer,
-                                                evalModelIngressName);
-      updateOwnerMask(builder, location, ingress, initialMask,
-                      /*clear=*/false, {}, &readyLayout);
+      updateReadyMask(builder, location, schedule::ReadySet::Ingress,
+                      readyLayout, initialMask);
       // Re-establish combinational quiescence before the first generated
       // clock edge. The runtime cold prefix may end immediately after a
       // clocked reset continuation; deferring these level-sensitive owners
@@ -5140,10 +5131,8 @@ FailureOr<bool> makeNativeEvalPlan(
             arith::CmpIOp::create(builder, location, arith::CmpIPredicate::ne,
                                   selected,
                                   llvmConstant(builder, location, i64, 0)));
-        Value ingress = LLVM::AddressOfOp::create(builder, location, pointer,
-                                                  evalModelIngressName);
-        updateEvalReadyWord(builder, location, ingress, readyLayout, word,
-                            selected);
+        updateEvalReadyWord(builder, location, schedule::ReadySet::Ingress,
+                            readyLayout, word, selected);
       }
       const auto &[directRiseOwners, directFallOwners] =
           clockDirectMasks[clockIndex];
@@ -5166,10 +5155,8 @@ FailureOr<bool> makeNativeEvalPlan(
         // set so the callback's coordinator can finish that edge. Each owner
         // clears only its own bit after execution below; an SSA-only mask
         // silently drops the suffix when control leaves run_until.
-        Value ingress = LLVM::AddressOfOp::create(builder, location, pointer,
-                                                  evalModelIngressName);
-        updateEvalReadyWord(builder, location, ingress, readyLayout, word,
-                            selected);
+        updateEvalReadyWord(builder, location, schedule::ReadySet::Ingress,
+                            readyLayout, word, selected);
         hasIngress = arith::OrIOp::create(
             builder, location, hasIngress,
             arith::CmpIOp::create(builder, location, arith::CmpIPredicate::ne,
@@ -5286,11 +5273,9 @@ FailureOr<bool> makeNativeEvalPlan(
       // where the bitset coordinator would consume it. Consume it on a
       // checkpoint return as well: the queued callback owns that activation,
       // so retaining its ingress would replay it after the handoff.
-      Value ingress = LLVM::AddressOfOp::create(builder, location, pointer,
-                                                evalModelIngressName);
-      updateOwnerMask(builder, location, ingress,
-                      directOwnerConsumedMask(recordIndex), /*clear=*/true, {},
-                      &readyLayout);
+      updateReadyMask(builder, location, schedule::ReadySet::Ingress,
+                      readyLayout, directOwnerConsumedMask(recordIndex),
+                      /*clear=*/true);
     };
     // A shared proof is valid for coincident domains when every direct owner
     // has an inductive two-state body. Such a body cannot invalidate a later
@@ -7565,14 +7550,12 @@ FailureOr<bool> makeNativeEvalPlan(
     builder.setInsertionPointToStart(activated);
   }
   if (directActivationWordCount != 0 && !clockKernels.empty()) {
-    Value ingress = LLVM::AddressOfOp::create(builder, location, pointer,
-                                              evalModelIngressName);
     if (directActivationWordCount > runtime::ReadySetLayout::flatWordLimit) {
       // Publish at the same NBA barrier (IEEE 1800-2023 4.5, 4.6, 10.4.2),
       // without expanding a large pending set into a dense SSA index graph.
       schedule::NativeReadyMergeOp::create(
-          builder, location, ingress, activatedDirect,
-          builder.getI64IntegerAttr(readyLayout.capacity));
+          builder, location, schedule::ReadySet::Ingress, activatedDirect,
+          readyLayout.capacity);
     } else {
       Value any = llvmConstant(builder, location, builder.getI1Type(), 0);
       for (uint32_t word = 0; word != directActivationWordCount; ++word) {
@@ -7582,8 +7565,8 @@ FailureOr<bool> makeNativeEvalPlan(
                                          uint64_t{word} * sizeof(uint64_t)),
                                  8);
         Value selected = activated;
-        updateEvalReadyWord(builder, location, ingress, readyLayout, word,
-                            selected);
+        updateEvalReadyWord(builder, location, schedule::ReadySet::Ingress,
+                            readyLayout, word, selected);
         any = arith::OrIOp::create(
             builder, location, any,
             arith::CmpIOp::create(builder, location, arith::CmpIPredicate::ne,

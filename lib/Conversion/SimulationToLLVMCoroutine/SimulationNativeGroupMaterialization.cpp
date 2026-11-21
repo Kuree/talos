@@ -1636,10 +1636,7 @@ inlineGroupBody(LLVM::LLVMFuncOp function, const SymbolTable &symbols,
     } else {
       auto [found, inserted] = costs.try_emplace(callee, 0);
       if (inserted)
-        callee.walk([&, &found = found](Operation *operation) {
-          if (operation != callee.getOperation())
-            found->second += nativeOperationCost(operation);
-        });
+        found->second = nativeInlineCost(callee);
       cost = found->second;
     }
     if (!cost || cost > remaining)
@@ -1944,10 +1941,7 @@ GroupPlan planGroups(ModuleOp module, const SymbolTable &symbols) {
       stableDefinitions.push_back(function);
   SmallVector<uint64_t> stableCounts(stableDefinitions.size());
   parallelFor(module.getContext(), 0, stableDefinitions.size(), [&](size_t i) {
-    stableDefinitions[i].walk([&](Operation *operation) {
-      if (operation != stableDefinitions[i].getOperation())
-        stableCounts[i] += nativeOperationCost(operation);
-    });
+    stableCounts[i] = nativeInlineCost(stableDefinitions[i]);
   });
   for (auto [i, function] : llvm::enumerate(stableDefinitions))
     plan.stableCosts.try_emplace(function, stableCounts[i]);

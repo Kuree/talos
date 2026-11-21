@@ -22,12 +22,12 @@
 // replayed, and `z_consumer`'s pending edge stays in the ingress word for the
 // runtime's same-slot coordinator.
 // PLAN-LABEL: llvm.func @__talos_eval_dispatch_v1(
+// PLAN: %[[INGRESS:.*]] = llvm.mlir.addressof @__talos_aot_model_ingress_v1
 // PLAN: llvm.switch %{{.*}} : i64, ^{{bb[0-9]+}} [
 // PLAN-NEXT: 0: ^{{bb[0-9]+}},
 // PLAN-NEXT: 1: ^{{bb[0-9]+}}
 // PLAN: llvm.call @__talos_direct_fragment_2_5.__talos_execute(%arg1)
 // PLAN: ^{{bb[0-9]+}}(%[[REPORT_STATUS:.*]]: i32):
-// PLAN-NEXT: %[[INGRESS:.*]] = llvm.mlir.addressof @__talos_aot_model_ingress_v1
 // PLAN: %[[PENDING:.*]] = llvm.load %[[INGRESS]]
 // PLAN: %[[NOT_REPORT:.*]] = llvm.mlir.constant(-2 : i64)
 // PLAN-NEXT: %[[LEFT:.*]] = llvm.and %[[PENDING]], %[[NOT_REPORT]]
@@ -37,11 +37,10 @@
 // PLAN-NEXT: llvm.cond_br %[[CONTINUE]], ^{{bb[0-9]+}}, ^[[RETURN:bb[0-9]+]](%[[REPORT_STATUS]] : i32)
 // PLAN: llvm.call @__talos_direct_fragment_1_16.__talos_execute(%arg1)
 // PLAN: ^{{bb[0-9]+}}(%[[OWNER_STATUS:.*]]: i32):
-// PLAN-NEXT: %[[OWNER_INGRESS:.*]] = llvm.mlir.addressof @__talos_aot_model_ingress_v1
-// PLAN: %[[OWNER_PENDING:.*]] = llvm.load %[[OWNER_INGRESS]]
+// PLAN: %[[OWNER_PENDING:.*]] = llvm.load %[[INGRESS]]
 // PLAN: %[[NOT_OWNER:.*]] = llvm.mlir.constant(-3 : i64)
 // PLAN-NEXT: %[[OWNER_LEFT:.*]] = llvm.and %[[OWNER_PENDING]], %[[NOT_OWNER]]
-// PLAN-NEXT: llvm.store %[[OWNER_LEFT]], %[[OWNER_INGRESS]]
+// PLAN-NEXT: llvm.store %[[OWNER_LEFT]], %[[INGRESS]]
 // PLAN-NEXT: %[[OWNER_ZERO:.*]] = llvm.mlir.constant(0 : i32)
 // PLAN-NEXT: %[[OWNER_CONTINUE:.*]] = llvm.icmp "eq" %[[OWNER_STATUS]], %[[OWNER_ZERO]]
 // PLAN-NEXT: llvm.cond_br %[[OWNER_CONTINUE]], ^{{bb[0-9]+}}, ^[[RETURN]](%[[OWNER_STATUS]] : i32)

@@ -1,8 +1,9 @@
 // RUN: talos-opt %s --split-input-file --verify-diagnostics
 module {
-  llvm.func @bad(%base: !llvm.ptr) {
+  llvm.mlir.global external @__talos_aot_model_ingress_v1() : !llvm.array<2 x i64>
+  llvm.func @bad() {
     // expected-error @+1 {{ready word must name a leaf within capacity}}
-    %value = schedule.ready.read %base {capacity = 64 : i64, word = 1 : i64} : (!llvm.ptr) -> i64
+    %value = schedule.ready.read @__talos_aot_model_ingress_v1[1] {capacity = 64 : i64}
     llvm.return
   }
 }

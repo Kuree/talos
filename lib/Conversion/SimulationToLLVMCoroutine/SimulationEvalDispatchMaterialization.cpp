@@ -562,8 +562,8 @@ materializeNativeEvalDispatch(ModuleOp module,
     return clean;
   };
   auto clearIngressMask = [&](const APInt &mask, Value condition = Value{}) {
-    updateOwnerMask(builder, location, ingressAddress(), mask,
-                    /*clear=*/true, condition, &readyLayout);
+    updateReadyMask(builder, location, schedule::ReadySet::Ingress, readyLayout,
+                    mask, /*clear=*/true, condition);
   };
   cf::BranchOp::create(builder, location, dispatch);
   builder.setInsertionPointToStart(dispatch);
@@ -1133,9 +1133,8 @@ materializeNativeEvalDispatch(ModuleOp module,
       // Do not replay upstream producers after an internal VPI deposit (38.34).
       clearIngressMask(APInt::getOneBitSet(ownerCount, record.bit));
       if (!ownerSubsumptionMasks[recordIndex].isZero()) {
-        updateOwnerMask(builder, location, ingressAddress(),
-                        plan.ownerFineIngress[recordIndex], /*clear=*/false, {},
-                        &readyLayout);
+        updateReadyMask(builder, location, schedule::ReadySet::Ingress,
+                        readyLayout, plan.ownerFineIngress[recordIndex]);
         cf::BranchOp::create(builder, location, targets.dispatch);
       } else {
         LLVM::StoreOp::create(
@@ -1265,9 +1264,9 @@ materializeNativeEvalDispatch(ModuleOp module,
           builder, location, arith::CmpIPredicate::ne, queuedMembers,
           llvmConstant(builder, location, i64, 0));
       clearIngressMask(subsumedOwnerMask);
-      updateOwnerMask(builder, location, ingressAddress(),
-                      APInt::getOneBitSet(ownerCount, record.bit),
-                      /*clear=*/false, membersPending, &readyLayout);
+      updateReadyMask(builder, location, schedule::ReadySet::Ingress,
+                      readyLayout, APInt::getOneBitSet(ownerCount, record.bit),
+                      /*clear=*/false, membersPending);
     }
     Value executeOK = arith::CmpIOp::create(
         builder, location, arith::CmpIPredicate::eq, executeStatus,

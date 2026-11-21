@@ -16,16 +16,15 @@
 // LOWER-NOT: schedule.ready
 // LOWER-NOT: llvm.alloca
 module {
-  llvm.mlir.global internal @ready(dense<0> : tensor<3xi64>) : !llvm.array<3 x i64>
+  llvm.mlir.global internal @__talos_aot_model_ingress_v1(dense<0> : tensor<3xi64>) : !llvm.array<3 x i64>
   llvm.func @form(%early: i1) {
-    %base = llvm.mlir.addressof @ready : !llvm.ptr
     %one = arith.constant 1 : i64
     cf.cond_br %early, ^left, ^right
   ^left:
-    schedule.ready.update %base, %one {capacity = 128 : i64, word = 0 : i64, consume = false} : (!llvm.ptr, i64) -> ()
+    schedule.ready.update @__talos_aot_model_ingress_v1[0], %one {capacity = 128 : i64, consume = false}
     llvm.return
   ^right:
-    schedule.ready.update %base, %one {capacity = 128 : i64, word = 1 : i64, consume = false} : (!llvm.ptr, i64) -> ()
+    schedule.ready.update @__talos_aot_model_ingress_v1[1], %one {capacity = 128 : i64, consume = false}
     llvm.return
   }
 }
@@ -52,18 +51,17 @@ module {
 // RESULT-LOWER: ^[[EXIT]](%[[STATUS:.*]]: i32):
 // RESULT-LOWER-NEXT: llvm.return %[[STATUS]] : i32
 module {
-  llvm.mlir.global internal @ready(dense<0> : tensor<3xi64>) : !llvm.array<3 x i64>
+  llvm.mlir.global internal @__talos_aot_model_ingress_v1(dense<0> : tensor<3xi64>) : !llvm.array<3 x i64>
   llvm.func @status(%early: i1) -> i32 {
-    %base = llvm.mlir.addressof @ready : !llvm.ptr
     %one = arith.constant 1 : i64
     %ok = arith.constant 0 : i32
     %failed = arith.constant 1 : i32
     cf.cond_br %early, ^left, ^right
   ^left:
-    schedule.ready.update %base, %one {capacity = 128 : i64, word = 0 : i64, consume = false} : (!llvm.ptr, i64) -> ()
+    schedule.ready.update @__talos_aot_model_ingress_v1[0], %one {capacity = 128 : i64, consume = false}
     llvm.return %failed : i32
   ^right:
-    schedule.ready.update %base, %one {capacity = 128 : i64, word = 0 : i64, consume = false} : (!llvm.ptr, i64) -> ()
+    schedule.ready.update @__talos_aot_model_ingress_v1[0], %one {capacity = 128 : i64, consume = false}
     llvm.return %ok : i32
   }
 }
