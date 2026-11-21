@@ -1321,6 +1321,22 @@ LogicalResult declareNativeImports(ModuleOp module) {
       import(FlatSymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"));
       return;
     }
+    FlatSymbolRefAttr handlePlane;
+    if (auto load = dyn_cast<schedule::NativeStateLoadHandleOp>(operation))
+      handlePlane = load.getGlobalAttr();
+    else if (auto store =
+                 dyn_cast<schedule::NativeStateStoreHandleOp>(operation))
+      handlePlane = store.getGlobalAttr();
+    if (handlePlane) {
+      // A handle-addressed access passes its plane's address and the current
+      // context to its runtime entry; see lowerNativeStateHandleAccesses.
+      MLIRContext *context = operation->getContext();
+      import(handlePlane);
+      import(FlatSymbolRefAttr::get(context, "__talos_current_context"));
+      import(FlatSymbolRefAttr::get(
+          context, getNativeStateHandleAccessCallee(operation)));
+      return;
+    }
     import(reference);
   });
   OpBuilder builder(module.getContext());
@@ -2062,9 +2078,11 @@ LogicalResult NativePipelineAnalysis::materialize() {
       evalScheduler = false;
     }
   }
-  // A static NBA stage or handle chain the eval plan did not rewrite is a
-  // runtime call from here on, including to the legacy plan.
+  // A static NBA stage, handle-addressed state access or handle chain the
+  // eval plan did not rewrite is a runtime call from here on, including to
+  // the legacy plan.
   lowerNativeNBAStages(module);
+  lowerNativeStateHandleAccesses(module);
   lowerNativeHandleOps(module);
   if (useAOT && !evalScheduler &&
       failed(makeNativeAOTPlanLegacy(

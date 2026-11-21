@@ -1308,6 +1308,85 @@ def NativeHandleGuardOp : ScheduleNativeOp<"handle.guard", [Pure]> {
   let hasFolder = 1;
 }
 
+// Accesses of the state a stable handle names, for state native code cannot
+// address itself: a dynamic selection the compiler did not bound, an
+// automatic variable, or a root that a force or procedural continuous
+// assignment may hold. The runtime resolves the handle and chooses at run
+// time which image it reads or writes, so these stand for its calls and,
+// like them, have unknown memory effects. Each names the plane it accesses
+// by its global, like the other state operations, and moves `width` bits
+// through a byte buffer: little endian, ceil(width / 8) bytes, the padding
+// bits of the last byte zero. `state_bits` is the size of the design state.
+//
+// Native lowering creates them; once AOT planning has read the eval bodies'
+// accesses, they become the runtime calls.
+def NativeStateLoadHandleOp : ScheduleNativeOp<"state.load_handle", [
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let summary = "read the native state a stable handle names into a buffer";
+  let description = [{
+    Writes the `width` bits of the plane at the state `handle` names to the
+    buffer at `buffer`. A bit the handle does not name reads as X, the value
+    of an invalid index: every bit through the invalid handle, and the bits
+    of a selection outside its object (IEEE 1800-2023 7.4.5, 11.5.1). X is
+    0 in the value plane and 1 in the unknown plane. A two-state executable
+    reads 0 from the unknown plane.
+
+    It stands for the runtime's `talos_rt_v1_native_state_load_plane`.
+  }];
+  let arguments = (ins FlatSymbolRefAttr:$global, I64:$handle,
+                       LLVM_DefaultPointer:$buffer, I64Attr:$state_bits,
+                       I64Attr:$width);
+  let assemblyFormat = [{
+    $global `[` $handle `]` `into` $buffer attr-dict
+  }];
+  let builders = [OpBuilder<(ins "::talos::schedule::StatePlane":$plane,
+                                 "::mlir::Value":$handle,
+                                 "::mlir::Value":$buffer,
+                                 "uint64_t":$stateBits, "uint64_t":$width)>];
+  let extraClassDeclaration = [{
+    ::talos::schedule::StatePlane getPlane();
+  }];
+  let hasVerifier = 1;
+}
+
+def NativeStateStoreHandleOp : ScheduleNativeOp<"state.store_handle", [
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let summary = "write the native state a stable handle names from a buffer";
+  let description = [{
+    Writes the `width` bits of the buffer at `buffer` to the plane at the
+    state `handle` names, and sets the byte at `changed` to whether any of
+    them changed: one change for the whole write, as an event sees it
+    (IEEE 1800-2023 9.4.2). A bit the handle does not name is not written:
+    nothing through the invalid handle, and only the bits inside its object
+    of a selection partly outside it (7.4.5, 11.5.1). A bit that a force or
+    procedural continuous assignment holds keeps its value (10.6).
+    `continuous` marks a continuous assignment's contribution, which the
+    runtime also keeps for a later release (10.6.2). A two-state executable
+    writes nothing to the unknown plane.
+
+    It stands for the runtime's `talos_rt_v1_native_state_store_plane`, or
+    `talos_rt_v1_native_state_store_continuous_plane` with `continuous`.
+  }];
+  let arguments = (ins LLVM_DefaultPointer:$buffer, FlatSymbolRefAttr:$global,
+                       I64:$handle, LLVM_DefaultPointer:$changed,
+                       I64Attr:$state_bits, I64Attr:$width,
+                       UnitAttr:$continuous);
+  let assemblyFormat = [{
+    $buffer `,` $global `[` $handle `]` `changed` $changed
+    (`continuous` $continuous^)? attr-dict
+  }];
+  let builders = [OpBuilder<(ins "::mlir::Value":$buffer,
+                                 "::talos::schedule::StatePlane":$plane,
+                                 "::mlir::Value":$handle,
+                                 "::mlir::Value":$changed,
+                                 "uint64_t":$stateBits, "uint64_t":$width,
+                                 "bool":$continuous)>];
+  let extraClassDeclaration = [{
+    ::talos::schedule::StatePlane getPlane();
+  }];
+  let hasVerifier = 1;
+}
+
 def NativeByteAddressOp : ScheduleNativeOp<"bytes.address", [Pure]> {
   let summary = "immutable bytes awaiting executable reachability";
   let arguments = (ins StrAttr:$name, StrAttr:$value, I64Attr:$alignment);

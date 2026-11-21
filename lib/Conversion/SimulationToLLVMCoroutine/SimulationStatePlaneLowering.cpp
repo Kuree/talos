@@ -3,6 +3,7 @@
 #include "NativeHandleChain.h"
 #include "NativeStateAccess.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
+#include "talos/Conversion/SimulationToLLVMCoroutine.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleEnums.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
@@ -1408,5 +1409,66 @@ bool emitDirectDynamicPackedStore(
 }
 
 } // namespace detail
+
+StringRef getNativeStateHandleAccessCallee(Operation *access) {
+  if (isa<schedule::NativeStateLoadHandleOp>(access))
+    return "talos_rt_v1_native_state_load_plane";
+  return cast<schedule::NativeStateStoreHandleOp>(access).getContinuous()
+             ? "talos_rt_v1_native_state_store_continuous_plane"
+             : "talos_rt_v1_native_state_store_plane";
+}
+
+LLVM::CallOp lowerNativeStateHandleAccess(Operation *access) {
+  OpBuilder builder(access);
+  Location location = access->getLoc();
+  Type pointer = LLVM::LLVMPointerType::get(builder.getContext());
+  IntegerType i32 = builder.getI32Type();
+  IntegerType i64 = builder.getI64Type();
+  auto load = dyn_cast<schedule::NativeStateLoadHandleOp>(access);
+  auto store = dyn_cast<schedule::NativeStateStoreHandleOp>(access);
+  schedule::StatePlane plane = load ? load.getPlane() : store.getPlane();
+  bool unknown = plane == schedule::StatePlane::Unknown;
+  Value base = schedule::NativeStateAddressOp::create(builder, location, plane);
+  Value contextAddress = LLVM::AddressOfOp::create(builder, location, pointer,
+                                                   "__talos_current_context");
+  Value context =
+      LLVM::LoadOp::create(builder, location, pointer, contextAddress, 8);
+  SmallVector<Value, 8> arguments{
+      context,
+      base,
+      detail::llvmConstant(builder, location, i64,
+                           load ? load.getStateBits() : store.getStateBits()),
+      load ? load.getHandle() : store.getHandle(),
+      detail::llvmConstant(builder, location, i64,
+                           load ? load.getWidth() : store.getWidth()),
+      detail::llvmConstant(builder, location, i32, unknown)};
+  if (load) {
+    // A bit the handle does not name reads as X: 0 in the value plane and 1
+    // in the unknown plane (IEEE 1800-2023 7.4.5, 11.5.1).
+    arguments.push_back(detail::llvmConstant(builder, location, i32, unknown));
+    arguments.push_back(load.getBuffer());
+  } else {
+    arguments.push_back(store.getBuffer());
+    arguments.push_back(store.getChanged());
+  }
+  auto call = LLVM::CallOp::create(
+      builder, location, TypeRange{i32},
+      SymbolRefAttr::get(builder.getContext(),
+                         getNativeStateHandleAccessCallee(access)),
+      arguments);
+  access->erase();
+  return call;
+}
+
+void lowerNativeStateHandleAccesses(ModuleOp module) {
+  SmallVector<Operation *> accesses;
+  module.walk([&](Operation *op) {
+    if (isa<schedule::NativeStateLoadHandleOp,
+            schedule::NativeStateStoreHandleOp>(op))
+      accesses.push_back(op);
+  });
+  for (Operation *access : accesses)
+    lowerNativeStateHandleAccess(access);
+}
 
 } // namespace talos

@@ -414,6 +414,57 @@ LogicalResult NativeNBAStageOp::verify() {
   return success();
 }
 
+// A handle-addressed access names a canonical plane; the runtime keeps the
+// contribution planes itself.
+static LogicalResult verifyHandleAccess(Operation *op, StringRef global,
+                                        uint64_t width) {
+  if (failed(verifyStateAccess(op, global)))
+    return failure();
+  if (!isCanonicalStatePlane(*getStatePlaneOfGlobal(global)))
+    return op->emitOpError("names a contribution plane, which only the "
+                           "runtime accesses through a handle");
+  if (width == 0)
+    return op->emitOpError("moves no bits");
+  return success();
+}
+
+void NativeStateLoadHandleOp::build(OpBuilder &builder, OperationState &state,
+                                    StatePlane plane, Value handle,
+                                    Value buffer, uint64_t stateBits,
+                                    uint64_t width) {
+  build(builder, state, getStatePlaneGlobalName(plane), handle, buffer,
+        stateBits, width);
+}
+StatePlane NativeStateLoadHandleOp::getPlane() {
+  return *getStatePlaneOfGlobal(getGlobal());
+}
+LogicalResult NativeStateLoadHandleOp::verify() {
+  return verifyHandleAccess(*this, getGlobal(), getWidth());
+}
+LogicalResult
+NativeStateLoadHandleOp::verifySymbolUses(SymbolTableCollection &tables) {
+  return verifyStatePlaneUse(*this, getGlobalAttr(), tables);
+}
+
+void NativeStateStoreHandleOp::build(OpBuilder &builder, OperationState &state,
+                                     Value buffer, StatePlane plane,
+                                     Value handle, Value changed,
+                                     uint64_t stateBits, uint64_t width,
+                                     bool continuous) {
+  build(builder, state, buffer, getStatePlaneGlobalName(plane), handle, changed,
+        stateBits, width, continuous);
+}
+StatePlane NativeStateStoreHandleOp::getPlane() {
+  return *getStatePlaneOfGlobal(getGlobal());
+}
+LogicalResult NativeStateStoreHandleOp::verify() {
+  return verifyHandleAccess(*this, getGlobal(), getWidth());
+}
+LogicalResult
+NativeStateStoreHandleOp::verifySymbolUses(SymbolTableCollection &tables) {
+  return verifyStatePlaneUse(*this, getGlobalAttr(), tables);
+}
+
 OpFoldResult NativeHandleGuardOp::fold(FoldAdaptor adaptor) {
   // Fold as `arith.select %valid, %handle, %invalid` does for an
   // invalid-handle constant %invalid of its own.

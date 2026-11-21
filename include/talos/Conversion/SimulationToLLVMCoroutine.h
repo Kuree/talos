@@ -19,6 +19,7 @@ class RewritePatternSet;
 class Operation;
 class SymbolTableCollection;
 namespace LLVM {
+class CallOp;
 class LLVMFuncOp;
 } // namespace LLVM
 } // namespace mlir
@@ -82,6 +83,19 @@ void declareNativeFunctionActionRuntime(
 /// pipeline calls it inside AOT planning, after the last reader of the typed
 /// handle chains, so later passes see only the runtime form.
 void lowerNativeHandleOps(mlir::ModuleOp module);
+
+/// The runtime entry a handle-addressed state access
+/// (schedule.state.load_handle or schedule.state.store_handle) stands for.
+llvm::StringRef getNativeStateHandleAccessCallee(mlir::Operation *access);
+
+/// Replace a handle-addressed state access by the call of the runtime entry
+/// it stands for, on its plane's address and the current context, and return
+/// the call.
+mlir::LLVM::CallOp lowerNativeStateHandleAccess(mlir::Operation *access);
+/// Lower every handle-addressed state access in `module`. The native pipeline
+/// calls it inside AOT planning, after the eval bodies' accesses are read, so
+/// later passes see only the runtime calls.
+void lowerNativeStateHandleAccesses(mlir::ModuleOp module);
 
 /// Address each native state plane through one invariant base per function
 /// that accesses it in several blocks, instead of constant offsets from the

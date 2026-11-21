@@ -8,8 +8,8 @@
 // chain deeper than any hand-written input, constant-trip loops unroll into
 // straight-line code, and marked operations replicate into many processes,
 // so scale tests keep a small input instead of a generated one. Typed
-// stable-handle operations lower on their own, so their runtime form is
-// tested without a whole native pipeline.
+// stable-handle operations and handle-addressed state accesses lower on their
+// own, so their runtime form is tested without a whole native pipeline.
 //
 //===----------------------------------------------------------------------===//
 
@@ -727,6 +727,27 @@ public:
   }
   void runOnOperation() final { talos::lowerNativeHandleOps(getOperation()); }
 };
+
+class LowerNativeStateHandleAccessesTestPass
+    : public PassWrapper<LowerNativeStateHandleAccessesTestPass,
+                         OperationPass<ModuleOp>> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(
+      LowerNativeStateHandleAccessesTestPass)
+
+  StringRef getArgument() const final {
+    return "test-talos-lower-native-state-handle-accesses";
+  }
+  StringRef getDescription() const final {
+    return "lower handle-addressed state accesses to their runtime calls";
+  }
+  void getDependentDialects(DialectRegistry &registry) const final {
+    registry.insert<LLVM::LLVMDialect>();
+  }
+  void runOnOperation() final {
+    talos::lowerNativeStateHandleAccesses(getOperation());
+  }
+};
 } // namespace
 
 namespace talos {
@@ -739,5 +760,6 @@ void registerModuleTestPasses() {
   PassRegistration<UnrollLoopsTestPass>();
   PassRegistration<ReplicateTestPass>();
   PassRegistration<LowerNativeHandleOpsTestPass>();
+  PassRegistration<LowerNativeStateHandleAccessesTestPass>();
 }
 } // namespace talos

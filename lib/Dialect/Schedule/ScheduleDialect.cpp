@@ -37,14 +37,15 @@ struct ReadyInlinerInterface final : DialectInlinerInterface {
     // are formed after body inlining; other schedule actions retain their
     // existing callable/activation restrictions.
     // State-plane, NBA accumulator and NBA index accesses are plain memory
-    // accesses.
+    // accesses; an NBA stage and a handle-addressed access inline like the
+    // runtime calls they stand for.
     return isa<NativeReadyReadOp, NativeReadyUpdateOp, NativeReadyCommitOp,
                NativeReadyMergeOp, NativeStateAddressOp,
                NativeStateWindowAddressOp, NativeStateLoadOp,
                NativeStateStoreOp, NativeNBAAccumulatorAddressOp,
                NativeNBAAccumulatorLoadOp, NativeNBAAccumulatorStoreOp,
-               NativeNBAIndexLoadOp, NativeNBAIndexStoreOp, NativeNBAStageOp>(
-        op);
+               NativeNBAIndexLoadOp, NativeNBAIndexStoreOp, NativeNBAStageOp,
+               NativeStateLoadHandleOp, NativeStateStoreHandleOp>(op);
   }
 };
 } // namespace

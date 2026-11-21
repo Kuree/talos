@@ -915,7 +915,8 @@ materializeGenericNBAQueueWindows(ModuleOp module,
     // Recheck authority at each original query in such a body.
     WalkResult window = function.walk([&](Operation *op) {
       if (isa<LLVM::CallOp, schedule::NativeNBAStageOp,
-              schedule::NativeHandleOffsetOp>(op))
+              schedule::NativeHandleOffsetOp, schedule::NativeStateLoadHandleOp,
+              schedule::NativeStateStoreHandleOp>(op))
         return hasNativeRuntimeEffect(op, native_runtime::QueueStable)
                    ? WalkResult::advance()
                    : WalkResult::interrupt();
@@ -1078,6 +1079,78 @@ static void normalizeGeneratedWideTransitions(
       call.erase();
   }
 }
+
+namespace {
+/// A runtime read of the state a stable handle names, in a generated eval
+/// body: schedule.state.load_handle, or the call of
+/// talos_rt_v1_native_state_load_plane it stands for.
+struct DynamicPlaneLoad {
+  Operation *access;
+  Value handle;
+  /// The buffer the read writes.
+  Value buffer;
+  /// The plane's address the call passes; the typed access names its plane.
+  Value base;
+  schedule::StatePlane plane;
+  uint64_t stateBits;
+  uint64_t width;
+  /// The value of a bit the handle does not name.
+  bool fallback;
+
+  static FailureOr<DynamicPlaneLoad> get(Operation *access) {
+    if (auto load = dyn_cast<schedule::NativeStateLoadHandleOp>(access))
+      return DynamicPlaneLoad{
+          access,           load.getHandle(),
+          load.getBuffer(), Value(),
+          load.getPlane(),  load.getStateBits(),
+          load.getWidth(),  load.getPlane() == schedule::StatePlane::Unknown};
+    auto call = cast<LLVM::CallOp>(access);
+    ValueRange arguments = call.getArgOperands();
+    if (arguments.size() != 8)
+      return call.emitError("malformed native state load ABI"), failure();
+    std::optional<uint64_t> stateBits = constantU64(arguments[2]);
+    std::optional<uint64_t> width = constantU64(arguments[4]);
+    std::optional<uint64_t> unknownPlane = constantU64(arguments[5]);
+    std::optional<uint64_t> fallback = constantU64(arguments[6]);
+    if (!stateBits || !width || *width == 0 || !unknownPlane ||
+        *unknownPlane > 1 || !fallback || *fallback > 1)
+      return call.emitError(
+                 "runtime-free eval cannot lower dynamic state load"),
+             failure();
+    return DynamicPlaneLoad{access,
+                            arguments[3],
+                            arguments[7],
+                            arguments[1],
+                            *unknownPlane ? schedule::StatePlane::Unknown
+                                          : schedule::StatePlane::Value,
+                            *stateBits,
+                            *width,
+                            *fallback != 0};
+  }
+
+  /// Replace the read by `value`, which `builder` stores to its buffer. The
+  /// read is erased.
+  LogicalResult replace(OpBuilder &builder, Value value) {
+    auto call = dyn_cast<LLVM::CallOp>(access);
+    Type i32 = builder.getI32Type();
+    if (call &&
+        (call.getNumResults() != 1 || call.getResult().getType() != i32))
+      return call.emitError("unsupported native state load status ABI"),
+             failure();
+    LLVM::StoreOp::create(builder, access->getLoc(), value, buffer, 1);
+    // TEMPORARY (F4 step 3b removes it): the body keeps the call's ABI
+    // values, now dead, until native function cleanup, and op-count budgets
+    // on the way count them (ranked groups' bodyCost). Leave the same ones.
+    if (!call)
+      call = lowerNativeStateHandleAccess(access);
+    OpBuilder status(call);
+    call.getResult().replaceAllUsesWith(
+        llvmConstant(status, call.getLoc(), i32, TALOS_RT_OK));
+    call.erase();
+    return success();
+  }
+};
+} // namespace
 
 FailureOr<bool> makeNativeEvalPlan(
     ModuleOp module, const llvm::DataLayout &dataLayout, uint32_t actorCount,
@@ -3432,55 +3505,45 @@ FailureOr<bool> makeNativeEvalPlan(
     // root. Keep the dynamic subscript, its source-language validity guard,
     // and the root bounds check, but do not re-enter the runtime for each
     // register-file read.
-    SmallVector<std::pair<LLVM::CallOp, bool>> dynamicPlaneLoads;
+    SmallVector<std::pair<Operation *, bool>> dynamicPlaneLoads;
     ::talos::detail::walkNativeFunctions<sim::SimFuncOp>(
         module, [&](sim::SimFuncOp function) {
           if (!isGeneratedEvalBody(function, selectedRawBodies))
             return;
           bool twoState = ::talos::schedule::has<
               ::talos::schedule::Field::EvalSelectedTwoState>(function);
-          function.walk([&](LLVM::CallOp call) {
-            if (call.getCallee() &&
-                *call.getCallee() == "talos_rt_v1_native_state_load_plane")
-              dynamicPlaneLoads.push_back({call, twoState});
+          function.walk([&](Operation *op) {
+            auto call = dyn_cast<LLVM::CallOp>(op);
+            if (isa<schedule::NativeStateLoadHandleOp>(op) ||
+                (call && call.getCallee() &&
+                 *call.getCallee() == "talos_rt_v1_native_state_load_plane"))
+              dynamicPlaneLoads.push_back({op, twoState});
           });
         });
-    for (auto [call, twoState] : dynamicPlaneLoads) {
-      ValueRange arguments = call.getArgOperands();
-      if (arguments.size() != 8)
-        return call.emitError("malformed native state load ABI"), failure();
-      std::optional<uint64_t> stateBits = constantU64(arguments[2]);
-      std::optional<uint64_t> width = constantU64(arguments[4]);
-      std::optional<uint64_t> unknownPlane = constantU64(arguments[5]);
-      std::optional<uint64_t> fallback = constantU64(arguments[6]);
+    for (auto [access, twoState] : dynamicPlaneLoads) {
+      FailureOr<DynamicPlaneLoad> load = DynamicPlaneLoad::get(access);
+      if (failed(load))
+        return failure();
       // The selection below is integer arithmetic of the field's own width, so
       // a field wider than a machine word lowers the same way.
-      if (!stateBits || *stateBits != stateLayout.bitCount || !width ||
-          *width == 0 || !unknownPlane || *unknownPlane > 1 || !fallback ||
-          *fallback > 1)
-        return call.emitError(
+      if (load->stateBits != stateLayout.bitCount)
+        return access->emitError(
                    "runtime-free eval cannot lower dynamic state load"),
                failure();
+      const uint64_t width = load->width;
+      const bool unknownPlane = load->plane == schedule::StatePlane::Unknown;
 
-      Value handle = arguments[3];
+      Value handle = load->handle;
       // Incoming handles in a CFG join may only become constants after the
       // state-access conversion has completed. Retry the same finite-handle
       // proof here, under the generated evaluator's clean-state handover.
-      OpBuilder selectedBuilder(call);
+      OpBuilder selectedBuilder(access);
       if (Value selected = tryLoadSelectedStaticStatePlane(
-              selectedBuilder, call.getLoc(), handle,
-              selectedBuilder.getIntegerType(*width),
-              *unknownPlane ? schedule::StatePlane::Unknown
-                            : schedule::StatePlane::Value,
-              &stateLayout, true, twoState && *unknownPlane)) {
-        if (call.getNumResults() != 1 || call.getResult().getType() != i32)
-          return call.emitError("unsupported native state load status ABI"),
-                 failure();
-        LLVM::StoreOp::create(selectedBuilder, call.getLoc(), selected,
-                              arguments[7], 1);
-        call.getResult().replaceAllUsesWith(
-            llvmConstant(selectedBuilder, call.getLoc(), i32, TALOS_RT_OK));
-        call.erase();
+              selectedBuilder, access->getLoc(), handle,
+              selectedBuilder.getIntegerType(width), load->plane, &stateLayout,
+              true, twoState && unknownPlane)) {
+        if (failed(load->replace(selectedBuilder, selected)))
+          return failure();
         continue;
       }
       Value sourceValid;
@@ -3491,11 +3554,11 @@ FailureOr<bool> makeNativeEvalPlan(
         handle = guard->handle;
       } else if (isa_and_nonnull<arith::SelectOp, LLVM::SelectOp>(
                      handleSelect)) {
-        return call.emitError(
+        return access->emitError(
                    "dynamic state handle has no invalid-handle guard"),
                failure();
       }
-      auto owner = call->getParentOfType<sim::SimFuncOp>();
+      auto owner = access->getParentOfType<sim::SimFuncOp>();
       // Local references, including slices with a handle-offset operation,
       // may survive here only in the retained cold callback copy. Route
       // materialization fractures checkpoint paths afterwards, and the closed
@@ -3527,9 +3590,9 @@ FailureOr<bool> makeNativeEvalPlan(
         if (native::has<native::DebugTiming>(module)) {
           llvm::errs() << "eval load rejection: function="
                        << (owner ? owner.getSymName() : StringRef("?"))
-                       << " width=" << *width << '\n';
+                       << " width=" << width << '\n';
         }
-        return call.emitError(
+        return access->emitError(
                    "dynamic state load has no fixed-root handle offset"),
                failure();
       }
@@ -3539,27 +3602,27 @@ FailureOr<bool> makeNativeEvalPlan(
       // level's invalid-index guard; each guard selects the invalid-handle
       // sentinel whose read yields the IEEE 1800-2023 11.5.1 out-of-range
       // value.
-      OpBuilder chainBuilder(call);
+      OpBuilder chainBuilder(access);
       // SSA forwarding can expose a fixed handle after state-access lowering
       // has already emitted the general ABI. It is the zero-offset case of
       // the same certified root, independent of its original CFG position.
       Value chainBase = hasOffset ? handleOffset->handle : handle;
       Value dynamicOffset =
           hasOffset ? handleOffset->amount
-                    : llvmConstant(chainBuilder, call.getLoc(), i64, 0);
+                    : llvmConstant(chainBuilder, access->getLoc(), i64, 0);
       bool chainedOffsets = false;
-      auto requireValid = [&, &call = call](Value guard) {
-        sourceValid = sourceValid
-                          ? arith::AndIOp::create(chainBuilder, call.getLoc(),
-                                                  sourceValid, guard)
-                                .getResult()
-                          : guard;
+      auto requireValid = [&, &access = access](Value guard) {
+        sourceValid =
+            sourceValid ? arith::AndIOp::create(chainBuilder, access->getLoc(),
+                                                sourceValid, guard)
+                              .getResult()
+                        : guard;
       };
       NativeHandleChain chain = getNativeHandleChain(chainBase);
       for (const NativeHandleLink &link : chain.links) {
         if (const auto *inner = std::get_if<NativeHandleOffset>(&link)) {
           chainedOffsets = true;
-          dynamicOffset = arith::AddIOp::create(chainBuilder, call.getLoc(),
+          dynamicOffset = arith::AddIOp::create(chainBuilder, access->getLoc(),
                                                 inner->amount, dynamicOffset);
           continue;
         }
@@ -3575,20 +3638,11 @@ FailureOr<bool> makeNativeEvalPlan(
       if (hasOffset && !chainedOffsets && !sourceValid && projectedOffset &&
           *projectedOffset <= uint64_t{INT32_MAX}) {
         if (Value selected = tryLoadSelectedStaticStatePlane(
-                chainBuilder, call.getLoc(), chainBase,
-                chainBuilder.getIntegerType(*width),
-                *unknownPlane ? schedule::StatePlane::Unknown
-                              : schedule::StatePlane::Value,
-                &stateLayout, true, twoState && *unknownPlane, {},
-                *projectedOffset)) {
-          if (call.getNumResults() != 1 || call.getResult().getType() != i32)
-            return call.emitError("unsupported native state load status ABI"),
-                   failure();
-          LLVM::StoreOp::create(chainBuilder, call.getLoc(), selected,
-                                arguments[7], 1);
-          call.getResult().replaceAllUsesWith(
-              llvmConstant(chainBuilder, call.getLoc(), i32, TALOS_RT_OK));
-          call.erase();
+                chainBuilder, access->getLoc(), chainBase,
+                chainBuilder.getIntegerType(width), load->plane, &stateLayout,
+                true, twoState && unknownPlane, {}, *projectedOffset)) {
+          if (failed(load->replace(chainBuilder, selected)))
+            return failure();
           if (handleOffset->op->use_empty())
             handleOffset->op->erase();
           continue;
@@ -3603,12 +3657,12 @@ FailureOr<bool> makeNativeEvalPlan(
            !stateLayout.guardedHandles.contains(decoded.id))) {
         if (deferColdReference)
           continue;
-        auto diagnostic = call.emitError(
+        auto diagnostic = access->emitError(
             "dynamic state load root is not direct-state certified");
         if (native::has<native::DebugTiming>(module)) {
-          diagnostic.attachNote(call.getLoc())
+          diagnostic.attachNote(access->getLoc())
               << "evaluator " << (owner ? owner.getSymName() : StringRef("?"))
-              << ", width " << *width << ", root " << chainBase;
+              << ", width " << width << ", root " << chainBase;
           if (auto argument = dyn_cast<BlockArgument>(chainBase)) {
             unsigned shown = 0;
             for (BlockOperand &use : argument.getOwner()->getUses()) {
@@ -3626,159 +3680,151 @@ FailureOr<bool> makeNativeEvalPlan(
         return failure();
       }
       const auto *bound = stateLayout.findBound(decoded.id);
-      if (!bound || *width > bound->width || decoded.offset < 0 ||
-          static_cast<uint64_t>(decoded.offset) > bound->width - *width)
-        return call.emitError("dynamic state load root is out of bounds"),
+      if (!bound || width > bound->width || decoded.offset < 0 ||
+          static_cast<uint64_t>(decoded.offset) > bound->width - width)
+        return access->emitError("dynamic state load root is out of bounds"),
                failure();
 
-      OpBuilder loadBuilder(call);
+      OpBuilder loadBuilder(access);
+      Location loc = access->getLoc();
       // IEEE 1800-2017 11.5.1 preserves every in-range bit of a partially
       // overhanging packed select and supplies the ordinary invalid-index
       // value only for the remainder.  Accept any overlap here, clamp the
       // physical load into the root, then align and mask it back into the
       // source-language result coordinates.
-      int64_t lowerOverlap = -decoded.offset - static_cast<int64_t>(*width - 1);
+      int64_t lowerOverlap = -decoded.offset - static_cast<int64_t>(width - 1);
       int64_t upperOverlap =
           static_cast<int64_t>(bound->width - 1) - decoded.offset;
-      Value lower = llvmConstant(loadBuilder, call.getLoc(), i64, lowerOverlap);
-      Value upper = llvmConstant(loadBuilder, call.getLoc(), i64, upperOverlap);
-      Value inLower = arith::CmpIOp::create(loadBuilder, call.getLoc(),
-                                            arith::CmpIPredicate::sge,
-                                            dynamicOffset, lower);
-      Value inUpper = arith::CmpIOp::create(loadBuilder, call.getLoc(),
-                                            arith::CmpIPredicate::sle,
-                                            dynamicOffset, upper);
+      Value lower = llvmConstant(loadBuilder, loc, i64, lowerOverlap);
+      Value upper = llvmConstant(loadBuilder, loc, i64, upperOverlap);
+      Value inLower = arith::CmpIOp::create(
+          loadBuilder, loc, arith::CmpIPredicate::sge, dynamicOffset, lower);
+      Value inUpper = arith::CmpIOp::create(
+          loadBuilder, loc, arith::CmpIPredicate::sle, dynamicOffset, upper);
       Value overlaps =
-          arith::AndIOp::create(loadBuilder, call.getLoc(), inLower, inUpper);
+          arith::AndIOp::create(loadBuilder, loc, inLower, inUpper);
       if (sourceValid)
-        overlaps = arith::AndIOp::create(loadBuilder, call.getLoc(),
-                                         sourceValid, overlaps);
+        overlaps =
+            arith::AndIOp::create(loadBuilder, loc, sourceValid, overlaps);
       // Select a safe coordinate before the load itself: LLVM select is not a
       // control dependency and an invalid source index must never form an
       // out-of-plane speculative address.
       Value safeDynamic = arith::SelectOp::create(
-          loadBuilder, call.getLoc(), overlaps, dynamicOffset,
-          llvmConstant(loadBuilder, call.getLoc(), i64, -decoded.offset));
+          loadBuilder, loc, overlaps, dynamicOffset,
+          llvmConstant(loadBuilder, loc, i64, -decoded.offset));
       Value requestedStart = arith::AddIOp::create(
-          loadBuilder, call.getLoc(), safeDynamic,
-          llvmConstant(loadBuilder, call.getLoc(), i64, decoded.offset));
-      Value zero64 = llvmConstant(loadBuilder, call.getLoc(), i64, 0);
+          loadBuilder, loc, safeDynamic,
+          llvmConstant(loadBuilder, loc, i64, decoded.offset));
+      Value zero64 = llvmConstant(loadBuilder, loc, i64, 0);
       Value maximumStart =
-          llvmConstant(loadBuilder, call.getLoc(), i64, bound->width - *width);
-      Value below = arith::CmpIOp::create(loadBuilder, call.getLoc(),
-                                          arith::CmpIPredicate::slt,
-                                          requestedStart, zero64);
-      Value above = arith::CmpIOp::create(loadBuilder, call.getLoc(),
-                                          arith::CmpIPredicate::sgt,
-                                          requestedStart, maximumStart);
-      Value clampedLow = arith::SelectOp::create(loadBuilder, call.getLoc(),
-                                                 below, zero64, requestedStart);
-      Value clampedStart = arith::SelectOp::create(
-          loadBuilder, call.getLoc(), above, maximumStart, clampedLow);
+          llvmConstant(loadBuilder, loc, i64, bound->width - width);
+      Value below = arith::CmpIOp::create(
+          loadBuilder, loc, arith::CmpIPredicate::slt, requestedStart, zero64);
+      Value above =
+          arith::CmpIOp::create(loadBuilder, loc, arith::CmpIPredicate::sgt,
+                                requestedStart, maximumStart);
+      Value clampedLow = arith::SelectOp::create(loadBuilder, loc, below,
+                                                 zero64, requestedStart);
+      Value clampedStart = arith::SelectOp::create(loadBuilder, loc, above,
+                                                   maximumStart, clampedLow);
       Value sourceBit = arith::AddIOp::create(
-          loadBuilder, call.getLoc(), clampedStart,
-          llvmConstant(loadBuilder, call.getLoc(), i64, bound->offset));
-      IntegerType resultType = IntegerType::get(context, *width);
+          loadBuilder, loc, clampedStart,
+          llvmConstant(loadBuilder, loc, i64, bound->offset));
+      IntegerType resultType = IntegerType::get(context, width);
       Value loaded;
-      if (twoState && *unknownPlane) {
+      if (twoState && unknownPlane) {
         // The two-state handover certifies that every live canonical unknown
         // bit is zero.  Its generated body therefore omits unknown-plane
         // traffic, but an invalid source-language index must still select the
         // ABI fallback below (all ones for a four-state integral result).
         loaded = arith::ConstantOp::create(
-            loadBuilder, call.getLoc(), resultType,
+            loadBuilder, loc, resultType,
             loadBuilder.getIntegerAttr(resultType, 0));
       } else {
-        Value byteOffset = arith::ShRUIOp::create(
-            loadBuilder, call.getLoc(), sourceBit,
-            llvmConstant(loadBuilder, call.getLoc(), i64, 3));
-        Value bitOffset = arith::AndIOp::create(
-            loadBuilder, call.getLoc(), sourceBit,
-            llvmConstant(loadBuilder, call.getLoc(), i64, 7));
-        unsigned spanWidth = static_cast<unsigned>(((*width + 14) / 8) * 8);
+        Value byteOffset =
+            arith::ShRUIOp::create(loadBuilder, loc, sourceBit,
+                                   llvmConstant(loadBuilder, loc, i64, 3));
+        Value bitOffset =
+            arith::AndIOp::create(loadBuilder, loc, sourceBit,
+                                  llvmConstant(loadBuilder, loc, i64, 7));
+        unsigned spanWidth = static_cast<unsigned>(((width + 14) / 8) * 8);
         IntegerType spanType = IntegerType::get(context, spanWidth);
-        // The call's plane argument is the plane's typed base.
-        Value span = detail::createLoadAt(loadBuilder, call.getLoc(), spanType,
-                                          arguments[1], byteOffset, 0, 1);
+        // The call's plane argument is the plane's typed base; the typed
+        // access names its plane.
+        Value span =
+            load->base
+                ? detail::createLoadAt(loadBuilder, loc, spanType, load->base,
+                                       byteOffset, 0, 1)
+                : schedule::NativeStateLoadOp::create(
+                      loadBuilder, loc, spanType, load->plane, byteOffset, 0, 1)
+                      .getResult();
         Value shift =
-            spanWidth < 64 ? LLVM::TruncOp::create(loadBuilder, call.getLoc(),
-                                                   spanType, bitOffset)
-                                 .getResult()
-            : spanWidth == 64 ? bitOffset
-                              : LLVM::ZExtOp::create(loadBuilder, call.getLoc(),
-                                                     spanType, bitOffset)
-                                    .getResult();
-        Value shifted =
-            arith::ShRUIOp::create(loadBuilder, call.getLoc(), span, shift);
-        loaded = spanWidth == *width
-                     ? shifted
-                     : LLVM::TruncOp::create(loadBuilder, call.getLoc(),
-                                             resultType, shifted)
-                           .getResult();
+            spanWidth < 64
+                ? LLVM::TruncOp::create(loadBuilder, loc, spanType, bitOffset)
+                      .getResult()
+            : spanWidth == 64
+                ? bitOffset
+                : LLVM::ZExtOp::create(loadBuilder, loc, spanType, bitOffset)
+                      .getResult();
+        Value shifted = arith::ShRUIOp::create(loadBuilder, loc, span, shift);
+        loaded = spanWidth == width ? shifted
+                                    : LLVM::TruncOp::create(loadBuilder, loc,
+                                                            resultType, shifted)
+                                          .getResult();
       }
       APInt fallbackBits =
-          *fallback ? APInt::getAllOnes(*width) : APInt::getZero(*width);
+          load->fallback ? APInt::getAllOnes(width) : APInt::getZero(width);
       Value lowClip = arith::SelectOp::create(
-          loadBuilder, call.getLoc(), below,
-          arith::SubIOp::create(loadBuilder, call.getLoc(), zero64,
-                                requestedStart),
+          loadBuilder, loc, below,
+          arith::SubIOp::create(loadBuilder, loc, zero64, requestedStart),
           zero64);
       Value highClip = arith::SelectOp::create(
-          loadBuilder, call.getLoc(), above,
-          arith::SubIOp::create(loadBuilder, call.getLoc(), requestedStart,
-                                maximumStart),
+          loadBuilder, loc, above,
+          arith::SubIOp::create(loadBuilder, loc, requestedStart, maximumStart),
           zero64);
-      auto resultShift = [&, &call = call](Value shift) -> Value {
-        if (*width == 64)
+      auto resultShift = [&](Value shift) -> Value {
+        if (width == 64)
           return shift;
-        if (*width < 64)
-          return LLVM::TruncOp::create(loadBuilder, call.getLoc(), resultType,
-                                       shift)
+        if (width < 64)
+          return LLVM::TruncOp::create(loadBuilder, loc, resultType, shift)
               .getResult();
-        return LLVM::ZExtOp::create(loadBuilder, call.getLoc(), resultType,
-                                    shift)
+        return LLVM::ZExtOp::create(loadBuilder, loc, resultType, shift)
             .getResult();
       };
       Value lowShift = resultShift(lowClip);
       Value highShift = resultShift(highClip);
-      loaded =
-          arith::ShLIOp::create(loadBuilder, call.getLoc(), loaded, lowShift);
-      loaded =
-          arith::ShRUIOp::create(loadBuilder, call.getLoc(), loaded, highShift);
+      loaded = arith::ShLIOp::create(loadBuilder, loc, loaded, lowShift);
+      loaded = arith::ShRUIOp::create(loadBuilder, loc, loaded, highShift);
       Value widthMask = arith::ConstantOp::create(
-          loadBuilder, call.getLoc(), resultType,
-          loadBuilder.getIntegerAttr(resultType, APInt::getAllOnes(*width)));
-      Value overlapMask = arith::ShLIOp::create(loadBuilder, call.getLoc(),
-                                                widthMask, lowShift);
-      overlapMask = arith::ShRUIOp::create(loadBuilder, call.getLoc(),
-                                           overlapMask, highShift);
+          loadBuilder, loc, resultType,
+          loadBuilder.getIntegerAttr(resultType, APInt::getAllOnes(width)));
+      Value overlapMask =
+          arith::ShLIOp::create(loadBuilder, loc, widthMask, lowShift);
+      overlapMask =
+          arith::ShRUIOp::create(loadBuilder, loc, overlapMask, highShift);
       overlapMask = arith::SelectOp::create(
-          loadBuilder, call.getLoc(), overlaps, overlapMask,
+          loadBuilder, loc, overlaps, overlapMask,
           arith::ConstantOp::create(
-              loadBuilder, call.getLoc(), resultType,
-              loadBuilder.getIntegerAttr(resultType, APInt::getZero(*width))));
+              loadBuilder, loc, resultType,
+              loadBuilder.getIntegerAttr(resultType, APInt::getZero(width))));
       Value fallbackValue = arith::ConstantOp::create(
-          loadBuilder, call.getLoc(), resultType,
+          loadBuilder, loc, resultType,
           loadBuilder.getIntegerAttr(resultType, fallbackBits));
       Value selected = arith::OrIOp::create(
-          loadBuilder, call.getLoc(),
-          arith::AndIOp::create(loadBuilder, call.getLoc(), loaded,
-                                overlapMask),
-          arith::AndIOp::create(loadBuilder, call.getLoc(), fallbackValue,
-                                arith::XOrIOp::create(loadBuilder,
-                                                      call.getLoc(),
-                                                      overlapMask, widthMask)));
-      LLVM::StoreOp::create(loadBuilder, call.getLoc(), selected, arguments[7],
-                            1);
-      if (call.getNumResults() != 1 || call.getResult().getType() != i32)
-        return call.emitError("unsupported native state load status ABI"),
-               failure();
-      call.getResult().replaceAllUsesWith(
-          llvmConstant(loadBuilder, call.getLoc(), i32, TALOS_RT_OK));
-      call.erase();
+          loadBuilder, loc,
+          arith::AndIOp::create(loadBuilder, loc, loaded, overlapMask),
+          arith::AndIOp::create(
+              loadBuilder, loc, fallbackValue,
+              arith::XOrIOp::create(loadBuilder, loc, overlapMask, widthMask)));
+      if (failed(load->replace(loadBuilder, selected)))
+        return failure();
       if (handleSelect && handleSelect->use_empty())
         handleSelect->erase();
     }
+    // Every handle-addressed access of a generated body is read above. The
+    // ones left are runtime calls to the rest of the plan, e.g. a ranked
+    // group's closed-body test.
+    lowerNativeStateHandleAccesses(module);
     // A fixed lane of a dynamic array element retains the inner encoded
     // handle as the outer slice's base. Inline that pure constant-root offset
     // calculation, including the signed 32-bit handle bounds. The outer NBA

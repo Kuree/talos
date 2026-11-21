@@ -2,6 +2,7 @@
 
 #include "NativeRuntimeEntries.h"
 
+#include "talos/Conversion/SimulationToLLVMCoroutine.h"
 #include "talos/Dialect/Schedule/ScheduleOps.h"
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -60,6 +61,10 @@ bool hasNativeRuntimeEffect(mlir::Operation *op, Effect effect) {
   if (llvm::isa<schedule::NativeHandleOffsetOp>(op))
     return (getNativeRuntimeEffects(NativeRuntimeEntry::NativeHandleOffset) &
             effect) == effect;
+  // A handle-addressed state access is the call of its runtime entry.
+  if (llvm::isa<schedule::NativeStateLoadHandleOp,
+                schedule::NativeStateStoreHandleOp>(op))
+    return hasNativeRuntimeEffect(getNativeStateHandleAccessCallee(op), effect);
   return false;
 }
 
