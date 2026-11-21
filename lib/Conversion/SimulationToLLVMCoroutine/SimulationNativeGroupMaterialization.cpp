@@ -2402,9 +2402,6 @@ GroupMaterializer::buildRefinement(const GroupRefinement &refinement) {
   auto ingress =
       ::talos::schedule::get<::talos::schedule::Field::EvalGroupIngress>(
           parent);
-  Value ready = LLVM::AddressOfOp::create(
-      builder, parent.getLoc(), LLVM::LLVMPointerType::get(module.getContext()),
-      ingress.getValue());
   SmallVector<Attribute> references;
   for (auto child : refinement.children) {
     references.push_back(FlatSymbolRefAttr::get(child));
@@ -2422,7 +2419,10 @@ GroupMaterializer::buildRefinement(const GroupRefinement &refinement) {
     for (auto [word, mask] : masks) {
       Value bits = LLVM::AndOp::create(
           builder, parent.getLoc(),
-          loadOwnerWord(builder, parent.getLoc(), ready, word),
+          schedule::NativeReadyWordLoadOp::create(
+              builder, parent.getLoc(), builder.getI64Type(), ingress,
+              /*dynamic_word=*/Value{}, builder.getI64IntegerAttr(word),
+              /*activation_entry=*/IntegerAttr{}, /*owner=*/IntegerAttr{}),
           llvmConstant(builder, parent.getLoc(), builder.getI64Type(), mask));
       pending = LLVM::OrOp::create(builder, parent.getLoc(), pending, bits);
     }

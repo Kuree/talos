@@ -74,6 +74,10 @@ void buildNativeLLVMFinalizationPipeline(mlir::OpPassManager &manager) {
   manager.addPass(createMaterializeNativeEvalRoutesPass());
   manager.addPass(createPublishNativeProofsPass());
   manager.addPass(createMaterializeNativeEvalGroupBodiesPass());
+  // Group materialization is the last pass that reads ready set words as
+  // typed accesses; later passes see the LLVM accesses they stand for.
+  manager.nest<mlir::LLVM::LLVMFuncOp>().addPass(
+      createLowerNativeReadyWordsPass());
   manager.addPass(createMaterializeNativeEvalTransactionsPass());
   manager.addPass(createFinalizeNativeFunctionsPass());
 }

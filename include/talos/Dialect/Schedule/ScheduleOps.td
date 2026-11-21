@@ -327,6 +327,68 @@ def NativeReadyReadOp : ScheduleNativeOp<"ready.read", [
   }];
   let hasVerifier = 1;
 }
+// The words of a generated eval ready set (ReadySet), a leaf or a dirty-level
+// word of its DirtyReadySetLayout, read and written whole. Outside ready
+// actions, functions access a set's storage only through these operations.
+//
+// What native passes need to know about an access is a property:
+// - activation_entry (loads): the access reads the leaf that selects member
+//   `activation_entry` of an activation group, its executable entry;
+// - owner: the activation-group member whose activation performs the access.
+def NativeReadyWordLoadOp : ScheduleNativeOp<"ready.word.load", [
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let summary = "read a word of a generated eval ready set";
+  let description = [{
+    Reads the 64-bit word `static_word` plus the optional `dynamic_word` of
+    the ready set `set`. This reads pending activations, not event history
+    (IEEE 1800-2023 4.3).
+  }];
+  let arguments = (ins Arg<FlatSymbolRefAttr, "the set's global",
+                           [MemRead]>:$set,
+                       Optional<I64>:$dynamic_word,
+                       I64Attr:$static_word,
+                       OptionalAttr<I32Attr>:$activation_entry,
+                       OptionalAttr<I32Attr>:$owner);
+  let results = (outs I64:$result);
+  let assemblyFormat = [{
+    $set `[` custom<StateOffset>($dynamic_word, $static_word) `]` attr-dict
+  }];
+  let builders = [OpBuilder<(ins "::talos::schedule::ReadySet":$set,
+                                 "::mlir::Value":$dynamicWord,
+                                 "uint64_t":$staticWord)>];
+  let extraClassDeclaration = [{
+    ::talos::schedule::ReadySet getReadySet();
+  }];
+  let hasVerifier = 1;
+}
+
+def NativeReadyWordStoreOp : ScheduleNativeOp<"ready.word.store", [
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let summary = "write a word of a generated eval ready set";
+  let description = [{
+    Writes `value` to the 64-bit word `static_word` plus the optional
+    `dynamic_word` of the ready set `set`.
+  }];
+  let arguments = (ins I64:$value,
+                       Arg<FlatSymbolRefAttr, "the set's global",
+                           [MemWrite]>:$set,
+                       Optional<I64>:$dynamic_word,
+                       I64Attr:$static_word,
+                       OptionalAttr<I32Attr>:$owner);
+  let assemblyFormat = [{
+    $value `,` $set `[` custom<StateOffset>($dynamic_word, $static_word) `]`
+    attr-dict
+  }];
+  let builders = [OpBuilder<(ins "::mlir::Value":$value,
+                                 "::talos::schedule::ReadySet":$set,
+                                 "::mlir::Value":$dynamicWord,
+                                 "uint64_t":$staticWord)>];
+  let extraClassDeclaration = [{
+    ::talos::schedule::ReadySet getReadySet();
+  }];
+  let hasVerifier = 1;
+}
+
 def NativeReadyRegionOp : ScheduleNativeOp<"ready.region", [RecursiveMemoryEffects]> {
   let summary = "carry pending readiness through a non-suspending CFG";
   let description = [{

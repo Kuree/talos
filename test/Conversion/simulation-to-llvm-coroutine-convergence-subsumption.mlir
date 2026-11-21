@@ -103,8 +103,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
 // CHECK: %[[WITHOUT_OLD:.*]] = llvm.and %[[OLD_READY]], %[[CLEAR_BOTH]]
 // CHECK: llvm.store %[[WITHOUT_OLD]], %[[INGRESS]]
 // CHECK: llvm.call @__talos_direct_fragment_1_1.__talos_execute
-// CHECK: %[[AFTER_CALL_INGRESS:.*]] = llvm.mlir.addressof @__talos_aot_model_ingress_v1
-// CHECK: %[[AFTER_CALL_READY:.*]] = llvm.load %[[AFTER_CALL_INGRESS]]
+// CHECK: %[[AFTER_CALL_READY:.*]] = llvm.load %[[INGRESS]]
 // CHECK: %[[MEMBER_MASK:.*]] = llvm.mlir.constant(2 : i64)
 // CHECK: %[[MEMBER_READY:.*]] = llvm.and %[[AFTER_CALL_READY]], %[[MEMBER_MASK]]
 // CHECK: %[[MEMBER_PENDING:.*]] = llvm.icmp "ne" %[[MEMBER_READY]],

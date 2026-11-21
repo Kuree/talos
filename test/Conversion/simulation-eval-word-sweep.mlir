@@ -10,11 +10,11 @@
 // escape the word function (IEEE 1800-2023 4.5, 4.7, 9.2.3).
 
 // CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1(
+// CHECK: %[[INGRESS:.*]] = llvm.mlir.addressof @__talos_aot_model_ingress_v1
 // CHECK: %[[FALLBACK:.*]] = llvm.alloca %{{.*}} x i1
 // CHECK: ^[[DISPATCH:bb[0-9]+]]:
 // CHECK-NEXT: llvm.br ^[[SCAN:bb[0-9]+]]
 // CHECK: ^[[SCAN]]:
-// CHECK: %[[INGRESS:.*]] = llvm.mlir.addressof @__talos_aot_model_ingress_v1
 // CHECK: %[[TOP_ADDRESS:.*]] = llvm.getelementptr %[[INGRESS]][72]
 // CHECK: %[[TOP:.*]] = llvm.load %[[TOP_ADDRESS]]
 // CHECK: %[[NINE_WORDS:.*]] = llvm.mlir.constant(511 : i64)
@@ -23,9 +23,10 @@
 // CHECK: ^[[CLEAR:bb[0-9]+]](%[[CLEARED:.*]]: i64):
 // CHECK: %[[PARENT:.*]] = llvm.lshr %[[CLEARED]],
 // CHECK: %[[DIRTY_INDEX:.*]] = llvm.add %[[PARENT]],
-// CHECK: %[[DIRTY_ADDRESS:.*]] = llvm.getelementptr %{{.*}}[%[[DIRTY_INDEX]]]
+// CHECK: %[[DIRTY_ADDRESS:.*]] = llvm.getelementptr %[[INGRESS]][%[[DIRTY_INDEX]]]
 // CHECK: llvm.load %[[DIRTY_ADDRESS]]
-// CHECK: llvm.store %{{.*}}, %[[DIRTY_ADDRESS]]
+// CHECK: %[[DIRTY_STORE:.*]] = llvm.getelementptr %[[INGRESS]][%[[DIRTY_INDEX]]]
+// CHECK: llvm.store %{{.*}}, %[[DIRTY_STORE]]
 // CHECK-NEXT: llvm.br ^[[DISPATCH]]
 // CHECK: ^[[GATE:bb[0-9]+]](%[[WORD:.*]]: i64):
 // CHECK: %[[LEAF_ADDRESS:.*]] = llvm.getelementptr %{{.*}}[%[[WORD]]]

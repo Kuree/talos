@@ -1305,6 +1305,10 @@ LogicalResult declareNativeImports(ModuleOp module) {
       reference = read.getSetAttr();
     else if (auto merge = dyn_cast<schedule::NativeReadyMergeOp>(operation))
       reference = merge.getSetAttr();
+    else if (auto load = dyn_cast<schedule::NativeReadyWordLoadOp>(operation))
+      reference = load.getSetAttr();
+    else if (auto store = dyn_cast<schedule::NativeReadyWordStoreOp>(operation))
+      reference = store.getSetAttr();
     else if (isa<schedule::NativeHandleOffsetOp>(operation))
       // It becomes the runtime's handle offset; see lowerNativeHandleOps.
       reference = getNativeRuntimeCallee(
@@ -4246,7 +4250,8 @@ public:
       target->addLegalOp<
           schedule::NativeByteAddressOp, schedule::NativeReadyReadOp,
           schedule::NativeReadyUpdateOp, schedule::NativeReadyCommitOp,
-          schedule::NativeReadyMergeOp, schedule::NativeStateAddressOp,
+          schedule::NativeReadyMergeOp, schedule::NativeReadyWordLoadOp,
+          schedule::NativeReadyWordStoreOp, schedule::NativeStateAddressOp,
           schedule::NativeStateWindowAddressOp, schedule::NativeStateLoadOp,
           schedule::NativeStateStoreOp, schedule::NativeNBAAccumulatorAddressOp,
           schedule::NativeNBAAccumulatorLoadOp,
@@ -4476,6 +4481,7 @@ public:
         ModuleOp, UnrealizedConversionCastOp, schedule::NativeByteAddressOp,
         schedule::NativeReadyReadOp, schedule::NativeReadyUpdateOp,
         schedule::NativeReadyCommitOp, schedule::NativeReadyMergeOp,
+        schedule::NativeReadyWordLoadOp, schedule::NativeReadyWordStoreOp,
         schedule::NativeStateAddressOp, schedule::NativeStateWindowAddressOp,
         schedule::NativeStateLoadOp, schedule::NativeStateStoreOp,
         schedule::NativeNBAAccumulatorAddressOp,

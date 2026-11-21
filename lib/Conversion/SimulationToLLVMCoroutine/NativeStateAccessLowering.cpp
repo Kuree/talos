@@ -7,11 +7,13 @@
 // for: the plane global's address, or for a contribution plane the pointer
 // its global binds, a byte GEP to the window, and a load or store of it.
 // Generated NBA accumulator records are accessed the same way: their typed
-// field accesses become byte GEPs to the field in the record layout.
+// field accesses become byte GEPs to the field in the record layout. Ready
+// set words are lowered earlier, after their last typed reader.
 //
 //===----------------------------------------------------------------------===//
 
 #include "NativeStateAccess.h"
+#include "SimulationEvalReadySet.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Conversion/Passes.h"
 #include "talos/Dialect/Schedule/ScheduleOps.h"
@@ -22,6 +24,7 @@ using namespace mlir;
 
 namespace talos {
 #define GEN_PASS_DEF_LOWERNATIVESTATEACCESSPASS
+#define GEN_PASS_DEF_LOWERNATIVEREADYWORDSPASS
 #include "talos/Conversion/Passes.h.inc"
 
 namespace {
@@ -383,6 +386,67 @@ private:
       operation->erase();
     }
     return success();
+  }
+};
+
+// Lowers ready set word accesses to whole-word LLVM accesses of the set's
+// global, as the eval schedule's LLVM form addresses them: the set's address
+// once per function (ReadySetAddresses), then a word's address per access.
+class LowerNativeReadyWordsPass final
+    : public impl::LowerNativeReadyWordsPassBase<LowerNativeReadyWordsPass> {
+public:
+  void runOnOperation() override {
+    LLVM::LLVMFuncOp function = getOperation();
+    SmallVector<Operation *> words;
+    function.walk([&](Operation *operation) {
+      if (isa<schedule::NativeReadyWordLoadOp,
+              schedule::NativeReadyWordStoreOp>(operation))
+        words.push_back(operation);
+    });
+    if (words.empty())
+      return markAllAnalysesPreserved();
+    detail::ReadySetAddresses addresses;
+    for (Operation *operation : words) {
+      OpBuilder builder(operation);
+      Location location = operation->getLoc();
+      auto address = [&](FlatSymbolRefAttr set, Value dynamicWord,
+                         uint64_t staticWord) -> Value {
+        Value base = addresses.get(operation, set);
+        if (!dynamicWord)
+          return detail::ownerWordAddress(builder, location, base, staticWord);
+        Value word = LLVM::GEPOp::create(builder, location, base.getType(),
+                                         builder.getI64Type(), base,
+                                         ValueRange{dynamicWord});
+        return staticWord ? detail::byteGEP(builder, location, word,
+                                            staticWord * sizeof(uint64_t))
+                          : word;
+      };
+      Operation *lowered;
+      IntegerAttr owner;
+      if (auto load = dyn_cast<schedule::NativeReadyWordLoadOp>(operation)) {
+        lowered = LLVM::LoadOp::create(builder, location, builder.getI64Type(),
+                                       address(load.getSetAttr(),
+                                               load.getDynamicWord(),
+                                               load.getStaticWord()),
+                                       sizeof(uint64_t));
+        load.getResult().replaceAllUsesWith(lowered->getResult(0));
+        owner = load.getOwnerAttr();
+      } else {
+        auto store = cast<schedule::NativeReadyWordStoreOp>(operation);
+        lowered = LLVM::StoreOp::create(builder, location, store.getValue(),
+                                        address(store.getSetAttr(),
+                                                store.getDynamicWord(),
+                                                store.getStaticWord()),
+                                        sizeof(uint64_t));
+        owner = store.getOwnerAttr();
+      }
+      // Other dialects' annotations stay with the access.
+      for (NamedAttribute attribute : operation->getDiscardableAttrs())
+        lowered->setAttr(attribute.getName(), attribute.getValue());
+      if (owner)
+        detail::setNativeMemoryOwner(lowered, owner);
+      operation->erase();
+    }
   }
 };
 } // namespace

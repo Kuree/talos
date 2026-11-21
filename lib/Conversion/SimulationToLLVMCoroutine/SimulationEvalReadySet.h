@@ -45,16 +45,17 @@ inline mlir::Value loadOwnerWord(mlir::OpBuilder &builder, mlir::Location loc,
                                     8);
 }
 
-inline mlir::Value maskedOwnerWords(mlir::OpBuilder &builder,
-                                    mlir::Location loc, mlir::Value base,
-                                    const llvm::APInt &mask) {
+// The union of the words of `mask`, each read by `load` and masked.
+inline mlir::Value maskedWords(mlir::OpBuilder &builder, mlir::Location loc,
+                               const llvm::APInt &mask,
+                               llvm::function_ref<mlir::Value(unsigned)> load) {
   auto i64 = builder.getI64Type();
   mlir::Value any;
   for (unsigned word = 0; word != mask.getNumWords(); ++word) {
     uint64_t bits = ownerMaskWord(mask, word);
     if (!bits)
       continue;
-    mlir::Value selected = loadOwnerWord(builder, loc, base, word);
+    mlir::Value selected = load(word);
     if (bits != UINT64_MAX)
       selected = mlir::arith::AndIOp::create(
           builder, loc, selected, llvmConstant(builder, loc, i64, bits));
@@ -62,6 +63,46 @@ inline mlir::Value maskedOwnerWords(mlir::OpBuilder &builder,
               : selected;
   }
   return any ? any : llvmConstant(builder, loc, i64, 0);
+}
+
+inline mlir::Value maskedOwnerWords(mlir::OpBuilder &builder,
+                                    mlir::Location loc, mlir::Value base,
+                                    const llvm::APInt &mask) {
+  return maskedWords(builder, loc, mask, [&](unsigned word) {
+    return loadOwnerWord(builder, loc, base, word);
+  });
+}
+
+// A word of a generated eval ready set, read or written whole: word `word`,
+// or the word `index` selects (an i64).
+inline mlir::Value loadReadyWord(mlir::OpBuilder &builder, mlir::Location loc,
+                                 schedule::ReadySet set, unsigned word) {
+  return schedule::NativeReadyWordLoadOp::create(builder, loc, set,
+                                                 mlir::Value{}, word);
+}
+inline mlir::Value loadReadyWordAt(mlir::OpBuilder &builder, mlir::Location loc,
+                                   schedule::ReadySet set, mlir::Value index) {
+  return schedule::NativeReadyWordLoadOp::create(builder, loc, set, index, 0);
+}
+inline void storeReadyWord(mlir::OpBuilder &builder, mlir::Location loc,
+                           mlir::Value value, schedule::ReadySet set,
+                           unsigned word) {
+  schedule::NativeReadyWordStoreOp::create(builder, loc, value, set,
+                                           mlir::Value{}, word);
+}
+inline void storeReadyWordAt(mlir::OpBuilder &builder, mlir::Location loc,
+                             mlir::Value value, schedule::ReadySet set,
+                             mlir::Value index) {
+  schedule::NativeReadyWordStoreOp::create(builder, loc, value, set, index, 0);
+}
+
+// The union of the words of `mask` in a ready set.
+inline mlir::Value maskedReadyWords(mlir::OpBuilder &builder,
+                                    mlir::Location loc, schedule::ReadySet set,
+                                    const llvm::APInt &mask) {
+  return maskedWords(builder, loc, mask, [&](unsigned word) {
+    return loadReadyWord(builder, loc, set, word);
+  });
 }
 
 inline void storeOwnerMask(mlir::OpBuilder &builder, mlir::Location loc,
@@ -252,9 +293,10 @@ inline void updateReadyMask(mlir::OpBuilder &builder, mlir::Location loc,
   }
 }
 
-/// The addresses of the ready sets that lowered ready actions access, as
+/// The addresses of the ready sets that lowered ready accesses use, as
 /// canonicalization leaves them: one per set and function, at the start of
-/// its entry block. An address the function already has there is reused.
+/// its entry block in the order of first use. An address the function
+/// already has there is reused.
 class ReadySetAddresses {
 public:
   mlir::Value get(mlir::Operation *user, mlir::FlatSymbolRefAttr set) {
@@ -272,16 +314,22 @@ public:
       if (address && address.getGlobalNameAttr() == set)
         return found->second = address;
     }
+    mlir::Operation *&previous = last[body];
     auto builder = mlir::OpBuilder::atBlockBegin(&entry);
-    return found->second = mlir::LLVM::AddressOfOp::create(
-               builder, user->getLoc(),
-               mlir::LLVM::LLVMPointerType::get(user->getContext()),
-               set.getValue());
+    if (previous)
+      builder.setInsertionPointAfter(previous);
+    auto address = mlir::LLVM::AddressOfOp::create(
+        builder, user->getLoc(),
+        mlir::LLVM::LLVMPointerType::get(user->getContext()), set.getValue());
+    previous = address;
+    return found->second = address;
   }
 
 private:
   llvm::DenseMap<std::pair<mlir::Region *, mlir::StringAttr>, mlir::Value>
       addresses;
+  // The last address created at the start of each function body.
+  llvm::DenseMap<mlir::Region *, mlir::Operation *> last;
 };
 
 } // namespace talos::detail

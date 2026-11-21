@@ -1,5 +1,6 @@
 //===- SimulationGroupHierarchy.cpp - Refine collapsed execution groups ---===//
 
+#include "NativeStateAccess.h"
 #include "SimulationNativeInlineCost.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Dialect/Schedule/ScheduleEnums.h"
@@ -19,8 +20,6 @@ using namespace mlir;
 namespace talos::detail {
 namespace {
 
-constexpr auto entryAttr = ::talos::schedule::Field::EvalActivationEntry;
-
 bool reproducibleSetup(Operation *operation) {
   // Pure/speculatable alone does not authorize duplication: e.g. freeze of
   // poison captures one value which must remain correlated across children.
@@ -38,10 +37,10 @@ SmallVector<Operation *> entries(LLVM::LLVMFuncOp function,
   DenseMap<int32_t, Operation *> indexed;
   bool valid = true;
   function.walk([&](Operation *operation) {
-    if (auto owner = ::talos::schedule::get<entryAttr>(operation))
+    if (auto owner = getNativeActivationEntry(operation))
       valid &= !owner.getValue().isNegative() &&
                owner.getValue().getActiveBits() <= 31 &&
-               isa<LLVM::LoadOp>(operation) &&
+               isa<LLVM::LoadOp, schedule::NativeReadyWordLoadOp>(operation) &&
                indexed.try_emplace(owner.getInt(), operation).second;
   });
   SmallVector<Operation *> result;
@@ -84,7 +83,7 @@ LLVM::LLVMFuncOp outline(LLVM::LLVMFuncOp source,
       }
       // A bypass of the next entry would execute a different activation
       // sequence after outlining. Reject it, even if the graph is acyclic.
-      if (schedule::has<entryAttr>(&operation) && !allowed.contains(&operation))
+      if (getNativeActivationEntry(&operation) && !allowed.contains(&operation))
         return {};
       included.insert(&operation);
       if (isa<LLVM::ReturnOp>(operation) && stop)

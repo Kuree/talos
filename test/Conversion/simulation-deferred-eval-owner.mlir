@@ -143,6 +143,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
 // PLAN: talos eval owner: bit=0 {{.*}} deferred{{$}}
 
 // LOWER-LABEL: llvm.func @__talos_eval_dispatch_v1(
+// LOWER: %[[INGRESS:.*]] = llvm.mlir.addressof @__talos_aot_model_ingress_v1
 // LOWER: llvm.call @talos_rt_v1_scheduler_prepare_eval_nba(%arg1, %[[REGION:[0-9]+]])
 // LOWER: %[[EMPTY:.*]] = llvm.icmp "eq" %{{.*}}, %{{.*}} : i64
 // LOWER-NEXT: llvm.cond_br %[[EMPTY]], ^[[CUT:bb[0-9]+]], ^[[SELECT:bb[0-9]+]]
@@ -157,7 +158,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
 // LOWER: ^[[RUNNING]]:
 // LOWER: llvm.cond_br %{{.*}}, ^{{bb[0-9]+}}, ^[[QUIESCENT:bb[0-9]+]]
 // LOWER-NEXT: ^[[QUIESCENT]]:
-// LOWER: llvm.mlir.addressof @__talos_aot_model_ingress_v1
+// LOWER: llvm.load %[[INGRESS]]
 // LOWER: "llvm.intr.cttz"
 // LOWER: llvm.br ^[[SWITCH]](
 

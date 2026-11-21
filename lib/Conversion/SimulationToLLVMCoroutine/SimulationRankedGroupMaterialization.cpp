@@ -1,6 +1,7 @@
 //===- SimulationRankedGroupMaterialization.cpp - Shared ranked sweeps
 //-----===//
 
+#include "NativeStateAccess.h"
 #include "SimulationAOTPlanning.h"
 #include "SimulationEvalReadySet.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
@@ -402,12 +403,11 @@ materializeNativeRankedGroups(ModuleOp module,
         segment, builder.getArrayAttr(helpers));
     Block *entry = segment.addEntryBlock(builder);
     builder.setInsertionPointToStart(entry);
-    Value ready =
-        LLVM::AddressOfOp::create(builder, loc, pointer, evalModelIngressName);
     auto emitChunk = [&](const Chunk &chunk) {
       Value dirty;
       for (auto [word, mask] : chunk.words) {
-        Value bits = loadOwnerWord(builder, loc, ready, word);
+        Value bits =
+            loadReadyWord(builder, loc, schedule::ReadySet::Ingress, word);
         if (mask != UINT64_MAX)
           bits = arith::AndIOp::create(builder, loc, bits,
                                        llvmConstant(builder, loc, i64, mask));
@@ -445,7 +445,8 @@ materializeNativeRankedGroups(ModuleOp module,
       if (end - index > 1) {
         // Not nested: argument evaluation order would make the emitted IR
         // differ between ABIs (the MSVC ABI evaluates right to left).
-        Value bits = loadOwnerWord(builder, loc, ready, word);
+        Value bits =
+            loadReadyWord(builder, loc, schedule::ReadySet::Ingress, word);
         Value active =
             arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ne, bits,
                                   llvmConstant(builder, loc, i64, 0));
@@ -847,8 +848,10 @@ unsigned elideUnconditionalMemberPublications(LLVM::LLVMFuncOp function) {
   // Use executable entries rather than owner IDs or inferred graph ranks.
   DenseMap<uint64_t, Operation *> entries;
   function.walk([&](Operation *operation) {
-    auto owner = schedule::get<schedule::Field::EvalActivationEntry>(operation);
-    if (!owner || !isa<schedule::NativeReadyReadOp, LLVM::LoadOp>(operation))
+    auto owner = getNativeActivationEntry(operation);
+    if (!owner ||
+        !isa<schedule::NativeReadyReadOp, schedule::NativeReadyWordLoadOp,
+             LLVM::LoadOp>(operation))
       return;
     auto [found, inserted] = entries.try_emplace(owner.getUInt(), operation);
     if (!inserted)

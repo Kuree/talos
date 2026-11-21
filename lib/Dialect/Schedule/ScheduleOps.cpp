@@ -1082,6 +1082,54 @@ void NativeReadyMergeOp::getEffects(
                        SideEffects::DefaultResource::get());
   addReadySetEffects(getSetAttr(), /*writes=*/true, effects);
 }
+
+// A word access names a generated ready set; its static word lies in the
+// set's global (a dynamic word only moves past it).
+static LogicalResult verifyReadyWord(Operation *op, StringRef set) {
+  if (!getReadySetOfGlobal(set))
+    return op->emitOpError("names '") << set << "', no generated ready set";
+  return verifyTypedMemoryOp(op);
+}
+
+void NativeReadyWordLoadOp::build(OpBuilder &builder, OperationState &state,
+                                  ReadySet set, Value dynamicWord,
+                                  uint64_t staticWord) {
+  build(
+      builder, state, builder.getI64Type(),
+      FlatSymbolRefAttr::get(builder.getContext(), getReadySetGlobalName(set)),
+      dynamicWord, builder.getI64IntegerAttr(staticWord),
+      /*activation_entry=*/IntegerAttr{}, /*owner=*/IntegerAttr{});
+}
+ReadySet NativeReadyWordLoadOp::getReadySet() {
+  return *getReadySetOfGlobal(getSet());
+}
+LogicalResult NativeReadyWordLoadOp::verify() {
+  return verifyReadyWord(*this, getSet());
+}
+LogicalResult
+NativeReadyWordLoadOp::verifySymbolUses(SymbolTableCollection &tables) {
+  return verifyReadySetUse(*this, getSetAttr(), getStaticWord() + 1, tables);
+}
+
+void NativeReadyWordStoreOp::build(OpBuilder &builder, OperationState &state,
+                                   Value value, ReadySet set, Value dynamicWord,
+                                   uint64_t staticWord) {
+  build(
+      builder, state, value,
+      FlatSymbolRefAttr::get(builder.getContext(), getReadySetGlobalName(set)),
+      dynamicWord, builder.getI64IntegerAttr(staticWord),
+      /*owner=*/IntegerAttr{});
+}
+ReadySet NativeReadyWordStoreOp::getReadySet() {
+  return *getReadySetOfGlobal(getSet());
+}
+LogicalResult NativeReadyWordStoreOp::verify() {
+  return verifyReadyWord(*this, getSet());
+}
+LogicalResult
+NativeReadyWordStoreOp::verifySymbolUses(SymbolTableCollection &tables) {
+  return verifyReadySetUse(*this, getSetAttr(), getStaticWord() + 1, tables);
+}
 SuccessorOperands NativeSuspendDelayOp::getSuccessorOperands(unsigned index) {
   assert(index == 0);
   return SuccessorOperands(getContinuationOperandsMutable());

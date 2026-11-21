@@ -130,35 +130,32 @@ getOrCreateNBAHeldWakeMerge(ModuleOp module, ArrayRef<int32_t> words,
   };
   builder.setInsertionPointToStart(newBlock());
   Type i64 = builder.getI64Type();
-  Type pointer = LLVM::LLVMPointerType::get(context);
   auto constant = [&](uint64_t value) {
     return llvmConstant(builder, loc, i64, value);
   };
-  Value held =
-      LLVM::AddressOfOp::create(builder, loc, pointer, evalNBAHeldWakesName);
-  Value ingress =
-      LLVM::AddressOfOp::create(builder, loc, pointer, evalModelIngressName);
-  auto word = [&](Value base, uint64_t index) {
-    return ownerWordAddress(builder, loc, base, index);
+  using schedule::ReadySet;
+  // Word `index` of `set`, or the word `dynamic` selects.
+  auto load = [&](ReadySet set, Value dynamic, uint64_t index) -> Value {
+    return schedule::NativeReadyWordLoadOp::create(builder, loc, set, dynamic,
+                                                   index);
   };
-  auto load = [&](Value address) -> Value {
-    return LLVM::LoadOp::create(builder, loc, i64, address, 8);
-  };
-  auto store = [&](Value value, Value address) {
-    LLVM::StoreOp::create(builder, loc, value, address, 8);
+  auto store = [&](Value value, ReadySet set, Value dynamic, uint64_t index) {
+    schedule::NativeReadyWordStoreOp::create(builder, loc, value, set, dynamic,
+                                             index);
   };
   // Move one word: OR it into the same ingress word, then clear it. Dirty
   // words move the same way: a held dirty bit covers a held word that the
   // merge may make nonempty in the ingress set, whose dirty bit it then sets.
-  auto move = [&](Value heldAddress, Value ingressAddress) {
-    Value value = load(heldAddress);
-    store(arith::OrIOp::create(builder, loc, load(ingressAddress), value),
-          ingressAddress);
-    store(constant(0), heldAddress);
+  auto move = [&](Value dynamic, uint64_t index) {
+    Value value = load(ReadySet::HeldWakes, dynamic, index);
+    store(arith::OrIOp::create(builder, loc,
+                               load(ReadySet::Ingress, dynamic, index), value),
+          ReadySet::Ingress, dynamic, index);
+    store(constant(0), ReadySet::HeldWakes, dynamic, index);
   };
   if (!layout.hasSummaries()) {
     for (int32_t index : words)
-      move(word(held, index), word(ingress, index));
+      move(Value{}, index);
   } else {
     // Walk the set bits of each first-level summary word that covers a listed
     // leaf: only the held leaves are touched.
@@ -167,8 +164,8 @@ getOrCreateNBAHeldWakeMerge(ModuleOp module, ArrayRef<int32_t> words,
       if (groups.empty() || groups.back() != unsigned(index) / 64)
         groups.push_back(unsigned(index) / 64);
     for (unsigned group : groups) {
-      Value summaryAddress = word(held, layout.offsets[1] + group);
-      Value summary = load(summaryAddress);
+      Value summary =
+          load(ReadySet::HeldWakes, Value{}, layout.offsets[1] + group);
       Block *visit = newBlock(), *loop = newBlock(), *body = newBlock(),
             *next = newBlock();
       loop->addArgument(i64, loc);
@@ -178,7 +175,7 @@ getOrCreateNBAHeldWakeMerge(ModuleOp module, ArrayRef<int32_t> words,
                                 summary, constant(0)),
           visit, ValueRange{}, next, ValueRange{});
       builder.setInsertionPointToStart(visit);
-      move(summaryAddress, word(ingress, layout.offsets[1] + group));
+      move(Value{}, layout.offsets[1] + group);
       cf::BranchOp::create(builder, loc, loop, ValueRange{summary});
       builder.setInsertionPointToStart(loop);
       Value bits = loop->getArgument(0);
@@ -192,10 +189,7 @@ getOrCreateNBAHeldWakeMerge(ModuleOp module, ArrayRef<int32_t> words,
           builder, loc,
           LLVM::CountTrailingZerosOp::create(builder, loc, i64, bits, true),
           constant(uint64_t{group} * 64));
-      move(LLVM::GEPOp::create(builder, loc, pointer, i64, held,
-                               ValueRange{leaf}),
-           LLVM::GEPOp::create(builder, loc, pointer, i64, ingress,
-                               ValueRange{leaf}));
+      move(leaf, 0);
       cf::BranchOp::create(
           builder, loc, loop,
           ValueRange{arith::AndIOp::create(
@@ -205,8 +199,7 @@ getOrCreateNBAHeldWakeMerge(ModuleOp module, ArrayRef<int32_t> words,
     }
     for (unsigned level = 2; level != layout.levels; ++level)
       for (unsigned index = 0; index != layout.counts[level]; ++index)
-        move(word(held, layout.offsets[level] + index),
-             word(ingress, layout.offsets[level] + index));
+        move(Value{}, layout.offsets[level] + index);
   }
   LLVM::ReturnOp::create(builder, loc, ValueRange{});
   return function;
@@ -228,12 +221,8 @@ void emitNBAHeldWakeMerge(OpBuilder &builder, Location loc, ModuleOp module,
   LLVM::LLVMFuncOp merge =
       getOrCreateNBAHeldWakeMerge(module, words.asArrayRef(), layout, loc);
   Type i64 = builder.getI64Type();
-  Value base = LLVM::AddressOfOp::create(
-      builder, loc, LLVM::LLVMPointerType::get(builder.getContext()),
-      evalNBAHeldWakesName);
   auto load = [&](uint64_t index) -> Value {
-    return LLVM::LoadOp::create(builder, loc, i64,
-                                ownerWordAddress(builder, loc, base, index), 8);
+    return loadReadyWord(builder, loc, schedule::ReadySet::HeldWakes, index);
   };
   // Only the merge consumes the held set, so its top dirty words covering
   // the listed leaves are nonzero exactly when one of them is; a flat layout
@@ -512,13 +501,9 @@ materializeNativeEvalDispatch(ModuleOp module,
         builder, location, complete,
         ValueRange{llvmConstant(builder, location, i32, TALOS_RT_OK)});
   };
-  auto ingressAddress = [&] {
-    return LLVM::AddressOfOp::create(builder, location, pointer,
-                                     evalModelIngressName)
-        .getResult();
-  };
+  constexpr schedule::ReadySet ingressSet = schedule::ReadySet::Ingress;
   auto combinedIngress = [&] {
-    return maskedOwnerWords(builder, location, ingressAddress(), allOwners);
+    return maskedReadyWords(builder, location, ingressSet, allOwners);
   };
   auto ownerWritableClean = [&](unsigned owner, Value context) -> Value {
     Value clean = llvmConstant(builder, location, builder.getI1Type(), 1);
@@ -652,11 +637,11 @@ materializeNativeEvalDispatch(ModuleOp module,
   auto constant = [&](uint64_t value) {
     return llvmConstant(builder, location, i64, value);
   };
+  // The ingress word `index` + `offset` selects.
   auto ingressWord = [&](Value index, uint64_t offset) -> Value {
     if (offset)
       index = arith::AddIOp::create(builder, location, index, constant(offset));
-    return LLVM::GEPOp::create(builder, location, pointer, i64,
-                               ingressAddress(), ValueRange{index});
+    return index;
   };
   // Children of the words of `level` that cover Active owners, a prefix of
   // each level: owner bits for level 0, words of level - 1 above it. The
@@ -688,7 +673,7 @@ materializeNativeEvalDispatch(ModuleOp module,
     unsigned top = readyLayout.levels - 1;
     Value any = constant(0);
     for (uint64_t word = 0; word != activeChildren[top + 1]; ++word) {
-      Value bits = loadOwnerWord(builder, location, ingressAddress(),
+      Value bits = loadReadyWord(builder, location, ingressSet,
                                  readyLayout.offsets[top] + word);
       uint64_t children = activeChildren[top] - word * 64;
       if (children < 64)
@@ -707,7 +692,7 @@ materializeNativeEvalDispatch(ModuleOp module,
            word * 64 < mergedFragments.size(); ++word) {
         Value pending = arith::AndIOp::create(
             builder, location,
-            loadOwnerWord(builder, location, ingressAddress(), word),
+            loadReadyWord(builder, location, ingressSet, word),
             constant(ownerMaskWord(deferredOwnerMask, word)));
         Block *execute = newCoordinatorBlock(), *next = newCoordinatorBlock();
         cf::CondBranchOp::create(builder, location,
@@ -730,7 +715,7 @@ materializeNativeEvalDispatch(ModuleOp module,
   if (!sweep) {
     SmallVector<Value> ready;
     for (unsigned word = 0; word != allOwners.getNumWords(); ++word)
-      ready.push_back(loadOwnerWord(builder, location, ingressAddress(), word));
+      ready.push_back(loadReadyWord(builder, location, ingressSet, word));
     llvm::BitVector changedWords(ready.size());
     for (auto [recordIndex, record] : llvm::enumerate(mergedFragments)) {
       const APInt &subsumed = ownerSubsumptionMasks[recordIndex];
@@ -759,9 +744,7 @@ materializeNativeEvalDispatch(ModuleOp module,
       }
     }
     for (int word : changedWords.set_bits())
-      LLVM::StoreOp::create(
-          builder, location, ready[word],
-          ownerWordAddress(builder, location, ingressAddress(), word), 8);
+      storeReadyWord(builder, location, ready[word], ingressSet, word);
     Value selectedReady = ready.front();
     Value empty = arith::CmpIOp::create(
         builder, location, arith::CmpIPredicate::eq, selectedReady,
@@ -815,15 +798,15 @@ materializeNativeEvalDispatch(ModuleOp module,
       Value child = clearFrom[level]->getArgument(0);
       Value parent =
           arith::ShRUIOp::create(builder, location, child, constant(6));
-      Value address = ingressWord(parent, readyLayout.offsets[level]);
+      Value index = ingressWord(parent, readyLayout.offsets[level]);
       Value bit = arith::ShLIOp::create(
           builder, location, constant(1),
           arith::AndIOp::create(builder, location, child, constant(63)));
       Value next = arith::AndIOp::create(
           builder, location,
-          LLVM::LoadOp::create(builder, location, i64, address, 8),
+          loadReadyWordAt(builder, location, ingressSet, index),
           arith::XOrIOp::create(builder, location, bit, constant(UINT64_MAX)));
-      LLVM::StoreOp::create(builder, location, next, address, 8);
+      storeReadyWordAt(builder, location, next, ingressSet, index);
       if (level == top) {
         cf::BranchOp::create(builder, location, dispatch);
         continue;
@@ -842,7 +825,7 @@ materializeNativeEvalDispatch(ModuleOp module,
     Block *descend = newBlock(1);
     builder.setInsertionPointToStart(scanReady);
     for (uint64_t word = 0; word != activeChildren[top + 1]; ++word) {
-      Value bits = loadOwnerWord(builder, location, ingressAddress(),
+      Value bits = loadReadyWord(builder, location, ingressSet,
                                  readyLayout.offsets[top] + word);
       uint64_t children = activeChildren[top] - word * 64;
       if (children < 64)
@@ -871,9 +854,8 @@ materializeNativeEvalDispatch(ModuleOp module,
       // `child` names a word of `level`.
       Value bits = arith::AndIOp::create(
           builder, location,
-          LLVM::LoadOp::create(builder, location, i64,
-                               ingressWord(child, readyLayout.offsets[level]),
-                               8),
+          loadReadyWordAt(builder, location, ingressSet,
+                          ingressWord(child, readyLayout.offsets[level])),
           activeMask(level, child));
       Block *lower = newBlock();
       cf::CondBranchOp::create(
@@ -895,8 +877,7 @@ materializeNativeEvalDispatch(ModuleOp module,
     auto branchOnActive = [&](Value word, Block *active,
                               ValueRange activeOperands, Block *idle,
                               ValueRange idleOperands) {
-      Value leaf =
-          LLVM::LoadOp::create(builder, location, i64, ingressWord(word, 0), 8);
+      Value leaf = loadReadyWordAt(builder, location, ingressSet, word);
       auto nonzero = [&](Value value) -> Value {
         return arith::CmpIOp::create(
             builder, location, arith::CmpIPredicate::ne, value, constant(0));
@@ -1073,8 +1054,8 @@ materializeNativeEvalDispatch(ModuleOp module,
       if (plan.writableVPI) {
         Value parents = llvmConstant(builder, location, i64, 0);
         for (unsigned parent : supersedingRecords[record.bit]) {
-          Value pending = maskedOwnerWords(
-              builder, location, ingressAddress(),
+          Value pending = maskedReadyWords(
+              builder, location, ingressSet,
               APInt::getOneBitSet(ownerCount, mergedFragments[parent].bit));
           pending = arith::SelectOp::create(
               builder, location, ownerWritableClean(parent, targets.context),
@@ -1103,7 +1084,7 @@ materializeNativeEvalDispatch(ModuleOp module,
         // clock group. Do not jump straight to its parent: unrelated lower
         // ready owners must retain their deterministic priority.
         Value parents =
-            maskedOwnerWords(builder, location, ingressAddress(), superseding);
+            maskedReadyWords(builder, location, ingressSet, superseding);
         Value covered = arith::CmpIOp::create(
             builder, location, arith::CmpIPredicate::ne, parents,
             llvmConstant(builder, location, i64, 0));
@@ -1258,8 +1239,8 @@ materializeNativeEvalDispatch(ModuleOp module,
     if (!convergenceOwner)
       clearIngressMask(consumed);
     else if (subsumedOwnerMask != 0) {
-      Value queuedMembers = maskedOwnerWords(
-          builder, location, ingressAddress(), subsumedOwnerMask);
+      Value queuedMembers =
+          maskedReadyWords(builder, location, ingressSet, subsumedOwnerMask);
       Value membersPending = arith::CmpIOp::create(
           builder, location, arith::CmpIPredicate::ne, queuedMembers,
           llvmConstant(builder, location, i64, 0));
@@ -1536,7 +1517,7 @@ materializeNativeEvalDispatch(ModuleOp module,
         function.getBody().push_back(next);
         Value pending = arith::AndIOp::create(
             builder, location,
-            loadOwnerWord(builder, location, ingressAddress(), word),
+            loadReadyWord(builder, location, ingressSet, word),
             llvmConstant(builder, location, i64, item.mask));
         cf::CondBranchOp::create(
             builder, location,
@@ -1712,10 +1693,9 @@ materializeNativeEvalDispatch(ModuleOp module,
         ValueRange{llvmConstant(builder, location, i32, TALOS_RT_OK)}, running,
         ValueRange{});
     builder.setInsertionPointToStart(running);
-    Value ingress = sweep
-                        ? activeDirty()
-                        : maskedOwnerWords(builder, location, ingressAddress(),
-                                           allOwners & ~deferredOwnerMask);
+    Value ingress = sweep ? activeDirty()
+                          : maskedReadyWords(builder, location, ingressSet,
+                                             allOwners & ~deferredOwnerMask);
     Value hasIngress = arith::CmpIOp::create(
         builder, location, arith::CmpIPredicate::ne, ingress,
         llvmConstant(builder, location, ingress.getType(), 0));
@@ -1736,7 +1716,7 @@ materializeNativeEvalDispatch(ModuleOp module,
            word * 64 < mergedFragments.size(); ++word) {
         Value pending = arith::AndIOp::create(
             builder, location,
-            loadOwnerWord(builder, location, ingressAddress(), word),
+            loadReadyWord(builder, location, ingressSet, word),
             llvmConstant(builder, location, i64,
                          ownerMaskWord(deferredOwnerMask, word)));
         Value found = arith::CmpIOp::create(
@@ -2090,11 +2070,11 @@ materializeNativeEvalDispatch(ModuleOp module,
     builder.setInsertionPointToStart(merged);
   }
   Value postNBAReady =
-      sweep ? arith::OrIOp::create(builder, location, activeDirty(),
-                                   maskedOwnerWords(builder, location,
-                                                    ingressAddress(),
-                                                    deferredOwnerMask))
-            : combinedIngress();
+      sweep
+          ? arith::OrIOp::create(builder, location, activeDirty(),
+                                 maskedReadyWords(builder, location, ingressSet,
+                                                  deferredOwnerMask))
+          : combinedIngress();
   Value postNBAEmpty = arith::CmpIOp::create(
       builder, location, arith::CmpIPredicate::eq, postNBAReady,
       llvmConstant(builder, location, i64, 0));

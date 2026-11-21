@@ -458,8 +458,9 @@ def FinalizeNativeLLVMPass
     Runs, in order, the native LLVM finalization stages:
     finalize-native-llvm-wrappers, materialize-native-eval-routes,
     publish-native-proofs, materialize-native-eval-group-bodies,
-    materialize-native-eval-transactions and finalize-native-functions. Each
-    stage expects the output of the previous one.
+    lower-native-ready-words, materialize-native-eval-transactions and
+    finalize-native-functions. Each stage expects the output of the previous
+    one.
   }];
   let dependentDialects = ["mlir::LLVM::LLVMDialect",
                            "mlir::arith::ArithDialect",
@@ -539,6 +540,22 @@ def MaterializeNativeEvalTransactionsPass
   let dependentDialects = ["mlir::LLVM::LLVMDialect",
                            "talos::schedule::ScheduleDialect",
                            "talos::native::NativeDialect"];
+}
+
+def LowerNativeReadyWordsPass
+    : Pass<"lower-native-ready-words", "mlir::LLVM::LLVMFuncOp"> {
+  let summary = "Lower typed ready set word accesses to LLVM memory accesses";
+  let description = [{
+    Replaces schedule.ready.word.load/store with a whole-word, 8-byte aligned
+    LLVM load or store of the ready set's global: its address once per
+    function, at the start of the entry block, then an i64 GEP by a dynamic
+    word and a byte GEP to a nonzero static word. An access's owner becomes
+    the group-owner tag of the LLVM access; its other properties served the
+    native passes before this point and are dropped. Runs in the native
+    finalization pipeline right after materialize-native-eval-groups, the
+    last pass that reads the typed words.
+  }];
+  let dependentDialects = ["mlir::LLVM::LLVMDialect"];
 }
 
 def LowerNativeStateAccessPass

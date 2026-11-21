@@ -13,7 +13,7 @@
 //
 // CHECK-LABEL: llvm.func @group()
 // CHECK-SAME: schedule.eval.group_children = [@group.child0, @group.child2]
-// CHECK-DAG: llvm.load
+// CHECK-DAG: schedule.ready.word.load @__talos_aot_model_ingress_v1[0]
 // CHECK-DAG: llvm.cond_br
 // CHECK-DAG: llvm.call @group.child0.dataflow()
 // CHECK-DAG: llvm.call @group.child0()
@@ -47,7 +47,7 @@
 
 module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu"} {
   llvm.mlir.global internal @__talos_state_value(dense<0> : tensor<3xi8>) : !llvm.array<3 x i8>
-  llvm.mlir.global internal @ready(dense<15> : tensor<1xi64>) : !llvm.array<1 x i64>
+  llvm.mlir.global internal @__talos_aot_model_ingress_v1(dense<15> : tensor<1xi64>) : !llvm.array<1 x i64>
   llvm.mlir.global internal @__talos_eval_promotion_pending_mask_v1(dense<2> : tensor<1xi64>) : !llvm.array<1 x i64>
   llvm.mlir.global internal @slow0(0 : i32) : i32
   llvm.mlir.global internal @slow2(0 : i32) : i32
@@ -83,7 +83,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %one = llvm.mlir.constant(1 : i32) : i32
     %count = llvm.add %old, %one : i32
     llvm.store %count, %counter : i32, !llvm.ptr
-    %ready = llvm.mlir.addressof @ready : !llvm.ptr
+    %ready = llvm.mlir.addressof @__talos_aot_model_ingress_v1 : !llvm.ptr
     %pending = llvm.load %ready : !llvm.ptr -> i64
     %bit0 = llvm.mlir.constant(1 : i64) : i64
     %again = llvm.or %pending, %bit0 : i64
@@ -101,8 +101,8 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
   ^done:
     llvm.return
   }
-  llvm.func @group() attributes {schedule.eval.ranked_members = array<i32: 0, 3, 1, 2>, schedule.eval.group_ingress = @ready} {
-    %ready = llvm.mlir.addressof @ready : !llvm.ptr
+  llvm.func @group() attributes {schedule.eval.ranked_members = array<i32: 0, 3, 1, 2>, schedule.eval.group_ingress = @__talos_aot_model_ingress_v1} {
+    %ready = llvm.mlir.addressof @__talos_aot_model_ingress_v1 : !llvm.ptr
     %zero = llvm.mlir.constant(0 : i64) : i64
     %pending0 = llvm.load %ready {schedule.eval.activation_entry = 0 : i32} : !llvm.ptr -> i64
     %bit0 = llvm.mlir.constant(1 : i64) : i64
@@ -158,8 +158,8 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
   ^done:
     llvm.return
   }
-  llvm.func @candidate() attributes {schedule.eval.ranked_members = array<i32: 0, 3, 1, 2>, schedule.eval.group_ingress = @ready, schedule.eval.dataflow_candidate = @group} {
-    %ready = llvm.mlir.addressof @ready : !llvm.ptr
+  llvm.func @candidate() attributes {schedule.eval.ranked_members = array<i32: 0, 3, 1, 2>, schedule.eval.group_ingress = @__talos_aot_model_ingress_v1, schedule.eval.dataflow_candidate = @group} {
+    %ready = llvm.mlir.addressof @__talos_aot_model_ingress_v1 : !llvm.ptr
     %zero = llvm.mlir.constant(0 : i64) : i64
     %pending0 = llvm.load %ready {schedule.eval.activation_entry = 0 : i32} : !llvm.ptr -> i64
     %bit0 = llvm.mlir.constant(1 : i64) : i64
@@ -222,7 +222,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     llvm.return
   }
   llvm.func @main() -> i32 {
-    %ready = llvm.mlir.addressof @ready : !llvm.ptr
+    %ready = llvm.mlir.addressof @__talos_aot_model_ingress_v1 : !llvm.ptr
     %proof = llvm.mlir.addressof @__talos_eval_promotion_pending_mask_v1 : !llvm.ptr
     %slow0 = llvm.mlir.addressof @slow0 : !llvm.ptr
     %slow2 = llvm.mlir.addressof @slow2 : !llvm.ptr

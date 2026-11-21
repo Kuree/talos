@@ -80,7 +80,8 @@ struct NativeAddress {
 /// store whose address may derive from a global or a local allocation
 /// through GEPs, a typed NBA accumulator field access, whose `pointer` is
 /// its record and whose offset is the field's in the four-state record, or a
-/// typed NBA readiness index access of a word of the index's global.
+/// typed access of a word of an NBA readiness index's or a ready set's
+/// global.
 struct NativeMemoryAccess : NativeAddress {
   mlir::Operation *operation = nullptr;
   /// The type read or written.
@@ -114,13 +115,15 @@ inline bool isNativeMemoryAccess(mlir::Operation *operation) {
       mlir::LLVM::LoadOp, mlir::LLVM::StoreOp, schedule::NativeStateLoadOp,
       schedule::NativeStateStoreOp, schedule::NativeNBAAccumulatorLoadOp,
       schedule::NativeNBAAccumulatorStoreOp, schedule::NativeNBAIndexLoadOp,
-      schedule::NativeNBAIndexStoreOp>(operation);
+      schedule::NativeNBAIndexStoreOp, schedule::NativeReadyWordLoadOp,
+      schedule::NativeReadyWordStoreOp>(operation);
 }
 /// Whether `operation` is a store, typed or LLVM.
 inline bool isNativeMemoryStore(mlir::Operation *operation) {
   return mlir::isa<mlir::LLVM::StoreOp, schedule::NativeStateStoreOp,
                    schedule::NativeNBAAccumulatorStoreOp,
-                   schedule::NativeNBAIndexStoreOp>(operation);
+                   schedule::NativeNBAIndexStoreOp,
+                   schedule::NativeReadyWordStoreOp>(operation);
 }
 
 /// A state plane's address as a producer takes it: the plane's typed base in
@@ -162,6 +165,11 @@ mlir::Operation *createStoreAt(mlir::OpBuilder &builder,
 /// it as a property, an LLVM access of other memory as a tag.
 /// The group member that owns the access.
 void setNativeMemoryOwner(mlir::Operation *operation, mlir::IntegerAttr owner);
+/// The activation-group member whose executable entry the load reads: the
+/// ready word that selects it.
+void setNativeActivationEntry(mlir::Operation *operation,
+                              mlir::IntegerAttr member);
+mlir::IntegerAttr getNativeActivationEntry(mlir::Operation *operation);
 /// The physical byte window [begin, end) the access lies in.
 void setNativeAccessWindow(mlir::Operation *operation,
                            mlir::DenseI64ArrayAttr window);

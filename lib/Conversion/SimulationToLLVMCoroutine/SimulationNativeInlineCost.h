@@ -9,13 +9,15 @@
 namespace talos::detail {
 
 /// The operations `operation` stands for in LLVM IR, as op-count budgets
-/// count them: an NBA accumulator field or readiness index access is its
-/// address computation and the access.
+/// count them: an NBA accumulator field, readiness index or ready set word
+/// access is its address computation and the access.
 inline uint64_t nativeLoweredSize(mlir::Operation *operation) {
-  return mlir::isa<schedule::NativeNBAAccumulatorLoadOp,
-                   schedule::NativeNBAAccumulatorStoreOp,
-                   schedule::NativeNBAIndexLoadOp,
-                   schedule::NativeNBAIndexStoreOp>(operation)
+  return mlir::isa<
+             schedule::NativeNBAAccumulatorLoadOp,
+             schedule::NativeNBAAccumulatorStoreOp,
+             schedule::NativeNBAIndexLoadOp, schedule::NativeNBAIndexStoreOp,
+             schedule::NativeReadyWordLoadOp, schedule::NativeReadyWordStoreOp>(
+             operation)
              ? 2
              : 1;
 }
@@ -54,10 +56,10 @@ inline uint64_t nativeOperationCost(mlir::Operation *operation) {
              : nativeLoweredSize(operation);
 }
 
-/// The operations nested in `root` cost. Ready actions name their set; in
-/// LLVM IR a function shares one address of each set (ReadySetAddresses), so
-/// a set that `root` addresses only through ready actions is charged that
-/// address once.
+/// The operations nested in `root` cost. Ready actions and word accesses
+/// name their set; in LLVM IR a function shares one address of each set
+/// (ReadySetAddresses), so a set that `root` addresses only through them is
+/// charged that address once.
 inline uint64_t nativeInlineCost(mlir::Operation *root) {
   uint64_t cost = 0;
   llvm::SmallVector<mlir::StringAttr, 2> readySets, addressed;
@@ -76,6 +78,12 @@ inline uint64_t nativeInlineCost(mlir::Operation *root) {
     else if (auto merge =
                  mlir::dyn_cast<schedule::NativeReadyMergeOp>(operation))
       set = merge.getSetAttr();
+    else if (auto load =
+                 mlir::dyn_cast<schedule::NativeReadyWordLoadOp>(operation))
+      set = load.getSetAttr();
+    else if (auto store =
+                 mlir::dyn_cast<schedule::NativeReadyWordStoreOp>(operation))
+      set = store.getSetAttr();
     auto address = mlir::dyn_cast<mlir::LLVM::AddressOfOp>(operation);
     if (address && schedule::getReadySetOfGlobal(address.getGlobalName()) &&
         !llvm::is_contained(addressed, address.getGlobalNameAttr().getAttr()))

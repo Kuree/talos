@@ -25,33 +25,37 @@
 // CHECK-NEXT: %[[HS:[0-9]+]] = llvm.getelementptr %[[HELD]][16]
 // CHECK-NEXT: %[[BITS:[0-9]+]] = llvm.load %[[HS]]
 // CHECK:      ^bb1:
+// CHECK-NEXT: %[[HS1:[0-9]+]] = llvm.getelementptr %[[HELD]][16]
+// CHECK-NEXT: %[[HSV:[0-9]+]] = llvm.load %[[HS1]]
 // CHECK-NEXT: %[[IS:[0-9]+]] = llvm.getelementptr %[[IN]][16]
-// CHECK-NEXT: %[[HSV:[0-9]+]] = llvm.load %[[HS]]
 // CHECK-NEXT: %[[ISV:[0-9]+]] = llvm.load %[[IS]]
 // CHECK-NEXT: %[[SUM:[0-9]+]] = llvm.or %[[ISV]], %[[HSV]]
-// CHECK-NEXT: llvm.store %[[SUM]], %[[IS]]
+// CHECK-NEXT: %[[IS2:[0-9]+]] = llvm.getelementptr %[[IN]][16]
+// CHECK-NEXT: llvm.store %[[SUM]], %[[IS2]]
 // CHECK-NEXT: llvm.mlir.constant(0 : i64)
-// CHECK-NEXT: llvm.store %{{[0-9]+}}, %[[HS]]
+// CHECK-NEXT: %[[HS2:[0-9]+]] = llvm.getelementptr %[[HELD]][16]
+// CHECK-NEXT: llvm.store %{{[0-9]+}}, %[[HS2]]
 // CHECK-NEXT: llvm.br ^bb2(%[[BITS]] : i64)
 // then moves the one leaf each set bit names,
 // CHECK:      ^bb2(%[[REST:[0-9]+]]: i64):
 // CHECK:      ^bb3:
 // CHECK:      %[[LEAF:[0-9]+]] = "llvm.intr.cttz"(%[[REST]])
-// CHECK-DAG: %[[HL:[0-9]+]] = llvm.getelementptr %[[HELD]][%[[LEAF]]]
-// CHECK-DAG: %[[IL:[0-9]+]] = llvm.getelementptr %[[IN]][%[[LEAF]]]
-// CHECK-DAG: %[[HV:[0-9]+]] = llvm.load %[[HL]]
-// CHECK-DAG: %[[IV:[0-9]+]] = llvm.load %[[IL]]
+// CHECK:      %[[HL:[0-9]+]] = llvm.getelementptr %[[HELD]][%[[LEAF]]]
+// CHECK-NEXT: %[[HV:[0-9]+]] = llvm.load %[[HL]]
+// CHECK-NEXT: %[[IL:[0-9]+]] = llvm.getelementptr %[[IN]][%[[LEAF]]]
+// CHECK-NEXT: %[[IV:[0-9]+]] = llvm.load %[[IL]]
 // CHECK-NEXT: %[[MV:[0-9]+]] = llvm.or %[[IV]], %[[HV]]
-// CHECK-NEXT: llvm.store %[[MV]], %[[IL]]
+// CHECK-NEXT: %[[IL2:[0-9]+]] = llvm.getelementptr %[[IN]][%[[LEAF]]]
+// CHECK-NEXT: llvm.store %[[MV]], %[[IL2]]
 // CHECK-NOT: llvm.store
-// CHECK:      llvm.store %{{[0-9]+}}, %[[HL]]
-// and there is no minimum cache to maintain.
+// CHECK:      %[[HL2:[0-9]+]] = llvm.getelementptr %[[HELD]][%[[LEAF]]]
+// CHECK-NEXT: llvm.store %{{[0-9]+}}, %[[HL2]]
 // CHECK:      ^bb4:
 // CHECK-NEXT: llvm.return
 // Each merge point tests only the held dirty word, then calls the merge.
 // CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1(
 // CHECK: %[[TH:[0-9]+]] = llvm.mlir.addressof @__talos_eval_nba_held_wakes_v1
-// CHECK-NEXT: %[[TS:[0-9]+]] = llvm.getelementptr %[[TH]][16]
+// CHECK: %[[TS:[0-9]+]] = llvm.getelementptr %[[TH]][16]
 // CHECK-NEXT: %[[TB:[0-9]+]] = llvm.load %[[TS]]
 // CHECK-COUNT-5: llvm.call @__talos_eval_nba_held_merge_v1()
 // CHECK-NOT: llvm.call @__talos_eval_nba_held_merge_v1()
@@ -63,10 +67,11 @@
 // CLEAR: %[[HELD:[0-9]+]] = llvm.mlir.addressof @__talos_eval_nba_held_wakes_v1
 // CLEAR: ^bb2(%[[REST:[0-9]+]]: i64):
 // CLEAR: ^bb3:
-// CLEAR-DAG: %[[LEAF:[0-9]+]] = "llvm.intr.cttz"(%[[REST]])
-// CLEAR-DAG: %[[HL:[0-9]+]] = llvm.getelementptr %[[HELD]][%[[LEAF]]]
-// CLEAR-DAG: llvm.store %[[ZERO:[0-9]+]], %[[HL]]
-// CLEAR-DAG: %[[ZERO]] = llvm.mlir.constant(0 : i64)
+// CLEAR: %[[LEAF:[0-9]+]] = "llvm.intr.cttz"(%[[REST]])
+// CLEAR: llvm.store
+// CLEAR: %[[ZERO:[0-9]+]] = llvm.mlir.constant(0 : i64)
+// CLEAR-NEXT: %[[HL:[0-9]+]] = llvm.getelementptr %[[HELD]][%[[LEAF]]]
+// CLEAR-NEXT: llvm.store %[[ZERO]], %[[HL]]
 // CLEAR: ^bb4:
 
 // Reordering the independent addresses and loads must not hide an early or

@@ -13,6 +13,7 @@
 // CHECK-NOT: @__talos_aot_model_ingress_v1
 // CHECK: {{^  }}llvm.func
 // CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1(
+// CHECK: %[[HELD:[0-9]+]] = llvm.mlir.addressof @__talos_eval_nba_held_wakes_v1
 // CHECK: llvm.call @talos_rt_v1_scheduler_prepare_eval_nba
 // CHECK: %[[REGION:[0-9]+]] = llvm.load %{{[0-9]+}} {{.*}}-> i32
 // CHECK-NEXT: %[[NBA:[0-9]+]] = llvm.mlir.constant(2 : i32)
@@ -22,14 +23,14 @@
 // CHECK: llvm.cond_br %{{[0-9]+}}, ^[[COMMITTED:bb[0-9]+]], ^
 // No barrier: merge and dispatch, or complete when nothing is held.
 // CHECK: ^[[NOBARRIER]]:
-// CHECK: llvm.mlir.addressof @__talos_eval_nba_held_wakes_v1
+// CHECK: llvm.load %[[HELD]]
 // CHECK: llvm.cond_br %{{[0-9]+}}, ^[[MERGENOW:bb[0-9]+]], ^{{bb[0-9]+}}(
 // CHECK: ^[[MERGENOW]]:
 // CHECK-NEXT: llvm.call @__talos_eval_nba_held_merge_v1()
 // CHECK-NEXT: llvm.br ^[[DISPATCH:bb[0-9]+]]{{$}}
 // After the runtime commit: merge, then dispatch.
 // CHECK: ^[[COMMITTED]]:
-// CHECK: llvm.mlir.addressof @__talos_eval_nba_held_wakes_v1
+// CHECK: llvm.load %[[HELD]]
 // CHECK: llvm.cond_br %{{[0-9]+}}, ^[[MERGED:bb[0-9]+]], ^[[DISPATCH]]{{$}}
 // CHECK: ^[[MERGED]]:
 // CHECK-NEXT: llvm.call @__talos_eval_nba_held_merge_v1()

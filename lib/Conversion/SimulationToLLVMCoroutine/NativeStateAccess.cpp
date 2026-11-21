@@ -132,8 +132,8 @@ std::optional<NativeMemoryAccess> getNativeMemoryAccess(Operation *operation) {
     access.owner = store.getOwnerAttr();
     return access;
   }
-  // An NBA readiness index word is other memory: a whole word of the
-  // index's global.
+  // An NBA readiness index word or a ready set word is other memory: a whole
+  // word of the index's or the set's global.
   auto describeWord = [&](StringRef global, Value dynamicWord,
                           uint64_t staticWord) {
     access.global = global;
@@ -149,6 +149,19 @@ std::optional<NativeMemoryAccess> getNativeMemoryAccess(Operation *operation) {
   if (auto store = dyn_cast<schedule::NativeNBAIndexStoreOp>(operation)) {
     describeWord(store.getGlobal(), store.getDynamicWord(),
                  store.getStaticWord());
+    access.type = store.getValue().getType();
+    access.stored = store.getValue();
+    access.owner = store.getOwnerAttr();
+    return access;
+  }
+  if (auto load = dyn_cast<schedule::NativeReadyWordLoadOp>(operation)) {
+    describeWord(load.getSet(), load.getDynamicWord(), load.getStaticWord());
+    access.type = load.getType();
+    access.owner = load.getOwnerAttr();
+    return access;
+  }
+  if (auto store = dyn_cast<schedule::NativeReadyWordStoreOp>(operation)) {
+    describeWord(store.getSet(), store.getDynamicWord(), store.getStaticWord());
     access.type = store.getValue().getType();
     access.stored = store.getValue();
     access.owner = store.getOwnerAttr();
@@ -361,8 +374,24 @@ void setNativeMemoryOwner(Operation *operation, IntegerAttr owner) {
     load.setOwnerAttr(owner);
   else if (auto store = dyn_cast<schedule::NativeNBAIndexStoreOp>(operation))
     store.setOwnerAttr(owner);
+  else if (auto load = dyn_cast<schedule::NativeReadyWordLoadOp>(operation))
+    load.setOwnerAttr(owner);
+  else if (auto store = dyn_cast<schedule::NativeReadyWordStoreOp>(operation))
+    store.setOwnerAttr(owner);
   else
     schedule::set<schedule::Field::EvalGroupOwner>(operation, owner);
+}
+
+void setNativeActivationEntry(Operation *operation, IntegerAttr member) {
+  if (auto load = dyn_cast<schedule::NativeReadyWordLoadOp>(operation))
+    load.setActivationEntryAttr(member);
+  else
+    schedule::set<schedule::Field::EvalActivationEntry>(operation, member);
+}
+IntegerAttr getNativeActivationEntry(Operation *operation) {
+  if (auto load = dyn_cast<schedule::NativeReadyWordLoadOp>(operation))
+    return load.getActivationEntryAttr();
+  return schedule::get<schedule::Field::EvalActivationEntry>(operation);
 }
 } // namespace detail
 } // namespace talos
