@@ -1,6 +1,7 @@
 //===- SimulationProcessWrapperLowering.cpp - Native process wrappers -===//
 
 #include "SimulationProcessWrapperLowering.h"
+#include "NativeRuntimeCalls.h"
 #include "SimulationProcessRuntimeABI.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
@@ -395,10 +396,8 @@ FailureOr<LLVM::LLVMFuncOp> makeDirectFragmentWrapper(
       // cold runtime exit too, or an inline call of a generated activation
       // (analysis::isDirectOutput); its enqueue may already be an ABI call.
       mayTerminate |= sim::isColdRuntimeCheckpoint(operation);
-      if (auto call = dyn_cast<LLVM::CallOp>(operation))
-        mayTerminate |= call.getCallee() &&
-                        call.getCallee()->starts_with(getNativeRuntimeSymbol(
-                            NativeRuntimeEntry::DeferredEnqueue));
+      mayTerminate |=
+          hasNativeRuntimeEffect(operation, native_runtime::ReportsStatus);
       // So is the start of a $strobe display (21.2.2), a schedule.spawn or
       // its call by now.
       mayTerminate |= sim::has<sim::metadata::PostponedDisplay>(operation);

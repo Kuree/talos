@@ -899,9 +899,8 @@ materializeGenericNBAQueueWindows(ModuleOp module,
     SmallVector<std::pair<LLVM::CallOp, uint32_t>> queries;
     uint32_t maximum = 0;
     function.walk([&](LLVM::CallOp call) {
-      if (call.getCallee() !=
-              getNativeRuntimeSymbol(
-                  NativeRuntimeEntry::SchedulerGenericNbaPending) ||
+      if (!callsNativeRuntime(call,
+                              NativeRuntimeEntry::SchedulerGenericNbaPending) ||
           call.getArgOperands().size() != 2)
         return;
       auto root = constantU64(call.getArgOperands()[1]);
@@ -1006,10 +1005,8 @@ static void normalizeGeneratedWideTransitions(
   for (auto function :
        collectGeneratedEvalCallClosure(module, selectedRawBodies))
     function.walk([&](LLVM::CallOp call) {
-      if (call.getCallee() &&
-          *call.getCallee() ==
-              getNativeRuntimeSymbol(
-                  NativeRuntimeEntry::SchedulerSignalTransition))
+      if (callsNativeRuntime(call,
+                             NativeRuntimeEntry::SchedulerSignalTransition))
         calls.push_back(call);
     });
   for (LLVM::CallOp call : calls) {

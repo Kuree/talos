@@ -1,5 +1,6 @@
 //===- SimulationRuntimeStatusThreading.cpp - Thread runtime statuses ---===//
 
+#include "NativeRuntimeCalls.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleOps.h"
@@ -56,10 +57,8 @@ struct RuntimeStatusInputs {
         // it inline (analysis::isDirectOutput); either route keeps the status
         // channel. Control lowering has already turned the enqueue into its
         // ABI call.
-        if (auto call = dyn_cast<LLVM::CallOp>(operation))
-          hasCheck |= call.getCallee() &&
-                      call.getCallee()->starts_with(getNativeRuntimeSymbol(
-                          NativeRuntimeEntry::DeferredEnqueue));
+        hasCheck |=
+            hasNativeRuntimeEffect(operation, native_runtime::ReportsStatus);
         // A $strobe display (21.2.2) is started the same way, as a cold
         // runtime exit of the activation. The spawn is a schedule.spawn by
         // now and keeps its marker.

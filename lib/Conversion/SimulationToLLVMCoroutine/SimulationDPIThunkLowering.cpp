@@ -111,7 +111,7 @@ LogicalResult materializeDPIThunk(ModuleOp module, const DPIThunkSpec &spec) {
   if (logicalInputs > spec.abiSignature.size())
     return spec.operation->emitError("has invalid DPI thunk operand metadata");
   StringRef cIdentifier = spec.cIdentifier.getValue();
-  if (cIdentifier == "main" || cIdentifier.starts_with("talos_rt_") ||
+  if (cIdentifier == "main" || isNativeRuntimeSymbol(cIdentifier) ||
       cIdentifier.starts_with("__talos_"))
     return spec.operation->emitError()
            << "DPI C identifier '" << cIdentifier

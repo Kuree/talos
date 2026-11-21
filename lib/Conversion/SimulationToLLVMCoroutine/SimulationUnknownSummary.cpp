@@ -181,7 +181,7 @@ public:
             writes.push_back(user);
         } else if (auto call = dyn_cast<LLVM::CallOp>(user)) {
           // Runtime services report the writes they make.
-          if (!call.getCallee() || !call.getCallee()->starts_with("talos_rt_"))
+          if (!call.getCallee() || !isNativeRuntimeSymbol(*call.getCallee()))
             escapes.push_back(user);
         } else if (!isa<LLVM::PtrToIntOp, LLVM::ICmpOp>(user)) {
           escapes.push_back(user);

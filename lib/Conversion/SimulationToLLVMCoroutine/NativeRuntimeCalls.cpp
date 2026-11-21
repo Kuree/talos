@@ -35,4 +35,9 @@ bool hasNativeRuntimeEffect(mlir::Operation *op, Effect effect) {
   return false;
 }
 
+bool callsNativeRuntime(mlir::Operation *op, NativeRuntimeEntry entry) {
+  auto call = llvm::dyn_cast_if_present<mlir::LLVM::CallOp>(op);
+  return call && call.getCallee() == getNativeRuntimeSymbol(entry);
+}
+
 } // namespace talos::detail

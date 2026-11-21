@@ -65,8 +65,23 @@ enum Effect : uint32_t {
   QueueCaptureOnly = 1u << 5,
   /// Reached only from a cold path, such as a failed capacity test.
   Cold = 1u << 6,
+  /// Observes the process that executes the call as a thread: process
+  /// control and queries (IEEE 1800-2023 9.7), the blocks a disable can
+  /// target (9.6.2), the processes it forks (9.3.2), and context DPI imports,
+  /// which can reach any exported subroutine (35.5.3). See
+  /// ThreadObservationAnalysis.
+  ObservesThread = 1u << 7,
+  /// Queues a deferred assertion report (16.4.1): a cold runtime exit of the
+  /// activation, like $error, so the caller keeps its status channel.
+  ReportsStatus = 1u << 8,
 };
 } // namespace native_runtime
+
+/// Whether `symbol` is in the namespace the runtime library reserves, whether
+/// or not the catalog lists it.
+inline bool isNativeRuntimeSymbol(llvm::StringRef symbol) {
+  return symbol.starts_with(kRuntimeSymbolPrefix);
+}
 
 /// The entry `callee` names, if it is one.
 std::optional<NativeRuntimeEntry> getNativeRuntimeEntry(llvm::StringRef callee);

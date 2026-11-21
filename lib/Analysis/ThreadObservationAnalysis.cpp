@@ -4,6 +4,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/CallInterfaces.h"
+#include "talos/Dialect/Native/NativeRuntimeEntries.h"
 #include "talos/Dialect/Schedule/ScheduleOps.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 
@@ -29,11 +30,8 @@ bool observesExecutingThread(Operation *operation) {
   // to runtime calls before eval owners are planned.
   auto call = dyn_cast<LLVM::CallOp>(operation);
   std::optional<StringRef> callee = call ? call.getCallee() : std::nullopt;
-  return callee && (callee->starts_with("talos_rt_v1_process_") ||
-                    callee->starts_with("talos_rt_v1_control_") ||
-                    *callee == "talos_rt_v1_scheduler_disable_children" ||
-                    *callee == "talos_rt_v1_import_call" ||
-                    *callee == "talos_rt_v1_import_call_guarded");
+  return callee &&
+         hasNativeRuntimeEffect(*callee, native_runtime::ObservesThread);
 }
 
 namespace {

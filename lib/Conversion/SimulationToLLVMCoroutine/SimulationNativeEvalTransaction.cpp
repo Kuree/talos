@@ -689,9 +689,8 @@ static void shareGenericQueueView(ModuleOp module) {
     auto call = dyn_cast<LLVM::CallOp>(op);
     if (!selected.count(op)) {
       if (call && call.getCallee()) {
-        if (*call.getCallee() ==
-            getNativeRuntimeSymbol(
-                NativeRuntimeEntry::SchedulerPrioritySignalPending))
+        if (callsNativeRuntime(
+                call, NativeRuntimeEntry::SchedulerPrioritySignalPending))
           continue;
         if (auto target = symbols.lookup<LLVM::LLVMFuncOp>(*call.getCallee()))
           if (bodies.lookup(target).closed)
@@ -1647,10 +1646,8 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
             replacement->setAttr(attr.getName(), attr.getValue());
         call.replaceAllUsesWith(replacement.getResults());
         call.erase();
-      } else if (call.getCallee() &&
-                 *call.getCallee() ==
-                     getNativeRuntimeSymbol(
-                         NativeRuntimeEntry::SchedulerPrepareEvalNba)) {
+      } else if (callsNativeRuntime(
+                     call, NativeRuntimeEntry::SchedulerPrepareEvalNba)) {
         Value bits = pendingBits(builder, loc, frame, words);
         Value localRegion = LLVM::SelectOp::create(
             builder, loc,

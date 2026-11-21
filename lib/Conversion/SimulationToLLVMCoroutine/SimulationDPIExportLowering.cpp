@@ -232,7 +232,7 @@ materializeCWrapper(ModuleOp module, const ExportSpec &spec,
   Type voidType = LLVM::LLVMVoidType::get(context);
   uint32_t outputCount = spec.abi.size() - spec.inputCount;
   StringRef cIdentifier = spec.cIdentifier.getValue();
-  if (cIdentifier == "main" || cIdentifier.starts_with("talos_rt_") ||
+  if (cIdentifier == "main" || isNativeRuntimeSymbol(cIdentifier) ||
       cIdentifier.starts_with("__talos_"))
     return spec.operation->emitError()
            << "DPI export C identifier '" << cIdentifier

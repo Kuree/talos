@@ -1,5 +1,6 @@
 //===- SimulationWideIntegerLowering.cpp - Word-vector bitwise planes ----===//
 
+#include "NativeRuntimeCalls.h"
 #include "SimulationPackedLowering.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Conversion/Passes.h"
@@ -280,8 +281,7 @@ static bool scopeNativeOutputTemporaries(LLVM::LLVMFuncOp function) {
           if (containsPointer(load.getType()))
             pending.push_back(load.getResult());
         } else if (auto call = dyn_cast<LLVM::CallOp>(user)) {
-          if (call.getCallee() !=
-                  getNativeRuntimeSymbol(NativeRuntimeEntry::EvalDisplay) ||
+          if (!callsNativeRuntime(call, NativeRuntimeEntry::EvalDisplay) ||
               call.getArgOperands().size() != 7) {
             valid = false;
           } else {

@@ -1,6 +1,7 @@
 //===- SimulationProcessCoroutineLowering.cpp - Native process lowering ===//
 
 #include "SimulationProcessCoroutineLowering.h"
+#include "NativeRuntimeCalls.h"
 #include "SimulationProcessRuntimeABI.h"
 #include "SimulationProcessWrapperLowering.h"
 #include "talos/Dialect/Native/NativeDialect.h"
@@ -657,9 +658,7 @@ void shareObservedSampledPlanes(
     for (Operation *consumer : context.getResult().getUsers()) {
       auto call = dyn_cast<LLVM::CallOp>(consumer);
       APInt selector;
-      if (call &&
-          call.getCallee() ==
-              getNativeRuntimeSymbol(NativeRuntimeEntry::SampledPlane) &&
+      if (call && callsNativeRuntime(call, NativeRuntimeEntry::SampledPlane) &&
           matchPattern(call.getArgOperands()[1], m_ConstantInt(&selector)) &&
           selector.ule(1))
         reads[selector.getZExtValue()].push_back(call);

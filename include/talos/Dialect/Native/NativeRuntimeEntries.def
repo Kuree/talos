@@ -159,12 +159,13 @@ TALOS_NATIVE_RUNTIME(StaticSpecializationGuardRoots,
                      SIG(I32, Ptr, Ptr, I64), PendingTransparent)
 
 // An epoch-armed deferred report (12.4.2.1, 12.5.3.1, 16.4.1) only queues its
-// ticket; an eval activation keeps it for a direct generated output.
+// ticket; an eval activation keeps it for a direct generated output. The
+// report is a cold runtime exit of the activation that queues it.
 TALOS_NATIVE_RUNTIME(DeferredEnqueue, talos_rt_v1_deferred_enqueue,
-                     SIG(I64, Ptr, I64), None)
+                     SIG(I64, Ptr, I64), ReportsStatus)
 TALOS_NATIVE_RUNTIME(DeferredEnqueueForAssertion,
                      talos_rt_v1_deferred_enqueue_for_assertion,
-                     SIG(I64, Ptr, I64, I64), None)
+                     SIG(I64, Ptr, I64, I64), ReportsStatus)
 
 // The generic NBA queue (4.5, 4.6(b), 10.4.2). Its queries read the queue's
 // membership; its captures append the RHS and destination. Neither changes
@@ -270,6 +271,60 @@ TALOS_NATIVE_RUNTIME(StaticNbaStageWide, talos_rt_v1_static_nba_stage_wide,
 TALOS_NATIVE_RUNTIME(SchedulerStaticNba, talos_rt_v1_scheduler_static_nba,
                      SIG(I32, Ptr, I64, Ptr, Ptr, I64, I64, I64, Ptr, Ptr),
                      None)
+
+// Process control and queries (9.7), the blocks a disable can target (9.6.2),
+// processes a fork starts (9.3.2) and context DPI imports (35.5.3) observe
+// the process that executes them.
+TALOS_NATIVE_RUNTIME(ControlBoundary, talos_rt_v1_control_boundary,
+                     SIG(I32, Ptr, I64, I32), ObservesThread)
+TALOS_NATIVE_RUNTIME(ControlDisable, talos_rt_v1_control_disable,
+                     SIG(I32, Ptr, I64, I64, I32), ObservesThread)
+TALOS_NATIVE_RUNTIME(ControlDisableSelected,
+                     talos_rt_v1_control_disable_selected,
+                     SIG(I32, Ptr, I64, I64, I32, Ptr), ObservesThread)
+TALOS_NATIVE_RUNTIME(ControlEnter, talos_rt_v1_control_enter,
+                     SIG(I32, Ptr, I64, Ptr), ObservesThread)
+TALOS_NATIVE_RUNTIME(ControlEscapePending, talos_rt_v1_control_escape_pending,
+                     SIG(I32, Ptr), ObservesThread)
+TALOS_NATIVE_RUNTIME(ControlLeave, talos_rt_v1_control_leave,
+                     SIG(I32, Ptr, I64), ObservesThread)
+TALOS_NATIVE_RUNTIME(ImportCall, talos_rt_v1_import_call,
+                     SIG(I32, Ptr, Ptr, Ptr, I32, Ptr, I32), ObservesThread)
+TALOS_NATIVE_RUNTIME(ImportCallGuarded, talos_rt_v1_import_call_guarded,
+                     SIG(I32, I32, Ptr, Ptr, Ptr, I32, Ptr, I32),
+                     ObservesThread)
+TALOS_NATIVE_RUNTIME(ProcessControl, talos_rt_v1_process_control,
+                     SIG(I32, Ptr, I64, I32, Ptr), ObservesThread)
+TALOS_NATIVE_RUNTIME(ProcessCurrent, talos_rt_v1_process_current, SIG(I64, Ptr),
+                     ObservesThread)
+TALOS_NATIVE_RUNTIME(ProcessEventPending, talos_rt_v1_process_event_pending,
+                     SIG(I32, Ptr, I64, Ptr), ObservesThread)
+TALOS_NATIVE_RUNTIME(ProcessInstanceCreate, talos_rt_v1_process_instance_create,
+                     SIG(I32, Ptr, Ptr), ObservesThread)
+TALOS_NATIVE_RUNTIME(ProcessInstanceCreateForContext,
+                     talos_rt_v1_process_instance_create_for_context,
+                     SIG(I32, Ptr, Ptr, Ptr), ObservesThread)
+TALOS_NATIVE_RUNTIME(ProcessInstanceDestroy,
+                     talos_rt_v1_process_instance_destroy, SIG(I32, Ptr),
+                     ObservesThread)
+TALOS_NATIVE_RUNTIME(ProcessInstanceExecute,
+                     talos_rt_v1_process_instance_execute,
+                     SIG(I32, Ptr, Ptr, I32, Ptr), ObservesThread)
+TALOS_NATIVE_RUNTIME(ProcessInstanceFrame, talos_rt_v1_process_instance_frame,
+                     SIG(I32, Ptr, Ptr, Ptr), ObservesThread)
+TALOS_NATIVE_RUNTIME(ProcessRandomGet, talos_rt_v1_process_random_get,
+                     SIG(I32, Ptr, I64, Ptr), ObservesThread)
+TALOS_NATIVE_RUNTIME(ProcessRandomSet, talos_rt_v1_process_random_set,
+                     SIG(I32, Ptr, I64, Ptr), ObservesThread)
+TALOS_NATIVE_RUNTIME(ProcessSpawn, talos_rt_v1_process_spawn,
+                     SIG(I64, Ptr, Ptr, Ptr), ObservesThread)
+TALOS_NATIVE_RUNTIME(ProcessSpawnBatch, talos_rt_v1_process_spawn_batch,
+                     SIG(I32, Ptr, Ptr, Ptr, I32), ObservesThread)
+TALOS_NATIVE_RUNTIME(ProcessStatus, talos_rt_v1_process_status,
+                     SIG(I32, Ptr, I64, Ptr), ObservesThread)
+TALOS_NATIVE_RUNTIME(SchedulerDisableChildren,
+                     talos_rt_v1_scheduler_disable_children, SIG(I32, Ptr),
+                     ObservesThread)
 
 // Entries native passes assume nothing about: generated code only calls them
 // through their declarations.
@@ -396,19 +451,6 @@ TALOS_NATIVE_RUNTIME(ContextDestroy, talos_rt_v1_context_destroy, SIG(V, Ptr),
 TALOS_NATIVE_RUNTIME(ContextRegisterImportSignature,
                      talos_rt_v1_context_register_import_signature,
                      SIG(I32, Ptr, I32, I64, Ptr, Ptr), None)
-TALOS_NATIVE_RUNTIME(ControlBoundary, talos_rt_v1_control_boundary,
-                     SIG(I32, Ptr, I64, I32), None)
-TALOS_NATIVE_RUNTIME(ControlDisable, talos_rt_v1_control_disable,
-                     SIG(I32, Ptr, I64, I64, I32), None)
-TALOS_NATIVE_RUNTIME(ControlDisableSelected,
-                     talos_rt_v1_control_disable_selected,
-                     SIG(I32, Ptr, I64, I64, I32, Ptr), None)
-TALOS_NATIVE_RUNTIME(ControlEnter, talos_rt_v1_control_enter,
-                     SIG(I32, Ptr, I64, Ptr), None)
-TALOS_NATIVE_RUNTIME(ControlEscapePending, talos_rt_v1_control_escape_pending,
-                     SIG(I32, Ptr), None)
-TALOS_NATIVE_RUNTIME(ControlLeave, talos_rt_v1_control_leave,
-                     SIG(I32, Ptr, I64), None)
 TALOS_NATIVE_RUNTIME(CoverageControlDefinition,
                      talos_rt_v1_coverage_control_definition,
                      SIG(I32, Ptr, I32, I32, I32, I64, Ptr), None)
@@ -697,10 +739,6 @@ TALOS_NATIVE_RUNTIME(GcRootRangePush, talos_rt_v1_gc_root_range_push,
 TALOS_NATIVE_RUNTIME(GcSafepoint, talos_rt_v1_gc_safepoint, SIG(I32, Ptr), None)
 TALOS_NATIVE_RUNTIME(GcStaticRootRegister, talos_rt_v1_gc_static_root_register,
                      SIG(I32, Ptr, Ptr), None)
-TALOS_NATIVE_RUNTIME(ImportCall, talos_rt_v1_import_call,
-                     SIG(I32, Ptr, Ptr, Ptr, I32, Ptr, I32), None)
-TALOS_NATIVE_RUNTIME(ImportCallGuarded, talos_rt_v1_import_call_guarded,
-                     SIG(I32, I32, Ptr, Ptr, Ptr, I32, Ptr, I32), None)
 TALOS_NATIVE_RUNTIME(ImportCallNoncontext, talos_rt_v1_import_call_noncontext,
                      SIG(I32, Ptr, Ptr, Ptr, I32, Ptr, I32), None)
 TALOS_NATIVE_RUNTIME(ImportCallNoncontextGuarded,
@@ -851,34 +889,6 @@ TALOS_NATIVE_RUNTIME(PowerNbaView, talos_rt_v1_power_nba_view,
                      SIG(I32, Ptr, Ptr, Ptr, I64, I64, I64, I64, I64, I64, I32,
                          I64, I64, Ptr, Ptr, Ptr),
                      None)
-TALOS_NATIVE_RUNTIME(ProcessControl, talos_rt_v1_process_control,
-                     SIG(I32, Ptr, I64, I32, Ptr), None)
-TALOS_NATIVE_RUNTIME(ProcessCurrent, talos_rt_v1_process_current, SIG(I64, Ptr),
-                     None)
-TALOS_NATIVE_RUNTIME(ProcessEventPending, talos_rt_v1_process_event_pending,
-                     SIG(I32, Ptr, I64, Ptr), None)
-TALOS_NATIVE_RUNTIME(ProcessInstanceCreate, talos_rt_v1_process_instance_create,
-                     SIG(I32, Ptr, Ptr), None)
-TALOS_NATIVE_RUNTIME(ProcessInstanceCreateForContext,
-                     talos_rt_v1_process_instance_create_for_context,
-                     SIG(I32, Ptr, Ptr, Ptr), None)
-TALOS_NATIVE_RUNTIME(ProcessInstanceDestroy,
-                     talos_rt_v1_process_instance_destroy, SIG(I32, Ptr), None)
-TALOS_NATIVE_RUNTIME(ProcessInstanceExecute,
-                     talos_rt_v1_process_instance_execute,
-                     SIG(I32, Ptr, Ptr, I32, Ptr), None)
-TALOS_NATIVE_RUNTIME(ProcessInstanceFrame, talos_rt_v1_process_instance_frame,
-                     SIG(I32, Ptr, Ptr, Ptr), None)
-TALOS_NATIVE_RUNTIME(ProcessRandomGet, talos_rt_v1_process_random_get,
-                     SIG(I32, Ptr, I64, Ptr), None)
-TALOS_NATIVE_RUNTIME(ProcessRandomSet, talos_rt_v1_process_random_set,
-                     SIG(I32, Ptr, I64, Ptr), None)
-TALOS_NATIVE_RUNTIME(ProcessSpawn, talos_rt_v1_process_spawn,
-                     SIG(I64, Ptr, Ptr, Ptr), None)
-TALOS_NATIVE_RUNTIME(ProcessSpawnBatch, talos_rt_v1_process_spawn_batch,
-                     SIG(I32, Ptr, Ptr, Ptr, I32), None)
-TALOS_NATIVE_RUNTIME(ProcessStatus, talos_rt_v1_process_status,
-                     SIG(I32, Ptr, I64, Ptr), None)
 TALOS_NATIVE_RUNTIME(QueueDeleteIndex, talos_rt_v1_queue_delete_index,
                      SIG(I32, Ptr, I64), None)
 TALOS_NATIVE_RUNTIME(QueueInsert, talos_rt_v1_queue_insert,
@@ -1007,9 +1017,6 @@ TALOS_NATIVE_RUNTIME(SchedulerDirectFragmentEnter,
 TALOS_NATIVE_RUNTIME(SchedulerDirectFragmentLeave,
                      talos_rt_v1_scheduler_direct_fragment_leave,
                      SIG(I32, Ptr, I32), None)
-TALOS_NATIVE_RUNTIME(SchedulerDisableChildren,
-                     talos_rt_v1_scheduler_disable_children, SIG(I32, Ptr),
-                     None)
 TALOS_NATIVE_RUNTIME(SchedulerDrainClockedActive,
                      talos_rt_v1_scheduler_drain_clocked_active,
                      SIG(I32, Ptr, Ptr, Ptr), None)

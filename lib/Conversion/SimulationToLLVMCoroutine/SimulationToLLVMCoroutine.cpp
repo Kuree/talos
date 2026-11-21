@@ -164,6 +164,7 @@ public:
 };
 
 using detail::buildNativeStateLayout;
+using detail::callsNativeRuntime;
 using detail::convertProcessType;
 using detail::declareNativeRuntimeABI;
 using detail::declareTableProcessRuntimeABI;
@@ -393,7 +394,7 @@ LogicalResult verifyGeneratedEvalCallClosures(ModuleOp module) {
               return WalkResult::advance();
           }
         }
-        if (callee->starts_with("talos_rt_")) {
+        if (isNativeRuntimeSymbol(*callee)) {
           if (isEvalClosureRuntimeCall(call, function, module))
             return WalkResult::advance();
           return reject(call, "generated eval hot closure calls runtime "
@@ -427,7 +428,7 @@ LogicalResult verifyGeneratedEvalCallClosures(ModuleOp module) {
                           function.getSymName());
       }
       for (FlatSymbolRefAttr target : targets) {
-        if (target.getValue().starts_with("talos_rt_"))
+        if (isNativeRuntimeSymbol(target.getValue()))
           return reject(call, "generated eval indirect route targets runtime "
                               "symbol " +
                                   target.getValue());
@@ -2736,11 +2737,10 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
   run.walk([&](LLVM::CallOp call) {
     if (!call.getCallee())
       return;
-    if (*call.getCallee() ==
-        getNativeRuntimeSymbol(NativeRuntimeEntry::SchedulerPreparePeriodicAot))
+    if (callsNativeRuntime(call,
+                           NativeRuntimeEntry::SchedulerPreparePeriodicAot))
       prepare = call;
-    else if (*call.getCallee() ==
-             getNativeRuntimeSymbol(NativeRuntimeEntry::SchedulerRunAotNodes))
+    else if (callsNativeRuntime(call, NativeRuntimeEntry::SchedulerRunAotNodes))
       eventDrivenRun = call;
   });
   if (!prepare && !eventDrivenRun) {
@@ -2908,7 +2908,7 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
       // remaining runtime calls, and the start of a $strobe display
       // (21.2.2), are checkpoint leaves.
       if (std::optional<StringRef> callee = call.getCallee();
-          (callee && callee->starts_with("talos_rt_") &&
+          (callee && isNativeRuntimeSymbol(*callee) &&
            !isEvalClosureRuntimeCall(call, function, module)) ||
           sim::has<sim::metadata::PostponedDisplay>(call))
         checkpointBlocks.try_emplace(call->getBlock(), call.getOperation());

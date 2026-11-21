@@ -21,6 +21,8 @@ namespace talos::detail {
 /// it. False for another operation.
 bool hasNativeRuntimeEffect(mlir::Operation *op, native_runtime::Effect effect);
 using ::talos::hasNativeRuntimeEffect;
+/// Whether `op` is an LLVM call of `entry`; false for a null `op`.
+bool callsNativeRuntime(mlir::Operation *op, NativeRuntimeEntry entry);
 
 } // namespace talos::detail
 
