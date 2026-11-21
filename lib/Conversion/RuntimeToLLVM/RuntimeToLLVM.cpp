@@ -2,6 +2,7 @@
 
 #include "talos/Conversion/RuntimeToLLVM.h"
 #include "talos/Analysis/ParallelWalk.h"
+#include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleDialect.h"
 #include "talos/Dialect/Schedule/ScheduleOps.h"
 

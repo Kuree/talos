@@ -63,7 +63,9 @@ enum Effect : uint32_t {
   /// Updates at most the generic NBA queue and its membership words, never
   /// which bitmap describes the queue.
   QueueCaptureOnly = 1u << 5,
-  /// Reached only from a cold path, such as a failed capacity test.
+  /// Declared cold: reached only from a cold path, such as a failed capacity
+  /// test, or a diagnostic or termination service whose own cost dwarfs any
+  /// code placement.
   Cold = 1u << 6,
   /// Observes the process that executes the call as a thread: process
   /// control and queries (IEEE 1800-2023 9.7), the blocks a disable can

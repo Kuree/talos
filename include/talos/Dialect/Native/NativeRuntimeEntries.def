@@ -53,15 +53,18 @@ TALOS_NATIVE_RUNTIME(CoveragePointHit, talos_rt_v1_coverage_point_hit,
 // eval_display formats its already captured arguments and writes to
 // runtime-owned FILE streams. It reads no pending accumulator and calls
 // neither the scheduler nor VPI; no NBA is committed for display (4.9.4).
+// Like the other diagnostic services, its declaration is cold.
 TALOS_NATIVE_RUNTIME(EvalDisplay, talos_rt_v1_eval_display,
                      SIG(I32, Ptr, I32, I32, I32, Ptr, I64, Ptr),
-                     EvalInline | PendingTransparent | ReadinessTransparent)
+                     EvalInline | PendingTransparent | ReadinessTransparent |
+                         Cold)
 // $error only latches the final exit status and lets simulation continue
 // (20.10). It never schedules or executes an actor. In VPI builds it also
 // delivers cbError callbacks (38.36.3), whose VPI accesses are those of a
-// context DPI call.
+// context DPI call. Like the other diagnostic services, its declaration is
+// cold.
 TALOS_NATIVE_RUNTIME(SchedulerError, talos_rt_v1_scheduler_error, SIG(I32, Ptr),
-                     EvalInline)
+                     EvalInline | Cold)
 // $random and $dist_* (20.14, Annex N) only run the normative algorithm on a
 // context-global or explicit seed. Random stability (18.14) lists neither, so
 // these draws need no process identity and stay in statement order (4.6(a)).
@@ -277,6 +280,27 @@ TALOS_NATIVE_RUNTIME(StaticNbaStageWide, talos_rt_v1_static_nba_stage_wide,
 TALOS_NATIVE_RUNTIME(SchedulerStaticNba, talos_rt_v1_scheduler_static_nba,
                      SIG(I32, Ptr, I64, Ptr, Ptr, I64, I64, I64, Ptr, Ptr),
                      None)
+
+// Diagnostic and termination services (20.2, 20.10, 21.2, 21.3.7): their own
+// cost dwarfs any code placement, so their declarations are cold and the
+// optimizer lays the paths that reach them out of line. This affects placement
+// only, never what executes.
+TALOS_NATIVE_RUNTIME(Display, talos_rt_v1_display,
+                     SIG(I32, Ptr, I32, I32, I32, Ptr, I64, Ptr), Cold)
+TALOS_NATIVE_RUNTIME(FileError, talos_rt_v1_file_error,
+                     SIG(I32, Ptr, I32, Ptr, Ptr), Cold)
+TALOS_NATIVE_RUNTIME(LastError, talos_rt_v1_last_error, SIG(I32, Ptr, Ptr),
+                     Cold)
+TALOS_NATIVE_RUNTIME(SchedulerFatal, talos_rt_v1_scheduler_fatal,
+                     SIG(I32, Ptr, I32), Cold)
+TALOS_NATIVE_RUNTIME(SchedulerFinish, talos_rt_v1_scheduler_finish,
+                     SIG(I32, Ptr, I32), Cold)
+TALOS_NATIVE_RUNTIME(SchedulerProgramExit, talos_rt_v1_scheduler_program_exit,
+                     SIG(I32, Ptr), Cold)
+TALOS_NATIVE_RUNTIME(SchedulerStop, talos_rt_v1_scheduler_stop,
+                     SIG(I32, Ptr, I32), Cold)
+TALOS_NATIVE_RUNTIME(StatusString, talos_rt_v1_status_string, SIG(Ptr, I32),
+                     Cold)
 
 // Process control and queries (9.7), the blocks a disable can target (9.6.2),
 // processes a fork starts (9.3.2) and context DPI imports (35.5.3) observe
@@ -539,8 +563,6 @@ TALOS_NATIVE_RUNTIME(DeferredMature, talos_rt_v1_deferred_mature,
                      SIG(I32, Ptr, I64), None)
 TALOS_NATIVE_RUNTIME(DeferredOnce, talos_rt_v1_deferred_once,
                      SIG(I32, Ptr, I64), None)
-TALOS_NATIVE_RUNTIME(Display, talos_rt_v1_display,
-                     SIG(I32, Ptr, I32, I32, I32, Ptr, I64, Ptr), None)
 TALOS_NATIVE_RUNTIME(DpiAggregateExportPack,
                      talos_rt_v1_dpi_aggregate_export_pack,
                      SIG(I32, Ptr, Ptr, I64, I64, I32, Ptr, I64, Ptr, I64, I32),
@@ -642,8 +664,6 @@ TALOS_NATIVE_RUNTIME(FileClose, talos_rt_v1_file_close, SIG(I32, Ptr, I32),
                      None)
 TALOS_NATIVE_RUNTIME(FileEof, talos_rt_v1_file_eof, SIG(I32, Ptr, I32, Ptr),
                      None)
-TALOS_NATIVE_RUNTIME(FileError, talos_rt_v1_file_error,
-                     SIG(I32, Ptr, I32, Ptr, Ptr), None)
 TALOS_NATIVE_RUNTIME(FileErrorString, talos_rt_v1_file_error_string,
                      SIG(I32, Ptr, Ptr, I32, Ptr, Ptr), None)
 TALOS_NATIVE_RUNTIME(FileFlush, talos_rt_v1_file_flush, SIG(I32, Ptr, I32),
@@ -744,8 +764,6 @@ TALOS_NATIVE_RUNTIME(InterfaceMethodInvoke, talos_rt_v1_interface_method_invoke,
 TALOS_NATIVE_RUNTIME(InterfaceMethodTaskActivate,
                      talos_rt_v1_interface_method_task_activate,
                      SIG(I32, Ptr, Ptr, I64, I64, I64, Ptr, I32, Ptr), None)
-TALOS_NATIVE_RUNTIME(LastError, talos_rt_v1_last_error, SIG(I32, Ptr, Ptr),
-                     None)
 TALOS_NATIVE_RUNTIME(MailboxCreateTyped, talos_rt_v1_mailbox_create_typed,
                      SIG(I32, Ptr, I64, I32, I32, I64, I64, I64, Ptr, I64, I64,
                          Ptr),
@@ -1039,10 +1057,6 @@ TALOS_NATIVE_RUNTIME(SchedulerEventTriggered,
 TALOS_NATIVE_RUNTIME(SchedulerExecuteAotActor,
                      talos_rt_v1_scheduler_execute_aot_actor,
                      SIG(I32, Ptr, I32), None)
-TALOS_NATIVE_RUNTIME(SchedulerFatal, talos_rt_v1_scheduler_fatal,
-                     SIG(I32, Ptr, I32), None)
-TALOS_NATIVE_RUNTIME(SchedulerFinish, talos_rt_v1_scheduler_finish,
-                     SIG(I32, Ptr, I32), None)
 TALOS_NATIVE_RUNTIME(SchedulerHandoffPeriodicAot,
                      talos_rt_v1_scheduler_handoff_periodic_aot,
                      SIG(I32, Ptr, Ptr, I32, Ptr), None)
@@ -1120,8 +1134,6 @@ TALOS_NATIVE_RUNTIME(SchedulerPrime, talos_rt_v1_scheduler_prime,
                      SIG(I32, Ptr, Ptr), None)
 TALOS_NATIVE_RUNTIME(SchedulerProcessToken, talos_rt_v1_scheduler_process_token,
                      SIG(I64, Ptr, Ptr), None)
-TALOS_NATIVE_RUNTIME(SchedulerProgramExit, talos_rt_v1_scheduler_program_exit,
-                     SIG(I32, Ptr), None)
 TALOS_NATIVE_RUNTIME(SchedulerProgramOwned, talos_rt_v1_scheduler_program_owned,
                      SIG(I32, Ptr), None)
 TALOS_NATIVE_RUNTIME(SchedulerProgramRegister,
@@ -1164,8 +1176,6 @@ TALOS_NATIVE_RUNTIME(SchedulerStaticNbaPacked,
                      talos_rt_v1_scheduler_static_nba_packed,
                      SIG(I32, Ptr, I32, Ptr, Ptr, I64, I64, I64, I64, I64),
                      None)
-TALOS_NATIVE_RUNTIME(SchedulerStop, talos_rt_v1_scheduler_stop,
-                     SIG(I32, Ptr, I32), None)
 TALOS_NATIVE_RUNTIME(SchedulerStringNba, talos_rt_v1_scheduler_string_nba,
                      SIG(I32, Ptr, Ptr, I64, I64, I64, I64), None)
 TALOS_NATIVE_RUNTIME(SchedulerTrackCohorts, talos_rt_v1_scheduler_track_cohorts,
@@ -1195,8 +1205,6 @@ TALOS_NATIVE_RUNTIME(StaticNbaCommitRoot, talos_rt_v1_static_nba_commit_root,
 TALOS_NATIVE_RUNTIME(StaticNbaCommitRoots, talos_rt_v1_static_nba_commit_roots,
                      SIG(I32, Ptr, I32, I32, Ptr), None)
 TALOS_NATIVE_RUNTIME(StaticOnce, talos_rt_v1_static_once, SIG(I32, Ptr, I64),
-                     None)
-TALOS_NATIVE_RUNTIME(StatusString, talos_rt_v1_status_string, SIG(Ptr, I32),
                      None)
 TALOS_NATIVE_RUNTIME(StochasticQueue, talos_rt_v1_stochastic_queue,
                      SIG(I32, Ptr, I32, I32, I32, I32, I32, I32, I32, I64, Ptr,

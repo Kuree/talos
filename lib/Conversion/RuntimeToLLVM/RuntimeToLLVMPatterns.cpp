@@ -26,152 +26,18 @@ using namespace mlir;
 
 namespace talos::runtimelowering {
 
-LLVM::LLVMFunctionType getFunctionType(runtime::RuntimeCall call,
-                                       const ABITypes &abi) {
-  SmallVector<Type> arguments;
-  Type result = abi.i32;
-  switch (runtime::getRuntimeSignature(call)) {
-  case runtime::RuntimeSignature::ContextCreate:
-    arguments = {abi.pointer};
-    break;
-  case runtime::RuntimeSignature::ContextDestroy:
-    result = abi.voidType;
-    arguments = {abi.pointer};
-    break;
-  case runtime::RuntimeSignature::StatusString:
-    result = abi.pointer;
-    arguments = {abi.i32};
-    break;
-  case runtime::RuntimeSignature::BufferRelease:
-    result = abi.voidType;
-    arguments = {abi.pointer};
-    break;
-  case runtime::RuntimeSignature::LastError:
-    arguments = {abi.pointer, abi.pointer};
-    break;
-  case runtime::RuntimeSignature::Finish:
-    arguments = {abi.pointer, abi.i32};
-    break;
-  case runtime::RuntimeSignature::Error:
-    arguments = {abi.pointer};
-    break;
-  case runtime::RuntimeSignature::TerminationRequested:
-    arguments = {abi.pointer};
-    break;
-  case runtime::RuntimeSignature::SchedulerTime:
-    result = abi.i64;
-    arguments = {abi.pointer};
-    break;
-  case runtime::RuntimeSignature::Format:
-    arguments = {abi.pointer, abi.pointer, abi.i64,    abi.pointer,
-                 abi.i64,     abi.pointer, abi.pointer};
-    break;
-  case runtime::RuntimeSignature::StringOutputFormat:
-    arguments = {abi.pointer, abi.i32,     abi.pointer,
-                 abi.i64,     abi.pointer, abi.pointer};
-    break;
-  case runtime::RuntimeSignature::StringOutputFields:
-    arguments = {abi.pointer, abi.pointer, abi.i64,
-                 abi.pointer, abi.i64,     abi.pointer};
-    break;
-  case runtime::RuntimeSignature::Display:
-    arguments = {abi.pointer, abi.i32, abi.i32,    abi.i32,
-                 abi.pointer, abi.i64, abi.pointer};
-    break;
-  case runtime::RuntimeSignature::TimeFormat:
-    arguments = {abi.pointer, abi.i32, abi.i32, abi.pointer, abi.i64, abi.i32};
-    break;
-  case runtime::RuntimeSignature::TimeScanScale:
-    result = Float64Type::get(abi.i64.getContext());
-    arguments = {abi.pointer, result, abi.i64, abi.i32};
-    break;
-  case runtime::RuntimeSignature::DumpOpen:
-    arguments = {abi.pointer, abi.pointer, abi.i64};
-    break;
-  case runtime::RuntimeSignature::DumpVars:
-    arguments = {abi.pointer, abi.i64, abi.pointer, abi.i64};
-    break;
-  case runtime::RuntimeSignature::DumpContext:
-    arguments = {abi.pointer};
-    break;
-  case runtime::RuntimeSignature::DumpU32:
-    arguments = {abi.pointer, abi.i32};
-    break;
-  case runtime::RuntimeSignature::DumpU64:
-    arguments = {abi.pointer, abi.i64};
-    break;
-  case runtime::RuntimeSignature::FileOpenMCD:
-    arguments = {abi.pointer, abi.pointer, abi.i64, abi.pointer};
-    break;
-  case runtime::RuntimeSignature::FileOpen:
-    arguments = {abi.pointer, abi.pointer, abi.i64,
-                 abi.pointer, abi.i64,     abi.pointer};
-    break;
-  case runtime::RuntimeSignature::FileDescriptorStatus:
-    arguments = {abi.pointer, abi.i32};
-    break;
-  case runtime::RuntimeSignature::FileBytesCount:
-    arguments = {abi.pointer, abi.i32, abi.pointer, abi.i64, abi.pointer};
-    break;
-  case runtime::RuntimeSignature::FileReadMemToken:
-    arguments = {abi.pointer, abi.i32,     abi.i32, abi.i64,     abi.pointer,
-                 abi.i64,     abi.pointer, abi.i64, abi.pointer, abi.pointer};
-    break;
-  case runtime::RuntimeSignature::FileByteOut:
-    arguments = {abi.pointer, abi.i32, abi.pointer};
-    break;
-  case runtime::RuntimeSignature::FileUngetc:
-    arguments = {abi.pointer, abi.i32, abi.i8};
-    break;
-  case runtime::RuntimeSignature::FileBufferOut:
-    arguments = {abi.pointer, abi.i32, abi.i64, abi.pointer};
-    break;
-  case runtime::RuntimeSignature::FileU32Out:
-    arguments = {abi.pointer, abi.i32, abi.pointer};
-    break;
-  case runtime::RuntimeSignature::FileError:
-    arguments = {abi.pointer, abi.i32, abi.pointer, abi.pointer};
-    break;
-  case runtime::RuntimeSignature::FileSeek:
-    arguments = {abi.pointer, abi.i32, abi.i64, abi.i32};
-    break;
-  case runtime::RuntimeSignature::FileI64Out:
-    arguments = {abi.pointer, abi.i32, abi.pointer};
-    break;
-  case runtime::RuntimeSignature::FragmentExecute:
-    arguments = {abi.pointer, abi.pointer, abi.pointer,
-                 abi.i64,     abi.i32,     abi.pointer};
-    break;
-  case runtime::RuntimeSignature::BytecodeBounded:
-    arguments = {abi.pointer, abi.pointer, abi.pointer, abi.i64,
-                 abi.i32,     abi.i64,     abi.pointer};
-    break;
-  case runtime::RuntimeSignature::ProcessCreate:
-    arguments = {abi.pointer, abi.pointer};
-    break;
-  case runtime::RuntimeSignature::ProcessFrame:
-    arguments = {abi.pointer, abi.pointer, abi.pointer};
-    break;
-  case runtime::RuntimeSignature::ProcessExecute:
-    arguments = {abi.pointer, abi.pointer, abi.i32, abi.pointer};
-    break;
-  case runtime::RuntimeSignature::ProcessDestroy:
-    arguments = {abi.pointer};
-    break;
-  }
-  return LLVM::LLVMFunctionType::get(result, arguments, false);
-}
-
 FailureOr<LLVM::LLVMFuncOp> getOrCreateDeclaration(Operation *anchor,
                                                    runtime::RuntimeCall call,
                                                    const ABITypes &abi) {
   ModuleOp module = anchor->getParentOfType<ModuleOp>();
-  StringRef name = runtime::getRuntimeSymbol(call);
+  NativeRuntimeEntry entry = runtime::getRuntimeEntry(call);
   if (call == runtime::RuntimeCall::Display &&
       ::talos::schedule::has<::talos::schedule::Field::EvalDirectOutput>(
           anchor))
-    name = "talos_rt_v1_eval_display";
-  LLVM::LLVMFunctionType expected = getFunctionType(call, abi);
+    entry = NativeRuntimeEntry::EvalDisplay;
+  StringRef name = getNativeRuntimeSymbol(entry);
+  LLVM::LLVMFunctionType expected =
+      getNativeRuntimeFunctionType(module.getContext(), entry);
   RuntimeDeclarations &declared = *abi.declarations;
   std::lock_guard<std::mutex> lock(declared.mutex);
   if (declared.module != module.getOperation()) {
@@ -205,10 +71,7 @@ FailureOr<LLVM::LLVMFuncOp> getOrCreateDeclaration(Operation *anchor,
   // pattern, so the cached entry stays valid.
   OpBuilder builder(module.getBody(), module.getBody()->begin());
   auto function =
-      LLVM::LLVMFuncOp::create(builder, anchor->getLoc(), name, expected);
-  if (runtime::isColdRuntimeCall(call))
-    function.setPassthroughAttr(
-        builder.getArrayAttr({builder.getStringAttr("cold")}));
+      createNativeRuntimeDeclaration(builder, anchor->getLoc(), entry);
   existing = function;
   return function;
 }
@@ -1316,7 +1179,7 @@ void populateRuntimePatterns(const TypeConverter &converter,
   TALOS_RUNTIME_MATERIALIZER(RTStatusFromBitsOp, StatusCast);
   TALOS_RUNTIME_MATERIALIZER(RTStatusToBitsOp, StatusCast);
 #undef TALOS_RUNTIME_MATERIALIZER
-#define TALOS_RUNTIME_CALL(Name, Op, Symbol, Signature)                        \
+#define TALOS_RUNTIME_CALL(Name, Op, Entry)                                    \
   patterns.add<RuntimeCallLowering>(converter,                                 \
                                     runtime::Op::getOperationName(),           \
                                     runtime::RuntimeCall::Name, context, abi);

@@ -40,22 +40,11 @@ Operation *TalosRuntimeDialect::materializeConstant(OpBuilder &builder,
 
 OpFoldResult RTBytesConstantOp::fold(FoldAdaptor) { return getValueAttr(); }
 
-llvm::StringRef getRuntimeSymbol(RuntimeCall call) {
+NativeRuntimeEntry getRuntimeEntry(RuntimeCall call) {
   switch (call) {
-#define TALOS_RUNTIME_CALL(Name, Op, Symbol, Signature)                        \
+#define TALOS_RUNTIME_CALL(Name, Op, Entry)                                    \
   case RuntimeCall::Name:                                                      \
-    return #Symbol;
-#include "talos/Dialect/Runtime/RuntimeABI.def"
-#undef TALOS_RUNTIME_CALL
-  }
-  llvm_unreachable("unknown runtime call");
-}
-
-RuntimeSignature getRuntimeSignature(RuntimeCall call) {
-  switch (call) {
-#define TALOS_RUNTIME_CALL(Name, Op, Symbol, Signature)                        \
-  case RuntimeCall::Name:                                                      \
-    return RuntimeSignature::Signature;
+    return NativeRuntimeEntry::Entry;
 #include "talos/Dialect/Runtime/RuntimeABI.def"
 #undef TALOS_RUNTIME_CALL
   }
@@ -63,31 +52,12 @@ RuntimeSignature getRuntimeSignature(RuntimeCall call) {
 }
 
 std::optional<RuntimeCall> getRuntimeCall(Operation *operation) {
-#define TALOS_RUNTIME_CALL(Name, Op, Symbol, Signature)                        \
+#define TALOS_RUNTIME_CALL(Name, Op, Entry)                                    \
   if (isa<Op>(operation))                                                      \
     return RuntimeCall::Name;
 #include "talos/Dialect/Runtime/RuntimeABI.def"
 #undef TALOS_RUNTIME_CALL
   return std::nullopt;
-}
-
-bool isColdRuntimeCall(RuntimeCall call) {
-  switch (call) {
-  case RuntimeCall::StatusString:
-  case RuntimeCall::LastError:
-  case RuntimeCall::Finish:
-  case RuntimeCall::ProgramExit:
-  case RuntimeCall::Stop:
-  case RuntimeCall::Fatal:
-  case RuntimeCall::Error:
-  case RuntimeCall::Display:
-  case RuntimeCall::FileError:
-    return true;
-  default:
-    // Formatting and file services may sit on a design's ordinary path (a
-    // trace written every cycle); only diagnostics and termination are cold.
-    return false;
-  }
 }
 
 static_assert(static_cast<uint32_t>(DescriptorKind::Invalid) ==

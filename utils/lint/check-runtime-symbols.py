@@ -13,10 +13,7 @@ import sys
 source = Path(sys.argv[1])
 symbol = re.compile(r'"(talos_rt_v[0-9]+_[a-z0-9_]*[a-z0-9])"')
 # Files that may still spell a symbol, with the reason.
-allowed = {
-    # RuntimeToLLVM declares its entries from RuntimeABI.def.
-    "lib/Conversion/RuntimeToLLVM/RuntimeToLLVMPatterns.cpp",
-}
+allowed = set()
 errors = []
 for path in sorted((source / "lib").rglob("*")):
     if path.suffix not in {".cpp", ".h", ".def", ".td"}:

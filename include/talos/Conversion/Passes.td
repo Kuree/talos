@@ -320,7 +320,8 @@ def ConvertRuntimeToLLVMPass
     composes preparation and conversion for callers that need both stages.
   }];
   let dependentDialects = ["mlir::LLVM::LLVMDialect",
-                          "talos::schedule::ScheduleDialect"];
+                          "talos::schedule::ScheduleDialect",
+                          "talos::native::NativeDialect"];
 }
 
 def MaterializeRuntimeByteGlobalsPass
