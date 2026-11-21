@@ -6,7 +6,6 @@
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
-#include "talos/Dialect/Schedule/ClockedKernelName.h"
 #include "talos/Dialect/Schedule/ScheduleEnums.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
@@ -595,8 +594,7 @@ materializeNativeRankedGroups(ModuleOp module,
                                  two, ValueRange{});
         builder.setInsertionPointToStart(check);
         Value known = emitOwnerKernelReady(
-            builder, loc, owner, schedule::isClockedKernelSymbol(node->body),
-            promotionSymbols);
+            builder, loc, owner, node->clockedKernel, promotionSymbols);
         cf::CondBranchOp::create(builder, loc, known, two, ValueRange{}, four,
                                  ValueRange{});
         builder.setInsertionPointToStart(two);

@@ -11,7 +11,7 @@ declare void @llvm.assume(i1)
 
 ; CHECK-LABEL: define void @__talos_clocked_alias.__talos_eval_body_0(
 ; CHECK: call fastcc void @__talos_clocked_alias.__talos_eval_body_0.__talos_update_group
-define void @__talos_clocked_alias.__talos_eval_body_0(ptr %a, ptr %b) {
+define void @__talos_clocked_alias.__talos_eval_body_0(ptr %a, ptr %b) #0 {
 entry:
   call void @llvm.assume(i1 true) [ "separate_storage"(ptr %a, ptr %b) ]
   br label %first
@@ -73,3 +73,5 @@ define i32 @main() {
 ; CHECK: store volatile i64 1, ptr %a
 ; CHECK: store volatile i64 2, ptr %b
 ; CHECK: "talos.clocked-update-group"
+
+attributes #0 = { "schedule.clocked_kernel" "schedule.eval_body" }

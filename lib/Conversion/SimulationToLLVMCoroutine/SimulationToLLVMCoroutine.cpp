@@ -7,6 +7,7 @@
 #include "SimulationEvalNBAQueue.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
+#include "talos/Dialect/Schedule/EvalRoles.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
 #include "talos/Dialect/Schedule/ScheduleDialect.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
@@ -251,9 +252,10 @@ bool isEvalClosureRuntimeCall(LLVM::CallOp call, LLVM::LLVMFuncOp function,
   switch (*entry) {
   case Entry::StaticSpecializationGuard:
   case Entry::StaticSpecializationGuardRoots:
-    // Only full VPI emits these scheduling guards; off/read retain their
-    // original generated execution paths.
-    return function.getSymName().starts_with("__talos_eval_write_guard_");
+    // Only full VPI emits these scheduling guards, and only the coordinator's
+    // write guard calls them; off/read retain their original generated
+    // execution paths.
+    return schedule::hasEvalRoles(function, schedule::EvalRole::WriteGuard);
   case Entry::DeferredEnqueue:
   case Entry::DeferredEnqueueForAssertion:
     // An epoch-armed deferred report (IEEE 1800-2023 12.4.2.1, 12.5.3.1,
@@ -323,10 +325,7 @@ LogicalResult verifyGeneratedEvalCallClosures(ModuleOp module) {
   // Verification does not mutate symbols. Build the index once instead of
   // scanning the module for each edge in the generated call closure.
   SymbolTable symbols(module);
-  bool writableEval = llvm::any_of(
-      module.getOps<LLVM::LLVMFuncOp>(), [](LLVM::LLVMFuncOp function) {
-        return function.getSymName().starts_with("__talos_eval_write_guard_");
-      });
+  bool writableEval = schedule::has<schedule::Field::EvalWritableVpi>(module);
   bool runtimeCalendar =
       schedule::has<schedule::Field::EvalRuntimeCalendar>(module);
   constexpr auto allowedCalleesAttr =
@@ -367,8 +366,8 @@ LogicalResult verifyGeneratedEvalCallClosures(ModuleOp module) {
       SmallVector<FlatSymbolRefAttr> targets;
       if (std::optional<StringRef> callee = call.getCallee()) {
         // Owner code may sit in a coordinator segment function.
-        if (function.getSymName().starts_with(detail::evalDispatchName) &&
-            writableEval &&
+        if (writableEval &&
+            schedule::hasEvalRoles(function, schedule::EvalRole::Dispatch) &&
             *callee == "talos_rt_v1_scheduler_execute_aot_actor" &&
             call.getArgOperands().size() == 2 &&
             call.getArgOperands()[1].getDefiningOp<LLVM::ConstantOp>())
@@ -402,10 +401,13 @@ LogicalResult verifyGeneratedEvalCallClosures(ModuleOp module) {
         // Starting an epoch-armed report's evaluator only queues that
         // Observed-region process (IEEE 1800-2023 16.4.1); its spawn helper
         // is not part of the activation's call closure.
-        if (callee->ends_with(".__talos_spawn") &&
-            ::talos::schedule::has<::talos::schedule::Field::EvalDirectOutput>(
-                call))
-          return WalkResult::advance();
+        if (::talos::schedule::has<::talos::schedule::Field::EvalDirectOutput>(
+                call)) {
+          auto target = symbols.lookup<LLVM::LLVMFuncOp>(*callee);
+          if (target &&
+              schedule::hasEvalRoles(target, schedule::EvalRole::SpawnHelper))
+            return WalkResult::advance();
+        }
         targets.push_back(call.getCalleeAttr());
       } else if (auto allowed =
                      ::talos::schedule::get<allowedCalleesAttr>(call)) {
@@ -2924,6 +2926,9 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
 
         route.checkpointBody = cast<LLVM::LLVMFuncOp>(route.fourState->clone());
         route.checkpointBody.setSymName(route.checkpointBodyName);
+        // The copy runs only after a checkpoint, off the hot path: none of the
+        // body's roles applies to it.
+        schedule::remove<schedule::Field::EvalRole>(route.checkpointBody);
         route.checkpointBody.setPrivate();
         module.getBody()->push_back(route.checkpointBody);
         if (failed(fractureCheckpoints(route.twoState)) ||

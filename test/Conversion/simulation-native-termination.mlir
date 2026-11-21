@@ -7,7 +7,9 @@
 // after every body and stops dispatching once termination was requested, so
 // no further activation or NBA commit runs in that time step.
 
+// The cold checkpoint copy of the eval body takes none of the body's roles.
 // CHECK-LABEL: llvm.func @__talos_eval_checkpoint_body_v1_0(
+// CHECK-NOT: schedule.eval.role
 // CHECK: %[[DIRTY:.*]] = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1
 // CHECK-NEXT: %[[MARK:.*]] = llvm.getelementptr %[[DIRTY]][0]
 // CHECK-NEXT: %[[PENDING:.*]] = llvm.load %[[MARK]]

@@ -86,6 +86,7 @@ module attributes {
     // reads `a`, before `swap` stores it.
     // CHECK: simulation.spawn @__talos_clocked_0_1_0(
     // CHECK-LABEL: simulation.func private @__talos_clocked_0_1_0
+    // CHECK-SAME: schedule.eval.role = #schedule.eval_role<clocked_kernel>
     // CHECK: simulation.suspend.edge posedge
     // CHECK: %[[OLD:.*]] = simulation.ref.load %[[A:arg[0-9]+]] : !simulation.ref<!simulation.logic<8>>
     // CHECK-NEXT: cf.br

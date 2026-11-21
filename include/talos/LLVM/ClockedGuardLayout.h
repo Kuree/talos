@@ -18,22 +18,23 @@ class PassBuilder;
 
 namespace talos {
 
-/// A fused clocked kernel (FuseClockedKernels names it `__talos_clocked_*`,
-/// and every body derived from it keeps the prefix) runs a chain of guards once
-/// per clock edge: the register updates of one event, and the publication of
-/// each register whose value changed. Few events occur and few registers
-/// change on a given edge, so the arms are rarely taken. Laid out in source
-/// order an arm follows its guard, every edge on which it is not taken jumps
-/// over it, and the hot path uses a fraction of each line it fetches.
+/// A fused clocked kernel (every function holding its code carries
+/// kClockedKernelFnAttr, see talos/LLVM/FunctionRoles.h) runs a chain of
+/// guards once per clock edge: the register updates of one event, and the
+/// publication of each register whose value changed. Few events occur and few
+/// registers change on a given edge, so the arms are rarely taken. Laid out in
+/// source order an arm follows its guard, every edge on which it is not taken
+/// jumps over it, and the hot path uses a fraction of each line it fetches.
 ///
 /// The arm of a branch is the successor that is not the branch's join, its
 /// immediate post-dominator; arms may share tail blocks, as consecutive
 /// publications do. The pass gives the arm edge an unlikely weight, so block
 /// placement keeps the guard chain contiguous and moves the arms out of line.
 /// Loop back edges and exit tests, and branches whose join only returns (the
-/// other successor is then the rest of the function), keep their layout. A weight orders code
-/// and changes no instruction. Combinational kernels keep the default layout:
-/// their arms are value selections taken on most evaluations.
+/// other successor is then the rest of the function), keep their layout. A
+/// weight orders code and changes no instruction. Combinational kernels keep
+/// the default layout: their arms are value selections taken on most
+/// evaluations.
 struct ClockedGuardLayoutPass : llvm::PassInfoMixin<ClockedGuardLayoutPass> {
   llvm::PreservedAnalyses run(llvm::Module &module,
                               llvm::ModuleAnalysisManager &analyses);

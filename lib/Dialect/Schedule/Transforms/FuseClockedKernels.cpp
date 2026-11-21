@@ -37,7 +37,7 @@
 #include "talos/Analysis/OrderedDenseAnalysis.h"
 #include "talos/Analysis/ParallelWalk.h"
 #include "talos/Dialect/Native/NativeDialect.h"
-#include "talos/Dialect/Schedule/ClockedKernelName.h"
+#include "talos/Dialect/Schedule/EvalRoles.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
@@ -2897,8 +2897,7 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
       attributes.emplace_back(first.function.getCodeUnitIdAttrName(), codeUnit);
     unsigned symbolCounter = 0;
     SmallString<48> base;
-    (schedule::clockedKernelPrefix + Twine(classRoot) + "_" +
-     Twine(plan.key.second))
+    ("__talos_clocked_" + Twine(classRoot) + "_" + Twine(plan.key.second))
         .toVector(base);
     SmallString<48> name = SymbolTable::generateSymbolName<48>(
         base,
@@ -2912,6 +2911,7 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
         first.function.getEntryKind(), attributes, plan.argumentAttrs);
     symbols.insert(kernel);
     SymbolTable::setSymbolVisibility(kernel, SymbolTable::Visibility::Private);
+    schedule::addEvalRoles(kernel, schedule::EvalRole::ClockedKernel);
 
     Block &entry = kernel.getBody().front();
     Block *wait = new Block;

@@ -189,6 +189,8 @@ struct NativeRankedEvalNode {
   // A certified edge-triggered activation. Its ready bit remains
   // authoritative; it must never become a speculative dataflow body.
   bool clocked = false;
+  // The body is code of a fused clocked kernel (schedule.eval.role).
+  bool clockedKernel = false;
   // Non-groupable owners still constrain the whole-program order. Emission
   // ends a segment here and leaves execution to the original dispatcher.
   bool boundary = false;

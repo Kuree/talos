@@ -19,6 +19,7 @@
 #include "talos/Analysis/StorageWriteAnalysis.h"
 #include "talos/Conversion/SimulationToSchedule/ComputeGraph.h"
 #include "talos/Dialect/Native/NativeDialect.h"
+#include "talos/Dialect/Schedule/EvalRoles.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
@@ -510,6 +511,8 @@ materializeStandaloneEvalBody(sim::SimDesignOp design, SymbolTable &symbols,
                         function.getFunctionType().getInputs(), TypeRange{}),
       sim::EntryKind::Function, evalAttributes, argumentAttrs);
   symbols.insert(evalBody);
+  schedule::inheritEvalRoles(function, evalBody);
+  schedule::addEvalRoles(evalBody, schedule::EvalRole::EvalBody);
   // Every path that abandons the clone below erases both halves: a code-unit
   // declaration naming a body that was never materialized would outlive the
   // rejection and describe a symbol the design does not contain.
@@ -4219,6 +4222,7 @@ FailureOr<sim::SimFuncOp> materializeFusion(
       first.getEntryKind(), fusedAttributes, argumentAttrs);
   symbols.insert(fused);
   SymbolTable::setSymbolVisibility(fused, SymbolTable::Visibility::Private);
+  schedule::addEvalRoles(fused, schedule::EvalRole::FusedKernel);
   ::talos::schedule::set<schedule::metadata::nativeRegionBody>(
       fused, builder.getUnitAttr());
   ::talos::schedule::set<schedule::metadata::evalReconstructsContinuationArgs>(
@@ -4476,6 +4480,8 @@ FailureOr<sim::SimFuncOp> materializeFusion(
         FunctionType::get(design.getContext(), inputTypes, TypeRange{}),
         sim::EntryKind::Function, evalAttributes, argumentAttrs);
     symbols.insert(evalBody);
+    schedule::inheritEvalRoles(fused, evalBody);
+    schedule::addEvalRoles(evalBody, schedule::EvalRole::EvalBody);
     ::talos::schedule::set<::talos::schedule::Field::EvalBorrowedCaptures>(
         evalBody, builder.getUnitAttr());
     ::talos::schedule::set<::talos::schedule::Field::EvalRawCaptures>(

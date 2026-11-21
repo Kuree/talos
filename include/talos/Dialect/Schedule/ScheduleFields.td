@@ -179,6 +179,14 @@ def EvalReconstructsContinuationArgs : ScheduleField<"EvalReconstructsContinuati
     "::mlir::UnitAttr">;
 def EvalRouteProofDependencies : ScheduleField<"EvalRouteProofDependencies", "schedule.eval.route_proof_dependencies",
     "::talos::schedule::RouteProofDependencyAttr">;
+// On a function: its generated roles (see EvalRoleEnum). Read and extend it
+// through talos/Dialect/Schedule/EvalRoles.h.
+def EvalRole : ScheduleField<"EvalRole", "schedule.eval.role",
+    "::talos::schedule::EvalRoleAttr">;
+// On the module: the eval coordinator guards owners against VPI writes
+// (--vpi=write/full), and its roots guard is part of the call closure.
+def EvalWritableVpi : ScheduleField<"EvalWritableVpi", "schedule.eval.writable_vpi",
+    "::mlir::UnitAttr">;
 def ForceGenericNBA : ScheduleField<"ForceGenericNBA", "schedule.force_generic_nba", "::mlir::UnitAttr">;
 def EvalRuntimeCalendar : ScheduleField<"EvalRuntimeCalendar", "schedule.eval.runtime_calendar",
     "::mlir::UnitAttr">;

@@ -23,13 +23,13 @@ module attributes {schedule.eval.runtime_calendar, native.closed_executable} {
     llvm.store %x, %destination : i32, !llvm.ptr
     llvm.return
   }
-  llvm.func @__talos_clocked_a() {
+  llvm.func @__talos_clocked_a() attributes {schedule.eval.role = #schedule.eval_role<clocked_kernel>} {
     %stage = llvm.mlir.addressof @stage : !llvm.ptr
     %v = llvm.mlir.constant(3 : i32) : i32
     llvm.store %v, %stage : i32, !llvm.ptr
     llvm.return
   }
-  llvm.func @__talos_clocked_b() {
+  llvm.func @__talos_clocked_b() attributes {schedule.eval.role = #schedule.eval_role<clocked_kernel>} {
     %stage = llvm.mlir.addressof @stage : !llvm.ptr
     %v = llvm.load %stage : !llvm.ptr -> i32
     %step = llvm.mlir.constant(1 : i32) : i32
@@ -74,7 +74,7 @@ module attributes {schedule.eval.runtime_calendar, native.closed_executable} {
 module attributes {schedule.eval.runtime_calendar, native.closed_executable} {
   llvm.func @capture(!llvm.ptr)
   llvm.func @talos_rt_v1_scheduler_prepare_eval_nba(!llvm.ptr, !llvm.ptr) -> i32
-  llvm.func @__talos_clocked_conditional(%report: i1, %ptr: !llvm.ptr) {
+  llvm.func @__talos_clocked_conditional(%report: i1, %ptr: !llvm.ptr) attributes {schedule.eval.role = #schedule.eval_role<clocked_kernel>} {
     llvm.cond_br %report, ^print, ^done
   ^print:
     llvm.call @capture(%ptr) : (!llvm.ptr) -> ()
@@ -82,7 +82,7 @@ module attributes {schedule.eval.runtime_calendar, native.closed_executable} {
   ^done:
     llvm.return
   }
-  llvm.func @__talos_clocked_quiet() {
+  llvm.func @__talos_clocked_quiet() attributes {schedule.eval.role = #schedule.eval_role<clocked_kernel>} {
     llvm.return
   }
   llvm.func @adapter() {
@@ -126,10 +126,10 @@ module attributes {schedule.eval.runtime_calendar, native.closed_executable} {
 module attributes {schedule.eval.runtime_calendar, native.closed_executable} {
   llvm.func @observe(i32)
   llvm.func @talos_rt_v1_scheduler_prepare_eval_nba(!llvm.ptr, !llvm.ptr) -> i32
-  llvm.func @__talos_clocked_a() {
+  llvm.func @__talos_clocked_a() attributes {schedule.eval.role = #schedule.eval_role<clocked_kernel>} {
     llvm.return
   }
-  llvm.func @__talos_clocked_b() {
+  llvm.func @__talos_clocked_b() attributes {schedule.eval.role = #schedule.eval_role<clocked_kernel>} {
     llvm.return
   }
   llvm.func @__talos_eval_dispatch_v1(%ctx: !llvm.ptr) -> i32 {
@@ -163,7 +163,7 @@ module attributes {schedule.eval.runtime_calendar, native.closed_executable} {
   llvm.mlir.global internal @__talos_aot_nba_dirty_summary_v1(dense<0> : tensor<8xi8>) : !llvm.array<8 x i8>
   llvm.func @talos_rt_v1_scheduler_prepare_eval_nba(!llvm.ptr, !llvm.ptr) -> i32
   llvm.func @talos_rt_v1_scheduler_prepare_quiet_eval_nba(!llvm.ptr, !llvm.ptr, !llvm.ptr) -> i32
-  llvm.func @__talos_clocked_a(%v: i64) {
+  llvm.func @__talos_clocked_a(%v: i64) attributes {schedule.eval.role = #schedule.eval_role<clocked_kernel>} {
     %r = schedule.nba.acc.address @acc0 : !llvm.ptr
     schedule.nba.acc.store %v, %r[value] {alignment = 8 : i64} : i64
     %old = schedule.nba.index.load @__talos_aot_nba_dirty_roots_v1[0] {root = 0 : i32}
@@ -176,7 +176,7 @@ module attributes {schedule.eval.runtime_calendar, native.closed_executable} {
     schedule.nba.index.store %markedPage, @__talos_aot_nba_dirty_summary_v1[0] {root = 0 : i32}
     llvm.return
   }
-  llvm.func @__talos_clocked_b(%v: i64) {
+  llvm.func @__talos_clocked_b(%v: i64) attributes {schedule.eval.role = #schedule.eval_role<clocked_kernel>} {
     %r = schedule.nba.acc.address @acc1 : !llvm.ptr
     schedule.nba.acc.store %v, %r[value] {alignment = 8 : i64} : i64
     %old = schedule.nba.index.load @__talos_aot_nba_dirty_roots_v1[0] {root = 1 : i32}

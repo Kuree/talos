@@ -10,7 +10,7 @@
 // CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1()
 // CHECK: llvm.call @__talos_eval_dispatch_v1.__talos_pending(
 
-module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", schedule.eval.runtime_calendar, schedule.eval.transaction_roots = [{root = array<i64: 1, 0, 1, 0, 32, 4294967295, 2, 1>, accumulator = @acc0, sites = array<i64: 1>}, {root = array<i64: 65, 64, 65, 0, 32, 4294967295, 2, 0>, accumulator = @acc64, sites = array<i64: 2>}, {root = array<i64: 4097, 4096, 4097, 0, 32, 4294967295, 2, 0>, accumulator = @acc4096, sites = array<i64: 3>}]} {
+module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", schedule.eval.runtime_calendar, schedule.eval.writable_vpi, schedule.eval.transaction_roots = [{root = array<i64: 1, 0, 1, 0, 32, 4294967295, 2, 1>, accumulator = @acc0, sites = array<i64: 1>}, {root = array<i64: 65, 64, 65, 0, 32, 4294967295, 2, 0>, accumulator = @acc64, sites = array<i64: 2>}, {root = array<i64: 4097, 4096, 4097, 0, 32, 4294967295, 2, 0>, accumulator = @acc4096, sites = array<i64: 3>}]} {
   llvm.mlir.global @acc0(dense<0> : tensor<136xi8>) : !llvm.array<136 x i8>
   llvm.mlir.global @acc64(dense<0> : tensor<136xi8>) : !llvm.array<136 x i8>
   llvm.mlir.global @acc4096(dense<0> : tensor<136xi8>) : !llvm.array<136 x i8>
@@ -20,7 +20,6 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     %null = llvm.mlir.zero : !llvm.ptr
     llvm.return %null : !llvm.ptr
   }
-  llvm.func @__talos_eval_write_guard_0_v1()
   llvm.func @talos_rt_v1_scheduler_execute_aot_actor(!llvm.ptr, i32) -> i32
   llvm.func @talos_rt_v1_scheduler_prepare_eval_nba(!llvm.ptr, !llvm.ptr) -> i32
 

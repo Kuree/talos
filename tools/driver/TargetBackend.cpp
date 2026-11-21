@@ -36,6 +36,7 @@
 #include "talos/Dialect/Simulation/Transforms/Passes.h"
 #include "talos/LLVM/ClockedGuardLayout.h"
 #include "talos/LLVM/ClockedKernelOutlining.h"
+#include "talos/LLVM/FunctionRoles.h"
 #include "talos/LLVM/WideIntegerVectorization.h"
 #include "talos/Runtime/OutputItemFlags.h"
 
@@ -1384,6 +1385,7 @@ LogicalResult writeObject(llvm::Module &module, TargetMachine &targetMachine,
 }
 
 LogicalResult writeBitcode(llvm::Module &module, StringRef path) {
+  dropFunctionRoleAttributes(module);
   std::error_code error;
   raw_fd_ostream output(path, error, sys::fs::OF_None);
   if (error) {

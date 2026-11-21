@@ -49,7 +49,7 @@ module attributes {native.optimization_level = 3 : i32, native.debug_timing, sch
       simulation.return
     }
     simulation.func @__talos_clocked_0_1_0.__talos_eval_body_0(%ctx: !c {simulation.capture_kind = 0 : i32})
-        attributes {entry_kind = 8 : i32, code_unit_id = 1 : i64, schedule.eval.two_state_variant = @two_state_body} {
+        attributes {entry_kind = 8 : i32, code_unit_id = 1 : i64, schedule.eval.role = #schedule.eval_role<clocked_kernel|eval_body>, schedule.eval.two_state_variant = @two_state_body} {
       %a = simulation.context.storage %ctx[0] : !r8
       %b = simulation.context.storage %ctx[1] : !r8
       %lower = arith.constant 0 : index
@@ -64,7 +64,7 @@ module attributes {native.optimization_level = 3 : i32, native.debug_timing, sch
       simulation.return
     }
     simulation.func @__talos_clocked_0_1_0.__talos_eval_body_0.__talos_two_state_0(%ctx: !c {simulation.capture_kind = 0 : i32})
-        attributes {entry_kind = 8 : i32, code_unit_id = 5 : i64, schedule.eval.inductive_two_state} {
+        attributes {entry_kind = 8 : i32, code_unit_id = 5 : i64, schedule.eval.role = #schedule.eval_role<clocked_kernel|eval_body>, schedule.eval.inductive_two_state} {
       %a = simulation.context.storage %ctx[0] : !r8
       %b = simulation.context.storage %ctx[1] : !r8
       %lower = arith.constant 0 : index
@@ -85,7 +85,7 @@ module attributes {native.optimization_level = 3 : i32, native.debug_timing, sch
       simulation.return
     }
     simulation.func @__talos_clocked_0_2_0.__talos_eval_body_0(%ctx: !c {simulation.capture_kind = 0 : i32})
-        attributes {entry_kind = 8 : i32, code_unit_id = 2 : i64, schedule.eval.two_state_variant = @two_state_body} {
+        attributes {entry_kind = 8 : i32, code_unit_id = 2 : i64, schedule.eval.role = #schedule.eval_role<clocked_kernel|eval_body>, schedule.eval.two_state_variant = @two_state_body} {
       %a = simulation.context.storage %ctx[0] : !r8
       %x = simulation.ref.load %a : !r8 -> !l8
       %y = simulation.logic.binary add %x, %x : !l8

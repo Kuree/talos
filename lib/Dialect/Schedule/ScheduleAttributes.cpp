@@ -1,7 +1,10 @@
 // Invariants for the canonical scheduling attributes.
 #include "mlir/IR/Diagnostics.h"
+#include "mlir/IR/Operation.h"
+#include "talos/Dialect/Schedule/EvalRoles.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
 #include "talos/Dialect/Schedule/ScheduleEnums.h"
+#include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
@@ -849,6 +852,28 @@ PeriodicAliasAttr::verify(llvm::function_ref<InFlightDiagnostic()> emitError,
   if (!forwardingContinuation)
     return emitError() << "periodic alias requires a forwarding continuation";
   return success();
+}
+
+EvalRole getEvalRoles(Operation *function) {
+  auto roles = get<Field::EvalRole>(function);
+  return roles ? roles.getValue() : EvalRole::None;
+}
+
+bool hasEvalRoles(Operation *function, EvalRole roles) {
+  assert(roles != EvalRole::None && "test for at least one role");
+  return bitEnumContainsAll(getEvalRoles(function), roles);
+}
+
+void addEvalRoles(Operation *function, EvalRole roles) {
+  EvalRole current = getEvalRoles(function);
+  if (bitEnumContainsAll(current, roles))
+    return;
+  set<Field::EvalRole>(
+      function, EvalRoleAttr::get(function->getContext(), current | roles));
+}
+
+void inheritEvalRoles(Operation *source, Operation *derived) {
+  addEvalRoles(derived, getEvalRoles(source) & inheritedEvalRoles);
 }
 
 } // namespace talos::schedule

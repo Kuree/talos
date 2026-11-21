@@ -1,7 +1,7 @@
 //===- ClockedKernelOutlining.cpp - Bound native clocked update bodies ----===//
 
 #include "talos/LLVM/ClockedKernelOutlining.h"
-#include "talos/Dialect/Schedule/ClockedKernelName.h"
+#include "talos/LLVM/FunctionRoles.h"
 
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -243,9 +243,9 @@ PreservedAnalyses ClockedKernelOutliningPass::run(Module &module,
   SmallVector<Function *> kernels;
   for (Function &function : module)
     if (!function.isDeclaration() &&
-        function.getName().contains(schedule::clockedKernelPrefix) &&
-        function.getName().contains(".__talos_eval_body_") &&
-        !function.getName().contains(".__talos_update_group") &&
+        function.hasFnAttribute(kClockedKernelFnAttr) &&
+        function.hasFnAttribute(kEvalBodyFnAttr) &&
+        !function.hasFnAttribute(kClockedUpdateGroupAttr) &&
         !function.hasFnAttribute(Attribute::OptimizeNone) &&
         !function.hasFnAttribute("nooutline") &&
         function.getInstructionCount() >= 4 * targetSize)

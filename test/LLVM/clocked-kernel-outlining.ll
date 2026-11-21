@@ -24,7 +24,7 @@ define internal void @change_sample() noinline {
 ; CHECK: call fastcc {{.*}}@__talos_clocked_test.__talos_eval_body_0.__talos_update_group
 ; CHECK-NOT: alloca
 ; CHECK: ret i32
-define i32 @__talos_clocked_test.__talos_eval_body_0(ptr %base, i1 %fail) {
+define i32 @__talos_clocked_test.__talos_eval_body_0(ptr %base, i1 %fail) #0 {
 entry:
   %sampled = load i64, ptr @sample
   %middle = getelementptr i64, ptr %base, i64 1
@@ -76,7 +76,7 @@ done:
 ; CHECK-LABEL: define void @__talos_clocked_live.__talos_eval_body_0(
 ; CHECK-NOT: call
 ; CHECK: ret void
-define void @__talos_clocked_live.__talos_eval_body_0(ptr %p, i64 %x) {
+define void @__talos_clocked_live.__talos_eval_body_0(ptr %p, i64 %x) #0 {
 entry:
   br label %first
 first:
@@ -125,7 +125,7 @@ done:
 ; CHECK-LABEL: define void @__talos_clocked_wide.__talos_eval_body_0(
 ; CHECK-NOT: call
 ; CHECK: ret void
-define void @__talos_clocked_wide.__talos_eval_body_0(ptr %p, i128 %wide) {
+define void @__talos_clocked_wide.__talos_eval_body_0(ptr %p, i128 %wide) #0 {
 entry:
   br label %first
 first:
@@ -176,7 +176,7 @@ done:
 ; CHECK: %value = load volatile i64, ptr %p
 ; CHECK-NOT: alloca
 ; CHECK: ret i64 %result
-define i64 @__talos_clocked_return.__talos_eval_body_0(ptr %p) {
+define i64 @__talos_clocked_return.__talos_eval_body_0(ptr %p) #0 {
 entry:
   br label %first
 first:
@@ -255,3 +255,5 @@ define i32 @main() {
 ; CHECK: getelementptr i8, ptr {{.*}}, i64 16
 ; CHECK: call void @change_sample()
 ; CHECK-NOT: load i64, ptr @sample
+
+attributes #0 = { "schedule.clocked_kernel" "schedule.eval_body" }

@@ -4,6 +4,7 @@
 #include "SimulationProcessRuntimeABI.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
+#include "talos/Dialect/Schedule/EvalRoles.h"
 #include "talos/Dialect/Schedule/ScheduleEnums.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
@@ -219,6 +220,7 @@ LogicalResult makeNativeWrappers(ModuleOp module, LLVM::LLVMFuncOp ramp,
         builder, location, (baseName + ".__talos_native_requirements").str(),
         LLVM::LLVMFunctionType::get(i32, {pointer, pointer}, false));
     copyNativePartition(ramp, requirements);
+    schedule::inheritEvalRoles(ramp, requirements);
     Block *entry = requirements.addEntryBlock(builder);
     builder.setInsertionPointToStart(entry);
     Value null = LLVM::ZeroOp::create(builder, location, pointer);
@@ -234,6 +236,7 @@ LogicalResult makeNativeWrappers(ModuleOp module, LLVM::LLVMFuncOp ramp,
       builder, location, (baseName + ".__talos_native_execute").str(),
       LLVM::LLVMFunctionType::get(i32, {pointer}, false));
   copyNativePartition(ramp, execute);
+  schedule::inheritEvalRoles(ramp, execute);
   Block *entry = execute.addEntryBlock(builder);
   builder.setInsertionPointToStart(entry);
   Value instance = entry->getArgument(0);
@@ -280,6 +283,7 @@ makePlainNativeWrappers(ModuleOp module, func::FuncOp body, StringRef baseName,
       builder, location, (baseName + ".__talos_native_execute").str(),
       LLVM::LLVMFunctionType::get(i32, {pointer}, false));
   copyNativePartition(body, execute);
+  schedule::inheritEvalRoles(body, execute);
   Block *executeEntry = execute.addEntryBlock(builder);
   builder.setInsertionPointToStart(executeEntry);
   Value instance = executeEntry->getArgument(0);

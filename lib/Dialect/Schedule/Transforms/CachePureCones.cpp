@@ -9,6 +9,7 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "talos/Analysis/ParallelWalk.h"
 #include "talos/Dialect/Native/NativeDialect.h"
+#include "talos/Dialect/Schedule/EvalRoles.h"
 #include "talos/Dialect/Schedule/Transforms/NativeTransforms.h"
 #include "talos/Dialect/Schedule/Transforms/Passes.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
@@ -161,6 +162,7 @@ unsigned outlineCones(ModuleOp module, uint64_t minimumCost,
             (function.getSymName() + ".__talos_pure_cone").str(),
             LLVM::LLVMFunctionType::get(root.getType(), types));
         symbols.insert(helper);
+        schedule::inheritEvalRoles(function, helper);
         helper.setLinkage(LLVM::Linkage::Internal);
         helper->setAttr("schedule.pure_cone", builder.getUnitAttr());
         helper->setAttr(

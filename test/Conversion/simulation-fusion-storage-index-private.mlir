@@ -2,6 +2,7 @@
 
 // Without the observer, the index storage is private to the fused kernel.
 // CHECK-LABEL: simulation.func private @__talos_fused_0
+// CHECK-SAME: schedule.eval.role = #schedule.eval_role<fused_kernel>
 // CHECK-NOT: simulation.ref.store
 // CHECK-NOT: simulation.ref.load
 // CHECK: simulation.nba.enqueue

@@ -5,10 +5,14 @@
 // Read-only observation uses canonical state at existing cuts (LRM 38.15).
 // Only writable VPI emits local scheduling/override routing (38.34/10.6.2).
 // NO-WRITE-NOT: __talos_eval_write_guard_
+// NO-WRITE-NOT: schedule.eval.writable_vpi
 // NO-WRITE-NOT: talos_rt_v1_scheduler_prepare_eval_nba_local_write
 // NO-WRITE-NOT: talos_rt_v1_static_nba_specialization_guard_write
 // NO-WRITE-NOT: schedule.nba.guarded_private_influence
+// WRITE: module attributes {{{.*}}schedule.eval.writable_vpi
 // WRITE: llvm.func @__talos_eval_write_guard_roots_v1
+// WRITE-SAME: schedule.eval.role = #schedule.eval_role<write_guard>
 // WRITE: llvm.call @talos_rt_v1_static_specialization_guard_roots
 // WRITE: llvm.func @__talos_eval_dispatch_v1
+// WRITE-SAME: schedule.eval.role = #schedule.eval_role<dispatch>
 // WRITE: llvm.call @talos_rt_v1_scheduler_execute_aot_actor

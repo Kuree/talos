@@ -57,6 +57,7 @@
 
 // Owners run in bit order; each consumes its own bit and polls termination.
 // CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1.word_0(%arg0: !llvm.ptr, %arg1: !llvm.ptr) -> i32
+// CHECK-SAME: schedule.eval.role = #schedule.eval_role<dispatch>
 // CHECK: %[[FIRST:.*]] = llvm.mlir.constant(1 : i64)
 // CHECK: llvm.and %{{.*}}, %[[FIRST]]
 // CHECK: llvm.cond_br %{{.*}}, ^[[RUN0:bb[0-9]+]], ^[[NEXT0:bb[0-9]+]]

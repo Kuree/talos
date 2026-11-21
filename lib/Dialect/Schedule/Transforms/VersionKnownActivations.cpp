@@ -24,7 +24,7 @@
 #include "talos/Analysis/LocalUnknownAnalysis.h"
 #include "talos/Analysis/StateDomainAnalysis.h"
 #include "talos/Dialect/Native/NativeDialect.h"
-#include "talos/Dialect/Schedule/ClockedKernelName.h"
+#include "talos/Dialect/Schedule/EvalRoles.h"
 #include "talos/Dialect/Schedule/ScheduleDialect.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
@@ -60,7 +60,7 @@ constexpr uint64_t largeSegmentOperations = 128;
 
 /// Whether a fused clocked kernel exceeds the inline budget.
 bool isLargeClockedKernel(sim::SimFuncOp function) {
-  if (!schedule::isClockedKernelSymbol(function.getSymName()))
+  if (!schedule::hasEvalRoles(function, schedule::EvalRole::ClockedKernel))
     return false;
   uint64_t budget =
       schedule::getMaxInlineOperations(function->getParentOfType<ModuleOp>());

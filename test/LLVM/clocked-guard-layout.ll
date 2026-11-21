@@ -1,15 +1,15 @@
 ; REQUIRES: llvm-pass-plugin
 ; RUN: %llvm_dist/bin/opt -load-pass-plugin=%pass_plugin -passes=talos-clocked-guard-layout -S %s | FileCheck %s
 
-; In a clocked kernel body, the successor of a branch that is not its join (its
-; immediate post-dominator) is an arm and gets the unlikely edge, in either
-; orientation, with internal control flow, and when arms share a tail. A
-; diamond, an existing weight, branches whose paths only meet at a return,
-; loop back edges and exit tests, and every function outside a clocked kernel
-; keep their layout.
+; In a clocked kernel body (schedule.clocked_kernel), the successor of a branch
+; that is not its join (its immediate post-dominator) is an arm and gets the
+; unlikely edge, in either orientation, with internal control flow, and when
+; arms share a tail. A diamond, an existing weight, branches whose paths only
+; meet at a return, loop back edges and exit tests, and every function outside
+; a clocked kernel keep their layout.
 
 ; CHECK-LABEL: define i32 @__talos_clocked_3_1_0.__talos_eval_body_0
-define i32 @__talos_clocked_3_1_0.__talos_eval_body_0(ptr %state, i1 %c0, i1 %c1, i1 %c2, i1 %c3, i1 %c4, i1 %c5, i1 %c6, i1 %c7) {
+define i32 @__talos_clocked_3_1_0.__talos_eval_body_0(ptr %state, i1 %c0, i1 %c1, i1 %c2, i1 %c3, i1 %c4, i1 %c5, i1 %c6, i1 %c7) #0 {
 entry:
   ; CHECK: br i1 %c0, label %arm0, label %join0, !prof ![[UNLIKELY_TRUE:[0-9]+]]
   br i1 %c0, label %arm0, label %join0
@@ -110,6 +110,8 @@ arm:
 join:
   ret i32 0
 }
+
+attributes #0 = { "schedule.clocked_kernel" }
 
 !0 = !{!"branch_weights", i32 7, i32 3}
 ; CHECK-DAG: ![[GIVEN]] = !{!"branch_weights", i32 7, i32 3}

@@ -4,7 +4,6 @@
 #include "SimulationAOTPlanning.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Conversion/Passes.h"
-#include "talos/Dialect/Schedule/ClockedKernelName.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Runtime/Runtime.h"
 
@@ -550,7 +549,7 @@ collectClockedKernelOwners(ArrayRef<NativeRankedEvalNode> nodes) {
   DenseSet<uint32_t> owners;
   // A runtime-owned actor's analysis-only node has no ready bit and no owner.
   for (const NativeRankedEvalNode &node : nodes)
-    if (node.owner != UINT32_MAX && schedule::isClockedKernelSymbol(node.body))
+    if (node.owner != UINT32_MAX && node.clockedKernel)
       owners.insert(node.owner);
   return owners;
 }

@@ -3,6 +3,7 @@
 #include "SimulationProcessFunctionLowering.h"
 #include "SimulationProcessWrapperLowering.h"
 #include "talos/Dialect/Native/NativeDialect.h"
+#include "talos/Dialect/Schedule/ScheduleAttrs.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleOps.h"
 
@@ -171,6 +172,8 @@ preparePlainNativeProcess(sim::SimFuncOp function,
                 static_cast<uint32_t>(function.getEntryKind())));
   native::set<native::ScratchSize>(body, builder.getI64IntegerAttr(0));
   copyNativePartition(function, body);
+  if (auto roles = ::talos::schedule::get<schedule::Field::EvalRole>(function))
+    ::talos::schedule::set<schedule::Field::EvalRole>(body, roles);
   bool unmanagedNative = native::has<native::Unmanaged>(function);
   bool virtualOwner = native::has<native::VirtualOwner>(function);
   body.getBody().takeBody(function.getBody());
@@ -305,6 +308,7 @@ prepareOrdinaryFunction(sim::SimFuncOp function) {
   auto evalSelectedTwoState =
       ::talos::schedule::get<::talos::schedule::Field::EvalSelectedTwoState>(
           function);
+  auto evalRole = ::talos::schedule::get<schedule::Field::EvalRole>(function);
   ArrayAttr outlinedPassthrough;
   if (::talos::schedule::has<::talos::schedule::Field::OutlinedPrimitiveMember>(
           function)) {
@@ -364,6 +368,8 @@ prepareOrdinaryFunction(sim::SimFuncOp function) {
   if (evalSelectedTwoState)
     ::talos::schedule::set<::talos::schedule::Field::EvalSelectedTwoState>(
         replacement, evalSelectedTwoState);
+  if (evalRole)
+    ::talos::schedule::set<schedule::Field::EvalRole>(replacement, evalRole);
   replacement.getBody().takeBody(function.getBody());
   function.erase();
   for (Block &block : replacement.getBody())

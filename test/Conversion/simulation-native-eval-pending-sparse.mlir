@@ -29,7 +29,7 @@
 // CHECK: llvm.mlir.constant(22 : i64)
 // CHECK: llvm.alloca
 
-module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", schedule.eval.runtime_calendar, schedule.eval.transaction_roots = [{root = array<i64: 1, 0, 1, 0, 32, 4294967295, 2, 1>, accumulator = @acc0, sites = array<i64: 1>}, {root = array<i64: 2, 1, 2, 0, 32, 4294967295, 2, 0>, accumulator = @acc1, sites = array<i64: 2>}, {root = array<i64: 64, 63, 64, 0, 32, 4294967295, 2, 0>, accumulator = @acc63, sites = array<i64: 3>}, {root = array<i64: 65, 64, 65, 0, 32, 4294967295, 2, 0>, accumulator = @acc64, sites = array<i64: 4>}, {root = array<i64: 128, 127, 128, 0, 32, 4294967295, 2, 0>, accumulator = @acc127, sites = array<i64: 5>}, {root = array<i64: 129, 128, 129, 0, 32, 4294967295, 2, 0>, accumulator = @acc128, sites = array<i64: 6>}, {root = array<i64: 4096, 4095, 4096, 0, 32, 4294967295, 2, 0>, accumulator = @acc4095, sites = array<i64: 7>}, {root = array<i64: 4097, 4096, 4097, 0, 32, 4294967295, 2, 0>, accumulator = @acc4096, sites = array<i64: 8>}]} {
+module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", schedule.eval.runtime_calendar, schedule.eval.writable_vpi, schedule.eval.transaction_roots = [{root = array<i64: 1, 0, 1, 0, 32, 4294967295, 2, 1>, accumulator = @acc0, sites = array<i64: 1>}, {root = array<i64: 2, 1, 2, 0, 32, 4294967295, 2, 0>, accumulator = @acc1, sites = array<i64: 2>}, {root = array<i64: 64, 63, 64, 0, 32, 4294967295, 2, 0>, accumulator = @acc63, sites = array<i64: 3>}, {root = array<i64: 65, 64, 65, 0, 32, 4294967295, 2, 0>, accumulator = @acc64, sites = array<i64: 4>}, {root = array<i64: 128, 127, 128, 0, 32, 4294967295, 2, 0>, accumulator = @acc127, sites = array<i64: 5>}, {root = array<i64: 129, 128, 129, 0, 32, 4294967295, 2, 0>, accumulator = @acc128, sites = array<i64: 6>}, {root = array<i64: 4096, 4095, 4096, 0, 32, 4294967295, 2, 0>, accumulator = @acc4095, sites = array<i64: 7>}, {root = array<i64: 4097, 4096, 4097, 0, 32, 4294967295, 2, 0>, accumulator = @acc4096, sites = array<i64: 8>}]} {
   llvm.mlir.global @acc0(dense<0> : tensor<136xi8>) : !llvm.array<136 x i8>
   llvm.mlir.global @acc1(dense<0> : tensor<136xi8>) : !llvm.array<136 x i8>
   llvm.mlir.global @acc63(dense<0> : tensor<136xi8>) : !llvm.array<136 x i8>
@@ -44,7 +44,6 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     %null = llvm.mlir.zero : !llvm.ptr
     llvm.return %null : !llvm.ptr
   }
-  llvm.func @__talos_eval_write_guard_0_v1()
   llvm.func @talos_rt_v1_scheduler_execute_aot_actor(!llvm.ptr, i32) -> i32
   llvm.func @talos_rt_v1_scheduler_prepare_eval_nba(!llvm.ptr, !llvm.ptr) -> i32
 

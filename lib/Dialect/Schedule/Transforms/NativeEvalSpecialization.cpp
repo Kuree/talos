@@ -22,6 +22,7 @@
 #include "talos/Conversion/SimulationToSchedule/Utils.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
+#include "talos/Dialect/Schedule/EvalRoles.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
@@ -1301,6 +1302,7 @@ LogicalResult materializeEvalTwoStateVariants(
         sim::EntryKind::Function, attributes, argumentAttrs);
     variantSymbols.insert(probe);
     detail::copyNativePartition(source, probe);
+    schedule::inheritEvalRoles(source, probe);
     ::talos::schedule::set<::talos::schedule::Field::EvalBorrowedCaptures>(
         probe, builder.getUnitAttr());
     ::talos::schedule::set<::talos::schedule::Field::EvalPathKnownPredicate>(

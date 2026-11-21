@@ -8,6 +8,7 @@
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Analysis/ParallelWalk.h"
 #include "talos/Dialect/Native/NativeDialect.h"
+#include "talos/Dialect/Schedule/EvalRoles.h"
 #include "talos/Dialect/Schedule/ScheduleEnums.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
@@ -1098,6 +1099,7 @@ materializeNativeEvalValueInterface(LLVM::LLVMFuncOp function,
       LLVM::LLVMFunctionType::get(result, arguments, false),
       LLVM::Linkage::Internal);
   symbols.insert(body);
+  schedule::inheritEvalRoles(function, body);
   if (auto passthrough = function.getPassthroughAttr())
     body.setPassthroughAttr(passthrough);
   if (auto attrs = extendNativeEvalArgumentAttrs(

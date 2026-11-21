@@ -273,6 +273,36 @@ def StatePlaneEnum
   let genSpecializedAttr = 0;
 }
 
+// The roles of a generated function (`schedule.eval.role`). The origin roles
+// (clocked_kernel, fused_kernel, eval_body, write_guard, dispatch) describe
+// where the function's code comes from: every function lowered, cloned or
+// split from it keeps them. spawn_helper describes only the function itself.
+def EvalRoleNone : I32BitEnumAttrCaseNone<"None", "none">;
+// Code of a fused clocked kernel (FuseClockedKernels).
+def EvalRoleClockedKernel
+    : I32BitEnumAttrCaseBit<"ClockedKernel", 0, "clocked_kernel">;
+// Code of a fused compute kernel (MaterializeComputeFusion).
+def EvalRoleFusedKernel
+    : I32BitEnumAttrCaseBit<"FusedKernel", 1, "fused_kernel">;
+// A generated eval activation body.
+def EvalRoleEvalBody : I32BitEnumAttrCaseBit<"EvalBody", 2, "eval_body">;
+// The writable-VPI roots guard of the eval coordinator.
+def EvalRoleWriteGuard : I32BitEnumAttrCaseBit<"WriteGuard", 3, "write_guard">;
+// The eval coordinator, or one of its segment or ready-word functions.
+def EvalRoleDispatch : I32BitEnumAttrCaseBit<"Dispatch", 4, "dispatch">;
+// The helper that spawns a process.
+def EvalRoleSpawnHelper
+    : I32BitEnumAttrCaseBit<"SpawnHelper", 5, "spawn_helper">;
+def EvalRoleEnum
+    : I32BitEnumAttr<"EvalRole", "generated function roles", [
+        EvalRoleNone, EvalRoleClockedKernel, EvalRoleFusedKernel,
+        EvalRoleEvalBody, EvalRoleWriteGuard, EvalRoleDispatch,
+        EvalRoleSpawnHelper
+      ]> {
+  let cppNamespace = "::talos::schedule";
+  let genSpecializedAttr = 0;
+}
+
 // The fields of a generated NBA accumulator record
 // (talos_rt_generated_nba_accumulator_256): the staged value and X/Z bits, the
 // bits written since the last barrier, whether a capture is pending and the

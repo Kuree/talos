@@ -10,7 +10,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/CallInterfaces.h"
 #include "talos/Dialect/Native/NativeDialect.h"
-#include "talos/Dialect/Schedule/ClockedKernelName.h"
+#include "talos/Dialect/Schedule/EvalRoles.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
 #include "talos/Dialect/Schedule/ScheduleOps.h"
@@ -799,7 +799,7 @@ void reuseQuietNBACuts(ModuleOp module) {
     auto fn = defined(call);
     if (!fn)
       return false;
-    if (schedule::isClockedKernelSymbol(fn.getSymName()))
+    if (schedule::hasEvalRoles(fn, schedule::EvalRole::ClockedKernel))
       return true;
     if (auto found = hasClock.find(fn); found != hasClock.end())
       return found->second;
@@ -1026,12 +1026,11 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
     return success();
   MLIRContext *context = module.getContext();
   llvm::StringMap<LLVM::LLVMFuncOp> functions;
-  bool writable = false;
+  bool writable = schedule::has<schedule::Field::EvalWritableVpi>(module);
   llvm::SetVector<Operation *> reachable;
   SmallVector<LLVM::LLVMFuncOp> work;
   for (auto function : module.getOps<LLVM::LLVMFuncOp>()) {
     functions.try_emplace(function.getSymName(), function);
-    writable |= function.getSymName().starts_with("__talos_eval_write_guard_");
     if (schedule::has<schedule::metadata::evalCallClosureRoot>(function))
       work.push_back(function);
   }

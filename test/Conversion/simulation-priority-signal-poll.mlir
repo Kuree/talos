@@ -14,7 +14,7 @@
 module attributes {schedule.eval.runtime_calendar, schedule.eval.assertion_observers = true} {
   llvm.func @talos_rt_v1_scheduler_priority_signal_flag(!llvm.ptr) -> !llvm.ptr
   llvm.func @talos_rt_v1_scheduler_priority_signal_pending(!llvm.ptr) -> i32
-  llvm.func @__talos_eval_dispatch_v1(%ctx: !llvm.ptr) -> i32 {
+  llvm.func @__talos_eval_dispatch_v1(%ctx: !llvm.ptr) -> i32 attributes {schedule.eval.role = #schedule.eval_role<dispatch>} {
     %a = llvm.call @talos_rt_v1_scheduler_priority_signal_pending(%ctx) : (!llvm.ptr) -> i32
     %one = llvm.mlir.constant(1 : i8) : i8
     llvm.store %one, %ctx : i8, !llvm.ptr

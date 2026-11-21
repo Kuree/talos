@@ -4,6 +4,7 @@
 #include "SimulationProcessRuntimeABI.h"
 #include "SimulationProcessWrapperLowering.h"
 #include "talos/Dialect/Native/NativeDialect.h"
+#include "talos/Dialect/Schedule/EvalRoles.h"
 #include "talos/Dialect/Schedule/ScheduleEnums.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
@@ -856,6 +857,7 @@ FailureOr<PreparedSuspendableProcess> prepareSuspendableProcess(
         "passthrough",
         builder.getArrayAttr({builder.getStringAttr("presplitcoroutine")}));
   copyNativePartition(function, ramp);
+  schedule::inheritEvalRoles(function, ramp);
   addFrameAttributes(ramp, analysis, builder);
   bool virtualOwner = native::has<native::VirtualOwner>(function);
   ramp.getBody().takeBody(function.getBody());

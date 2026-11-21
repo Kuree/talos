@@ -12,6 +12,7 @@
 #include "talos/Analysis/OrderedDenseAnalysis.h"
 #include "talos/Analysis/SimulationAnalysis.h"
 #include "talos/Analysis/StorageWriteAnalysis.h"
+#include "talos/Dialect/Schedule/EvalRoles.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleOps.h"
 #include "talos/Runtime/StableHandle.h"
@@ -478,6 +479,7 @@ sim::SimFuncOp materializeConditionalPromotionProbe(
   symbols.insert(probe);
   SymbolTable::setSymbolVisibility(probe, SymbolTable::Visibility::Private);
   copyNativePartition(source, probe);
+  schedule::inheritEvalRoles(source, probe);
   schedule::set<schedule::Field::EvalBorrowedCaptures>(probe,
                                                        builder.getUnitAttr());
   schedule::set<schedule::Field::EvalPathKnownPredicate>(probe,

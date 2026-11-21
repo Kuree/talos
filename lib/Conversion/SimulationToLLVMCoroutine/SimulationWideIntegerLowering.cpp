@@ -5,7 +5,9 @@
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Conversion/Passes.h"
 #include "talos/Dialect/Native/NativeDialect.h"
+#include "talos/Dialect/Schedule/EvalRoles.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
+#include "talos/LLVM/FunctionRoles.h"
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Matchers.h"
@@ -530,10 +532,9 @@ struct NativeFunctionFinalizationPass
     // two-state NBA commits get theirs where they are created.
     Builder alignmentBuilder(function.getContext());
     {
-      StringRef name = function.getSymName();
       uint64_t alignment = 0;
-      if (name.starts_with("__talos_fused_") &&
-          name.contains("__talos_eval_body_"))
+      if (schedule::hasEvalRoles(function, schedule::EvalRole::FusedKernel |
+                                               schedule::EvalRole::EvalBody))
         alignment = 64;
       else if (::talos::schedule::has<
                    ::talos::schedule::Field::EvalCallClosureRoot>(function))
@@ -542,6 +543,27 @@ struct NativeFunctionFinalizationPass
         auto desired = alignmentBuilder.getI64IntegerAttr(alignment);
         changed |= function.getAlignmentAttr() != desired;
         function.setAlignmentAttr(desired);
+      }
+    }
+
+    // The LLVM passes read these roles as function attributes.
+    {
+      SmallVector<Attribute> exported;
+      ArrayAttr passthrough = function.getPassthroughAttr();
+      if (passthrough)
+        llvm::append_range(exported, passthrough);
+      size_t existing = exported.size();
+      auto exportRole = [&](schedule::EvalRole role, StringRef attribute) {
+        if (schedule::hasEvalRoles(function, role) &&
+            !llvm::is_contained(exported,
+                                StringAttr::get(&getContext(), attribute)))
+          exported.push_back(StringAttr::get(&getContext(), attribute));
+      };
+      exportRole(schedule::EvalRole::ClockedKernel, kClockedKernelFnAttr);
+      exportRole(schedule::EvalRole::EvalBody, kEvalBodyFnAttr);
+      if (exported.size() != existing) {
+        function.setPassthroughAttr(ArrayAttr::get(&getContext(), exported));
+        changed = true;
       }
     }
 

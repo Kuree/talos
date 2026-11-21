@@ -1,5 +1,6 @@
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
+#include "talos/Dialect/Schedule/EvalRoles.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 //===- SimulationProcessActivationLowering.cpp - Activation helpers ---===//
 
@@ -62,6 +63,7 @@ makeProcessActivationHelper(ModuleOp module, SymbolTable &symbols,
       LLVM::LLVMFunctionType::get(i32, checkedArguments, false),
       LLVM::Linkage::Internal);
   copyNativePartition(function, checkedHelper);
+  schedule::inheritEvalRoles(function, checkedHelper);
   indexModuleSymbol(module, symbols, checkedHelper);
   Block *entry = checkedHelper.addEntryBlock(builder);
   Block *created = new Block;
@@ -134,6 +136,7 @@ makeProcessActivationHelper(ModuleOp module, SymbolTable &symbols,
       builder, location, helperName,
       LLVM::LLVMFunctionType::get(i64, arguments, false));
   copyNativePartition(function, helper);
+  schedule::inheritEvalRoles(function, helper);
   indexModuleSymbol(module, symbols, helper);
   Block *wrapperEntry = helper.addEntryBlock(builder);
   Block *wrapperSucceeded = new Block;
@@ -437,6 +440,8 @@ FailureOr<LLVM::LLVMFuncOp> makeProcessSpawnHelper(
       builder, location, helperName,
       LLVM::LLVMFunctionType::get(i64, arguments, false));
   copyNativePartition(function, helper);
+  schedule::inheritEvalRoles(function, helper);
+  schedule::addEvalRoles(helper, schedule::EvalRole::SpawnHelper);
   // Retain the layout for root-spawn table materialization. Dynamic callers
   // use the typed marshalling body below.
   native::set<native::SpawnCaptureOffsets>(

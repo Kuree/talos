@@ -359,5 +359,10 @@ def StatePlaneAttr : EnumAttr<ScheduleDialect, StatePlaneEnum, "state_plane"> {
   let assemblyFormat = "`<` $value `>`";
 }
 
+// The roles of a generated function; see EvalRoleEnum.
+def EvalRoleAttr : EnumAttr<ScheduleDialect, EvalRoleEnum, "eval_role"> {
+  let assemblyFormat = "`<` $value `>`";
+}
+
 include "talos/Dialect/Schedule/ScheduleRecords.td"
 #endif

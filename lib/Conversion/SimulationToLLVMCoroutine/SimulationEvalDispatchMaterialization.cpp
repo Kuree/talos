@@ -4,6 +4,7 @@
 #include "SimulationEvalNBAQueue.h"
 #include "SimulationEvalReadySet.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
+#include "talos/Dialect/Schedule/EvalRoles.h"
 #include "talos/Dialect/Schedule/ScheduleEnums.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
@@ -56,7 +57,7 @@ void lowerNativePrioritySignalPolls(ModuleOp module) {
   for (auto fn : module.getOps<LLVM::LLVMFuncOp>()) {
     if (fn.isExternal() ||
         (fn.getSymName() != "__talos_aot_schedule_run_v1" &&
-         !fn.getSymName().starts_with("__talos_eval_dispatch_v1")))
+         !schedule::hasEvalRoles(fn, schedule::EvalRole::Dispatch)))
       continue;
     llvm::MapVector<Value, SmallVector<LLVM::CallOp>> groups;
     fn.walk([&](LLVM::CallOp call) {
@@ -359,6 +360,9 @@ materializeNativeEvalDispatch(ModuleOp module,
         builder, location, evalWriteRootsGuardName,
         LLVM::LLVMFunctionType::get(builder.getI1Type(),
                                     {pointer, pointer, i64}, false));
+    schedule::addEvalRoles(guard, schedule::EvalRole::WriteGuard);
+    schedule::set<schedule::Field::EvalWritableVpi>(module,
+                                                    builder.getUnitAttr());
     Block *entry = guard.addEntryBlock(builder);
     builder.setInsertionPointToStart(entry);
     Value checked =
@@ -389,6 +393,7 @@ materializeNativeEvalDispatch(ModuleOp module,
       LLVM::LLVMFunctionType::get(i32, coordinatorArguments, false));
   ::talos::schedule::set<schedule::metadata::evalCallClosureRoot>(
       fastCoordinator, builder.getUnitAttr());
+  schedule::addEvalRoles(fastCoordinator, schedule::EvalRole::Dispatch);
   Block *fastEntry = fastCoordinator.addEntryBlock(builder);
   Block *dispatch = new Block;
   Block *commit = new Block;
@@ -1032,6 +1037,7 @@ materializeNativeEvalDispatch(ModuleOp module,
         builder, location,
         (Twine(functionName) + ".segment_" + Twine(index)).str(),
         LLVM::LLVMFunctionType::get(i32, {pointer, i64, pointer}, false));
+    schedule::addEvalRoles(segment.function, schedule::EvalRole::Dispatch);
     Block *entry = segment.function.addEntryBlock(builder);
     Block *resume = new Block, *segmentFailed = new Block,
           *segmentStopped = new Block;
@@ -1510,6 +1516,7 @@ materializeNativeEvalDispatch(ModuleOp module,
           builder, location,
           (Twine(functionName) + ".word_" + Twine(word)).str(),
           LLVM::LLVMFunctionType::get(i32, {pointer, pointer}, false));
+      schedule::addEvalRoles(function, schedule::EvalRole::Dispatch);
       Block *entry = function.addEntryBlock(builder);
       Block *wordFailed = new Block, *wordStopped = new Block;
       wordFailed->addArgument(i32, location);

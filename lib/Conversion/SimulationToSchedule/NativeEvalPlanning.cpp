@@ -6,6 +6,7 @@
 #include "talos/Analysis/ParallelWalk.h"
 #include "talos/Analysis/SimulationScheduleAnalysis.h"
 #include "talos/Dialect/Native/NativeDialect.h"
+#include "talos/Dialect/Schedule/EvalRoles.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
@@ -221,6 +222,9 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
     node.plan.owner = record.bit;
     node.plan.body = direct.body;
     node.plan.twoStateBody = twoStateBody.str();
+    if (sim::SimFuncOp body = functions.lookup(direct.body))
+      node.plan.clockedKernel =
+          schedule::hasEvalRoles(body, schedule::EvalRole::ClockedKernel);
     if (!twoStateBody.empty())
       if (auto source = functions.lookup(direct.body)) {
         auto probe =

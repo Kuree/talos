@@ -2,8 +2,8 @@
 //--------===//
 
 #include "talos/LLVM/ClockedGuardLayout.h"
-#include "talos/Dialect/Schedule/ClockedKernelName.h"
 #include "talos/LLVM/ClockedKernelOutlining.h"
+#include "talos/LLVM/FunctionRoles.h"
 #include "talos/LLVM/WideIntegerVectorization.h"
 
 #include "llvm/Analysis/LoopInfo.h"
@@ -22,7 +22,7 @@ namespace talos {
 
 bool ClockedGuardLayoutPass::runOnFunction(Function &function) {
   if (function.isDeclaration() ||
-      !function.getName().contains(schedule::clockedKernelPrefix))
+      !function.hasFnAttribute(kClockedKernelFnAttr))
     return false;
   DominatorTree dominance(function);
   PostDominatorTree postDominance(function);

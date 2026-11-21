@@ -1,5 +1,6 @@
 // RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-suspension),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),convert-talos-sim-processes-to-llvm-coroutines)' -o %t.mlir 2> %t.trace
 // RUN: FileCheck %s < %t.mlir
+// RUN: FileCheck %s --check-prefix=ROLES < %t.mlir
 
 // Every entry path of an owner selects its value domain through one query. A
 // ranked member that is a fused clocked kernel gets the retry state its dispatch
@@ -10,6 +11,13 @@
 // CHECK: llvm.mlir.addressof @__talos_eval_kernel_retry_[[KERNEL]]_v1
 // CHECK-NEXT: llvm.call @__talos_eval_clocked_kernel_ready_v1(
 // CHECK: llvm.call @__talos_eval_kernel_promotion_ready_v1(
+
+// Every function made from the kernel's code keeps its role, which reaches
+// LLVM as a function attribute; the spawn helper is also a spawn helper.
+// ROLES-DAG: llvm.func @__talos_clocked_7_1_0.__talos_spawn({{.*}}passthrough = ["schedule.clocked_kernel"], schedule.eval.role = #schedule.eval_role<clocked_kernel|spawn_helper>}
+// ROLES-DAG: llvm.func @__talos_clocked_7_1_0.__talos_table_body({{.*}}passthrough = ["schedule.clocked_kernel"], schedule.eval.role = #schedule.eval_role<clocked_kernel>}
+// ROLES-DAG: llvm.func @__talos_clocked_7_1_0.__talos_eval_body_0({{.*}}passthrough = ["schedule.clocked_kernel", "schedule.eval_body"],{{.*}}schedule.eval.role = #schedule.eval_role<clocked_kernel|eval_body>
+// ROLES-DAG: llvm.func @__talos_clocked_7_1_0.__talos_eval_body_0.__talos_two_state_0({{.*}}passthrough = ["schedule.clocked_kernel", "schedule.eval_body"],{{.*}}schedule.eval.role = #schedule.eval_role<clocked_kernel|eval_body>
 
 !clock = !simulation.ref<i1>
 !word = !simulation.ref<i8>
@@ -45,7 +53,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
       simulation.ref.store %next to %clk : i1, !clock
       cf.br ^wait
     }
-    simulation.func @__talos_clocked_7_1_0(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %clk: !clock {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}, %other: !clock {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 1 : i64}) attributes {entry_kind = 3 : i32, code_unit_id = 4 : i64} {
+    simulation.func @__talos_clocked_7_1_0(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %clk: !clock {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}, %other: !clock {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 1 : i64}) attributes {entry_kind = 3 : i32, code_unit_id = 4 : i64, schedule.eval.role = #schedule.eval_role<clocked_kernel>} {
       cf.br ^wait
     ^wait:
       simulation.suspend.edge posedge %clk to ^body : !clock
