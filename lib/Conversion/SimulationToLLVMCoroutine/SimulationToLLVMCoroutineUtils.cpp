@@ -1,6 +1,6 @@
 //===- SimulationToLLVMCoroutineUtils.cpp - Shared lowering support -----===//
 
-#include "NativeRuntimeEntries.h"
+#include "NativeRuntimeCalls.h"
 #include "NativeStateAccess.h"
 #include "SimulationEvalNBAQueue.h"
 #include "SimulationToLLVMCoroutinePrivate.h"

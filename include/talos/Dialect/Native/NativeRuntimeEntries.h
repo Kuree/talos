@@ -1,4 +1,4 @@
-//===- NativeRuntimeEntries.h - Native runtime entry effects ----*- C++ -*-===//
+//===- NativeRuntimeEntries.h - Native runtime entry catalog ----*- C++ -*-===//
 //
 // What native passes may assume about a call to a native runtime entry. Each
 // entry states its facts once, in NativeRuntimeEntries.def; passes query the
@@ -6,23 +6,19 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef TALOS_CONVERSION_SIMULATIONTOLLVM_NATIVE_RUNTIME_ENTRIES_H
-#define TALOS_CONVERSION_SIMULATIONTOLLVM_NATIVE_RUNTIME_ENTRIES_H
+#ifndef TALOS_DIALECT_NATIVE_NATIVERUNTIMEENTRIES_H
+#define TALOS_DIALECT_NATIVE_NATIVERUNTIMEENTRIES_H
 
 #include "llvm/ADT/StringRef.h"
 
 #include <cstdint>
 #include <optional>
 
-namespace mlir {
-class Operation;
-} // namespace mlir
-
-namespace talos::detail {
+namespace talos {
 
 enum class NativeRuntimeEntry : uint16_t {
 #define TALOS_NATIVE_RUNTIME(Enum, symbol, effects) Enum,
-#include "NativeRuntimeEntries.def"
+#include "talos/Dialect/Native/NativeRuntimeEntries.def"
 };
 
 namespace native_runtime {
@@ -59,11 +55,7 @@ uint32_t getNativeRuntimeEffects(NativeRuntimeEntry entry);
 /// Whether every call to `callee` has `effect`; false for another callee.
 bool hasNativeRuntimeEffect(llvm::StringRef callee,
                             native_runtime::Effect effect);
-/// Whether `op` is a native runtime call with `effect`: an LLVM call to an
-/// entry, or a typed operation that lowers to calls of entries that all have
-/// it. False for another operation.
-bool hasNativeRuntimeEffect(mlir::Operation *op, native_runtime::Effect effect);
 
-} // namespace talos::detail
+} // namespace talos
 
 #endif

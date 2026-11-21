@@ -1,7 +1,7 @@
 //===- SimulationAOTMaterialization.cpp - Native AOT LLVM plan --------===//
 
 #include "NativeHandleChain.h"
-#include "NativeRuntimeEntries.h"
+#include "NativeRuntimeCalls.h"
 #include "NativeStateAccess.h"
 #include "SimulationAOTPlanning.h"
 #include "SimulationEvalNBAQueue.h"

@@ -2,7 +2,7 @@
 
 #include "talos/Conversion/SimulationToLLVMCoroutine.h"
 #include "../SimulationToSchedule/NativePipeline.h"
-#include "NativeRuntimeEntries.h"
+#include "NativeRuntimeCalls.h"
 #include "NativeStateAccess.h"
 #include "SimulationEvalNBAQueue.h"
 #include "talos/Dialect/Native/NativeDialect.h"
@@ -224,12 +224,11 @@ using detail::threadProcessStateThroughCFG;
 bool isEvalClosureRuntimeCall(LLVM::CallOp call, LLVM::LLVMFuncOp function,
                               ModuleOp module) {
   std::optional<StringRef> callee = call.getCallee();
-  std::optional<detail::NativeRuntimeEntry> entry =
-      callee ? detail::getNativeRuntimeEntry(*callee) : std::nullopt;
+  std::optional<NativeRuntimeEntry> entry =
+      callee ? getNativeRuntimeEntry(*callee) : std::nullopt;
   if (!entry)
     return false;
-  if (detail::getNativeRuntimeEffects(*entry) &
-      detail::native_runtime::EvalInline)
+  if (getNativeRuntimeEffects(*entry) & native_runtime::EvalInline)
     return true;
   bool runtimeCalendar =
       schedule::has<schedule::Field::EvalRuntimeCalendar>(module);
@@ -248,7 +247,7 @@ bool isEvalClosureRuntimeCall(LLVM::CallOp call, LLVM::LLVMFuncOp function,
   // waits to the runtime as node activations (4.5, 10.4.2).
   bool runtimeRouted =
       schedule::has<schedule::Field::EvalRuntimeRoutedPublication>(call);
-  using Entry = detail::NativeRuntimeEntry;
+  using Entry = NativeRuntimeEntry;
   switch (*entry) {
   case Entry::StaticSpecializationGuard:
   case Entry::StaticSpecializationGuardRoots:

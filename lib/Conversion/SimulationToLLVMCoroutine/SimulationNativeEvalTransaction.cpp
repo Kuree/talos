@@ -1,6 +1,6 @@
 //===- SimulationNativeEvalTransaction.cpp - Local NBA captures ---------===//
 
-#include "NativeRuntimeEntries.h"
+#include "NativeRuntimeCalls.h"
 #include "SimulationAOTPlanning.h"
 #include "SimulationEvalNBAQueue.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
