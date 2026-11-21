@@ -10,7 +10,7 @@
 // CHECK-SAME: schedule.eval.control_flow_dataflow
 // CHECK-SAME: schedule.eval.dataflow_fallback = @call_group.fallback
 // CHECK-SAME: schedule.eval.refresh_group_proofs
-// CHECK: llvm.mlir.addressof @__talos_eval_promotion_pending_mask_v1
+// CHECK: schedule.mask.load @__talos_eval_promotion_pending_mask_v1[0]
 // CHECK: llvm.cond_br
 // CHECK: llvm.call @effect()
 // CHECK: llvm.call @call_group.fallback()

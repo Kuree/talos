@@ -8,7 +8,7 @@
 // its global binds, a byte GEP to the window, and a load or store of it.
 // Generated NBA accumulator records are accessed the same way: their typed
 // field accesses become byte GEPs to the field in the record layout. Ready
-// set words are lowered earlier, after their last typed reader.
+// set and eval mask words are lowered earlier, after their last typed reader.
 //
 //===----------------------------------------------------------------------===//
 
@@ -25,6 +25,7 @@ using namespace mlir;
 namespace talos {
 #define GEN_PASS_DEF_LOWERNATIVESTATEACCESSPASS
 #define GEN_PASS_DEF_LOWERNATIVEREADYWORDSPASS
+#define GEN_PASS_DEF_LOWERNATIVEMASKWORDSPASS
 #include "talos/Conversion/Passes.h.inc"
 
 namespace {
@@ -389,11 +390,92 @@ private:
   }
 };
 
+// The LLVM addresses of whole words of the generated word globals, the ready
+// sets and the eval masks, in one function: a global's address once per
+// function, at the start of its entry block in the order of first use, then
+// a static word's address per access and a dynamic word's once per block, as
+// the eval schedule's LLVM form takes them.
+class WordAddresses {
+public:
+  explicit WordAddresses(LLVM::LLVMFuncOp function) : function(function) {}
+
+  Value get(Operation *access, FlatSymbolRefAttr global, Value dynamicWord,
+            uint64_t staticWord) {
+    Location location = access->getLoc();
+    Value &base = bases[global];
+    if (!base) {
+      OpBuilder entry = OpBuilder::atBlockBegin(&function.getBody().front());
+      if (lastBase)
+        entry.setInsertionPointAfter(lastBase);
+      base = LLVM::AddressOfOp::create(
+          entry, location, LLVM::LLVMPointerType::get(function.getContext()),
+          global.getValue());
+      lastBase = base.getDefiningOp();
+    }
+    if (!dynamicWord) {
+      OpBuilder builder(access);
+      return detail::ownerWordAddress(builder, location, base, staticWord);
+    }
+    // A dynamic word's address is computed once per block, where its index
+    // is: right after the index's definition in the access's block, else
+    // before the block's first access.
+    Value &shared =
+        dynamicAddresses[{access->getBlock(), global, dynamicWord, staticWord}];
+    if (shared)
+      return shared;
+    OpBuilder at(access);
+    Operation *definition = dynamicWord.getDefiningOp();
+    if (definition && definition->getBlock() == access->getBlock()) {
+      Operation *&after = lastAfterIndex[dynamicWord];
+      at.setInsertionPointAfter(after ? after : definition);
+    }
+    Value word =
+        LLVM::GEPOp::create(at, location, base.getType(), at.getI64Type(), base,
+                            ValueRange{dynamicWord});
+    if (staticWord)
+      word = detail::byteGEP(at, location, word, staticWord * sizeof(uint64_t));
+    if (definition && definition->getBlock() == access->getBlock())
+      lastAfterIndex[dynamicWord] = word.getDefiningOp();
+    return shared = word;
+  }
+
+  // Replaces `access`, a typed load (with `result`) or store (with `value`)
+  // of a word, with the 8-byte aligned LLVM access it stands for; other
+  // dialects' annotations stay with it, and `owner` becomes its group-owner
+  // tag. Returns the LLVM access.
+  Operation *lower(Operation *access, FlatSymbolRefAttr global,
+                   Value dynamicWord, uint64_t staticWord, Value result,
+                   Value value, IntegerAttr owner) {
+    Value address = get(access, global, dynamicWord, staticWord);
+    OpBuilder builder(access);
+    Operation *lowered;
+    if (result) {
+      lowered =
+          LLVM::LoadOp::create(builder, access->getLoc(), builder.getI64Type(),
+                               address, sizeof(uint64_t));
+      result.replaceAllUsesWith(lowered->getResult(0));
+    } else {
+      lowered = LLVM::StoreOp::create(builder, access->getLoc(), value, address,
+                                      sizeof(uint64_t));
+    }
+    for (NamedAttribute attribute : access->getDiscardableAttrs())
+      lowered->setAttr(attribute.getName(), attribute.getValue());
+    if (owner)
+      detail::setNativeMemoryOwner(lowered, owner);
+    return lowered;
+  }
+
+private:
+  LLVM::LLVMFuncOp function;
+  llvm::SmallDenseMap<Attribute, Value, 2> bases;
+  Operation *lastBase = nullptr;
+  DenseMap<std::tuple<Block *, Attribute, Value, uint64_t>, Value>
+      dynamicAddresses;
+  DenseMap<Value, Operation *> lastAfterIndex;
+};
+
 // Lowers ready set word accesses to whole-word LLVM accesses of the set's
-// global: the set's address once per function, at the start of its entry
-// block in the order of first use, then a static word's address per access
-// and a dynamic word's once per block, as the eval schedule's LLVM form takes
-// them.
+// global (WordAddresses).
 class LowerNativeReadyWordsPass final
     : public impl::LowerNativeReadyWordsPassBase<LowerNativeReadyWordsPass> {
 public:
@@ -419,78 +501,53 @@ public:
       return signalPassFailure();
     if (words.empty())
       return markAllAnalysesPreserved();
-    llvm::SmallDenseMap<Attribute, Value, 2> bases;
-    Operation *lastBase = nullptr;
-    DenseMap<std::tuple<Block *, Attribute, Value, uint64_t>, Value>
-        dynamicAddresses;
-    DenseMap<Value, Operation *> lastAfterIndex;
+    WordAddresses addresses(function);
     for (Operation *operation : words) {
-      OpBuilder builder(operation);
-      Location location = operation->getLoc();
-      auto address = [&](FlatSymbolRefAttr set, Value dynamicWord,
-                         uint64_t staticWord) -> Value {
-        Value &base = bases[set];
-        if (!base) {
-          OpBuilder entry =
-              OpBuilder::atBlockBegin(&function.getBody().front());
-          if (lastBase)
-            entry.setInsertionPointAfter(lastBase);
-          base = LLVM::AddressOfOp::create(
-              entry, location, LLVM::LLVMPointerType::get(&getContext()),
-              set.getValue());
-          lastBase = base.getDefiningOp();
-        }
-        if (!dynamicWord)
-          return detail::ownerWordAddress(builder, location, base, staticWord);
-        // A dynamic word's address is computed once per block, where its
-        // index is: right after the index's definition in the access's
-        // block, else before the block's first access.
-        Value &shared = dynamicAddresses[{operation->getBlock(), set,
-                                          dynamicWord, staticWord}];
-        if (shared)
-          return shared;
-        OpBuilder at(operation);
-        Operation *definition = dynamicWord.getDefiningOp();
-        if (definition && definition->getBlock() == operation->getBlock()) {
-          Operation *&after = lastAfterIndex[dynamicWord];
-          at.setInsertionPointAfter(after ? after : definition);
-        }
-        Value word =
-            LLVM::GEPOp::create(at, location, base.getType(), at.getI64Type(),
-                                base, ValueRange{dynamicWord});
-        if (staticWord)
-          word = detail::byteGEP(at, location, word,
-                                 staticWord * sizeof(uint64_t));
-        if (definition && definition->getBlock() == operation->getBlock())
-          lastAfterIndex[dynamicWord] = word.getDefiningOp();
-        return shared = word;
-      };
-      Operation *lowered;
-      IntegerAttr owner;
       if (auto load = dyn_cast<schedule::NativeReadyWordLoadOp>(operation)) {
-        lowered = LLVM::LoadOp::create(builder, location, builder.getI64Type(),
-                                       address(load.getSetAttr(),
-                                               load.getDynamicWord(),
-                                               load.getStaticWord()),
-                                       sizeof(uint64_t));
-        load.getResult().replaceAllUsesWith(lowered->getResult(0));
-        owner = load.getOwnerAttr();
+        Operation *lowered =
+            addresses.lower(load, load.getSetAttr(), load.getDynamicWord(),
+                            load.getStaticWord(), load.getResult(), Value{},
+                            load.getOwnerAttr());
         if (IntegerAttr entry = load.getActivationEntryAttr())
           detail::setNativeActivationEntry(lowered, entry);
       } else {
         auto store = cast<schedule::NativeReadyWordStoreOp>(operation);
-        lowered = LLVM::StoreOp::create(builder, location, store.getValue(),
-                                        address(store.getSetAttr(),
-                                                store.getDynamicWord(),
-                                                store.getStaticWord()),
-                                        sizeof(uint64_t));
-        owner = store.getOwnerAttr();
+        addresses.lower(store, store.getSetAttr(), store.getDynamicWord(),
+                        store.getStaticWord(), Value{}, store.getValue(),
+                        store.getOwnerAttr());
       }
-      // Other dialects' annotations stay with the access.
-      for (NamedAttribute attribute : operation->getDiscardableAttrs())
-        lowered->setAttr(attribute.getName(), attribute.getValue());
-      if (owner)
-        detail::setNativeMemoryOwner(lowered, owner);
+      operation->erase();
+    }
+  }
+};
+
+// Lowers eval mask word accesses to whole-word LLVM accesses of the mask's
+// global (WordAddresses).
+class LowerNativeMaskWordsPass final
+    : public impl::LowerNativeMaskWordsPassBase<LowerNativeMaskWordsPass> {
+public:
+  void runOnOperation() override {
+    LLVM::LLVMFuncOp function = getOperation();
+    SmallVector<Operation *> words;
+    function.walk([&](Operation *operation) {
+      if (isa<schedule::NativeMaskLoadOp, schedule::NativeMaskStoreOp>(
+              operation))
+        words.push_back(operation);
+    });
+    if (words.empty())
+      return markAllAnalysesPreserved();
+    WordAddresses addresses(function);
+    for (Operation *operation : words) {
+      if (auto load = dyn_cast<schedule::NativeMaskLoadOp>(operation)) {
+        addresses.lower(load, load.getMaskAttr(), load.getDynamicWord(),
+                        load.getStaticWord(), load.getResult(), Value{},
+                        load.getOwnerAttr());
+      } else {
+        auto store = cast<schedule::NativeMaskStoreOp>(operation);
+        addresses.lower(store, store.getMaskAttr(), store.getDynamicWord(),
+                        store.getStaticWord(), Value{}, store.getValue(),
+                        store.getOwnerAttr());
+      }
       operation->erase();
     }
   }

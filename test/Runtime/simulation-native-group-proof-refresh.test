@@ -1,4 +1,4 @@
-// RUN: talos-opt %S/../Conversion/simulation-native-group-proof-refresh.mlir --pass-pipeline='builtin.module(talos-materialize-native-eval-groups,llvm.func(lower-native-state-access))' -o %t.mlir
+// RUN: talos-opt %S/../Conversion/simulation-native-group-proof-refresh.mlir --pass-pipeline='builtin.module(talos-materialize-native-eval-groups,llvm.func(lower-native-mask-words,lower-native-state-access))' -o %t.mlir
 // RUN: talos-translate --mlir-to-llvmir %t.mlir | %llvm_dist/bin/opt -passes='default<O0>' | %llc -filetype=obj -relocation-model=pic -o %t.o
 // RUN: %llvm_dist/bin/clang %t.o -o %t.exe
 // RUN: %t.exe

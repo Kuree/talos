@@ -2,6 +2,7 @@
 
 #include "NativeStateAccess.h"
 #include "SimulationAOTPlanning.h"
+#include "SimulationEvalReadySet.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Conversion/Passes.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
@@ -27,8 +28,7 @@ namespace talos::detail {
 
 LogicalResult materializeNativeRoutePromotionScan(
     ModuleOp module, LLVM::LLVMFuncOp scanner, uint64_t stateBits,
-    ArrayRef<NativeRoutePromotion> routes, StringRef pendingName,
-    StringRef dirtyName) {
+    ArrayRef<NativeRoutePromotion> routes, StringRef dirtyName) {
   OpBuilder builder(module.getContext());
   Location loc = scanner.getLoc();
   Type i1 = builder.getI1Type(), i8 = builder.getI8Type(),
@@ -125,8 +125,7 @@ LogicalResult materializeNativeRoutePromotionScan(
                                   noValues);
   };
   builder.setInsertionPointToStart(entry);
-  Value pendingBase = address(pendingName), ownerBase = address(ownerName),
-        rangeBase = address(rangeName);
+  Value ownerBase = address(ownerName), rangeBase = address(rangeName);
   if (!dirtyName.empty())
     LLVM::StoreOp::create(builder, loc, llvmConstant(builder, loc, i8, 0),
                           address(dirtyName), 1);
@@ -138,11 +137,12 @@ LogicalResult materializeNativeRoutePromotionScan(
                            constant((routes.size() + 63) / 64));
   condBranch(finished, done, ValueRange{}, readWord, ValueRange{});
   builder.setInsertionPointToStart(readWord);
-  Value pendingAddress = gep(pendingBase, i64, word);
-  Value pending = LLVM::LoadOp::create(builder, loc, i64, pendingAddress, 8);
+  Value pending = loadMaskWordAt(
+      builder, loc, schedule::EvalMask::RoutePromotionPending, word);
   // This scan executes no callbacks or actors. Snapshot and consume each word
   // once; subsequent mutations enqueue their own exact proof dependencies.
-  LLVM::StoreOp::create(builder, loc, constant(0), pendingAddress, 8);
+  storeMaskWordAt(builder, loc, constant(0),
+                  schedule::EvalMask::RoutePromotionPending, word);
   branch(nextBit, ValueRange{pending});
   builder.setInsertionPointToStart(nextBit);
   Value remaining = nextBit->getArgument(0);
@@ -361,8 +361,6 @@ materializePromotionReadiness(ModuleOp module, ArrayRef<uint64_t> owners,
   };
   StringRef latchName = group ? groupPromotionLatchName
                               : "__talos_eval_kernel_promotion_latched_v1";
-  constexpr StringLiteral pendingName =
-      "__talos_eval_promotion_pending_mask_v1";
   StringRef scanName = group ? "__talos_eval_group_promotion_scan_v1"
                              : "__talos_eval_kernel_promotion_scan_v1";
   builder.setInsertionPointToEnd(module.getBody());
@@ -483,14 +481,14 @@ materializePromotionReadiness(ModuleOp module, ArrayRef<uint64_t> owners,
                         llvmConstant(builder, loc, i8, kPromotionLatchKnown),
                         gep(address(latchName), i8, owner), 1);
   if (!group) {
-    Value pendingAddress =
-        gep(address(pendingName), i64, field(ownerBase, owner, 2));
-    Value pending = LLVM::LoadOp::create(builder, loc, i64, pendingAddress, 8);
+    Value pendingWord = field(ownerBase, owner, 2);
+    Value pending = loadMaskWordAt(
+        builder, loc, schedule::EvalMask::PromotionPending, pendingWord);
     Value keep = arith::XOrIOp::create(builder, loc, field(ownerBase, owner, 3),
                                        constant(UINT64_MAX));
-    LLVM::StoreOp::create(builder, loc,
-                          arith::AndIOp::create(builder, loc, pending, keep),
-                          pendingAddress, 8);
+    storeMaskWordAt(builder, loc,
+                    arith::AndIOp::create(builder, loc, pending, keep),
+                    schedule::EvalMask::PromotionPending, pendingWord);
   }
   LLVM::ReturnOp::create(builder, loc, llvmConstant(builder, loc, i1, 1));
   // A failed scan caches its result: the latch holds FAILED until a

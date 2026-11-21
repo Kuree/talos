@@ -132,8 +132,8 @@ std::optional<NativeMemoryAccess> getNativeMemoryAccess(Operation *operation) {
     access.owner = store.getOwnerAttr();
     return access;
   }
-  // An NBA readiness index word or a ready set word is other memory: a whole
-  // word of the index's or the set's global.
+  // An NBA readiness index word, a ready set word or a mask word is other
+  // memory: a whole word of the index's, the set's or the mask's global.
   auto describeWord = [&](StringRef global, Value dynamicWord,
                           uint64_t staticWord) {
     access.global = global;
@@ -162,6 +162,20 @@ std::optional<NativeMemoryAccess> getNativeMemoryAccess(Operation *operation) {
   }
   if (auto store = dyn_cast<schedule::NativeReadyWordStoreOp>(operation)) {
     describeWord(store.getSet(), store.getDynamicWord(), store.getStaticWord());
+    access.type = store.getValue().getType();
+    access.stored = store.getValue();
+    access.owner = store.getOwnerAttr();
+    return access;
+  }
+  if (auto load = dyn_cast<schedule::NativeMaskLoadOp>(operation)) {
+    describeWord(load.getMask(), load.getDynamicWord(), load.getStaticWord());
+    access.type = load.getType();
+    access.owner = load.getOwnerAttr();
+    return access;
+  }
+  if (auto store = dyn_cast<schedule::NativeMaskStoreOp>(operation)) {
+    describeWord(store.getMask(), store.getDynamicWord(),
+                 store.getStaticWord());
     access.type = store.getValue().getType();
     access.stored = store.getValue();
     access.owner = store.getOwnerAttr();
@@ -377,6 +391,10 @@ void setNativeMemoryOwner(Operation *operation, IntegerAttr owner) {
   else if (auto load = dyn_cast<schedule::NativeReadyWordLoadOp>(operation))
     load.setOwnerAttr(owner);
   else if (auto store = dyn_cast<schedule::NativeReadyWordStoreOp>(operation))
+    store.setOwnerAttr(owner);
+  else if (auto load = dyn_cast<schedule::NativeMaskLoadOp>(operation))
+    load.setOwnerAttr(owner);
+  else if (auto store = dyn_cast<schedule::NativeMaskStoreOp>(operation))
     store.setOwnerAttr(owner);
   else
     schedule::set<schedule::Field::EvalGroupOwner>(operation, owner);

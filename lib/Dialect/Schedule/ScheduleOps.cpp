@@ -337,6 +337,32 @@ std::optional<ReadySet> getReadySetOfGlobal(StringRef name) {
       .Default(std::nullopt);
 }
 
+StringRef getEvalMaskGlobalName(EvalMask mask) {
+  switch (mask) {
+  case EvalMask::PromotionPending:
+    return "__talos_eval_promotion_pending_mask_v1";
+  case EvalMask::RoutePromotionPending:
+    return "__talos_eval_route_promotion_pending_v1";
+  case EvalMask::StepFourStateNBARoots:
+    return "__talos_eval_step_four_state_nba_roots_v1";
+  case EvalMask::FastNBARoots:
+    return "__talos_eval_fast_nba_roots_v1";
+  }
+  llvm_unreachable("unknown eval mask");
+}
+
+std::optional<EvalMask> getEvalMaskOfGlobal(StringRef name) {
+  return llvm::StringSwitch<std::optional<EvalMask>>(name)
+      .Case("__talos_eval_promotion_pending_mask_v1",
+            EvalMask::PromotionPending)
+      .Case("__talos_eval_route_promotion_pending_v1",
+            EvalMask::RoutePromotionPending)
+      .Case("__talos_eval_step_four_state_nba_roots_v1",
+            EvalMask::StepFourStateNBARoots)
+      .Case("__talos_eval_fast_nba_roots_v1", EvalMask::FastNBARoots)
+      .Default(std::nullopt);
+}
+
 // A root's own access is to the dirty word that holds its bit, or to the
 // summary word that holds its dirty word's bit.
 static LogicalResult verifyIndexAccess(Operation *op, StringRef global,
@@ -1129,6 +1155,70 @@ LogicalResult NativeReadyWordStoreOp::verify() {
 LogicalResult
 NativeReadyWordStoreOp::verifySymbolUses(SymbolTableCollection &tables) {
   return verifyReadySetUse(*this, getSetAttr(), getStaticWord() + 1, tables);
+}
+
+// A mask word access names a generated eval mask; its static word lies in
+// the mask's global, an array of whole 64-bit words (a dynamic word only
+// moves past it).
+static LogicalResult verifyMaskWord(Operation *op, StringRef mask) {
+  if (!getEvalMaskOfGlobal(mask))
+    return op->emitOpError("names '") << mask << "', no generated eval mask";
+  return verifyTypedMemoryOp(op);
+}
+static LogicalResult verifyMaskUse(Operation *op, FlatSymbolRefAttr mask,
+                                   uint64_t staticWord,
+                                   SymbolTableCollection &tables) {
+  auto global = tables.lookupNearestSymbolFrom<LLVM::GlobalOp>(op, mask);
+  auto array =
+      global ? dyn_cast<LLVM::LLVMArrayType>(global.getType()) : nullptr;
+  if (!array || !array.getElementType().isInteger(64))
+    return op->emitOpError("must reference the llvm.mlir.global of its mask, "
+                           "an array of i64 words");
+  if (staticWord >= array.getNumElements())
+    return op->emitOpError("accesses word ")
+           << staticWord << " of a mask of " << array.getNumElements()
+           << " words";
+  return success();
+}
+
+void NativeMaskLoadOp::build(OpBuilder &builder, OperationState &state,
+                             EvalMask mask, Value dynamicWord,
+                             uint64_t staticWord) {
+  build(
+      builder, state, builder.getI64Type(),
+      FlatSymbolRefAttr::get(builder.getContext(), getEvalMaskGlobalName(mask)),
+      dynamicWord, builder.getI64IntegerAttr(staticWord),
+      /*owner=*/IntegerAttr{});
+}
+EvalMask NativeMaskLoadOp::getEvalMask() {
+  return *getEvalMaskOfGlobal(getMask());
+}
+LogicalResult NativeMaskLoadOp::verify() {
+  return verifyMaskWord(*this, getMask());
+}
+LogicalResult
+NativeMaskLoadOp::verifySymbolUses(SymbolTableCollection &tables) {
+  return verifyMaskUse(*this, getMaskAttr(), getStaticWord(), tables);
+}
+
+void NativeMaskStoreOp::build(OpBuilder &builder, OperationState &state,
+                              Value value, EvalMask mask, Value dynamicWord,
+                              uint64_t staticWord) {
+  build(
+      builder, state, value,
+      FlatSymbolRefAttr::get(builder.getContext(), getEvalMaskGlobalName(mask)),
+      dynamicWord, builder.getI64IntegerAttr(staticWord),
+      /*owner=*/IntegerAttr{});
+}
+EvalMask NativeMaskStoreOp::getEvalMask() {
+  return *getEvalMaskOfGlobal(getMask());
+}
+LogicalResult NativeMaskStoreOp::verify() {
+  return verifyMaskWord(*this, getMask());
+}
+LogicalResult
+NativeMaskStoreOp::verifySymbolUses(SymbolTableCollection &tables) {
+  return verifyMaskUse(*this, getMaskAttr(), getStaticWord(), tables);
 }
 SuccessorOperands NativeSuspendDelayOp::getSuccessorOperands(unsigned index) {
   assert(index == 0);

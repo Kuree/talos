@@ -36,18 +36,19 @@ struct ReadyInlinerInterface final : DialectInlinerInterface {
     // Cloning preserves ordered accesses to the same pending set. Regions
     // are formed after body inlining; other schedule actions retain their
     // existing callable/activation restrictions.
-    // State-plane, NBA accumulator, NBA index and ready-set word accesses
-    // are plain memory accesses; an NBA stage and a handle-addressed access
-    // inline like the runtime calls they stand for.
+    // State-plane, NBA accumulator, NBA index, ready-set word and mask word
+    // accesses are plain memory accesses; an NBA stage and a handle-addressed
+    // access inline like the runtime calls they stand for.
     return isa<NativeReadyReadOp, NativeReadyUpdateOp, NativeReadyCommitOp,
                NativeReadyMergeOp, NativeReadyWordLoadOp,
-               NativeReadyWordStoreOp, NativeStateAddressOp,
-               NativeStateWindowAddressOp, NativeStateLoadOp,
-               NativeStateStoreOp, NativeNBAAccumulatorAddressOp,
-               NativeNBAAccumulatorLoadOp, NativeNBAAccumulatorStoreOp,
-               NativeNBAIndexLoadOp, NativeNBAIndexStoreOp, NativeNBAStageOp,
-               NativeStateLoadHandleOp, NativeStateStoreHandleOp,
-               NativeStateFrameStoreOp, NativeStateLoadAutomaticOp>(op);
+               NativeReadyWordStoreOp, NativeMaskLoadOp, NativeMaskStoreOp,
+               NativeStateAddressOp, NativeStateWindowAddressOp,
+               NativeStateLoadOp, NativeStateStoreOp,
+               NativeNBAAccumulatorAddressOp, NativeNBAAccumulatorLoadOp,
+               NativeNBAAccumulatorStoreOp, NativeNBAIndexLoadOp,
+               NativeNBAIndexStoreOp, NativeNBAStageOp, NativeStateLoadHandleOp,
+               NativeStateStoreHandleOp, NativeStateFrameStoreOp,
+               NativeStateLoadAutomaticOp>(op);
   }
 };
 } // namespace

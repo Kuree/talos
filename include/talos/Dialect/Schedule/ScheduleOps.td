@@ -389,7 +389,66 @@ def NativeReadyWordStoreOp : ScheduleNativeOp<"ready.word.store", [
   let hasVerifier = 1;
 }
 
-def NativeReadyRegionOp : ScheduleNativeOp<"ready.region", [RecursiveMemoryEffects]> {
+// The words of a generated eval mask (EvalMask), read and written whole.
+// A mask is no ready set: its words carry no pending activations, so ready
+// regions and activation groups see these as plain accesses of other memory.
+// The runtime's proof certificates also address mask words directly.
+//
+// What native passes need to know about an access is a property:
+// - owner: the activation-group member whose activation performs the access.
+def NativeMaskLoadOp : ScheduleNativeOp<"mask.load", [
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let summary = "read a word of a generated eval mask";
+  let description = [{
+    Reads the 64-bit word `static_word` plus the optional `dynamic_word` of
+    the generated eval mask `mask`.
+  }];
+  let arguments = (ins Arg<FlatSymbolRefAttr, "the mask's global",
+                           [MemRead]>:$mask,
+                       Optional<I64>:$dynamic_word,
+                       I64Attr:$static_word,
+                       OptionalAttr<I32Attr>:$owner);
+  let results = (outs I64:$result);
+  let assemblyFormat = [{
+    $mask `[` custom<StateOffset>($dynamic_word, $static_word) `]` attr-dict
+  }];
+  let builders = [OpBuilder<(ins "::talos::schedule::EvalMask":$mask,
+                                 "::mlir::Value":$dynamicWord,
+                                 "uint64_t":$staticWord)>];
+  let extraClassDeclaration = [{
+    ::talos::schedule::EvalMask getEvalMask();
+  }];
+  let hasVerifier = 1;
+}
+
+def NativeMaskStoreOp : ScheduleNativeOp<"mask.store", [
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let summary = "write a word of a generated eval mask";
+  let description = [{
+    Writes `value` to the 64-bit word `static_word` plus the optional
+    `dynamic_word` of the generated eval mask `mask`.
+  }];
+  let arguments = (ins I64:$value,
+                       Arg<FlatSymbolRefAttr, "the mask's global",
+                           [MemWrite]>:$mask,
+                       Optional<I64>:$dynamic_word,
+                       I64Attr:$static_word,
+                       OptionalAttr<I32Attr>:$owner);
+  let assemblyFormat = [{
+    $value `,` $mask `[` custom<StateOffset>($dynamic_word, $static_word) `]`
+    attr-dict
+  }];
+  let builders = [OpBuilder<(ins "::mlir::Value":$value,
+                                 "::talos::schedule::EvalMask":$mask,
+                                 "::mlir::Value":$dynamicWord,
+                                 "uint64_t":$staticWord)>];
+  let extraClassDeclaration = [{
+    ::talos::schedule::EvalMask getEvalMask();
+  }];
+  let hasVerifier = 1;
+}
+
+def NativeReadyRegionOp: ScheduleNativeOp<"ready.region", [RecursiveMemoryEffects]> {
   let summary = "carry pending readiness through a non-suspending CFG";
   let description = [{
     Execute the body in source order while representing ready.update and

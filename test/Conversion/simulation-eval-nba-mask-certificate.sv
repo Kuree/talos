@@ -6,9 +6,9 @@
 // its canonicalizing commit must not latch a whole-root certificate.
 //
 // CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1(
-// CHECK: %[[FAST:.*]] = llvm.mlir.addressof @__talos_eval_fast_nba_roots_v1
-// CHECK: %[[FALSE:.*]] = llvm.mlir.constant(false) : i1
-// CHECK: %[[TRUE:.*]] = llvm.mlir.constant(true) : i1
+// CHECK-DAG: %[[FAST:.*]] = llvm.mlir.addressof @__talos_eval_fast_nba_roots_v1
+// CHECK-DAG: %[[FALSE:.*]] = llvm.mlir.constant(false) : i1
+// CHECK-DAG: %[[TRUE:.*]] = llvm.mlir.constant(true) : i1
 // CHECK: %[[KNOWN:.*]] = llvm.call @__talos_eval_nba_known_v1(%{{[^,]+}}, %[[TRUE]], %[[TRUE]])
 // CHECK: %[[WHOLE_KNOWN:.*]] = llvm.call @__talos_eval_nba_known_v1(%{{[^,]+}}, %[[TRUE]], %[[FALSE]])
 // CHECK-NEXT: llvm.cond_br %[[WHOLE_KNOWN]] {{.*}}, ^[[LATCH:bb[0-9]+]], ^[[CANONICAL:bb[0-9]+]]

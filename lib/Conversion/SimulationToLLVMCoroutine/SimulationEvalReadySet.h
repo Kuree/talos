@@ -38,13 +38,6 @@ inline mlir::Value ownerWordAddress(mlir::OpBuilder &builder,
   return byteGEP(builder, loc, base, uint64_t{word} * sizeof(uint64_t));
 }
 
-inline mlir::Value loadOwnerWord(mlir::OpBuilder &builder, mlir::Location loc,
-                                 mlir::Value base, unsigned word) {
-  return mlir::LLVM::LoadOp::create(builder, loc, builder.getI64Type(),
-                                    ownerWordAddress(builder, loc, base, word),
-                                    8);
-}
-
 // The union of the words of `mask`, each read by `load` and masked.
 inline mlir::Value maskedWords(mlir::OpBuilder &builder, mlir::Location loc,
                                const llvm::APInt &mask,
@@ -63,14 +56,6 @@ inline mlir::Value maskedWords(mlir::OpBuilder &builder, mlir::Location loc,
               : selected;
   }
   return any ? any : llvmConstant(builder, loc, i64, 0);
-}
-
-inline mlir::Value maskedOwnerWords(mlir::OpBuilder &builder,
-                                    mlir::Location loc, mlir::Value base,
-                                    const llvm::APInt &mask) {
-  return maskedWords(builder, loc, mask, [&](unsigned word) {
-    return loadOwnerWord(builder, loc, base, word);
-  });
 }
 
 // A word of a generated eval ready set, read or written whole: word `word`,
@@ -105,31 +90,57 @@ inline mlir::Value maskedReadyWords(mlir::OpBuilder &builder,
   });
 }
 
-inline void storeOwnerMask(mlir::OpBuilder &builder, mlir::Location loc,
-                           mlir::Value base, const llvm::APInt &mask) {
-  for (unsigned word = 0; word != mask.getNumWords(); ++word)
-    mlir::LLVM::StoreOp::create(builder, loc,
-                                llvmConstant(builder, loc, builder.getI64Type(),
-                                             ownerMaskWord(mask, word)),
-                                ownerWordAddress(builder, loc, base, word), 8);
+// A word of a generated eval mask, read or written whole: word `word`, or
+// the word `index` selects (an i64). A mask holds proofs, not pending
+// activations; see schedule::EvalMask.
+inline mlir::Value loadMaskWord(mlir::OpBuilder &builder, mlir::Location loc,
+                                schedule::EvalMask mask, unsigned word) {
+  return schedule::NativeMaskLoadOp::create(builder, loc, mask, mlir::Value{},
+                                            word);
+}
+inline mlir::Value loadMaskWordAt(mlir::OpBuilder &builder, mlir::Location loc,
+                                  schedule::EvalMask mask, mlir::Value index) {
+  return schedule::NativeMaskLoadOp::create(builder, loc, mask, index, 0);
+}
+inline void storeMaskWord(mlir::OpBuilder &builder, mlir::Location loc,
+                          mlir::Value value, schedule::EvalMask mask,
+                          unsigned word) {
+  schedule::NativeMaskStoreOp::create(builder, loc, value, mask, mlir::Value{},
+                                      word);
+}
+inline void storeMaskWordAt(mlir::OpBuilder &builder, mlir::Location loc,
+                            mlir::Value value, schedule::EvalMask mask,
+                            mlir::Value index) {
+  schedule::NativeMaskStoreOp::create(builder, loc, value, mask, index, 0);
 }
 
-inline mlir::Value updateOwnerWord(mlir::OpBuilder &builder, mlir::Location loc,
-                                   mlir::Value base, unsigned word,
-                                   mlir::Value mask, bool clear = false) {
-  mlir::Value previous = loadOwnerWord(builder, loc, base, word);
-  mlir::Value next;
-  if (clear) {
-    mlir::Value inverse = mlir::arith::XOrIOp::create(
-        builder, loc, mask,
-        llvmConstant(builder, loc, builder.getI64Type(), UINT64_MAX));
-    next = mlir::arith::AndIOp::create(builder, loc, previous, inverse);
-  } else {
-    next = mlir::arith::OrIOp::create(builder, loc, previous, mask);
-  }
-  mlir::LLVM::StoreOp::create(builder, loc, next,
-                              ownerWordAddress(builder, loc, base, word), 8);
-  return next;
+// The union of the words of `bits` in a generated eval mask.
+inline mlir::Value maskedMaskWords(mlir::OpBuilder &builder, mlir::Location loc,
+                                   schedule::EvalMask mask,
+                                   const llvm::APInt &bits) {
+  return maskedWords(builder, loc, bits, [&](unsigned word) {
+    return loadMaskWord(builder, loc, mask, word);
+  });
+}
+
+// Write every word of `bits` to a generated eval mask.
+inline void storeMaskWords(mlir::OpBuilder &builder, mlir::Location loc,
+                           schedule::EvalMask mask, const llvm::APInt &bits) {
+  for (unsigned word = 0; word != bits.getNumWords(); ++word)
+    storeMaskWord(builder, loc,
+                  llvmConstant(builder, loc, builder.getI64Type(),
+                               ownerMaskWord(bits, word)),
+                  mask, word);
+}
+
+// Add `bits` (an i64) to word `word` of a generated eval mask.
+inline void addMaskWord(mlir::OpBuilder &builder, mlir::Location loc,
+                        schedule::EvalMask mask, unsigned word,
+                        mlir::Value bits) {
+  storeMaskWord(builder, loc,
+                mlir::arith::OrIOp::create(
+                    builder, loc, loadMaskWord(builder, loc, mask, word), bits),
+                mask, word);
 }
 
 // Add `mask` to word `word` of a ready set, or remove it with `clear`.

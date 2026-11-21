@@ -272,7 +272,7 @@ SmallVector<LLVM::LLVMFuncOp> splitNativeEvalGroup(LLVM::LLVMFuncOp original,
   for (auto function : {original, candidate}) {
     function.walk(
         [&](Operation *operation) { cost += nativeLoweredSize(operation); });
-    cost += nativeReadySetAddressCost(function);
+    cost += nativeWordGlobalAddressCost(function);
   }
   if (cost > budget)
     return {};
@@ -310,7 +310,7 @@ SmallVector<LLVM::LLVMFuncOp> splitNativeEvalGroup(LLVM::LLVMFuncOp original,
   for (auto child : children) {
     child.walk(
         [&](Operation *operation) { cost += nativeLoweredSize(operation); });
-    cost += nativeReadySetAddressCost(child);
+    cost += nativeWordGlobalAddressCost(child);
   }
   if (cost > budget) {
     for (auto child : children)

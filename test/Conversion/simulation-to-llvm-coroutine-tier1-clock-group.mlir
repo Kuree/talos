@@ -111,6 +111,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
 // this call's four-state evidence, stores STAGED (2) and returns OK without
 // committing (IEEE 1800-2023 4.4.2.4, 4.5).
 // CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1(
+// CHECK-NEXT: %[[PENDING:.+]] = llvm.mlir.addressof @__talos_eval_promotion_pending_mask_v1
 // CHECK-NOT: llvm.call @talos_rt_
 // CHECK: %[[YIELD:.+]] = llvm.mlir.addressof @__talos_eval_runtime_yield_v1
 // CHECK: %[[WORD:.+]] = llvm.load %[[YIELD]]
@@ -118,7 +119,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
 // CHECK: %[[GENERATED:.+]] = llvm.icmp "eq" %[[WORD]], %[[COMMIT_WORD]]
 // CHECK: llvm.cond_br %[[GENERATED]], ^[[COMMIT:[^,]+]], ^[[DRIVEN:[^ ]+]]{{$}}
 // CHECK-NOT: llvm.call @talos_rt_
-// CHECK: llvm.mlir.addressof @__talos_eval_promotion_pending_mask_v1
+// CHECK: llvm.load %[[PENDING]]
 // CHECK: llvm.call @__talos_direct_fragment_1_1.__talos_execute(
 // The proven call's trivial trusted wrapper is inlined: the dispatcher calls
 // the selected two-state body directly.

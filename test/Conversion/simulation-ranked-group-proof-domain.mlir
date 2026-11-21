@@ -11,6 +11,7 @@
 // Runtime O0/O3 and actual required-bytecode execution are checked separately.
 // CHECK-DAG: llvm.mlir.global internal @__talos_eval_group_promotion_latched_v1
 // CHECK-LABEL: llvm.func @__talos_eval_promotion_invalidate_v1()
+// CHECK-NEXT: %[[PENDING:.*]] = llvm.mlir.addressof @__talos_eval_promotion_pending_mask_v1
 // CHECK: llvm.mlir.addressof @__talos_eval_kernel_promotion_latched_v1
 // CHECK: "llvm.intr.memset"
 // The memset's independent operands may be emitted in either order.
@@ -18,8 +19,8 @@
 // CHECK-DAG: %[[ZERO:.*]] = llvm.mlir.constant(0 : i8)
 // CHECK-DAG: %[[GROUP_COUNT:.*]] = llvm.mlir.constant(1 : i64)
 // CHECK: "llvm.intr.memset"(%[[GROUP_LATCH]], %[[ZERO]], %[[GROUP_COUNT]])
-// CHECK: llvm.mlir.addressof @__talos_eval_promotion_pending_mask_v1
-// CHECK: llvm.mlir.constant(510 : i64)
+// CHECK: %[[INITIAL:.*]] = llvm.mlir.constant(510 : i64)
+// CHECK-NEXT: llvm.store %[[INITIAL]], %[[PENDING]]
 // CHECK-LABEL: llvm.func @__talos_eval_group_promotion_ready_v1
 // CHECK: llvm.call @__talos_eval_group_promotion_scan_v1
 // CHECK-LABEL: llvm.func @__talos_eval_ranked_group_0(

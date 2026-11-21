@@ -37,6 +37,10 @@ std::optional<NBAIndex> getNBAIndexOfGlobal(llvm::StringRef name);
 llvm::StringRef getReadySetGlobalName(ReadySet set);
 /// The generated eval ready set a global holds, if it is one.
 std::optional<ReadySet> getReadySetOfGlobal(llvm::StringRef name);
+/// The global that holds a generated eval mask.
+llvm::StringRef getEvalMaskGlobalName(EvalMask mask);
+/// The generated eval mask a global holds, if it is one.
+std::optional<EvalMask> getEvalMaskOfGlobal(llvm::StringRef name);
 /// The bytes a generated NBA accumulator field spans in the four-state
 /// record (talos_rt_generated_nba_accumulator_256): four words for a bit
 /// field, one 32-bit word for `valid` and `exec_region`.

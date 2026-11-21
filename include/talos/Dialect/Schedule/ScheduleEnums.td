@@ -373,4 +373,32 @@ def ReadySetEnum
   let genSpecializedAttr = 0;
 }
 
+// The generated eval masks: plain arrays of 64-bit words, one bit per member
+// of a fixed numbering, with no dirty levels and no pending activations.
+// They record value-domain proofs (IEEE 1800-2023 6.3.1), not scheduling:
+// - promotion_pending: the eval owners whose two-state certificate must be
+//   checked again before their two-state body runs;
+// - route_promotion_pending: the independent eval routes whose proof must be
+//   scanned again;
+// - step_four_state_nba_roots: the NBA roots a four-state activation of the
+//   current step may have staged X/Z for (4.9.4, 10.4.2);
+// - fast_nba_roots: the NBA roots whose destination the fast two-state NBA
+//   commit has certified known.
+def EvalMaskPromotionPending
+    : I32EnumAttrCase<"PromotionPending", 0, "promotion_pending">;
+def EvalMaskRoutePromotionPending
+    : I32EnumAttrCase<"RoutePromotionPending", 1, "route_promotion_pending">;
+def EvalMaskStepFourStateNBARoots
+    : I32EnumAttrCase<"StepFourStateNBARoots", 2, "step_four_state_nba_roots">;
+def EvalMaskFastNBARoots
+    : I32EnumAttrCase<"FastNBARoots", 3, "fast_nba_roots">;
+def EvalMaskEnum
+    : I32EnumAttr<"EvalMask", "generated eval mask", [
+        EvalMaskPromotionPending, EvalMaskRoutePromotionPending,
+        EvalMaskStepFourStateNBARoots, EvalMaskFastNBARoots
+      ]> {
+  let cppNamespace = "::talos::schedule";
+  let genSpecializedAttr = 0;
+}
+
 #endif

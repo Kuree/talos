@@ -458,9 +458,9 @@ def FinalizeNativeLLVMPass
     Runs, in order, the native LLVM finalization stages:
     finalize-native-llvm-wrappers, materialize-native-eval-routes,
     publish-native-proofs, materialize-native-eval-group-bodies,
-    lower-native-ready-words, materialize-native-eval-transactions and
-    finalize-native-functions. Each stage expects the output of the previous
-    one.
+    lower-native-ready-words, lower-native-mask-words,
+    materialize-native-eval-transactions and finalize-native-functions. Each
+    stage expects the output of the previous one.
   }];
   let dependentDialects = ["mlir::LLVM::LLVMDialect",
                            "mlir::arith::ArithDialect",
@@ -557,6 +557,25 @@ def LowerNativeReadyWordsPass
     words. Runs in the native finalization pipeline right after
     materialize-native-eval-group-bodies, the last pass that reads the typed
     words.
+  }];
+  let dependentDialects = ["mlir::LLVM::LLVMDialect"];
+}
+
+def LowerNativeMaskWordsPass
+    : Pass<"lower-native-mask-words", "mlir::LLVM::LLVMFuncOp"> {
+  let summary = "Lower typed eval mask word accesses to LLVM memory accesses";
+  let description = [{
+    Replaces schedule.mask.load/store with a whole-word, 8-byte aligned LLVM
+    load or store of the mask's global, addressed as lower-native-ready-words
+    addresses ready set words: the mask's address once per function, at the
+    start of the entry block in the order of first use, then an i64 GEP by a
+    dynamic word and a byte GEP to a nonzero static word. An access's owner
+    becomes the LLVM access's group-owner tag. A mask's address may also
+    escape (the runtime's proof certificates point at its words, and a reset
+    may fill it whole), so raw addresses of a mask stay legal. Runs in the
+    native finalization pipeline right after lower-native-ready-words:
+    materialize-native-eval-group-bodies is the last pass that emits or reads
+    the typed words.
   }];
   let dependentDialects = ["mlir::LLVM::LLVMDialect"];
 }

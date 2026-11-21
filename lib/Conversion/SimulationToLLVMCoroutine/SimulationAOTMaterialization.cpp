@@ -1653,21 +1653,17 @@ FailureOr<bool> makeNativeEvalPlan(
   auto markOwnerNBATaint = [&](unsigned recordIndex) {
     if (!ownerMayTaintNBA(recordIndex) || nbaTaintWordCount == 0)
       return;
-    Value taintBase =
-        LLVM::AddressOfOp::create(builder, location, pointer,
-                                  "__talos_eval_step_four_state_nba_roots_v1");
     for (uint32_t word = 0; word != nbaTaintWordCount; ++word) {
       uint64_t mask = recordNBATaintMasks[recordIndex][word];
       if (mask == 0)
         continue;
-      Value address = byteGEP(builder, location, taintBase,
-                              uint64_t{word} * sizeof(uint64_t));
-      Value old = LLVM::LoadOp::create(builder, location, i64, address, 8);
-      LLVM::StoreOp::create(
+      Value old = loadMaskWord(builder, location,
+                               schedule::EvalMask::StepFourStateNBARoots, word);
+      storeMaskWord(
           builder, location,
           arith::OrIOp::create(builder, location, old,
                                llvmConstant(builder, location, i64, mask)),
-          address, 8);
+          schedule::EvalMask::StepFourStateNBARoots, word);
     }
   };
   // Static time/region control and exact actor fanout are independent of VPI
@@ -1725,8 +1721,8 @@ FailureOr<bool> makeNativeEvalPlan(
   constexpr StringLiteral runtimeNBACommitName =
       "__talos_aot_runtime_nba_commit_v1";
   constexpr StringLiteral nbaKnownName = "__talos_eval_nba_known_v1";
-  constexpr StringLiteral evalFastNBARootsName =
-      "__talos_eval_fast_nba_roots_v1";
+  const StringRef evalFastNBARootsName =
+      schedule::getEvalMaskGlobalName(schedule::EvalMask::FastNBARoots);
   constexpr StringLiteral periodicTerminationName =
       "__talos_periodic_termination_v1";
   constexpr StringLiteral promotionReadyName =
@@ -1735,8 +1731,8 @@ FailureOr<bool> makeNativeEvalPlan(
       "__talos_eval_promotion_latched_v1";
   constexpr StringLiteral promotionKernelLatchedName =
       "__talos_eval_kernel_promotion_latched_v1";
-  constexpr StringLiteral promotionPendingMaskName =
-      "__talos_eval_promotion_pending_mask_v1";
+  const StringRef promotionPendingMaskName =
+      schedule::getEvalMaskGlobalName(schedule::EvalMask::PromotionPending);
   constexpr StringLiteral promotionInvalidateName =
       "__talos_eval_promotion_invalidate_v1";
   constexpr StringLiteral promotionQueryName =
@@ -1886,11 +1882,8 @@ FailureOr<bool> makeNativeEvalPlan(
       llvmConstant(builder, location, builder.getI1Type(), 1));
 
   builder.setInsertionPointToStart(scan);
-  Value pending = maskedOwnerWords(
-      builder, location,
-      LLVM::AddressOfOp::create(builder, location, pointer,
-                                promotionPendingMask.getSymName()),
-      allOwners);
+  Value pending = maskedMaskWords(
+      builder, location, schedule::EvalMask::PromotionPending, allOwners);
   Value known =
       arith::CmpIOp::create(builder, location, arith::CmpIPredicate::eq,
                             pending, llvmConstant(builder, location, i64, 0));
@@ -1939,9 +1932,7 @@ FailureOr<bool> makeNativeEvalPlan(
                                     groupPromotionLatchName),
           llvmConstant(builder, location, builder.getI8Type(), 0),
           llvmConstant(builder, location, i64, groupCount), false);
-    storeOwnerMask(builder, location,
-                   LLVM::AddressOfOp::create(builder, location, pointer,
-                                             promotionPendingMask.getSymName()),
+    storeMaskWords(builder, location, schedule::EvalMask::PromotionPending,
                    initialPromotionPendingMask);
     if (nbaTaintWordCount != 0)
       LLVM::MemsetOp::create(
@@ -5237,16 +5228,10 @@ FailureOr<bool> makeNativeEvalPlan(
           builder, location,
           llvmConstant(builder, location, builder.getI8Type(), 0),
           stepFourStateFallback, 1);
-      if (nbaTaintWordCount == 0)
-        return;
-      Value taint = LLVM::AddressOfOp::create(builder, location, pointer,
-                                              evalStepFourStateNBARootsName);
       for (uint32_t word = 0; word != nbaTaintWordCount; ++word)
-        LLVM::StoreOp::create(builder, location,
-                              llvmConstant(builder, location, i64, 0),
-                              byteGEP(builder, location, taint,
-                                      uint64_t{word} * sizeof(uint64_t)),
-                              8);
+        storeMaskWord(builder, location,
+                      llvmConstant(builder, location, i64, 0),
+                      schedule::EvalMask::StepFourStateNBARoots, word);
     };
     // The compressed single-clock path below has a structurally separate
     // trusted two-state block. Keep transient four-state accounting out of
@@ -5327,13 +5312,11 @@ FailureOr<bool> makeNativeEvalPlan(
       cf::BranchOp::create(builder, location, prepareDirectHybrid);
       builder.setInsertionPointToStart(prepareDirectHybrid);
       resetStepFourStateTracking();
-      Value directPending = LLVM::AddressOfOp::create(
-          builder, location, pointer, promotionPendingMaskName);
       Value pendingOwners;
       if (canCompressSilentFall) {
-        pendingOwners =
-            maskedOwnerWords(builder, location, directPending,
-                             directPromotionMask & ~pathGuardedOwnerMask);
+        pendingOwners = maskedMaskWords(
+            builder, location, schedule::EvalMask::PromotionPending,
+            directPromotionMask & ~pathGuardedOwnerMask);
       } else {
         pendingOwners = llvmConstant(builder, location, i64, 0);
         for (unsigned word = 0; word != directReady.size(); ++word) {
@@ -5345,7 +5328,8 @@ FailureOr<bool> makeNativeEvalPlan(
                                     llvmConstant(builder, location, i64, mask));
           Value pending = arith::AndIOp::create(
               builder, location, selected,
-              loadOwnerWord(builder, location, directPending, word));
+              loadMaskWord(builder, location,
+                           schedule::EvalMask::PromotionPending, word));
           pendingOwners =
               arith::OrIOp::create(builder, location, pendingOwners, pending);
         }
@@ -5563,10 +5547,8 @@ FailureOr<bool> makeNativeEvalPlan(
           // earlier coincident owner can invalidate a CDC consumer through a
           // blocking publication before that consumer executes. NBA crossings
           // retain the common commit barrier below.
-          Value pending = maskedOwnerWords(
-              builder, location,
-              LLVM::AddressOfOp::create(builder, location, pointer,
-                                        promotionPendingMaskName),
+          Value pending = maskedMaskWords(
+              builder, location, schedule::EvalMask::PromotionPending,
               APInt::getOneBitSet(ownerCount, record.bit) &
                   ~pathGuardedOwnerMask);
           Value promoted = arith::CmpIOp::create(
@@ -8006,13 +7988,8 @@ FailureOr<bool> makeNativeEvalPlan(
     builder.setInsertionPointToStart(wordCursor);
     Value dirty =
         loadNBAIndex(builder, location, schedule::NBAIndex::DirtyRoots, word);
-    Value taintBase = LLVM::AddressOfOp::create(builder, location, pointer,
-                                                evalStepFourStateNBARootsName);
-    Value taintedRoots =
-        LLVM::LoadOp::create(builder, location, i64,
-                             byteGEP(builder, location, taintBase,
-                                     uint64_t{word} * sizeof(uint64_t)),
-                             8);
+    Value taintedRoots = loadMaskWord(
+        builder, location, schedule::EvalMask::StepFourStateNBARoots, word);
     taintedRoots = arith::SelectOp::create(
         builder, location, knownEntry->getArgument(1),
         llvmConstant(builder, location, i64, UINT64_MAX), taintedRoots);

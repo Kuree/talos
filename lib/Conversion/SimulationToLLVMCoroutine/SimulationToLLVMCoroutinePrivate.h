@@ -113,11 +113,10 @@ inline constexpr llvm::StringLiteral evalDispatchName =
 inline constexpr llvm::StringLiteral evalRuntimeYieldName =
     "__talos_eval_runtime_yield_v1";
 // Per-step evidence that an activation staged four-state NBA data: the byte
-// selects the four-state commit, the bit array names the staged roots.
+// selects the four-state commit, and the mask
+// schedule::EvalMask::StepFourStateNBARoots names the staged roots.
 inline constexpr llvm::StringLiteral evalStepFourStateFallbackName =
     "__talos_eval_step_four_state_fallback_v1";
-inline constexpr llvm::StringLiteral evalStepFourStateNBARootsName =
-    "__talos_eval_step_four_state_nba_roots_v1";
 /// Nonzero whenever a fixed dynamic NBA slot (`__talos_eval_nba_valid_<site>`)
 /// may hold a staged update: each staging site ORs its valid bit into this
 /// word, and the generated NBA commit clears it after consuming every slot.

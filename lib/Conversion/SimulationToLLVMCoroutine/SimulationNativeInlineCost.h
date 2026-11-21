@@ -8,8 +8,9 @@
 
 namespace talos::detail {
 
-/// The ready set a ready action or ready word access names.
-inline mlir::FlatSymbolRefAttr getNativeReadySet(mlir::Operation *operation) {
+/// The global a ready action, ready set word access or mask word access
+/// names.
+inline mlir::FlatSymbolRefAttr getNativeWordGlobal(mlir::Operation *operation) {
   if (auto update = mlir::dyn_cast<schedule::NativeReadyUpdateOp>(operation))
     return update.getSetAttr();
   if (auto commit = mlir::dyn_cast<schedule::NativeReadyCommitOp>(operation))
@@ -22,14 +23,19 @@ inline mlir::FlatSymbolRefAttr getNativeReadySet(mlir::Operation *operation) {
     return load.getSetAttr();
   if (auto store = mlir::dyn_cast<schedule::NativeReadyWordStoreOp>(operation))
     return store.getSetAttr();
+  if (auto load = mlir::dyn_cast<schedule::NativeMaskLoadOp>(operation))
+    return load.getMaskAttr();
+  if (auto store = mlir::dyn_cast<schedule::NativeMaskStoreOp>(operation))
+    return store.getMaskAttr();
   return {};
 }
 
 /// The operations `operation` stands for in LLVM IR, as op-count budgets
 /// count them: an NBA accumulator field or readiness index access is its
-/// address computation and the access; a ready set word access is the access
-/// and the GEPs to its word, an i64 GEP by a dynamic word and a byte GEP to a
-/// nonzero static word, of the set's address (nativeReadySetAddressCost).
+/// address computation and the access; a ready set or mask word access is
+/// the access and the GEPs to its word, an i64 GEP by a dynamic word and a
+/// byte GEP to a nonzero static word, of its global's address
+/// (nativeWordGlobalAddressCost).
 inline uint64_t nativeLoweredSize(mlir::Operation *operation) {
   auto wordSize = [](mlir::Value dynamicWord, uint64_t staticWord) {
     return uint64_t{1} + bool(dynamicWord) + (staticWord != 0);
@@ -37,6 +43,10 @@ inline uint64_t nativeLoweredSize(mlir::Operation *operation) {
   if (auto load = mlir::dyn_cast<schedule::NativeReadyWordLoadOp>(operation))
     return wordSize(load.getDynamicWord(), load.getStaticWord());
   if (auto store = mlir::dyn_cast<schedule::NativeReadyWordStoreOp>(operation))
+    return wordSize(store.getDynamicWord(), store.getStaticWord());
+  if (auto load = mlir::dyn_cast<schedule::NativeMaskLoadOp>(operation))
+    return wordSize(load.getDynamicWord(), load.getStaticWord());
+  if (auto store = mlir::dyn_cast<schedule::NativeMaskStoreOp>(operation))
     return wordSize(store.getDynamicWord(), store.getStaticWord());
   return mlir::isa<schedule::NativeNBAAccumulatorLoadOp,
                    schedule::NativeNBAAccumulatorStoreOp,
@@ -46,17 +56,18 @@ inline uint64_t nativeLoweredSize(mlir::Operation *operation) {
              : 1;
 }
 
-/// The addresses of ready sets the LLVM form of `root`'s ready actions and
-/// word accesses takes: one per set each function names (as
-/// lower-native-ready-words and action lowering take them).
-inline uint64_t nativeReadySetAddressCost(mlir::Operation *root) {
-  llvm::SmallVector<mlir::Attribute, 2> sets;
+/// The addresses of ready sets and masks the LLVM form of `root`'s ready
+/// actions and word accesses takes: one per global each function names (as
+/// lower-native-ready-words, lower-native-mask-words and action lowering take
+/// them).
+inline uint64_t nativeWordGlobalAddressCost(mlir::Operation *root) {
+  llvm::SmallVector<mlir::Attribute, 4> globals;
   root->walk([&](mlir::Operation *operation) {
-    mlir::FlatSymbolRefAttr set = getNativeReadySet(operation);
-    if (set && !llvm::is_contained(sets, set))
-      sets.push_back(set);
+    mlir::FlatSymbolRefAttr global = getNativeWordGlobal(operation);
+    if (global && !llvm::is_contained(globals, global))
+      globals.push_back(global);
   });
-  return sets.size();
+  return globals.size();
 }
 
 inline uint64_t nativeOperationCost(mlir::Operation *operation) {
@@ -93,15 +104,15 @@ inline uint64_t nativeOperationCost(mlir::Operation *operation) {
              : nativeLoweredSize(operation);
 }
 
-/// The operations nested in `root` cost, with the ready set addresses
-/// their LLVM form shares.
+/// The operations nested in `root` cost, with the ready set and mask
+/// addresses their LLVM form shares.
 inline uint64_t nativeInlineCost(mlir::Operation *root) {
   uint64_t cost = 0;
   root->walk([&](mlir::Operation *operation) {
     if (operation != root)
       cost += nativeOperationCost(operation);
   });
-  return cost + nativeReadySetAddressCost(root);
+  return cost + nativeWordGlobalAddressCost(root);
 }
 
 } // namespace talos::detail

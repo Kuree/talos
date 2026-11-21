@@ -5,6 +5,7 @@
 #include "NativeRuntimeCalls.h"
 #include "NativeStateAccess.h"
 #include "SimulationEvalNBAQueue.h"
+#include "SimulationEvalReadySet.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
 #include "talos/Dialect/Schedule/EvalRoles.h"
@@ -1309,6 +1310,10 @@ LogicalResult declareNativeImports(ModuleOp module) {
       reference = load.getSetAttr();
     else if (auto store = dyn_cast<schedule::NativeReadyWordStoreOp>(operation))
       reference = store.getSetAttr();
+    else if (auto load = dyn_cast<schedule::NativeMaskLoadOp>(operation))
+      reference = load.getMaskAttr();
+    else if (auto store = dyn_cast<schedule::NativeMaskStoreOp>(operation))
+      reference = store.getMaskAttr();
     else if (isa<schedule::NativeHandleOffsetOp>(operation))
       // It becomes the runtime's handle offset; see lowerNativeHandleOps.
       reference = getNativeRuntimeCallee(
@@ -2768,8 +2773,10 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
   Type pointer = LLVM::LLVMPointerType::get(context);
   Type i8 = builder.getI8Type();
   Type i64 = builder.getI64Type();
-  constexpr StringLiteral routePromotionPendingName =
-      "__talos_eval_route_promotion_pending_v1";
+  constexpr schedule::EvalMask routePendingMask =
+      schedule::EvalMask::RoutePromotionPending;
+  const StringRef routePromotionPendingName =
+      schedule::getEvalMaskGlobalName(routePendingMask);
   constexpr StringLiteral routePromotionDirtyName =
       "__talos_eval_route_promotion_dirty_v1";
   constexpr StringLiteral routePromotionScanName =
@@ -2881,13 +2888,9 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
   LLVM::ReturnOp::create(builder, module.getLoc(), initialPending);
   auto resetRoutePending = [&](Location location) {
     for (auto [word, mask] : llvm::enumerate(initialRoutePending))
-      LLVM::StoreOp::create(
-          builder, location, detail::llvmConstant(builder, location, i64, mask),
-          detail::byteGEP(builder, location,
-                          LLVM::AddressOfOp::create(builder, location, pointer,
-                                                    routePromotionPendingName),
-                          word * sizeof(uint64_t)),
-          8);
+      detail::storeMaskWord(builder, location,
+                            detail::llvmConstant(builder, location, i64, mask),
+                            routePendingMask, word);
   };
   // IEEE 1800-2023 6.8: a variable retains its value between assignments.
   // Returning from a runtime checkpoint does not itself change knownness.
@@ -3137,8 +3140,10 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
             LLVM::AddressOfOp::create(builder, route.fourState.getLoc(),
                                       pointer, fallback.getSymName()),
             1);
+      // Clearing the whole mask stays one store of the array.
       if (auto fastRoots = inputSymbols.lookup<LLVM::GlobalOp>(
-              "__talos_eval_fast_nba_roots_v1"))
+              schedule::getEvalMaskGlobalName(
+                  schedule::EvalMask::FastNBARoots)))
         LLVM::StoreOp::create(
             builder, route.fourState.getLoc(),
             LLVM::ZeroOp::create(builder, route.fourState.getLoc(),
@@ -3518,7 +3523,6 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
           "route promotion requires the native state layout");
     if (failed(detail::materializeNativeRoutePromotionScan(
             module, routePromotionScan, stateBits.getUInt(), compact,
-            routePromotionPendingName,
             needsRouteSummary ? StringRef(routePromotionDirtyName)
                               : StringRef{})))
       return failure();
@@ -3546,12 +3550,8 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
       OpBuilder builder(context);
       builder.setInsertionPointToStart(entry);
       Location location = module.getLoc();
-      Value address =
-          detail::byteGEP(builder, location,
-                          LLVM::AddressOfOp::create(builder, location, pointer,
-                                                    routePromotionPendingName),
-                          word * sizeof(uint64_t));
-      Value pending = LLVM::LoadOp::create(builder, location, i64, address, 8);
+      Value pending =
+          detail::loadMaskWord(builder, location, routePendingMask, word);
       Block *inspect = new Block, *nextWord = new Block;
       fragment.push_back(inspect);
       fragment.push_back(nextWord);
@@ -3565,9 +3565,9 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
       // No actor, observer, or foreign call runs during a proof scan. Consume
       // this word once; newly invalidated proofs are queued at actual
       // mutations.
-      LLVM::StoreOp::create(builder, location,
+      detail::storeMaskWord(builder, location,
                             detail::llvmConstant(builder, location, i64, 0),
-                            address, 8);
+                            routePendingMask, word);
       uint64_t end =
           std::min<uint64_t>(independentRoutes.size(), (word + 1) * 64);
       for (uint64_t index = word * 64; index != end; ++index) {
@@ -3666,12 +3666,16 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
       boundaryEntry->getArgument(0),
       detail::llvmConstant(builder, module.getLoc(), i32, TALOS_RT_OK));
   Type summaryType = needsRouteSummary ? i8 : i64;
-  StringRef summaryName =
-      needsRouteSummary ? routePromotionDirtyName : routePromotionPendingName;
-  Value dirty = LLVM::LoadOp::create(
-      builder, module.getLoc(), summaryType,
-      LLVM::AddressOfOp::create(builder, module.getLoc(), pointer, summaryName),
-      needsRouteSummary ? 1 : 8);
+  // One pending word is its own summary.
+  Value dirty =
+      needsRouteSummary
+          ? LLVM::LoadOp::create(
+                builder, module.getLoc(), i8,
+                LLVM::AddressOfOp::create(builder, module.getLoc(), pointer,
+                                          routePromotionDirtyName),
+                1)
+                .getResult()
+          : detail::loadMaskWord(builder, module.getLoc(), routePendingMask, 0);
   Value isDirty = LLVM::ICmpOp::create(
       builder, module.getLoc(), LLVM::ICmpPredicate::ne, dirty,
       detail::llvmConstant(builder, module.getLoc(), summaryType, 0));
@@ -4251,7 +4255,8 @@ public:
           schedule::NativeByteAddressOp, schedule::NativeReadyReadOp,
           schedule::NativeReadyUpdateOp, schedule::NativeReadyCommitOp,
           schedule::NativeReadyMergeOp, schedule::NativeReadyWordLoadOp,
-          schedule::NativeReadyWordStoreOp, schedule::NativeStateAddressOp,
+          schedule::NativeReadyWordStoreOp, schedule::NativeMaskLoadOp,
+          schedule::NativeMaskStoreOp, schedule::NativeStateAddressOp,
           schedule::NativeStateWindowAddressOp, schedule::NativeStateLoadOp,
           schedule::NativeStateStoreOp, schedule::NativeNBAAccumulatorAddressOp,
           schedule::NativeNBAAccumulatorLoadOp,
@@ -4482,6 +4487,7 @@ public:
         schedule::NativeReadyReadOp, schedule::NativeReadyUpdateOp,
         schedule::NativeReadyCommitOp, schedule::NativeReadyMergeOp,
         schedule::NativeReadyWordLoadOp, schedule::NativeReadyWordStoreOp,
+        schedule::NativeMaskLoadOp, schedule::NativeMaskStoreOp,
         schedule::NativeStateAddressOp, schedule::NativeStateWindowAddressOp,
         schedule::NativeStateLoadOp, schedule::NativeStateStoreOp,
         schedule::NativeNBAAccumulatorAddressOp,

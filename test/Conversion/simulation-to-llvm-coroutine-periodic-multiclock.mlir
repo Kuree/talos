@@ -135,6 +135,7 @@ module attributes {
 // CHECK-LABEL: llvm.mlir.global internal constant @__talos_periodic_clock_plan_v1
 // CHECK-SAME: !llvm.array<2 x
 // CHECK-LABEL: llvm.func @__talos_aot_schedule_run_v1(
+// CHECK: %[[PENDING_ADDR:.*]] = llvm.mlir.addressof @__talos_eval_promotion_pending_mask_v1
 // CHECK: llvm.call @talos_rt_v1_scheduler_prepare_periodic_aot
 // Allocation defers to designated collection points from here on.
 // CHECK: llvm.call @talos_rt_v1_gc_designate(
@@ -166,7 +167,6 @@ module attributes {
 // Silent slots bypass the entire dispatcher, after both clock updates.
 // CHECK-NEXT: llvm.cond_br %[[INGRESS]], ^{{bb[0-9]+}}, ^{{bb[0-9]+}}
 // Only selected owners contribute to the shared promotion check.
-// CHECK: %[[PENDING_ADDR:.*]] = llvm.mlir.addressof @__talos_eval_promotion_pending_mask_v1
 // CHECK: %[[OWNERS:.*]] = llvm.mlir.constant(3 : i64)
 // CHECK-NEXT: %[[SELECTED:.*]] = llvm.and %[[READY]], %[[OWNERS]] : i64
 // CHECK-NEXT: %[[PENDING:.*]] = llvm.load %[[PENDING_ADDR]] {{.*}} : !llvm.ptr -> i64

@@ -64,9 +64,10 @@ LogicalResult materializeNativePromotionRangeIndex(ModuleOp module,
   constexpr auto groupAttr =
       ::talos::schedule::Field::EvalGroupProofDependencies;
   auto pending = module.lookupSymbol<LLVM::GlobalOp>(
-      "__talos_eval_promotion_pending_mask_v1");
-  auto routePending = module.lookupSymbol<LLVM::GlobalOp>(
-      "__talos_eval_route_promotion_pending_v1");
+      schedule::getEvalMaskGlobalName(schedule::EvalMask::PromotionPending));
+  auto routePending =
+      module.lookupSymbol<LLVM::GlobalOp>(schedule::getEvalMaskGlobalName(
+          schedule::EvalMask::RoutePromotionPending));
   for (auto global : module.getOps<LLVM::GlobalOp>()) {
     if (auto ranges =
             schedule::get<schedule::Field::EvalKnownRangeDependencies>(
@@ -117,7 +118,8 @@ LogicalResult materializeNativePromotionRangeIndex(ModuleOp module,
     }
     if (auto roots = ::talos::schedule::get<nbaAttr>(global)) {
       auto wordType = dyn_cast<LLVM::LLVMArrayType>(global.getGlobalType());
-      if (global.getSymName() != "__talos_eval_fast_nba_roots_v1" ||
+      if (schedule::getEvalMaskOfGlobal(global.getSymName()) !=
+              schedule::EvalMask::FastNBARoots ||
           !wordType || !wordType.getElementType().isInteger(64))
         return global.emitError(
             "NBA proof index has invalid knownness storage");

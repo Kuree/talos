@@ -11,6 +11,7 @@
 // no per-activation path-known predicate.
 
 // CHECK-LABEL: llvm.func @join.__talos_eval_body_0.__talos_two_state_0(
+// CHECK-NEXT: %[[ROOTS:.*]] = llvm.mlir.addressof @__talos_eval_step_four_state_nba_roots_v1
 // CHECK: llvm.mlir.addressof @__talos_aot_nba_accumulator_0
 // CHECK-NOT: __talos_eval_step_four_state
 // CHECK: ^[[JOIN:bb[0-9]+]](%{{.*}}: i6, %[[UNKNOWN:.*]]: i6):
@@ -22,12 +23,10 @@
 // CHECK-DAG: %[[ONE:.*]] = llvm.mlir.constant(1 : i8)
 // CHECK-DAG: %[[FALLBACK:.*]] = llvm.mlir.addressof @__talos_eval_step_four_state_fallback_v1
 // CHECK-NEXT: llvm.store %[[ONE]], %[[FALLBACK]]
-// CHECK-NEXT: %[[ROOTS:.*]] = llvm.mlir.addressof @__talos_eval_step_four_state_nba_roots_v1
-// CHECK-NEXT: %[[WORD:.*]] = llvm.getelementptr %[[ROOTS]][0]
-// CHECK-NEXT: %[[OLD:.*]] = llvm.load %[[WORD]]
 // CHECK-NEXT: %[[BIT:.*]] = llvm.mlir.constant(2 : i64)
+// CHECK-NEXT: %[[OLD:.*]] = llvm.load %[[ROOTS]]
 // CHECK-NEXT: %[[NEW:.*]] = llvm.or %[[OLD]], %[[BIT]]
-// CHECK-NEXT: llvm.store %[[NEW]], %[[WORD]]
+// CHECK-NEXT: llvm.store %[[NEW]], %[[ROOTS]]
 // CHECK-NEXT: llvm.br ^[[STAGE]]
 // CHECK-NEXT: ^[[STAGE]]:
 // CHECK-NOT: __talos_eval_step_four_state
@@ -35,8 +34,9 @@
 // CHECK-NOT: __talos_eval_step_four_state
 // CHECK: {{^  }}}
 // CHECK-LABEL: llvm.func @literal.__talos_eval_body_0.__talos_two_state_0(
+// CHECK-NEXT: %[[LITERAL_ROOTS:.*]] = llvm.mlir.addressof @__talos_eval_step_four_state_nba_roots_v1
 // CHECK: llvm.mlir.addressof @__talos_eval_step_four_state_fallback_v1
-// CHECK: llvm.mlir.addressof @__talos_eval_step_four_state_nba_roots_v1
+// CHECK: llvm.load %[[LITERAL_ROOTS]]
 
 !clk = !simulation.ref<i1>
 !l6 = !simulation.logic<6>

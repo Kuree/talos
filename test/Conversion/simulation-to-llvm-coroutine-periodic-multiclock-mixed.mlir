@@ -2,10 +2,10 @@
 
 // The crossing value is a mixed known/unknown constant instead of a load.
 // CHECK-LABEL: llvm.func @__talos_aot_schedule_run_v1(
+// CHECK: %[[PENDING:.*]] = llvm.mlir.addressof @__talos_eval_promotion_pending_mask_v1
 // CHECK: llvm.call @__talos_direct_fragment_3_9.__talos_execute(
 // CHECK-NOT: llvm.call @body0.__talos_two_state_0
-// CHECK: %[[PENDING:.*]] = llvm.mlir.addressof @__talos_eval_promotion_pending_mask_v1
-// CHECK-NEXT: %[[BITS:.*]] = llvm.load %[[PENDING]] {{.*}} : !llvm.ptr -> i64
+// CHECK: %[[BITS:.*]] = llvm.load %[[PENDING]] {{.*}} : !llvm.ptr -> i64
 // CHECK-NEXT: %[[BIT:.*]] = llvm.mlir.constant(2 : i64)
 // CHECK-NEXT: %[[LOCAL:.*]] = llvm.and %[[BITS]], %[[BIT]] : i64
 // CHECK: %[[KNOWN:.*]] = llvm.icmp "eq" %[[LOCAL]], {{.*}} : i64

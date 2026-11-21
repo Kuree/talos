@@ -1739,15 +1739,13 @@ emitGroupDomainGuard(OpBuilder &builder, Location loc,
     return success();
   }
   Value zero = llvmConstant(builder, loc, i64, 0);
-  Value proof = LLVM::AddressOfOp::create(
-      builder, loc, LLVM::LLVMPointerType::get(builder.getContext()),
-      "__talos_eval_promotion_pending_mask_v1");
   Value needed = zero;
   SmallVector<std::pair<unsigned, Value>> words;
   for (auto [word, mask] : masks) {
-    Value bits = LLVM::AndOp::create(builder, loc,
-                                     loadOwnerWord(builder, loc, proof, word),
-                                     llvmConstant(builder, loc, i64, mask));
+    Value bits = LLVM::AndOp::create(
+        builder, loc,
+        loadMaskWord(builder, loc, schedule::EvalMask::PromotionPending, word),
+        llvmConstant(builder, loc, i64, mask));
     words.emplace_back(word, bits);
     needed = LLVM::OrOp::create(builder, loc, needed, bits);
   }
@@ -2201,8 +2199,8 @@ LogicalResult GroupMaterializer::materializeGroup(LLVM::LLVMFuncOp function,
 bool GroupMaterializer::isValidCandidate(LLVM::LLVMFuncOp function,
                                          LLVM::LLVMFuncOp original,
                                          DenseI32ArrayAttr members) {
-  auto pendingGlobal =
-      symbols.lookup<LLVM::GlobalOp>("__talos_eval_promotion_pending_mask_v1");
+  auto pendingGlobal = symbols.lookup<LLVM::GlobalOp>(
+      schedule::getEvalMaskGlobalName(schedule::EvalMask::PromotionPending));
   auto pendingType =
       pendingGlobal
           ? dyn_cast<LLVM::LLVMArrayType>(pendingGlobal.getGlobalType())

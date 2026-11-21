@@ -28,9 +28,6 @@ using namespace mlir;
 namespace talos::detail {
 namespace {
 
-constexpr StringLiteral evalFastNBARootsName = "__talos_eval_fast_nba_roots_v1";
-constexpr StringLiteral promotionPendingMaskName =
-    "__talos_eval_promotion_pending_mask_v1";
 constexpr StringLiteral periodicTerminationName =
     "__talos_periodic_termination_v1";
 constexpr StringLiteral nbaKnownName = "__talos_eval_nba_known_v1";
@@ -312,20 +309,17 @@ materializeNativeEvalDispatch(ModuleOp module,
   auto markOwnerNBATaint = [&](unsigned owner) {
     if (!ownerMayTaintNBA(owner) || nbaTaintWordCount == 0)
       return;
-    Value taintBase = LLVM::AddressOfOp::create(builder, location, pointer,
-                                                evalStepFourStateNBARootsName);
     for (uint32_t word = 0; word != nbaTaintWordCount; ++word) {
       uint64_t mask = plan.nbaTaintMasks[owner][word];
       if (mask == 0)
         continue;
-      Value address = byteGEP(builder, location, taintBase,
-                              uint64_t{word} * sizeof(uint64_t));
-      Value old = LLVM::LoadOp::create(builder, location, i64, address, 8);
-      LLVM::StoreOp::create(
+      Value old = loadMaskWord(builder, location,
+                               schedule::EvalMask::StepFourStateNBARoots, word);
+      storeMaskWord(
           builder, location,
           arith::OrIOp::create(builder, location, old,
                                llvmConstant(builder, location, i64, mask)),
-          address, 8);
+          schedule::EvalMask::StepFourStateNBARoots, word);
     }
   };
 
@@ -1142,17 +1136,13 @@ materializeNativeEvalDispatch(ModuleOp module,
     }
     Value ownerBit =
         llvmConstant(builder, location, i64, uint64_t{1} << (record.bit % 64));
-    Value selectedPromotionPending;
-    {
-      Value pending = LLVM::AddressOfOp::create(builder, location, pointer,
-                                                promotionPendingMaskName);
-      selectedPromotionPending = arith::CmpIOp::create(
-          builder, location, arith::CmpIPredicate::ne,
-          arith::AndIOp::create(
-              builder, location, ownerBit,
-              loadOwnerWord(builder, location, pending, record.bit / 64)),
-          llvmConstant(builder, location, i64, 0));
-    }
+    Value selectedPromotionPending = arith::CmpIOp::create(
+        builder, location, arith::CmpIPredicate::ne,
+        arith::AndIOp::create(builder, location, ownerBit,
+                              loadMaskWord(builder, location,
+                                           schedule::EvalMask::PromotionPending,
+                                           record.bit / 64)),
+        llvmConstant(builder, location, i64, 0));
     if (mergedTwoStateExecutors[recordIndex].empty()) {
       LLVM::StoreOp::create(
           builder, location,
@@ -1930,39 +1920,27 @@ materializeNativeEvalDispatch(ModuleOp module,
     cf::CondBranchOp::create(builder, location, usedFallback, checkFallbackNBA,
                              ValueRange{}, selectFastNBA, ValueRange{});
     auto markCurrentDirtyRootsFast = [&] {
-      if (nbaTaintWordCount == 0)
-        return;
-      Value fastRootsBase = LLVM::AddressOfOp::create(
-          builder, location, pointer, evalFastNBARootsName);
       for (uint32_t word = 0; word != nbaTaintWordCount; ++word) {
         Value dirty = loadNBAIndex(builder, location,
                                    schedule::NBAIndex::DirtyRoots, word);
-        Value fastAddress = byteGEP(builder, location, fastRootsBase,
-                                    uint64_t{word} * sizeof(uint64_t));
-        Value fastRoots =
-            LLVM::LoadOp::create(builder, location, i64, fastAddress, 8);
-        LLVM::StoreOp::create(
-            builder, location,
-            arith::OrIOp::create(builder, location, fastRoots, dirty),
-            fastAddress, 8);
+        Value fastRoots = loadMaskWord(builder, location,
+                                       schedule::EvalMask::FastNBARoots, word);
+        storeMaskWord(builder, location,
+                      arith::OrIOp::create(builder, location, fastRoots, dirty),
+                      schedule::EvalMask::FastNBARoots, word);
       }
     };
     builder.setInsertionPointToStart(selectFastNBA);
     Value fastRootsKnown =
         llvmConstant(builder, location, builder.getI1Type(), 0);
     if (nbaTaintWordCount != 0) {
-      Value fastRootsBase = LLVM::AddressOfOp::create(
-          builder, location, pointer, evalFastNBARootsName);
       Value missingFastRoot =
           llvmConstant(builder, location, builder.getI1Type(), 0);
       for (uint32_t word = 0; word != nbaTaintWordCount; ++word) {
         Value dirty = loadNBAIndex(builder, location,
                                    schedule::NBAIndex::DirtyRoots, word);
-        Value fastRoots =
-            LLVM::LoadOp::create(builder, location, i64,
-                                 byteGEP(builder, location, fastRootsBase,
-                                         uint64_t{word} * sizeof(uint64_t)),
-                                 8);
+        Value fastRoots = loadMaskWord(builder, location,
+                                       schedule::EvalMask::FastNBARoots, word);
         Value missing = arith::AndIOp::create(
             builder, location, dirty,
             arith::XOrIOp::create(

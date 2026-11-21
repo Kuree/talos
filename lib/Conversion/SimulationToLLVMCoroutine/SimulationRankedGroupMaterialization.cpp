@@ -4,6 +4,7 @@
 #include "NativeStateAccess.h"
 #include "SimulationAOTPlanning.h"
 #include "SimulationEvalReadySet.h"
+#include "SimulationNativeInlineCost.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
@@ -101,10 +102,22 @@ planNativeRankedGroups(ModuleOp module, const NativeEvalCoordinatorPlan &plan,
       return 0;
     bool safe = true;
     uint64_t cost = 0;
+    SmallVector<Attribute, 2> masks;
     function.walk([&](Operation *op) {
       // A wake names its ready set; it stands for the set's address and the
-      // update, as its LLVM form computes the address at the wake.
-      cost += isa<schedule::NativeReadyUpdateOp>(op) ? 2 : 1;
+      // update, as its LLVM form computes the address at the wake. A mask
+      // word access stands for its LLVM access, and the body shares the
+      // mask's address (lower-native-mask-words).
+      if (isa<schedule::NativeMaskLoadOp, schedule::NativeMaskStoreOp>(op)) {
+        cost += nativeLoweredSize(op);
+        FlatSymbolRefAttr mask = getNativeWordGlobal(op);
+        if (!llvm::is_contained(masks, mask)) {
+          masks.push_back(mask);
+          ++cost;
+        }
+      } else {
+        cost += isa<schedule::NativeReadyUpdateOp>(op) ? 2 : 1;
+      }
       safe &=
           !isa_and_nonnull<runtime::TalosRuntimeDialect>(op->getDialect()) &&
           !isa<sim::SimCallOp, sim::SimStatusCheckOp, LLVM::CallOp,
@@ -515,8 +528,6 @@ materializeNativeRankedGroups(ModuleOp module,
         group, builder.getUnitAttr());
     Block *entry = group.addEntryBlock(builder);
     builder.setInsertionPointToStart(entry);
-    Value promotion = LLVM::AddressOfOp::create(
-        builder, loc, pointer, "__talos_eval_promotion_pending_mask_v1");
     auto rawCall = [&](StringRef body, uint32_t owner) {
       SmallVector<Value> arguments;
       for (Type type : functions.lookup(body).getFunctionType().getInputs())
@@ -548,10 +559,8 @@ materializeNativeRankedGroups(ModuleOp module,
         uint64_t mask = plan.nbaTaintMasks[owner][word];
         if (!mask)
           continue;
-        Value base = LLVM::AddressOfOp::create(
-            builder, loc, pointer, "__talos_eval_step_four_state_nba_roots_v1");
-        updateOwnerWord(builder, loc, base, word,
-                        llvmConstant(builder, loc, i64, mask));
+        addMaskWord(builder, loc, schedule::EvalMask::StepFourStateNBARoots,
+                    word, llvmConstant(builder, loc, i64, mask));
       }
     };
     for (const auto *node : members) {
@@ -587,7 +596,9 @@ materializeNativeRankedGroups(ModuleOp module,
         group.getBody().push_back(check);
         group.getBody().push_back(two);
         Value unknown = arith::AndIOp::create(
-            builder, loc, loadOwnerWord(builder, loc, promotion, owner / 64),
+            builder, loc,
+            loadMaskWord(builder, loc, schedule::EvalMask::PromotionPending,
+                         owner / 64),
             bit);
         Value needsProof =
             arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ne,

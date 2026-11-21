@@ -136,13 +136,15 @@ module attributes {
 // range before clearing this owner's pending bit.
 // CHECK-LABEL: llvm.func @__talos_eval_kernel_promotion_scan_v1(
 // CHECK-SAME: passthrough = ["noinline", "cold"]
+// CHECK-NEXT: %[[SCAN_PENDING:.*]] = llvm.mlir.addressof @__talos_eval_promotion_pending_mask_v1
 // CHECK: llvm.mlir.addressof @__talos_eval_kernel_promotion_owners_v1
 // CHECK: llvm.mlir.addressof @__talos_eval_kernel_promotion_ranges_v1
 // CHECK: llvm.mlir.addressof @__talos_eval_kernel_promotion_hints_v1
 // CHECK: llvm.mlir.addressof @__talos_state_unknown
 // CHECK: llvm.load {{.*}} : !llvm.ptr -> i64
 // CHECK: llvm.and {{.*}} : i64
-// CHECK: llvm.mlir.addressof @__talos_eval_promotion_pending_mask_v1
+// CHECK: %[[OWNER_WORD:.*]] = llvm.getelementptr %[[SCAN_PENDING]][%{{.*}}] : (!llvm.ptr, i64)
+// CHECK: llvm.store %{{.*}}, %[[OWNER_WORD]]
 // CHECK-LABEL: llvm.func @__talos_eval_kernel_promotion_ready_v1(
 // CHECK-SAME: passthrough = ["alwaysinline"]
 // CHECK: llvm.mlir.addressof @__talos_eval_kernel_promotion_latched_v1
@@ -150,7 +152,8 @@ module attributes {
 
 // Path probes and checkpoint continuation remain local to their executor.
 // CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1
-// CHECK: llvm.mlir.addressof @__talos_eval_promotion_pending_mask_v1
+// CHECK-NEXT: %[[DISPATCH_PENDING:.*]] = llvm.mlir.addressof @__talos_eval_promotion_pending_mask_v1
+// CHECK: llvm.load %[[DISPATCH_PENDING]]
 // CHECK: llvm.call @__talos_direct_fragment_{{[0-9]+}}_{{[0-9]+}}.__talos_execute
 // CHECK-LABEL: llvm.func @__talos_eval_checkpoint_body_v1_0(
 // CHECK: llvm.call @talos_rt_v1_scheduler_time

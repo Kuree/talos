@@ -65,8 +65,7 @@ struct NativeRoutePromotion {
 /// once per word; only exact masked unknown-plane ranges certify a selector.
 mlir::LogicalResult materializeNativeRoutePromotionScan(
     mlir::ModuleOp module, mlir::LLVM::LLVMFuncOp scanner, uint64_t stateBits,
-    mlir::ArrayRef<NativeRoutePromotion> routes, llvm::StringRef pendingName,
-    llvm::StringRef dirtyName);
+    mlir::ArrayRef<NativeRoutePromotion> routes, llvm::StringRef dirtyName);
 
 inline constexpr llvm::StringLiteral kernelPromotionReadyName =
     "__talos_eval_kernel_promotion_ready_v1";

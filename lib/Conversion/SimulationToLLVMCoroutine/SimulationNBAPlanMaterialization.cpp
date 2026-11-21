@@ -87,12 +87,14 @@ void materializeEvalStepFourStateGlobals(ModuleOp module, uint64_t taintWords) {
     LLVM::GlobalOp::create(
         builder, location, builder.getI8Type(), false, LLVM::Linkage::Internal,
         evalStepFourStateFallbackName, builder.getI8IntegerAttr(0), 1);
-  if (taintWords == 0 || module.lookupSymbol(evalStepFourStateNBARootsName))
+  StringRef taintName = schedule::getEvalMaskGlobalName(
+      schedule::EvalMask::StepFourStateNBARoots);
+  if (taintWords == 0 || module.lookupSymbol(taintName))
     return;
   Type taintType = LLVM::LLVMArrayType::get(builder.getI64Type(), taintWords);
-  auto taint = LLVM::GlobalOp::create(
-      builder, location, taintType, false, LLVM::Linkage::Internal,
-      evalStepFourStateNBARootsName, Attribute{}, 8);
+  auto taint = LLVM::GlobalOp::create(builder, location, taintType, false,
+                                      LLVM::Linkage::Internal, taintName,
+                                      Attribute{}, 8);
   Block *initializer = new Block;
   taint.getInitializerRegion().push_back(initializer);
   builder.setInsertionPointToStart(initializer);

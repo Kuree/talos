@@ -80,8 +80,8 @@ struct NativeAddress {
 /// store whose address may derive from a global or a local allocation
 /// through GEPs, a typed NBA accumulator field access, whose `pointer` is
 /// its record and whose offset is the field's in the four-state record, or a
-/// typed access of a word of an NBA readiness index's or a ready set's
-/// global.
+/// typed access of a word of an NBA readiness index's, a ready set's or a
+/// generated eval mask's global.
 struct NativeMemoryAccess : NativeAddress {
   mlir::Operation *operation = nullptr;
   /// The type read or written.
@@ -116,14 +116,15 @@ inline bool isNativeMemoryAccess(mlir::Operation *operation) {
       schedule::NativeStateStoreOp, schedule::NativeNBAAccumulatorLoadOp,
       schedule::NativeNBAAccumulatorStoreOp, schedule::NativeNBAIndexLoadOp,
       schedule::NativeNBAIndexStoreOp, schedule::NativeReadyWordLoadOp,
-      schedule::NativeReadyWordStoreOp>(operation);
+      schedule::NativeReadyWordStoreOp, schedule::NativeMaskLoadOp,
+      schedule::NativeMaskStoreOp>(operation);
 }
 /// Whether `operation` is a store, typed or LLVM.
 inline bool isNativeMemoryStore(mlir::Operation *operation) {
-  return mlir::isa<mlir::LLVM::StoreOp, schedule::NativeStateStoreOp,
-                   schedule::NativeNBAAccumulatorStoreOp,
-                   schedule::NativeNBAIndexStoreOp,
-                   schedule::NativeReadyWordStoreOp>(operation);
+  return mlir::isa<
+      mlir::LLVM::StoreOp, schedule::NativeStateStoreOp,
+      schedule::NativeNBAAccumulatorStoreOp, schedule::NativeNBAIndexStoreOp,
+      schedule::NativeReadyWordStoreOp, schedule::NativeMaskStoreOp>(operation);
 }
 
 /// A state plane's address as a producer takes it: the plane's typed base in

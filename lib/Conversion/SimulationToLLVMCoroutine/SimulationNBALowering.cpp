@@ -3,6 +3,7 @@
 #include "SimulationNBALowering.h"
 #include "NativeHandleChain.h"
 #include "NativeStateAccess.h"
+#include "SimulationEvalReadySet.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
@@ -52,17 +53,8 @@ void emitGeneratedNBAUnknownHandoff(OpBuilder &r, Location loc, uint32_t root,
       r, loc, llvmConstant(r, loc, r.getI8Type(), 1),
       LLVM::AddressOfOp::create(r, loc, pointer, evalStepFourStateFallbackName),
       1);
-  Value roots = byteGEP(
-      r, loc,
-      LLVM::AddressOfOp::create(r, loc, pointer, evalStepFourStateNBARootsName),
-      uint64_t{root / 64} * sizeof(uint64_t));
-  Value marked = LLVM::LoadOp::create(r, loc, i64, roots, 8);
-  LLVM::StoreOp::create(
-      r, loc,
-      arith::OrIOp::create(
-          r, loc, marked,
-          llvmConstant(r, loc, i64, uint64_t{1} << (root % 64))),
-      roots, 8);
+  addMaskWord(r, loc, schedule::EvalMask::StepFourStateNBARoots, root / 64,
+              llvmConstant(r, loc, i64, uint64_t{1} << (root % 64)));
   cf::BranchOp::create(r, loc, continuation);
   r.setInsertionPointToStart(continuation);
 }
