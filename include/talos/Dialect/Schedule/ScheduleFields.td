@@ -249,8 +249,6 @@ def EvalStateAccessBytes : ScheduleField<"EvalStateAccessBytes", "schedule.eval.
 // descriptor/root identity, exact canonical range, captured mask and region.
 def EvalTransactionRoots : ScheduleField<"EvalTransactionRoots", "schedule.eval.transaction_roots",
     "::mlir::ArrayAttr">;
-def EvalPendingRuntimeRoot : ScheduleField<"EvalPendingRuntimeRoot", "schedule.eval.pending_runtime_root",
-    "::mlir::IntegerAttr">;
 def EvalUnsupportedCheckpointOwner : ScheduleField<"EvalUnsupportedCheckpointOwner", "schedule.eval.unsupported_checkpoint_owner",
     "::mlir::StringAttr">;
 def NativeAssumeCleanSpecialization : ScheduleField<"NativeAssumeCleanSpecialization", "schedule.native.assume_clean_specialization",

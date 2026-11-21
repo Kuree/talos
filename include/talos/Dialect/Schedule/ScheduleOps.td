@@ -1323,8 +1323,7 @@ def NativeNBAStageOp : ScheduleNativeOp<"nba.stage"> {
     `unknown` points to when the RHS has any, for the destination `handle`
     in the state of `state_bits` bits. The RHS and the destination were
     evaluated when the assignment executed; the update is applied in the NBA
-    region (IEEE 1800-2023 4.9.4, 10.4.2). `root` is the static NBA root
-    the plan maps the site to.
+    region (IEEE 1800-2023 4.9.4, 10.4.2).
 
     Native lowering emits this for the runtime's static NBA entry. AOT
     materialization replaces it with generated staging where it can; any
@@ -1334,8 +1333,7 @@ def NativeNBAStageOp : ScheduleNativeOp<"nba.stage"> {
   let arguments = (ins LLVM_DefaultPointer:$runtime_context, I64:$handle,
                        LLVM_DefaultPointer:$value,
                        Optional<LLVM_DefaultPointer>:$unknown,
-                       I64Attr:$site, I64Attr:$state_bits, I64Attr:$width,
-                       I32Attr:$root);
+                       I64Attr:$site, I64Attr:$state_bits, I64Attr:$width);
   let assemblyFormat = [{
     $runtime_context `,` $handle `,` $value (`,` $unknown^)? attr-dict
   }];

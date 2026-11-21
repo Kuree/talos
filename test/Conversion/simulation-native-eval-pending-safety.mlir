@@ -157,6 +157,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
 // transaction-local call: the transaction exports its private captures
 // before it and adopts them again after it, as around any opaque call. NBAs to one variable stay
 // in execution order (IEEE 1800-2023 4.6(b), 10.4.2).
+// CUT: talos eval pending external cut: talos_rt_v1_scheduler_static_nba sites=1
 // CUT: talos eval pending external cut: talos_rt_v1_static_nba_claim sites=1
 // CUT: talos eval pending external cut: talos_rt_v1_static_nba_stage_wide sites=1
 // CHECK-LABEL: llvm.func internal @work.__talos_pending(
@@ -177,6 +178,10 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
 // CHECK-NEXT: llvm.getelementptr %[[FRAME]][8]
 // CHECK: llvm.call @talos_rt_v1_static_nba_stage_wide(
 // CHECK: llvm.call @talos_rt_v1_static_nba_specialization_guard(
+// CHECK: llvm.mlir.addressof @acc
+// CHECK-NEXT: llvm.getelementptr %[[FRAME]][8]
+// CHECK: llvm.call @talos_rt_v1_scheduler_static_nba(
+// CHECK: llvm.call @talos_rt_v1_static_nba_specialization_guard(
 module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", native.debug_timing, schedule.eval.runtime_calendar, schedule.eval.transaction_roots = [{root = array<i64: 1, 0, 1, 0, 32, 4294967295, 2, 0>, accumulator = @acc, sites = array<i64: 1>}]} {
   llvm.mlir.global internal @acc(dense<0> : tensor<136xi8>) : !llvm.array<136 x i8>
   llvm.mlir.global internal @__talos_aot_nba_dirty_roots_v1(dense<0> : tensor<8xi8>) : !llvm.array<8 x i8>
@@ -187,6 +192,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", n
   }
   llvm.func @talos_rt_v1_static_nba_claim(!llvm.ptr, i32, !llvm.ptr, !llvm.ptr, i64, i64, i64, i64, i64) -> i32
   llvm.func @talos_rt_v1_static_nba_stage_wide(!llvm.ptr, i32, i64, i64, i64, i64, i32)
+  llvm.func @talos_rt_v1_scheduler_static_nba(!llvm.ptr, i64, !llvm.ptr, !llvm.ptr, i64, i64, i64, !llvm.ptr, !llvm.ptr) -> i32
   llvm.func @work(%arg: i64) attributes {schedule.eval.call_closure_root} {
     %acc = schedule.nba.acc.address @acc : !llvm.ptr
     %one = llvm.mlir.constant(1 : i32) : i32
@@ -201,6 +207,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", n
     %other = llvm.mlir.constant(7 : i32) : i32
     %claimed = llvm.call @talos_rt_v1_static_nba_claim(%context, %other, %context, %context, %arg, %arg, %arg, %arg, %arg) : (!llvm.ptr, i32, !llvm.ptr, !llvm.ptr, i64, i64, i64, i64, i64) -> i32
     llvm.call @talos_rt_v1_static_nba_stage_wide(%context, %other, %arg, %arg, %arg, %arg, %zero) : (!llvm.ptr, i32, i64, i64, i64, i64, i32) -> ()
+    %staged = llvm.call @talos_rt_v1_scheduler_static_nba(%context, %arg, %context, %context, %arg, %arg, %arg, %context, %context) : (!llvm.ptr, i64, !llvm.ptr, !llvm.ptr, i64, i64, i64, !llvm.ptr, !llvm.ptr) -> i32
     %present = schedule.nba.acc.load %acc[valid] {alignment = 4 : i64, pending_root = 0 : i32} : i32
     schedule.nba.acc.store %zero, %acc[valid] {alignment = 4 : i64} : i32
     llvm.return

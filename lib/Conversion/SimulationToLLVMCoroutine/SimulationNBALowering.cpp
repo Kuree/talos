@@ -1928,7 +1928,7 @@ public:
             rewriter, location, runtimeContext,
             adaptor.getDestination().front(), value,
             adaptor.getValue().size() == 2 ? unknown : Value(), site.getId(),
-            stateBitCount, *width, rootIndex);
+            stateBitCount, *width);
       } else {
         Value status =
             LLVM::CallOp::create(
@@ -1952,9 +1952,6 @@ public:
                               NativeRuntimeEntry::SchedulerNba)),
                 arguments)
                 .getResult();
-        if (mappedSite)
-          schedule::set<schedule::Field::EvalPendingRuntimeRoot>(
-              status.getDefiningOp(), rewriter.getI32IntegerAttr(rootIndex));
         LLVM::CallOp::create(
             rewriter, location, TypeRange{},
             getNativeRuntimeCallee(rewriter.getContext(),
@@ -2072,8 +2069,6 @@ void lowerNativeNBAStages(ModuleOp module) {
                    stage.getHandle(),
                    llvmConstant(builder, location, i64, stage.getWidth()),
                    stage.getValue(), unknown});
-    schedule::set<schedule::Field::EvalPendingRuntimeRoot>(
-        status, builder.getI32IntegerAttr(stage.getRoot()));
     LLVM::CallOp::create(
         builder, location, TypeRange{},
         getNativeRuntimeCallee(builder.getContext(),

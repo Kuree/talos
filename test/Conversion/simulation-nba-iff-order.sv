@@ -4,14 +4,12 @@
 // before the following source-ordered NBA changes en. A later en change
 // cannot retroactively admit or cancel the edge. Both roots must retain
 // ordered publication; independently merging en before queued clk is wrong.
-// CHECK: llvm.call @talos_rt_v1_scheduler_nba(
-// CHECK-SAME: schedule.eval.pending_runtime_root = 0 : i32
-// CHECK: llvm.call @talos_rt_v1_scheduler_nba(
-// CHECK-SAME: schedule.eval.pending_runtime_root = 1 : i32
-// CHECK: llvm.call @talos_rt_v1_scheduler_nba(
-// CHECK-SAME: schedule.eval.pending_runtime_root = 0 : i32
-// CHECK: llvm.call @talos_rt_v1_scheduler_nba(
-// CHECK-SAME: schedule.eval.pending_runtime_root = 1 : i32
+// The runtime queues the four NBAs in source order: clk, en, clk, en (the
+// destination handle is the fifth operand).
+// CHECK: llvm.call @talos_rt_v1_scheduler_nba({{[^,]+}}, {{[^,]+}}, {{[^,]+}}, {{[^,]+}}, [[CLK:%[0-9]+]],
+// CHECK: llvm.call @talos_rt_v1_scheduler_nba({{[^,]+}}, {{[^,]+}}, {{[^,]+}}, {{[^,]+}}, [[EN:%[0-9]+]],
+// CHECK: llvm.call @talos_rt_v1_scheduler_nba({{[^,]+}}, {{[^,]+}}, {{[^,]+}}, {{[^,]+}}, [[CLK]],
+// CHECK: llvm.call @talos_rt_v1_scheduler_nba({{[^,]+}}, {{[^,]+}}, {{[^,]+}}, {{[^,]+}}, [[EN]],
 // CHECK-NOT: llvm.call @talos_rt_v1_scheduler_nba(
 
 `timescale 1ns/1ps

@@ -8,7 +8,7 @@
 // This checks the compiler's guard protocol, not its runtime implementation.
 //
 // CHECK-LABEL: llvm.func @{{unit_[0-9]+}}.__talos_group_body(
-// CHECK: %[[STATUS:.*]] = llvm.call @talos_rt_v1_scheduler_static_nba(%[[CONTEXT:[0-9]+]], {{.*}}) {schedule.eval.pending_runtime_root = 0 : i32} : (!llvm.ptr, i64, !llvm.ptr, !llvm.ptr, i64, i64, i64, !llvm.ptr, !llvm.ptr) -> i32
+// CHECK: %[[STATUS:.*]] = llvm.call @talos_rt_v1_scheduler_static_nba(%[[CONTEXT:[0-9]+]], {{.*}}) : (!llvm.ptr, i64, !llvm.ptr, !llvm.ptr, i64, i64, i64, !llvm.ptr, !llvm.ptr) -> i32
 // CHECK-NEXT: llvm.call @talos_rt_v1_scheduler_fail(%[[CONTEXT]], %[[STATUS]])
 // CHECK: llvm.getelementptr %{{.*}}[64]
 // CHECK: llvm.store

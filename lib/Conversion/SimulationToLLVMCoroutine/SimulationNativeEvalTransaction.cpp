@@ -414,8 +414,7 @@ static LLVM::LLVMFuncOp moveBodyWithPointerArgument(LLVM::LLVMFuncOp original,
 // inventory separately excludes runtime Active writers of localized roots.
 // An entry that is PendingTransparent for every call qualifies; the others
 // only for the argument forms below.
-bool pendingRuntimeTransparent(LLVM::CallOp call,
-                               const DenseMap<uint32_t, unsigned> &byRoot) {
+bool pendingRuntimeTransparent(LLVM::CallOp call) {
   auto callee = call.getCallee();
   if (!callee)
     return false;
@@ -439,11 +438,6 @@ bool pendingRuntimeTransparent(LLVM::CallOp call,
     // waiting actor or consume pending captures. CURRENT publication still
     // occurs at this call (LRM 4.6(a), 9.4.2).
     return arguments.size() == 9 && constant(1) && constant(2);
-  case NativeRuntimeEntry::SchedulerStaticNba:
-    if (auto root =
-            schedule::get<schedule::Field::EvalPendingRuntimeRoot>(call))
-      return !byRoot.contains(root.getValue().getZExtValue());
-    return false;
   default:
     return false;
   }
@@ -1067,9 +1061,6 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
     });
     cast<LLVM::LLVMFuncOp>(operation).walk([&](Operation *nested) {
       std::optional<IndexAccess> index = indexAccess(nested);
-      if (auto runtime =
-              schedule::get<schedule::Field::EvalPendingRuntimeRoot>(nested))
-        captures[runtime.getValue().getZExtValue()].exact = false;
       // A runtime-held capture keeps its root canonical.
       if (index && index->canonicalCapture)
         captures[*index->root].exact = false;
@@ -1229,7 +1220,7 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
     if (schedule::has<schedule::Field::EvalStateMetadataOnly>(function))
       continue;
     function.walk([&](LLVM::CallOp call) {
-      if (pendingRuntimeTransparent(call, byRoot))
+      if (pendingRuntimeTransparent(call))
         return;
       auto callee = call.getCallee() ? functions.lookup(*call.getCallee())
                                      : LLVM::LLVMFuncOp{};
@@ -1684,7 +1675,7 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
                                        constant(builder, loc, 0),
                                        load(builder, loc, frame, word.offset)));
         LLVM::BrOp::create(builder, loc, ValueRange{}, tail);
-      } else if (!pendingRuntimeTransparent(call, byRoot) &&
+      } else if (!pendingRuntimeTransparent(call) &&
                  (!callee || !reachable.contains(callee.getOperation()) ||
                   opaque.contains(callee.getOperation()))) {
         // Cold/fine/opaque execution retains the existing captured NBA ABI.
