@@ -200,9 +200,11 @@ static Value wholeNBAField(OpBuilder &builder, Location loc, StringRef bank,
       (Twine(bank) + "." + field).str());
 }
 
+// A two-state bank has no X/Z words: its slot passes no unknown array, which
+// the runtime accepts only in a two-state executable and reads as zero.
 static std::string makeWholeNBASlot(ModuleOp module, Location loc,
                                     Type slotType, StringRef bank,
-                                    uint64_t width) {
+                                    uint64_t width, bool twoState) {
   Type storage = LLVM::LLVMArrayType::get(slotType, 1);
   std::string name = (Twine(bank) + ".slot").str();
   makeConstantGlobal(
@@ -212,8 +214,14 @@ static std::string makeWholeNBASlot(ModuleOp module, Location loc,
         unsigned index = 0;
         for (StringRef field :
              {"offset", "value", "unknown", "valid", "transient"})
-          entry = insertValue(init, loc, entry,
-                              wholeNBAField(init, loc, bank, field), index++);
+          entry = insertValue(
+              init, loc, entry,
+              twoState && field == "unknown"
+                  ? LLVM::ZeroOp::create(
+                        init, loc, LLVM::LLVMPointerType::get(init.getContext()))
+                        .getResult()
+                  : wholeNBAField(init, loc, bank, field),
+              index++);
         entry =
             insertValue(init, loc, entry,
                         llvmConstant(init, loc, init.getI64Type(),
@@ -230,11 +238,13 @@ static std::string makeWholeNBASlot(ModuleOp module, Location loc,
 // can supply its exact comparison against CURRENT. After a second write the
 // stored mask instead describes transitions *between captures*, so both a
 // cold interposed writer and the barrier may compare against their own image.
+// A two-state bank captures no X/Z bits: a two-state executable has none
+// (IEEE 1800-2023 6.11.2).
 static void emitWholeNBACapture(OpBuilder &builder, Operation *nbaStage,
                                 StringRef bank, uint32_t root, unsigned width,
                                 Value enabled, Value source,
                                 Value sourceUnknown,
-                                ArrayRef<Value> initialChanges) {
+                                ArrayRef<Value> initialChanges, bool twoState) {
   Location loc = nbaStage->getLoc();
   Type scalar = IntegerType::get(builder.getContext(), width);
   Type i32 = builder.getI32Type();
@@ -250,12 +260,14 @@ static void emitWholeNBACapture(OpBuilder &builder, Operation *nbaStage,
   cf::CondBranchOp::create(builder, loc, enabled, stage, after);
   builder.setInsertionPointToStart(stage);
   Value values = wholeNBAField(builder, loc, bank, "value");
-  Value unknowns = wholeNBAField(builder, loc, bank, "unknown");
+  Value unknowns =
+      twoState ? Value() : wholeNBAField(builder, loc, bank, "unknown");
   Value value = LLVM::LoadOp::create(builder, loc, scalar, source, 1);
-  Value unknown =
-      sourceUnknown
-          ? Value(LLVM::LoadOp::create(builder, loc, scalar, sourceUnknown, 1))
-          : Value(LLVM::ZeroOp::create(builder, loc, scalar));
+  Value unknown;
+  if (unknowns)
+    unknown = sourceUnknown ? Value(LLVM::LoadOp::create(builder, loc, scalar,
+                                                         sourceUnknown, 1))
+                            : Value(LLVM::ZeroOp::create(builder, loc, scalar));
   Value validity = wholeNBAField(builder, loc, bank, "valid");
   Value prior = LLVM::LoadOp::create(builder, loc, i32, validity, 4);
   Value pending =
@@ -277,8 +289,10 @@ static void emitWholeNBACapture(OpBuilder &builder, Operation *nbaStage,
         builder, loc, next,
         LLVM::LoadOp::create(builder, loc, scalar, address, 8));
   };
-  Value delta = LLVM::OrOp::create(builder, loc, difference(value, values),
-                                   difference(unknown, unknowns));
+  Value delta = difference(value, values);
+  if (unknowns)
+    delta = LLVM::OrOp::create(builder, loc, delta,
+                               difference(unknown, unknowns));
   Value transients = wholeNBAField(builder, loc, bank, "transient");
   Value rewritten = arith::CmpIOp::create(
       builder, loc, arith::CmpIPredicate::eq, prior,
@@ -293,7 +307,8 @@ static void emitWholeNBACapture(OpBuilder &builder, Operation *nbaStage,
   cf::BranchOp::create(builder, loc, save);
   builder.setInsertionPointToStart(save);
   LLVM::StoreOp::create(builder, loc, value, values, 8);
-  LLVM::StoreOp::create(builder, loc, unknown, unknowns, 8);
+  if (unknowns)
+    LLVM::StoreOp::create(builder, loc, unknown, unknowns, 8);
   uint32_t firstState = initialChanges.empty() ? TALOS_RT_NBA_WHOLE_PENDING
                                                : TALOS_RT_NBA_WHOLE_COMPARED;
   LLVM::StoreOp::create(
@@ -1608,6 +1623,8 @@ FailureOr<bool> makeNativeEvalPlan(
       bankCandidates.erase(root->second);
   }
   OpBuilder bankBuilder = OpBuilder::atBlockBegin(module.getBody());
+  // A two-state bank has no X/Z words (makeWholeNBASlot).
+  const bool twoStateBanks = native::has<native::TwoState>(module);
   for (unsigned root = 0; root < changeBanks.size(); ++root) {
     if (!bankCandidates.contains(root))
       continue;
@@ -1619,6 +1636,8 @@ FailureOr<bool> makeNativeEvalPlan(
     auto array = LLVM::LLVMArrayType::get(word, words);
     for (StringRef suffix :
          {"value", "unknown", "transient", "valid", "offset"}) {
+      if (twoStateBanks && suffix == "unknown")
+        continue;
       Type type = suffix == "valid"    ? Type(bankBuilder.getI32Type())
                   : suffix == "offset" ? Type(word)
                                        : Type(array);
@@ -2949,7 +2968,7 @@ FailureOr<bool> makeNativeEvalPlan(
           emitWholeNBACapture(nbaBuilder, nbaStage, changeBanks[root->second],
                               root->second, *width, overlaps,
                               nbaStage.getValue(), nbaStage.getUnknown(),
-                              orderedChunkDifferences);
+                              orderedChunkDifferences, twoStateBanks);
         } else if (orderedWide) {
           uint64_t chunks = (*width + 63) / 64;
           auto chunkSite = [&](uint64_t index) {
@@ -3950,7 +3969,7 @@ FailureOr<bool> makeNativeEvalPlan(
               "whole-value NBA bank overlaps a fixed capture slot");
         rootSlotNames[root] =
             makeWholeNBASlot(module, location, slotType, changeBanks[root],
-                             nbaRoots[root].bit_width);
+                             nbaRoots[root].bit_width, twoStateBanks);
         continue;
       }
       if (entries.empty())
