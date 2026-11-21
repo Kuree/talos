@@ -5,7 +5,6 @@
 // Even a one-operation inlining budget retains the certified shared sweep.
 // PLAN: llvm.call @__talos_eval_ranked_group_
 // PLAN-NOT: schedule.eval.materialized_group_calls
-// PLAN-NOT: schedule.eval.ssa_ready_words
 
 !ref = !simulation.ref<i1>
 !vref = !simulation.ref<i8>

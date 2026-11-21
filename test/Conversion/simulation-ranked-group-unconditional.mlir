@@ -37,7 +37,6 @@
 // GROUP-NOT: llvm.select %{{.*}} : i1, i64
 // GROUP: llvm.call @__talos_eval_ranked_group_0.fallback
 // GROUP-LABEL: llvm.func @__talos_eval_ranked_group_0.fallback(
-// GROUP-SAME: schedule.eval.ssa_ready_words = 1 : i64
 // GROUP-DAG: %[[FZERO:.*]] = llvm.mlir.constant(0 : i64) : i64
 // GROUP-DAG: %[[LINK1:.*]] = llvm.mlir.constant(4 : i64) : i64
 // GROUP: llvm.select %{{.*}}, %[[LINK1]], %[[FZERO]] : i1, i64

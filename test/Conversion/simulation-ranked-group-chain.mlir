@@ -46,7 +46,6 @@
 // PLAN: llvm.return
 // PLAN: llvm.call @__talos_eval_ranked_group_0.fallback
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_0.fallback(
-// PLAN-SAME: schedule.eval.ssa_ready_words = 1 : i64
 // PLAN-SAME: schedule.eval.ssa_value_ranges = 4 : i64
 // PLAN-LABEL: llvm.func @__talos_eval_dispatch_v1(
 // PLAN: llvm.call @__talos_eval_ranked_group_0

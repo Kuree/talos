@@ -8,7 +8,7 @@
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_0(
 // PLAN-SAME: schedule.eval.ranked_members = array<i32: 0, 1, {{.*}}62, 63, 64, 65, 66, 67, 68, 69>
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_0.fallback(
-// PLAN-SAME: schedule.eval.ssa_ready_words = 3 : i64
+// PLAN-SAME: schedule.eval.ssa_value_ranges = 69 : i64
 
 !ref = !simulation.ref<i1>
 !vref = !simulation.ref<i8>

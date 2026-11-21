@@ -19,7 +19,6 @@
 // GROUP-NOT: llvm.call %
 // GROUP: llvm.return
 // GROUP-LABEL: llvm.func @__talos_eval_ranked_group_0.fallback(
-// GROUP-SAME: schedule.eval.ssa_ready_words = 1 : i64
 // STATE-LABEL: llvm.func @__talos_eval_ranked_group_0(
 // STATE-SAME: schedule.eval.control_flow_dataflow
 // STATE: llvm.add

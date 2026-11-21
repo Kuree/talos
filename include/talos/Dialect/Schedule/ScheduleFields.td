@@ -223,8 +223,6 @@ def EvalSourceOwner : ScheduleField<"EvalSourceOwner", "schedule.eval.source_own
     "::talos::schedule::SourceOwnerAttr">;
 def EvalSourceOwners : ScheduleField<"EvalSourceOwners", "schedule.eval.source_owners",
     "::mlir::ArrayAttr">;
-def EvalSsaReadyWords : ScheduleField<"EvalSsaReadyWords", "schedule.eval.ssa_ready_words",
-    "::mlir::IntegerAttr">;
 def EvalSsaUnknownRanges : ScheduleField<"EvalSsaUnknownRanges", "schedule.eval.ssa_unknown_ranges",
     "::mlir::IntegerAttr">;
 def EvalSsaValueRanges : ScheduleField<"EvalSsaValueRanges", "schedule.eval.ssa_value_ranges",

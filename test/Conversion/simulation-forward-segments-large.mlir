@@ -10,12 +10,9 @@
 // PLAN-SAME: schedule.eval.ranked_members = array<i32: 0, 1, {{.*}}32, 33>
 // The group budget counts a typed state access as one operation, the machine
 // access it becomes, so the first chunk takes 34 members. Deferred readiness
-// is charged before expansion; flushing two ready words around each of the
-// fallback's calls costs more than its remaining helper budget, so they stay
-// in memory, and the budget admits 33 state ranges using their actual joins
-// and memory cuts. Promotion queries read only the unknown plane and are no
-// value-plane cut.
-// PLAN-NOT: schedule.eval.ssa_ready_words
+// is charged before expansion, and the remaining budget admits 33 state
+// ranges using their actual joins and memory cuts. Promotion queries read
+// only the unknown plane and are no value-plane cut.
 // PLAN-SAME: schedule.eval.ssa_value_ranges = 33 : i64
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_1(
 // PLAN-SAME: schedule.eval.control_flow_dataflow

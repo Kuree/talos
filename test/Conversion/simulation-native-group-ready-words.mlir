@@ -1,25 +1,22 @@
-// RUN: talos-opt %s --talos-materialize-native-eval-groups | FileCheck %s
+// RUN: talos-opt %s --talos-materialize-native-eval-groups | FileCheck %s --implicit-check-not=llvm.alloca
 
-// A group keeps its ingress words in SSA between executor boundaries, as a
-// local form of the same pending activations (IEEE 1800-2023 4.7): typed word
-// accesses of a static word read and write the SSA value. An opaque call may
-// observe or publish readiness, so the word is written before it and read
-// again after it; a dynamic word access and the return are boundaries too.
+// A group reads and consumes its ingress words where its members do, in the
+// ready set itself (IEEE 1800-2023 4.7): every typed word access stays at its
+// place, with its activation entry, and the group neither copies a word into a
+// local nor writes it back around an opaque call or at the return. A member
+// expanded in place keeps its own accesses.
 // CHECK-LABEL: llvm.func @group(
-// CHECK-SAME: schedule.eval.ssa_ready_words = 1
-// CHECK: %[[INITIAL:.*]] = schedule.ready.word.load @__talos_aot_model_ingress_v1[0]{{$}}
-// CHECK-NOT: activation_entry
-// CHECK: %[[CONSUMED:.*]] = llvm.xor %[[INITIAL]],
+// CHECK: %[[FIRST:.*]] = schedule.ready.word.load @__talos_aot_model_ingress_v1[0] {activation_entry = 0 : i32}
+// CHECK: %[[CONSUMED:.*]] = llvm.xor %[[FIRST]],
 // CHECK-NEXT: schedule.ready.word.store %[[CONSUMED]], @__talos_aot_model_ingress_v1[0]
-// CHECK-NEXT: llvm.call @opaque()
-// CHECK-NEXT: %[[ACQUIRED:.*]] = schedule.ready.word.load @__talos_aot_model_ingress_v1[0]
-// CHECK-NEXT: llvm.br ^{{bb[0-9]+}}(%[[ACQUIRED]] : i64)
+// CHECK-NEXT: llvm.call @opaque() {schedule.eval.group_member = 0 : i32}
+// CHECK-NEXT: llvm.br ^[[CHECK1:bb[0-9]+]]
+// CHECK: ^[[CHECK1]]:
+// CHECK-NEXT: %[[SECOND:.*]] = schedule.ready.word.load @__talos_aot_model_ingress_v1[0] {activation_entry = 1 : i32}
+// CHECK: %[[REST:.*]] = llvm.xor %[[SECOND]],
+// CHECK-NEXT: schedule.ready.word.store %[[REST]], @__talos_aot_model_ingress_v1[0]
 // CHECK: llvm.store {{.*}}schedule.eval.group_owner = 1
-// CHECK: ^{{bb[0-9]+}}(%[[PENDING:[0-9]+]]: i64):
-// CHECK-NEXT: schedule.ready.word.store %[[PENDING]], @__talos_aot_model_ingress_v1[0]
-// CHECK-NEXT: %[[ANY:.*]] = schedule.ready.word.load @__talos_aot_model_ingress_v1[%{{.*}}]
-// CHECK-NEXT: %[[AFTER:.*]] = schedule.ready.word.load @__talos_aot_model_ingress_v1[0]
-// CHECK-NEXT: schedule.ready.word.store %[[AFTER]], @__talos_aot_model_ingress_v1[0]
+// CHECK: %[[ANY:.*]] = schedule.ready.word.load @__talos_aot_model_ingress_v1[%{{.*}}]
 // CHECK-NEXT: llvm.return %[[ANY]] : i64
 module {
   llvm.mlir.global internal @__talos_aot_model_ingress_v1(dense<3> : tensor<1xi64>) : !llvm.array<1 x i64>
