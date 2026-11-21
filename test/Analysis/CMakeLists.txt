@@ -39,6 +39,7 @@ add_mlir_library(TalosAnalysisTestPasses
   TalosSimulationAnalysis
   TalosScheduleTransforms
   TalosSimulationIR
+  TalosSimulationToLLVMCoroutine
   MLIRArithDialect
   MLIRAsmParser
   MLIRIR

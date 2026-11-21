@@ -5,11 +5,8 @@
 // element `i`, guards the result with the validity of `i`, and offsets that
 // to field `f`. An invalid index selects the invalid handle, which names no
 // storage (IEEE 1800-2023 7.4.5, 11.5.1, 11.5.2). Native passes read chains
-// through these matchers instead of matching their operations.
-//
-// They match schedule.handle.offset and schedule.handle.guard, and the form
-// those lower to: a call of the runtime's talos_rt_v1_native_handle_offset
-// and a select of the invalid handle.
+// through these matchers of schedule.handle.offset and schedule.handle.guard,
+// which live until AOT planning has read them (lowerNativeHandleOps).
 //
 //===----------------------------------------------------------------------===//
 
@@ -39,9 +36,6 @@ struct NativeHandleGuard {
   mlir::Operation *op;
   mlir::Value valid;
   mlir::Value handle;
-  /// A select with the invalid handle as its true value: `handle` is
-  /// selected where `valid` does not hold.
-  bool inverted;
 };
 
 std::optional<NativeHandleOffset> matchNativeHandleOffset(mlir::Operation *op);

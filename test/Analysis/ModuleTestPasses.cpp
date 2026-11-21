@@ -7,11 +7,15 @@
 // derive invalid variants of one input, a marked branch grows into a block
 // chain deeper than any hand-written input, constant-trip loops unroll into
 // straight-line code, and marked operations replicate into many processes,
-// so scale tests keep a small input instead of a generated one.
+// so scale tests keep a small input instead of a generated one. Typed
+// stable-handle operations lower on their own, so their runtime form is
+// tested without a whole native pipeline.
 //
 //===----------------------------------------------------------------------===//
 
 #include "AnalysisTestPasses.h"
+#include "talos/Conversion/SimulationToLLVMCoroutine.h"
+#include "talos/Dialect/Native/NativeDialect.h"
 
 #include "mlir/AsmParser/AsmParser.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -704,6 +708,25 @@ private:
     return success();
   }
 };
+
+class LowerNativeHandleOpsTestPass
+    : public PassWrapper<LowerNativeHandleOpsTestPass,
+                         OperationPass<ModuleOp>> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LowerNativeHandleOpsTestPass)
+
+  StringRef getArgument() const final {
+    return "test-talos-lower-native-handle-ops";
+  }
+  StringRef getDescription() const final {
+    return "lower typed stable-handle operations to their runtime form";
+  }
+  void getDependentDialects(DialectRegistry &registry) const final {
+    registry.insert<arith::ArithDialect, LLVM::LLVMDialect,
+                    talos::native::NativeDialect>();
+  }
+  void runOnOperation() final { talos::lowerNativeHandleOps(getOperation()); }
+};
 } // namespace
 
 namespace talos {
@@ -715,5 +738,6 @@ void registerModuleTestPasses() {
   PassRegistration<InsertBlockChainTestPass>();
   PassRegistration<UnrollLoopsTestPass>();
   PassRegistration<ReplicateTestPass>();
+  PassRegistration<LowerNativeHandleOpsTestPass>();
 }
 } // namespace talos

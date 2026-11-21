@@ -76,6 +76,13 @@ lowerNativeFunctionScheduleActions(mlir::LLVM::LLVMFuncOp function,
 void declareNativeFunctionActionRuntime(
     mlir::ModuleOp module, const NativeFunctionActionLowering &lowering);
 
+/// Lower schedule.handle.offset to the runtime's stable-handle offset (tagged
+/// native.in_bounds_handle_offset when proved in bounds) and
+/// schedule.handle.guard to a select of the invalid handle. The native
+/// pipeline calls it inside AOT planning, after the last reader of the typed
+/// handle chains, so later passes see only the runtime form.
+void lowerNativeHandleOps(mlir::ModuleOp module);
+
 /// Address each native state plane through one invariant base per function
 /// that accesses it in several blocks, instead of constant offsets from the
 /// plane global. Run last, just before translation to LLVM IR.

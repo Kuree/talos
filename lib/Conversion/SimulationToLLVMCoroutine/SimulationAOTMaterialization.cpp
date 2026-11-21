@@ -9,6 +9,7 @@
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Analysis/ParallelWalk.h"
 #include "talos/Analysis/StorageWriteAnalysis.h"
+#include "talos/Conversion/SimulationToLLVMCoroutine.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
@@ -2700,8 +2701,6 @@ FailureOr<bool> makeNativeEvalPlan(
                                                      : handle);
         Value dynamicValid =
             destinationGuard ? destinationGuard->valid : Value{};
-        bool invertDynamicValid =
-            destinationGuard && destinationGuard->inverted;
         auto proof = dynamicNBAProofs.find(nbaStage.getOperation());
         if (proof == dynamicNBAProofs.end() || !proof->second.eligible) {
           const DynamicEvalNBAProof emptyProof;
@@ -2838,15 +2837,9 @@ FailureOr<bool> makeNativeEvalPlan(
                                   upper));
         overlaps = arith::AndIOp::create(nbaBuilder, nbaStage.getLoc(),
                                          baseValid, overlaps);
-        if (dynamicValid) {
-          if (invertDynamicValid)
-            dynamicValid = arith::XOrIOp::create(
-                nbaBuilder, nbaStage.getLoc(), dynamicValid,
-                llvmConstant(nbaBuilder, nbaStage.getLoc(),
-                             nbaBuilder.getI1Type(), 1));
+        if (dynamicValid)
           overlaps = arith::AndIOp::create(nbaBuilder, nbaStage.getLoc(),
                                            dynamicValid, overlaps);
-        }
         Value zero64 = llvmConstant(nbaBuilder, nbaStage.getLoc(), i64, 0);
         Value safeDynamic = arith::SelectOp::create(
             nbaBuilder, nbaStage.getLoc(), overlaps, dynamicBit,
@@ -3491,12 +3484,10 @@ FailureOr<bool> makeNativeEvalPlan(
         continue;
       }
       Value sourceValid;
-      bool invertSourceValid = false;
       Operation *handleSelect = handle.getDefiningOp();
       if (std::optional<NativeHandleGuard> guard =
               matchNativeHandleGuard(handleSelect)) {
         sourceValid = guard->valid;
-        invertSourceValid = guard->inverted;
         handle = guard->handle;
       } else if (isa_and_nonnull<arith::SelectOp, LLVM::SelectOp>(
                      handleSelect)) {
@@ -3564,13 +3555,6 @@ FailureOr<bool> makeNativeEvalPlan(
                                 .getResult()
                           : guard;
       };
-      if (sourceValid && invertSourceValid) {
-        sourceValid =
-            arith::XOrIOp::create(chainBuilder, call.getLoc(), sourceValid,
-                                  llvmConstant(chainBuilder, call.getLoc(),
-                                               chainBuilder.getI1Type(), 1));
-        invertSourceValid = false;
-      }
       NativeHandleChain chain = getNativeHandleChain(chainBase);
       for (const NativeHandleLink &link : chain.links) {
         if (const auto *inner = std::get_if<NativeHandleOffset>(&link)) {
@@ -3579,14 +3563,7 @@ FailureOr<bool> makeNativeEvalPlan(
                                                 inner->amount, dynamicOffset);
           continue;
         }
-        const auto &guard = std::get<NativeHandleGuard>(link);
-        Value valid = guard.valid;
-        if (guard.inverted)
-          valid =
-              arith::XOrIOp::create(chainBuilder, call.getLoc(), valid,
-                                    llvmConstant(chainBuilder, call.getLoc(),
-                                                 chainBuilder.getI1Type(), 1));
-        requireValid(valid);
+        requireValid(std::get<NativeHandleGuard>(link).valid);
       }
       chainBase = chain.root;
       // A common packed view can leave offset(selected-root, constant) after
@@ -3673,15 +3650,9 @@ FailureOr<bool> makeNativeEvalPlan(
                                             dynamicOffset, upper);
       Value overlaps =
           arith::AndIOp::create(loadBuilder, call.getLoc(), inLower, inUpper);
-      if (sourceValid) {
-        if (invertSourceValid)
-          sourceValid =
-              arith::XOrIOp::create(loadBuilder, call.getLoc(), sourceValid,
-                                    llvmConstant(loadBuilder, call.getLoc(),
-                                                 loadBuilder.getI1Type(), 1));
+      if (sourceValid)
         overlaps = arith::AndIOp::create(loadBuilder, call.getLoc(),
                                          sourceValid, overlaps);
-      }
       // Select a safe coordinate before the load itself: LLVM select is not a
       // control dependency and an invalid source index must never form an
       // out-of-plane speculative address.
@@ -3908,6 +3879,10 @@ FailureOr<bool> makeNativeEvalPlan(
       for (Operation *operation : deadHandleOperations)
         operation->erase();
     }
+    // The plan has read every handle chain. The ones left are runtime calls
+    // and selects to the rest of the plan, e.g. a ranked group's closed-body
+    // test.
+    lowerNativeHandleOps(module);
     llvm::SmallDenseSet<uint32_t, 8> dynamicRoots;
     SmallVector<llvm::SmallDenseSet<uint64_t, 4>> dynamicOrigins(
         staticNBAPlan.roots.size());

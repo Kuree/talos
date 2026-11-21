@@ -1,6 +1,5 @@
 //===- SimulationWideIntegerLowering.cpp - Word-vector bitwise planes ----===//
 
-#include "NativeHandleChain.h"
 #include "SimulationPackedLowering.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Conversion/Passes.h"
@@ -497,22 +496,21 @@ struct NativeFunctionFinalizationPass
         lowerWideNativeBitwiseIntegers(function, configuration.dataLayout);
     changed |= scopeNativeOutputTemporaries(function);
     changed |= shareScopedTemporaries(function);
-    SmallVector<Operation *> provenOffsets;
-    function.walk([&](Operation *op) {
-      if (std::optional<NativeHandleOffset> offset =
-              matchNativeHandleOffset(op);
-          offset && offset->inBounds)
-        provenOffsets.push_back(op);
+    // A handle offset proved in bounds is the plain sum (see
+    // lowerNativeHandleOps).
+    SmallVector<LLVM::CallOp> provenOffsets;
+    function.walk([&](LLVM::CallOp call) {
+      if (native::has<native::InBoundsHandleOffset>(call) &&
+          call.getArgOperands().size() == 2)
+        provenOffsets.push_back(call);
     });
-    for (Operation *op : provenOffsets) {
-      // Read the operands now: an inner offset may already have been
-      // replaced.
-      NativeHandleOffset offset = *matchNativeHandleOffset(op);
-      OpBuilder builder(op);
-      Value result = LLVM::AddOp::create(builder, op->getLoc(), offset.handle,
-                                         offset.amount);
-      op->getResult(0).replaceAllUsesWith(result);
-      op->erase();
+    for (auto call : provenOffsets) {
+      OpBuilder builder(call);
+      Value result =
+          LLVM::AddOp::create(builder, call.getLoc(), call.getArgOperands()[0],
+                              call.getArgOperands()[1]);
+      call.getResult().replaceAllUsesWith(result);
+      call.erase();
       changed = true;
     }
     // Source ownership has been consumed by scheduling and publication

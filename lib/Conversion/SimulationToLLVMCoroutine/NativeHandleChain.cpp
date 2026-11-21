@@ -2,35 +2,18 @@
 
 #include "NativeHandleChain.h"
 
-#include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleOps.h"
-
-#include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/IR/Matchers.h"
 
 using namespace mlir;
 
 namespace talos::detail {
-namespace {
-bool isInvalidHandle(Value value) {
-  IntegerAttr constant;
-  return matchPattern(value, m_Constant(&constant)) &&
-         constant.getType().isInteger(64) && constant.getValue().isAllOnes();
-}
-} // namespace
 
 std::optional<NativeHandleOffset> matchNativeHandleOffset(Operation *op) {
-  if (auto offset = dyn_cast_or_null<schedule::NativeHandleOffsetOp>(op))
-    return NativeHandleOffset{op, offset.getHandle(), offset.getAmount(),
-                              offset.getInBounds()};
-  auto call = dyn_cast_or_null<LLVM::CallOp>(op);
-  if (!call || call.getCallee() != "talos_rt_v1_native_handle_offset" ||
-      call.getArgOperands().size() != 2)
+  auto offset = dyn_cast_or_null<schedule::NativeHandleOffsetOp>(op);
+  if (!offset)
     return std::nullopt;
-  return NativeHandleOffset{op, call.getArgOperands()[0],
-                            call.getArgOperands()[1],
-                            native::has<native::InBoundsHandleOffset>(call)};
+  return NativeHandleOffset{op, offset.getHandle(), offset.getAmount(),
+                            offset.getInBounds()};
 }
 
 std::optional<NativeHandleOffset> matchNativeHandleOffset(Value value) {
@@ -38,17 +21,10 @@ std::optional<NativeHandleOffset> matchNativeHandleOffset(Value value) {
 }
 
 std::optional<NativeHandleGuard> matchNativeHandleGuard(Operation *op) {
-  if (auto guard = dyn_cast_or_null<schedule::NativeHandleGuardOp>(op))
-    return NativeHandleGuard{op, guard.getValid(), guard.getHandle(),
-                             /*inverted=*/false};
-  if (!isa_and_nonnull<arith::SelectOp, LLVM::SelectOp>(op))
+  auto guard = dyn_cast_or_null<schedule::NativeHandleGuardOp>(op);
+  if (!guard)
     return std::nullopt;
-  Value valid = op->getOperand(0);
-  if (isInvalidHandle(op->getOperand(2)))
-    return NativeHandleGuard{op, valid, op->getOperand(1), /*inverted=*/false};
-  if (isInvalidHandle(op->getOperand(1)))
-    return NativeHandleGuard{op, valid, op->getOperand(2), /*inverted=*/true};
-  return std::nullopt;
+  return NativeHandleGuard{op, guard.getValid(), guard.getHandle()};
 }
 
 std::optional<NativeHandleGuard> matchNativeHandleGuard(Value value) {

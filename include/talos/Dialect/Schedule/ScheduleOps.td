@@ -1267,14 +1267,24 @@ def NativeHandleOffsetOp : ScheduleNativeOp<"handle.offset"> {
     field then neither carries nor borrows, so the result is the plain sum
     `handle + amount`.
 
-    Its memory effects are those of the runtime call it stands for.
+    Its memory effects are those of the runtime call it stands for, and like
+    that call it does not fold: producers offset constant operands when they
+    create the selection, and constant propagation leaves it opaque.
+
+    Native lowering creates it; it becomes the runtime call once AOT
+    planning has read the selections it is part of.
   }];
   let arguments = (ins I64:$handle, I64:$amount, UnitAttr:$in_bounds);
   let results = (outs I64:$result);
   let assemblyFormat = [{
     $handle `,` $amount (`in_bounds` $in_bounds^)? attr-dict
   }];
-  let hasFolder = 1;
+  let builders = [OpBuilder<(ins "::mlir::Value":$handle,
+                                 "::mlir::Value":$amount,
+                                 CArg<"bool", "false">:$inBounds), [{
+    build($_builder, $_state, $_builder.getI64Type(), handle, amount,
+          inBounds);
+  }]>];
 }
 
 def NativeHandleGuardOp : ScheduleNativeOp<"handle.guard", [Pure]> {
@@ -1284,10 +1294,17 @@ def NativeHandleGuardOp : ScheduleNativeOp<"handle.guard", [Pure]> {
     `valid` is the validity of the selection that produced `handle`, e.g.
     its index being in range and free of X/Z bits (IEEE 1800-2023 7.4.5,
     11.5.1).
+
+    It folds as the select of `handle` and an invalid-handle constant that
+    it becomes once AOT planning has read the selection.
   }];
   let arguments = (ins I1:$valid, I64:$handle);
   let results = (outs I64:$result);
   let assemblyFormat = "$valid `,` $handle attr-dict";
+  let builders = [OpBuilder<(ins "::mlir::Value":$valid,
+                                 "::mlir::Value":$handle), [{
+    build($_builder, $_state, $_builder.getI64Type(), valid, handle);
+  }]>];
   let hasFolder = 1;
 }
 

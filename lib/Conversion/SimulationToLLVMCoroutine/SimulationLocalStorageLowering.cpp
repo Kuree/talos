@@ -384,7 +384,8 @@ Value addOffset(ConversionPatternRewriter &rewriter, Location location,
   Value sum = rewriter.createOrFold<arith::AddIOp>(
       location, offset,
       llvmConstant(rewriter, location, rewriter.getI64Type(), amount));
-  return rewriter.createOrFold<arith::SelectOp>(location, valid, sum, invalid);
+  return rewriter.createOrFold<schedule::NativeHandleGuardOp>(location, valid,
+                                                              sum);
 }
 
 Value loadPlane(ConversionPatternRewriter &rewriter, Location location,

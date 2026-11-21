@@ -2,6 +2,7 @@
 
 #include "SimulationLocalStorageLowering.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
+#include "talos/Conversion/SimulationToLLVMCoroutine.h"
 
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleOps.h"
@@ -10,6 +11,7 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/Transforms/DialectConversion.h"
 
 #include <limits>
@@ -22,6 +24,8 @@ namespace {
 Value offsetNativeHandle(OpBuilder &builder, Location location, Value handle,
                          Value offset, bool local = false,
                          bool inBounds = false) {
+  // A frame handle offsets with plain arithmetic; only its invalid-handle
+  // guard is typed.
   if (local) {
     Value invalid =
         llvmConstant(builder, location, builder.getI64Type(), UINT64_MAX);
@@ -29,8 +33,8 @@ Value offsetNativeHandle(OpBuilder &builder, Location location, Value handle,
         location, arith::CmpIPredicate::ne, handle, invalid);
     Value selected =
         builder.createOrFold<arith::AddIOp>(location, handle, offset);
-    return builder.createOrFold<arith::SelectOp>(location, valid, selected,
-                                                 invalid);
+    return builder.createOrFold<schedule::NativeHandleGuardOp>(location, valid,
+                                                               selected);
   }
   auto handleConstant = handle.getDefiningOp<arith::ConstantOp>();
   auto offsetConstant = offset.getDefiningOp<arith::ConstantOp>();
@@ -40,6 +44,8 @@ Value offsetNativeHandle(OpBuilder &builder, Location location, Value handle,
   auto offsetValue = offsetConstant
                          ? dyn_cast<IntegerAttr>(offsetConstant.getValue())
                          : IntegerAttr{};
+  // The offset operation does not fold, like the runtime call it stands for:
+  // offset constant operands here, as the runtime does.
   if (handleValue && offsetValue) {
     uint64_t folded =
         talos_rt_stable_handle_offset(handleValue.getValue().getZExtValue(),
@@ -48,17 +54,11 @@ Value offsetNativeHandle(OpBuilder &builder, Location location, Value handle,
         builder, location, builder.getI64Type(),
         builder.getI64IntegerAttr(static_cast<int64_t>(folded)));
   }
-  auto call = LLVM::CallOp::create(
-      builder, location, TypeRange{builder.getI64Type()},
-      SymbolRefAttr::get(builder.getContext(),
-                         "talos_rt_v1_native_handle_offset"),
-      ValueRange{handle, offset});
   // Keep the root/offset form until native access and NBA consumers finish
-  // resolving it. The proof permits plain encoded addition afterwards: the
+  // resolving it. The in-bounds proof permits plain encoded addition: the
   // physical root fits in the nonnegative signed 32-bit offset field.
-  if (inBounds)
-    native::mark<native::InBoundsHandleOffset>(call);
-  return call.getResult();
+  return schedule::NativeHandleOffsetOp::create(builder, location, handle,
+                                                offset, inBounds);
 }
 
 Value isValidHandle(OpBuilder &builder, Location location, Value handle) {
@@ -236,11 +236,8 @@ public:
       rewriter.replaceOp(op, selected);
       return success();
     }
-    Value invalid = arith::ConstantOp::create(
-        rewriter, location, rewriter.getI64Type(),
-        rewriter.getI64IntegerAttr(static_cast<int64_t>(UINT64_MAX)));
-    rewriter.replaceOp(op, arith::SelectOp::create(rewriter, location, valid,
-                                                   selected, invalid));
+    rewriter.replaceOp(op, schedule::NativeHandleGuardOp::create(
+                               rewriter, location, valid, selected));
     return success();
   }
 };
@@ -385,11 +382,8 @@ public:
       rewriter.replaceOp(op, selected);
       return success();
     }
-    Value invalid = arith::ConstantOp::create(
-        rewriter, location, i64,
-        rewriter.getI64IntegerAttr(static_cast<int64_t>(UINT64_MAX)));
-    rewriter.replaceOp(op, arith::SelectOp::create(rewriter, location, valid,
-                                                   selected, invalid));
+    rewriter.replaceOp(op, schedule::NativeHandleGuardOp::create(
+                               rewriter, location, valid, selected));
     return success();
   }
 };
@@ -425,3 +419,48 @@ void populateNativeHandleConversionPatterns(
 }
 
 } // namespace talos::detail
+
+namespace talos {
+void lowerNativeHandleOps(ModuleOp module) {
+  SmallVector<Operation *> handles;
+  module.walk([&](Operation *op) {
+    if (isa<schedule::NativeHandleOffsetOp, schedule::NativeHandleGuardOp>(op))
+      handles.push_back(op);
+  });
+  for (Operation *op : handles) {
+    OpBuilder builder(op);
+    Location location = op->getLoc();
+    Type i64 = builder.getI64Type();
+    Value lowered;
+    if (auto offset = dyn_cast<schedule::NativeHandleOffsetOp>(op)) {
+      auto call = LLVM::CallOp::create(
+          builder, location, TypeRange{i64},
+          SymbolRefAttr::get(builder.getContext(),
+                             "talos_rt_v1_native_handle_offset"),
+          ValueRange{offset.getHandle(), offset.getAmount()});
+      if (offset.getInBounds())
+        native::mark<native::InBoundsHandleOffset>(call);
+      lowered = call.getResult();
+    } else {
+      auto guard = cast<schedule::NativeHandleGuardOp>(op);
+      // A frame handle's validity compares the handle with an invalid-handle
+      // constant; the select takes that same constant.
+      Value invalid;
+      APInt constant;
+      if (auto compare = guard.getValid().getDefiningOp<arith::CmpIOp>();
+          compare && compare.getPredicate() == arith::CmpIPredicate::ne &&
+          matchPattern(compare.getRhs(), m_ConstantInt(&constant)) &&
+          constant.getBitWidth() == 64 && constant.isAllOnes())
+        invalid = compare.getRhs();
+      else
+        invalid = arith::ConstantOp::create(
+            builder, location, i64,
+            builder.getI64IntegerAttr(static_cast<int64_t>(UINT64_MAX)));
+      lowered = arith::SelectOp::create(builder, location, guard.getValid(),
+                                        guard.getHandle(), invalid);
+    }
+    op->getResult(0).replaceAllUsesWith(lowered);
+    op->erase();
+  }
+}
+} // namespace talos

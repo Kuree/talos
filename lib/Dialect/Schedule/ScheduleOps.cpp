@@ -12,7 +12,6 @@
 #include "talos/Dialect/Schedule/ScheduleDialect.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
-#include "talos/Runtime/StableHandle.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/TypeSwitch.h"
 using namespace mlir;
@@ -415,29 +414,31 @@ LogicalResult NativeNBAStageOp::verify() {
   return success();
 }
 
-OpFoldResult NativeHandleOffsetOp::fold(FoldAdaptor adaptor) {
-  // Constant operands offset as the runtime does. `in_bounds` does not
-  // change the result: under its proof that is the plain sum.
-  auto handle = dyn_cast_or_null<IntegerAttr>(adaptor.getHandle());
-  auto amount = dyn_cast_or_null<IntegerAttr>(adaptor.getAmount());
-  if (!handle || !amount)
-    return {};
-  return IntegerAttr::get(getType(),
-                          APInt(64, talos_rt_stable_handle_offset(
-                                        handle.getValue().getZExtValue(),
-                                        amount.getValue().getSExtValue())));
-}
-
 OpFoldResult NativeHandleGuardOp::fold(FoldAdaptor adaptor) {
+  // Fold as `arith.select %valid, %handle, %invalid` does for an
+  // invalid-handle constant %invalid of its own.
   if (auto valid = dyn_cast_or_null<IntegerAttr>(adaptor.getValid()))
     return valid.getValue().isOne() ? OpFoldResult(getHandle())
                                     : OpFoldResult(IntegerAttr::get(
                                           getType(), APInt::getAllOnes(64)));
-  // Guarding the invalid handle gives the invalid handle.
-  if (auto handle = dyn_cast_or_null<IntegerAttr>(adaptor.getHandle());
-      handle && handle.getValue().isAllOnes())
-    return getHandle();
-  return {};
+  // A validity that compares the handle itself with the invalid handle
+  // decides the result: the handle, or the invalid handle.
+  auto compare = getValid().getDefiningOp<arith::CmpIOp>();
+  if (!compare || (compare.getPredicate() != arith::CmpIPredicate::ne &&
+                   compare.getPredicate() != arith::CmpIPredicate::eq))
+    return {};
+  Value other;
+  if (compare.getLhs() == getHandle())
+    other = compare.getRhs();
+  else if (compare.getRhs() == getHandle())
+    other = compare.getLhs();
+  APInt constant;
+  if (!other || !matchPattern(other, m_ConstantInt(&constant)) ||
+      constant.getBitWidth() != 64 || !constant.isAllOnes())
+    return {};
+  return compare.getPredicate() == arith::CmpIPredicate::ne
+             ? OpFoldResult(getHandle())
+             : OpFoldResult(other);
 }
 
 uint64_t getNBAAccumulatorFieldBytes(NBAAccumulatorField field) {

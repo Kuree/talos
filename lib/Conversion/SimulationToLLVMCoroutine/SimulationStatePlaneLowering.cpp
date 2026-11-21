@@ -208,10 +208,7 @@ resolveDirectDynamicStateRange(Value handle, unsigned width,
       amounts.push_back(offset->amount);
       continue;
     }
-    const auto &guard = std::get<NativeHandleGuard>(link);
-    if (guard.inverted)
-      return std::nullopt;
-    guards.push_back(guard.valid);
+    guards.push_back(std::get<NativeHandleGuard>(link).valid);
   }
   Value root = chain.root;
   if (amounts.empty() || (guards.empty() && (!access || !access->inBounds)))

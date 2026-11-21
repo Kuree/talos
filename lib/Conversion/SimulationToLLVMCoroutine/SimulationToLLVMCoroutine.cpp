@@ -1294,6 +1294,10 @@ LogicalResult declareNativeImports(ModuleOp module) {
       reference = load.getGlobalAttr();
     else if (auto store = dyn_cast<schedule::NativeNBAIndexStoreOp>(operation))
       reference = store.getGlobalAttr();
+    else if (isa<schedule::NativeHandleOffsetOp>(operation))
+      // It becomes the runtime's handle offset; see lowerNativeHandleOps.
+      reference = FlatSymbolRefAttr::get(operation->getContext(),
+                                         "talos_rt_v1_native_handle_offset");
     auto import = [&](FlatSymbolRefAttr reference) {
       if (!reference || symbols.lookupSymbolIn(design, reference))
         return;
@@ -2058,9 +2062,10 @@ LogicalResult NativePipelineAnalysis::materialize() {
       evalScheduler = false;
     }
   }
-  // A static NBA stage the eval plan did not rewrite is a runtime call from
-  // here on, including to the legacy plan.
+  // A static NBA stage or handle chain the eval plan did not rewrite is a
+  // runtime call from here on, including to the legacy plan.
   lowerNativeNBAStages(module);
+  lowerNativeHandleOps(module);
   if (useAOT && !evalScheduler &&
       failed(makeNativeAOTPlanLegacy(
           module, dataLayout, aotEligibility.getActorSlots().size(),

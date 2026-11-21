@@ -56,7 +56,7 @@ Operation *ScheduleDialect::materializeConstant(OpBuilder &builder,
   if (plane && isCanonicalStatePlane(plane.getValue()) &&
       type == LLVM::LLVMPointerType::get(builder.getContext()))
     return NativeStateAddressOp::create(builder, loc, plane.getValue());
-  // Handle operations fold to i64 handle constants.
+  // A handle guard folds to the invalid handle, an i64 constant.
   auto integer = dyn_cast<IntegerAttr>(value);
   if (integer && type.isSignlessInteger(64) && integer.getType() == type)
     return arith::ConstantOp::create(builder, loc, type, integer);

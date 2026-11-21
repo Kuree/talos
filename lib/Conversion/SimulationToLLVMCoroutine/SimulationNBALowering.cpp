@@ -832,13 +832,8 @@ public:
     Value destination = adaptor.getDestination().front();
     if (std::optional<NativeHandleGuard> guard =
             matchNativeHandleGuard(destination)) {
-      Value condition = guard->valid;
-      if (guard->inverted)
-        condition = arith::XOrIOp::create(
-            rewriter, location, condition,
-            llvmConstant(rewriter, location, rewriter.getI1Type(), 1));
       directValid =
-          arith::AndIOp::create(rewriter, location, directValid, condition);
+          arith::AndIOp::create(rewriter, location, directValid, guard->valid);
     } else if (isa_and_nonnull<arith::SelectOp, LLVM::SelectOp>(
                    destination.getDefiningOp())) {
       // Any other select hides which of its handles are valid.
