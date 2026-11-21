@@ -128,8 +128,8 @@ static LogicalResult threadFunctionRuntimeStatuses(sim::SimFuncOp function) {
   for (sim::SimStatusCheckOp check : llvm::reverse(checks))
     continuations[check] =
         check->getBlock()->splitBlock(std::next(check->getIterator()));
-  LLVM::AllocaOp rootRecord =
-      checks.empty() ? LLVM::AllocaOp() : findManagedRootRangeRecord(function);
+  Value rootRecord =
+      checks.empty() ? Value() : findManagedRootRangeRecord(function);
   for (sim::SimStatusCheckOp check : checks) {
     Block *continuation = continuations.lookup(check);
     Block *failure = new Block;
@@ -141,7 +141,7 @@ static LogicalResult threadFunctionRuntimeStatuses(sim::SimFuncOp function) {
     cf::CondBranchOp::create(localRewriter, check.getLoc(), ok, continuation,
                              ValueRange{}, failure, ValueRange{});
     Value status = check.getStatus();
-    bool pushFailure = native::has<native::ManagedRootRangePushCheck>(check);
+    bool pushFailure = check.getRootRangePush();
     localRewriter.eraseOp(check);
 
     localRewriter.setInsertionPointToStart(failure);

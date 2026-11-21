@@ -132,7 +132,6 @@ LogicalResult instrumentManagedRoots(sim::SimFuncOp function,
   Value one = llvmConstant(builder, location, i64, 1);
   Value record =
       LLVM::AllocaOp::create(builder, location, pointer, rootType, one, 8);
-  native::mark<native::ManagedRootRangeRecord>(record.getDefiningOp());
 
   // Each coroutine activation owns roots only while it is running on
   // the current worker lane. Pop before suspension and reacquire on
@@ -178,8 +177,9 @@ LogicalResult instrumentManagedRoots(sim::SimFuncOp function,
                           record, 8);
     Value status = schedule::NativeManagedRootPushOp::create(
         builder, location, i32, record, slotsBase, rootCount);
-    Operation *check = reportManagedStatus(builder, location, Value{}, status);
-    native::mark<native::ManagedRootRangePushCheck>(check);
+    auto check = cast<sim::SimStatusCheckOp>(
+        reportManagedStatus(builder, location, Value{}, status));
+    check.setRootRangePush(true);
     native::mark<native::ManagedRootActivationPrologue>(check);
     activationEnds[block] = check;
   }
@@ -256,9 +256,9 @@ LogicalResult instrumentManagedRoots(sim::SimFuncOp function,
     Value status = schedule::NativeManagedRootPushOp::create(
         builder, collectionPoint->getLoc(), i32, record, slotsBase, rootCount,
         /*lazy=*/true);
-    Operation *check = reportManagedStatus(builder, collectionPoint->getLoc(),
-                                           Value{}, status);
-    native::mark<native::ManagedRootRangePushCheck>(check);
+    auto check = cast<sim::SimStatusCheckOp>(reportManagedStatus(
+        builder, collectionPoint->getLoc(), Value{}, status));
+    check.setRootRangePush(true);
   }
 
   SmallVector<Operation *> exits;
@@ -273,11 +273,9 @@ LogicalResult instrumentManagedRoots(sim::SimFuncOp function,
          !isa<sim::SimControlBoundaryOp>(operation)))
       exits.push_back(operation);
   });
-  LLVM::AllocaOp rangeRecord =
-      exits.empty() ? LLVM::AllocaOp() : findManagedRootRangeRecord(function);
   for (Operation *exit : exits) {
     builder.setInsertionPoint(exit);
-    emitManagedRootRangePop(builder, exit->getLoc(), function, rangeRecord);
+    emitManagedRootRangePop(builder, exit->getLoc(), function, record);
   }
   return success();
 }

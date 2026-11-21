@@ -1326,8 +1326,8 @@ lowerPreparedSuspendableProcess(PreparedSuspendableProcess &process) {
   for (sim::SimStatusCheckOp check : llvm::reverse(checks))
     continuations[check] =
         check->getBlock()->splitBlock(std::next(check->getIterator()));
-  LLVM::AllocaOp rootRecord =
-      checks.empty() ? LLVM::AllocaOp() : findManagedRootRangeRecord(ramp);
+  Value rootRecord =
+      checks.empty() ? Value() : findManagedRootRangeRecord(ramp);
   for (sim::SimStatusCheckOp check : checks) {
     Block *continuation = continuations.lookup(check);
     Block *failure = new Block;
@@ -1339,7 +1339,7 @@ lowerPreparedSuspendableProcess(PreparedSuspendableProcess &process) {
     cf::CondBranchOp::create(builder, check.getLoc(), ok, continuation,
                              ValueRange{}, failure, ValueRange{});
     Value status = check.getStatus();
-    bool pushFailure = native::has<native::ManagedRootRangePushCheck>(check);
+    bool pushFailure = check.getRootRangePush();
     check.erase();
     builder.setInsertionPointToStart(failure);
     Value bits = runtime::RTStatusToBitsOp::create(

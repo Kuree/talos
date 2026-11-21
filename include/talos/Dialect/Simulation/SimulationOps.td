@@ -3903,10 +3903,13 @@ def SimStatusCheckOp : SimOp<"status.check", [
   let description = [{
     Native fragment lowering consumes this operation and routes a non-OK
     status through the fragment ABI. Expected SystemVerilog sentinel results
-    are selected before this hook and do not use it.
+    are selected before this hook and do not use it. With root_range_push the
+    status is that of registering the activation's managed root range: on
+    failure no range is registered, so the failure exit does not unregister
+    one.
   }];
-  let arguments = (ins RTStatusType:$status);
-  let assemblyFormat = "$status attr-dict";
+  let arguments = (ins RTStatusType:$status, UnitAttr:$root_range_push);
+  let assemblyFormat = "$status (`root_range_push` $root_range_push^)? attr-dict";
 }
 
 def SimFinishOp : SimOp<"finish", [

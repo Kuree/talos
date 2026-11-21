@@ -206,8 +206,8 @@ lowerPreparedPlainNativeProcess(PreparedPlainNativeProcess &process) {
   for (sim::SimStatusCheckOp check : llvm::reverse(checks))
     continuations[check] =
         check->getBlock()->splitBlock(std::next(check->getIterator()));
-  LLVM::AllocaOp rootRecord =
-      checks.empty() ? LLVM::AllocaOp() : findManagedRootRangeRecord(body);
+  Value rootRecord =
+      checks.empty() ? Value() : findManagedRootRangeRecord(body);
   for (sim::SimStatusCheckOp check : checks) {
     Block *continuation = continuations.lookup(check);
     Block *failure = new Block;
@@ -219,7 +219,7 @@ lowerPreparedPlainNativeProcess(PreparedPlainNativeProcess &process) {
     cf::CondBranchOp::create(rewriter, check.getLoc(), ok, continuation,
                              ValueRange{}, failure, ValueRange{});
     Value status = check.getStatus();
-    bool pushFailure = native::has<native::ManagedRootRangePushCheck>(check);
+    bool pushFailure = check.getRootRangePush();
     rewriter.eraseOp(check);
     rewriter.setInsertionPointToStart(failure);
     Value bits = runtime::RTStatusToBitsOp::create(

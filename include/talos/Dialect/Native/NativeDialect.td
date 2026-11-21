@@ -113,8 +113,6 @@ def NativeDialect : Dialect {
     "::mlir::UnitAttr":$private_class_field,
     "::mlir::UnitAttr":$private_queue,
     "::mlir::UnitAttr":$in_bounds_handle_offset,
-    "::mlir::UnitAttr":$managed_root_range_record,
-    "::mlir::UnitAttr":$managed_root_range_push_check,
     // Ends the prologue that reacquires an activation's root record at a
     // resume target; coroutine lowering runs it only on scheduler resumption.
     "::mlir::UnitAttr":$managed_root_activation_prologue,

@@ -15,13 +15,17 @@ using namespace mlir;
 
 namespace talos::detail {
 
-LLVM::AllocaOp findManagedRootRangeRecord(Operation *scope) {
-  LLVM::AllocaOp record;
-  scope->walk([&](LLVM::AllocaOp allocation) {
-    if (!native::has<native::ManagedRootRangeRecord>(allocation))
-      return WalkResult::advance();
-    record = allocation;
-    return WalkResult::interrupt();
+Value findManagedRootRangeRecord(Operation *scope) {
+  // Instrumentation gives a function one record and registers it at every
+  // activation (or collection point) and unregisters it at every exit, so
+  // these operations name it until runtime lowering replaces them.
+  Value record;
+  scope->walk([&](Operation *operation) {
+    if (auto push = dyn_cast<schedule::NativeManagedRootPushOp>(operation))
+      record = push.getRecord();
+    else if (auto pop = dyn_cast<schedule::NativeManagedRootPopOp>(operation))
+      record = pop.getRecord();
+    return record ? WalkResult::interrupt() : WalkResult::advance();
   });
   return record;
 }
@@ -88,7 +92,7 @@ void emitGuardedManagedRootRangePop(OpBuilder &builder, Location location,
 } // namespace
 
 void emitManagedRootRangePop(OpBuilder &builder, Location location,
-                             Operation *scope, LLVM::AllocaOp record) {
+                             Operation *scope, Value record) {
   if (!record)
     return;
   if (isa<sim::SimFuncOp>(scope)) {

@@ -529,12 +529,12 @@ void populateNativeManagedRootToLLVMConversionPatterns(
     mlir::RewritePatternSet &patterns);
 void emitManagedRootRangePop(mlir::OpBuilder &builder, mlir::Location location,
                              mlir::Operation *scope);
-/// The scope's managed-root range record, if it has one. Callers popping at
+/// The scope's managed-root range record, if it has one: the record its
+/// schedule.gc.root_range.push and .pop operations name. Callers popping at
 /// many exits look it up once and pass it to the overload below.
-mlir::LLVM::AllocaOp findManagedRootRangeRecord(mlir::Operation *scope);
+mlir::Value findManagedRootRangeRecord(mlir::Operation *scope);
 void emitManagedRootRangePop(mlir::OpBuilder &builder, mlir::Location location,
-                             mlir::Operation *scope,
-                             mlir::LLVM::AllocaOp record);
+                             mlir::Operation *scope, mlir::Value record);
 mlir::LogicalResult materializeDPIThunks(mlir::ModuleOp module);
 mlir::LogicalResult materializeDPIExportWrappers(mlir::ModuleOp module);
 mlir::LogicalResult materializeNativeDPIExportThunks(mlir::ModuleOp module);

@@ -131,11 +131,13 @@ module attributes {
   }
 }
 
+// The push and pop name the one record; the push's status check says that
+// a failed registration leaves nothing to unregister.
 // CHECK-LABEL: simulation.func @root
-// CHECK: llvm.alloca
-// CHECK: llvm.alloca
-// CHECK-SAME: native.managed_root_range_record
-// CHECK: schedule.gc.root_range.push
+// CHECK: %[[RECORD:.*]] = llvm.alloca %{{.*}} x !llvm.struct<(ptr, i64, ptr, i64)>
+// CHECK: %[[PUSHED:.*]] = schedule.gc.root_range.push %[[RECORD]]
+// CHECK-NEXT: %[[STATUS:.*]] = runtime.status.from_bits %[[PUSHED]]
+// CHECK-NEXT: simulation.status.check %[[STATUS]] root_range_push
 // Candidate classification is refreshed immediately before every collection;
 // it is not cached once at the SSA definition.
 // CHECK-NOT: simulation.class.root_bind
@@ -143,7 +145,7 @@ module attributes {
 // CHECK-NEXT: simulation.gc.safepoint
 // CHECK: simulation.class.root_bind %[[CANDIDATE]] to %[[SLOT]] at 0 candidate kinds 3
 // CHECK-NEXT: simulation.gc.safepoint
-// CHECK: schedule.gc.root_range.pop
+// CHECK: schedule.gc.root_range.pop %[[RECORD]]
 
 // A large aggregate uses compact bulk root refreshes instead of one scalar
 // dead-slot clear per root at every safepoint.

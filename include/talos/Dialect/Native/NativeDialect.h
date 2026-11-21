@@ -73,9 +73,6 @@ using GuardedRefStore = NativeDialect::GuardedRefStoreAttrHelper;
 using PrivateClassField = NativeDialect::PrivateClassFieldAttrHelper;
 using PrivateQueue = NativeDialect::PrivateQueueAttrHelper;
 using InBoundsHandleOffset = NativeDialect::InBoundsHandleOffsetAttrHelper;
-using ManagedRootRangeRecord = NativeDialect::ManagedRootRangeRecordAttrHelper;
-using ManagedRootRangePushCheck =
-    NativeDialect::ManagedRootRangePushCheckAttrHelper;
 using ManagedRootActivationPrologue =
     NativeDialect::ManagedRootActivationPrologueAttrHelper;
 using TransferredReferences = NativeDialect::TransferredReferencesAttrHelper;
