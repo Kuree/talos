@@ -1337,6 +1337,22 @@ LogicalResult declareNativeImports(ModuleOp module) {
           context, getNativeStateHandleAccessCallee(operation)));
       return;
     }
+    if (auto store = dyn_cast<schedule::NativeStateFrameStoreOp>(operation)) {
+      // A frame store passes the value plane, the unknown plane of a
+      // four-state destination and the current context to the runtime.
+      MLIRContext *context = operation->getContext();
+      auto plane = [&](schedule::StatePlane plane) {
+        return FlatSymbolRefAttr::get(context,
+                                      schedule::getStatePlaneGlobalName(plane));
+      };
+      import(plane(schedule::StatePlane::Value));
+      if (store.getFourState())
+        import(plane(schedule::StatePlane::Unknown));
+      import(FlatSymbolRefAttr::get(context, "__talos_current_context"));
+      import(FlatSymbolRefAttr::get(
+          context, getNativeStateHandleAccessCallee(operation)));
+      return;
+    }
     import(reference);
   });
   OpBuilder builder(module.getContext());

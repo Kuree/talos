@@ -13,6 +13,7 @@ module {
   llvm.func @talos_rt_v1_native_state_load_plane(!llvm.ptr, !llvm.ptr, i64, i64, i64, i32, i32, !llvm.ptr) -> i32
   llvm.func @talos_rt_v1_native_state_store_plane(!llvm.ptr, !llvm.ptr, i64, i64, i64, i32, !llvm.ptr, !llvm.ptr) -> i32
   llvm.func @talos_rt_v1_native_state_store_continuous_plane(!llvm.ptr, !llvm.ptr, i64, i64, i64, i32, !llvm.ptr, !llvm.ptr) -> i32
+  llvm.func @talos_rt_v1_native_frame_store(!llvm.ptr, !llvm.ptr, !llvm.ptr, i64, i64, i32, i32, i64, i64)
 
   // CHECK-LABEL: llvm.func @load(
   // CHECK-SAME: %[[HANDLE:.*]]: i64, %[[BUFFER:.*]]: !llvm.ptr)
@@ -52,5 +53,49 @@ module {
     schedule.state.store_handle %buffer, @__talos_state_unknown[%handle] changed %changed {state_bits = 128 : i64, width = 200 : i64}
     schedule.state.store_handle %buffer, @__talos_state_value[%handle] changed %changed continuous {state_bits = 128 : i64, width = 200 : i64}
     llvm.return
+  }
+
+  // A frame store passes the planes it writes, both of a four-state
+  // destination, and its value and X/Z bits as words; the flags name a
+  // continuous contribution (1) and a four-state destination (2). A
+  // two-state destination passes no unknown plane and no X/Z bits.
+  // CHECK-LABEL: llvm.func @frame(
+  // CHECK-SAME: %[[HANDLE:.*]]: i64, %[[VALUE:.*]]: i7, %[[UNKNOWN:.*]]: i7)
+  // CHECK-NEXT: %[[VALUE_PLANE:.*]] = schedule.state.address @__talos_state_value
+  // CHECK-NEXT: %[[UNKNOWN_PLANE:.*]] = schedule.state.address @__talos_state_unknown
+  // CHECK-NEXT: %[[UNKNOWN_WORD:.*]] = arith.extui %[[UNKNOWN]] : i7 to i64
+  // CHECK-NEXT: %[[CURRENT:.*]] = llvm.mlir.addressof @__talos_current_context
+  // CHECK-NEXT: %[[CONTEXT:.*]] = llvm.load %[[CURRENT]]
+  // CHECK-NEXT: %[[STATE:.*]] = llvm.mlir.constant(128 : i64) : i64
+  // CHECK-NEXT: %[[WIDTH:.*]] = llvm.mlir.constant(7 : i32) : i32
+  // CHECK-NEXT: %[[FLAGS:.*]] = llvm.mlir.constant(3 : i32) : i32
+  // CHECK-NEXT: %[[VALUE_WORD:.*]] = arith.extui %[[VALUE]] : i7 to i64
+  // CHECK-NEXT: llvm.call @talos_rt_v1_native_frame_store(%[[CONTEXT]], %[[VALUE_PLANE]], %[[UNKNOWN_PLANE]], %[[STATE]], %[[HANDLE]], %[[WIDTH]], %[[FLAGS]], %[[VALUE_WORD]], %[[UNKNOWN_WORD]])
+  // CHECK-NEXT: schedule.state.address @__talos_state_value
+  // CHECK-NEXT: %[[NO_PLANE:.*]] = llvm.mlir.zero : !llvm.ptr
+  // CHECK-NEXT: %[[NO_UNKNOWN:.*]] = llvm.mlir.constant(0 : i64) : i64
+  // CHECK: %[[TWO_STATE:.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK: llvm.call @talos_rt_v1_native_frame_store(%{{.*}}, %{{.*}}, %[[NO_PLANE]], %{{.*}}, %[[HANDLE]], %{{.*}}, %[[TWO_STATE]], %{{.*}}, %[[NO_UNKNOWN]])
+  // CHECK-NEXT: llvm.return
+  llvm.func @frame(%handle: i64, %value: i7, %unknown: i7) {
+    schedule.state.frame_store %value, %unknown to %handle four_state continuous {state_bits = 128 : i64} : i7, i7
+    schedule.state.frame_store %value to %handle {state_bits = 128 : i64} : i7
+    llvm.return
+  }
+
+  // An automatic variable's read names its context and passes its buffer for
+  // the plane of no design state; a bit outside the variable reads 0. Its
+  // status is the call's.
+  // CHECK-LABEL: llvm.func @automatic(
+  // CHECK-SAME: %[[CONTEXT:.*]]: !llvm.ptr, %[[HANDLE:.*]]: i64, %[[BUFFER:.*]]: !llvm.ptr)
+  // CHECK-NEXT: %[[STATE:.*]] = llvm.mlir.constant(0 : i64) : i64
+  // CHECK-NEXT: %[[WIDTH:.*]] = llvm.mlir.constant(65 : i64) : i64
+  // CHECK-NEXT: %[[PLANE:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-NEXT: %[[FALLBACK:.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-NEXT: %[[STATUS:.*]] = llvm.call @talos_rt_v1_native_state_load_plane(%[[CONTEXT]], %[[BUFFER]], %[[STATE]], %[[HANDLE]], %[[WIDTH]], %[[PLANE]], %[[FALLBACK]], %[[BUFFER]])
+  // CHECK-NEXT: llvm.return %[[STATUS]]
+  llvm.func @automatic(%context: !llvm.ptr, %handle: i64, %buffer: !llvm.ptr) -> i32 {
+    %status = schedule.state.load_automatic %context, %handle into %buffer unknown {width = 65 : i64}
+    llvm.return %status : i32
   }
 }

@@ -2,6 +2,8 @@
 
 #include "SimulationDPILowering.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
+#include "talos/Conversion/SimulationToLLVMCoroutine.h"
+#include "talos/Dialect/Schedule/ScheduleOps.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
@@ -1132,6 +1134,8 @@ LogicalResult materializeNativeTaskThunk(ModuleOp module,
   builder.setInsertionPointToStart(copy);
   uint32_t output = 0;
   handle = 0;
+  // Each output formal is an automatic variable of the task's activation.
+  SmallVector<Operation *> outputReads;
   auto mergeStatus = [&](Value next) {
     Value current = LLVM::LoadOp::create(builder, location, i32, statusSlot, 4);
     Value ok = LLVM::ICmpOp::create(
@@ -1148,35 +1152,16 @@ LogicalResult materializeNativeTaskThunk(ModuleOp module,
       continue;
     Value reference =
         LLVM::LoadOp::create(builder, location, i64, handleSlots[handle++], 8);
-    Value valueDestination = plane(outputs, output, false);
-    Value loadValue =
-        LLVM::CallOp::create(
-            builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context, "talos_rt_v1_native_state_load_plane"),
-            ValueRange{entry->getArgument(0), valueDestination,
-                       llvmConstant(builder, location, i64, 0), reference,
-                       llvmConstant(builder, location, i64, abi.width),
-                       llvmConstant(builder, location, i32, 0),
-                       llvmConstant(builder, location, i32, 0),
-                       valueDestination})
-            .getResult();
-    mergeStatus(loadValue);
-    if (abi.fourState) {
-      Value unknownDestination = plane(outputs, output, true);
-      Value loadUnknown =
-          LLVM::CallOp::create(
-              builder, location, TypeRange{i32},
-              SymbolRefAttr::get(context,
-                                 "talos_rt_v1_native_state_load_plane"),
-              ValueRange{entry->getArgument(0), unknownDestination,
-                         llvmConstant(builder, location, i64, 0), reference,
-                         llvmConstant(builder, location, i64, abi.width),
-                         llvmConstant(builder, location, i32, 1),
-                         llvmConstant(builder, location, i32, 0),
-                         unknownDestination})
-              .getResult();
-      mergeStatus(loadUnknown);
-    }
+    auto read = [&](bool unknown) {
+      auto load = schedule::NativeStateLoadAutomaticOp::create(
+          builder, location, i32, entry->getArgument(0), reference,
+          plane(outputs, output, unknown), abi.width, unknown);
+      outputReads.push_back(load);
+      mergeStatus(load.getStatus());
+    };
+    read(/*unknown=*/false);
+    if (abi.fourState)
+      read(/*unknown=*/true);
     ++output;
   }
   LLVM::BrOp::create(builder, location, cleanup);
@@ -1207,6 +1192,9 @@ LogicalResult materializeNativeTaskThunk(ModuleOp module,
   LLVM::ReturnOp::create(
       builder, location,
       LLVM::LoadOp::create(builder, location, i32, statusSlot, 4));
+  // Nothing after the thunk reads the copies by their operation.
+  for (Operation *read : outputReads)
+    lowerNativeStateHandleAccess(read);
   return success();
 }
 

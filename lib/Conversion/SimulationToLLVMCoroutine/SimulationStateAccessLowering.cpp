@@ -893,36 +893,12 @@ public:
             op->getParentOfType<ModuleOp>()) &&
         *width <= 64 && storedValue.getType() == plane &&
         sim::getPackedScalarType(valueType)) {
-      auto loc = op.getLoc();
-      auto i64 = rewriter.getI64Type(), i32 = rewriter.getI32Type();
-      auto word = [&](Value bits) -> Value {
-        return bits.getType() == i64
-                   ? bits
-                   : arith::ExtUIOp::create(rewriter, loc, i64, bits)
-                         .getResult();
-      };
       bool fourState = containsLogic(valueType) && !twoState;
-      Value valuePlane = detail::createStatePlaneAddress(
-          rewriter, loc, schedule::StatePlane::Value);
-      Value unknownPlane =
-          fourState ? detail::createStatePlaneAddress(
-                          rewriter, loc, schedule::StatePlane::Unknown)
-                    : LLVM::ZeroOp::create(rewriter, loc, valuePlane.getType())
-                          .getResult();
-      uint32_t flags = (continuous ? TALOS_RT_FRAME_STORE_CONTINUOUS : 0) |
-                       (fourState ? TALOS_RT_FRAME_STORE_UNKNOWN : 0);
-      Value unknown = fourState && adaptor.getValue().size() == 2
-                          ? word(adaptor.getValue()[1])
-                          : llvmConstant(rewriter, loc, i64, 0);
-      LLVM::CallOp::create(
-          rewriter, loc, TypeRange{}, "talos_rt_v1_native_frame_store",
-          ValueRange{loadCurrentRuntimeContext(rewriter, loc), valuePlane,
-                     unknownPlane,
-                     llvmConstant(rewriter, loc, i64, stateBitCount),
-                     adaptor.getReference().front(),
-                     llvmConstant(rewriter, loc, i32, *width),
-                     llvmConstant(rewriter, loc, i32, flags), word(storedValue),
-                     unknown});
+      schedule::NativeStateFrameStoreOp::create(
+          rewriter, op.getLoc(), storedValue,
+          fourState && adaptor.getValue().size() == 2 ? adaptor.getValue()[1]
+                                                      : Value(),
+          adaptor.getReference().front(), stateBitCount, fourState, continuous);
       rewriter.eraseOp(op);
       return success();
     }

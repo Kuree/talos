@@ -67,3 +67,44 @@ module {
     llvm.return %null : !llvm.ptr
   }
 }
+
+// -----
+
+// A frame store writes 1 to 64 bits.
+module {
+  llvm.func @wide_frame(%handle: i64, %value: i65) {
+    // expected-error @below {{writes 65 bits, not 1 to 64}}
+    schedule.state.frame_store %value to %handle {state_bits = 128 : i64} : i65
+    llvm.return
+  }
+}
+
+// -----
+
+module {
+  llvm.func @two_state_unknown(%handle: i64, %value: i8, %unknown: i8) {
+    // expected-error @below {{has X/Z bits for a two-state destination}}
+    schedule.state.frame_store %value, %unknown to %handle {state_bits = 128 : i64} : i8, i8
+    llvm.return
+  }
+}
+
+// -----
+
+module {
+  llvm.func @unknown_width(%handle: i64, %value: i8, %unknown: i4) {
+    // expected-error @below {{has X/Z bits of another width than its value}}
+    schedule.state.frame_store %value, %unknown to %handle four_state {state_bits = 128 : i64} : i8, i4
+    llvm.return
+  }
+}
+
+// -----
+
+module {
+  llvm.func @automatic_no_bits(%context: !llvm.ptr, %handle: i64, %buffer: !llvm.ptr) -> i32 {
+    // expected-error @below {{moves no bits}}
+    %status = schedule.state.load_automatic %context, %handle into %buffer {width = 0 : i64}
+    llvm.return %status : i32
+  }
+}

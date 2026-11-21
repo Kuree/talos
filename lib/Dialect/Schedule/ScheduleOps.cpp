@@ -465,6 +465,29 @@ NativeStateStoreHandleOp::verifySymbolUses(SymbolTableCollection &tables) {
   return verifyStatePlaneUse(*this, getGlobalAttr(), tables);
 }
 
+LogicalResult NativeStateFrameStoreOp::verify() {
+  if (failed(verifyTypedMemoryOp(*this)))
+    return failure();
+  unsigned width = getValue().getType().getIntOrFloatBitWidth();
+  if (width == 0 || width > 64)
+    return emitOpError("writes ") << width << " bits, not 1 to 64";
+  if (Value unknown = getUnknown()) {
+    if (!getFourState())
+      return emitOpError("has X/Z bits for a two-state destination");
+    if (unknown.getType() != getValue().getType())
+      return emitOpError("has X/Z bits of another width than its value");
+  }
+  return success();
+}
+
+LogicalResult NativeStateLoadAutomaticOp::verify() {
+  if (failed(verifyTypedMemoryOp(*this)))
+    return failure();
+  if (getWidth() == 0)
+    return emitOpError("moves no bits");
+  return success();
+}
+
 OpFoldResult NativeHandleGuardOp::fold(FoldAdaptor adaptor) {
   // Fold as `arith.select %valid, %handle, %invalid` does for an
   // invalid-handle constant %invalid of its own.

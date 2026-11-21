@@ -916,7 +916,8 @@ materializeGenericNBAQueueWindows(ModuleOp module,
     WalkResult window = function.walk([&](Operation *op) {
       if (isa<LLVM::CallOp, schedule::NativeNBAStageOp,
               schedule::NativeHandleOffsetOp, schedule::NativeStateLoadHandleOp,
-              schedule::NativeStateStoreHandleOp>(op))
+              schedule::NativeStateStoreHandleOp,
+              schedule::NativeStateFrameStoreOp>(op))
         return hasNativeRuntimeEffect(op, native_runtime::QueueStable)
                    ? WalkResult::advance()
                    : WalkResult::interrupt();

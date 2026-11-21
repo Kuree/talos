@@ -63,7 +63,9 @@ bool hasNativeRuntimeEffect(mlir::Operation *op, Effect effect) {
             effect) == effect;
   // A handle-addressed state access is the call of its runtime entry.
   if (llvm::isa<schedule::NativeStateLoadHandleOp,
-                schedule::NativeStateStoreHandleOp>(op))
+                schedule::NativeStateStoreHandleOp,
+                schedule::NativeStateFrameStoreOp,
+                schedule::NativeStateLoadAutomaticOp>(op))
     return hasNativeRuntimeEffect(getNativeStateHandleAccessCallee(op), effect);
   return false;
 }

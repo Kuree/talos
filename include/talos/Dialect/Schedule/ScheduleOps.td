@@ -1387,6 +1387,63 @@ def NativeStateStoreHandleOp : ScheduleNativeOp<"state.store_handle", [
   let hasVerifier = 1;
 }
 
+def NativeStateFrameStoreOp : ScheduleNativeOp<"state.frame_store"> {
+  let summary = "write and publish the native state a stable handle names";
+  let description = [{
+    The executing process's complete packed blocking write of `value`, at
+    most 64 bits, to the state `handle` names: with `four_state`, `unknown`
+    holds its X/Z bits (none when absent), and both planes change before the
+    one value-change publication of the write (IEEE 1800-2023 9.4.2). A bit
+    that a force or procedural continuous assignment holds keeps its value
+    (10.6); `continuous` marks a continuous assignment's contribution, which
+    the runtime also keeps for a later release (10.6.2). `state_bits` is the
+    size of the design state.
+
+    It stands for the runtime's `talos_rt_v1_native_frame_store`, which
+    publishes in place when it can and otherwise falls back to the generic
+    handle-addressed store and transition; like that call it has unknown
+    memory effects. Native lowering creates it; it becomes the call once AOT
+    planning has read the eval bodies' accesses.
+  }];
+  let arguments = (ins AnySignlessInteger:$value,
+                       Optional<AnySignlessInteger>:$unknown, I64:$handle,
+                       I64Attr:$state_bits, UnitAttr:$four_state,
+                       UnitAttr:$continuous);
+  let assemblyFormat = [{
+    $value (`,` $unknown^)? `to` $handle (`four_state` $four_state^)?
+    (`continuous` $continuous^)? attr-dict `:` type($value)
+    (`,` type($unknown)^)?
+  }];
+  let hasVerifier = 1;
+}
+
+// A DPI export thunk copies an exported task's output formals, automatic
+// variables, to its foreign caller's arguments when the task returns
+// (IEEE 1800-2023 35.6.1, 35.8).
+def NativeStateLoadAutomaticOp : ScheduleNativeOp<"state.load_automatic"> {
+  let summary = "read an automatic variable a stable handle names";
+  let description = [{
+    Writes the `width` bits of the automatic variable `handle` names, its
+    value or with `unknown` its X/Z bits, to the buffer at `buffer` for the
+    runtime context `runtime_context`, and returns the runtime status: an
+    error when the variable no longer exists. A bit outside the variable
+    reads 0. The buffer is little endian, ceil(width / 8) bytes, the padding
+    bits of the last byte zero.
+
+    It stands for the runtime's `talos_rt_v1_native_state_load_plane` on no
+    design state, and has the unknown memory effects of that call.
+  }];
+  let arguments = (ins LLVM_DefaultPointer:$runtime_context, I64:$handle,
+                       LLVM_DefaultPointer:$buffer, I64Attr:$width,
+                       UnitAttr:$unknown);
+  let results = (outs I32:$status);
+  let assemblyFormat = [{
+    $runtime_context `,` $handle `into` $buffer (`unknown` $unknown^)?
+    attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
 def NativeByteAddressOp : ScheduleNativeOp<"bytes.address", [Pure]> {
   let summary = "immutable bytes awaiting executable reachability";
   let arguments = (ins StrAttr:$name, StrAttr:$value, I64Attr:$alignment);

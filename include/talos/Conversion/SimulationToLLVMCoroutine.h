@@ -85,12 +85,13 @@ void declareNativeFunctionActionRuntime(
 void lowerNativeHandleOps(mlir::ModuleOp module);
 
 /// The runtime entry a handle-addressed state access
-/// (schedule.state.load_handle or schedule.state.store_handle) stands for.
+/// (schedule.state.load_handle, store_handle, frame_store or load_automatic)
+/// stands for.
 llvm::StringRef getNativeStateHandleAccessCallee(mlir::Operation *access);
 
 /// Replace a handle-addressed state access by the call of the runtime entry
-/// it stands for, on its plane's address and the current context, and return
-/// the call.
+/// it stands for, on its planes' addresses and the current context (an
+/// automatic read names its context), and return the call.
 mlir::LLVM::CallOp lowerNativeStateHandleAccess(mlir::Operation *access);
 /// Lower every handle-addressed state access in `module`. The native pipeline
 /// calls it inside AOT planning, after the eval bodies' accesses are read, so
