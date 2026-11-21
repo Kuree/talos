@@ -567,6 +567,42 @@ LogicalResult NativeStateLoadAutomaticOp::verify() {
   return success();
 }
 
+OpFoldResult NativeHandleOffsetOp::fold(FoldAdaptor adaptor) {
+  // The runtime re-encodes a stable handle offset by zero unchanged and keeps
+  // the invalid handle.
+  if (auto amount = dyn_cast_or_null<IntegerAttr>(adaptor.getAmount());
+      amount && amount.getValue().isZero())
+    return getHandle();
+  return {};
+}
+namespace {
+/// offset(offset(h, a) in_bounds, b) in_bounds -> offset(h, a + b) in_bounds.
+/// Both proofs together say that `h` is valid, that its offset is
+/// nonnegative and that the final offset lies in [0, INT32_MAX], which is the
+/// proof of the merged offset; its plain sum is the same handle. Without both
+/// proofs the runtime's check of each step can differ from a check of the
+/// total.
+struct MergeInBoundsHandleOffsets final
+    : OpRewritePattern<NativeHandleOffsetOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(NativeHandleOffsetOp op,
+                                PatternRewriter &rewriter) const override {
+    auto inner = op.getHandle().getDefiningOp<NativeHandleOffsetOp>();
+    if (!op.getInBounds() || !inner || !inner.getInBounds())
+      return failure();
+    Value amount = rewriter.createOrFold<arith::AddIOp>(
+        op.getLoc(), inner.getAmount(), op.getAmount());
+    rewriter.replaceOpWithNewOp<NativeHandleOffsetOp>(op, inner.getHandle(),
+                                                      amount, true);
+    return success();
+  }
+};
+} // namespace
+void NativeHandleOffsetOp::getCanonicalizationPatterns(
+    RewritePatternSet &results, MLIRContext *context) {
+  results.add<MergeInBoundsHandleOffsets>(context);
+}
+
 OpFoldResult NativeHandleGuardOp::fold(FoldAdaptor adaptor) {
   // Fold as `arith.select %valid, %handle, %invalid` does for an
   // invalid-handle constant %invalid of its own.

@@ -4,8 +4,12 @@
 // handle offset, and one proved in bounds the plain sum: its offset field
 // neither carries nor borrows. A guard becomes a select of the invalid handle
 // (IEEE 1800-2023 7.4.5, 11.5.1). The order of the selection is kept.
+// Handle operations are pure, so first an offset recomputing a dominating
+// one takes its handle, offsets by zero and proved chains fold, and unused
+// ones go away: none of them reaches the runtime.
 module {
   llvm.func @talos_rt_v1_native_handle_offset(i64, i64) -> i64
+  llvm.func @use(i64, i64, i64)
 
   // CHECK-LABEL: llvm.func @chain(
   // CHECK-SAME: %[[ROOT:.*]]: i64, %[[INDEX:.*]]: i64, %[[VALID:.*]]: i1)
@@ -36,5 +40,51 @@ module {
     %sum = arith.addi %handle, %amount : i64
     %selected = schedule.handle.guard %valid, %sum
     llvm.return %selected : i64
+  }
+
+  // The dominated offset takes the dominating one's handle, proved in bounds
+  // or not, while an offset on another path keeps its own call. An offset by
+  // zero is its guarded handle, and a proved chain is one sum.
+  // CHECK-LABEL: llvm.func @reuse(
+  // CHECK-SAME: %[[ROOT:.*]]: i64, %[[INDEX:.*]]: i64, %[[VALID:.*]]: i1, %[[TAKEN:.*]]: i1)
+  // CHECK: %[[TWO:.*]] = arith.constant 2 : i64
+  // CHECK-NEXT: llvm.cond_br %[[TAKEN]], ^[[THEN:.*]], ^[[ELSE:.*]]
+  // CHECK: ^[[THEN]]:
+  // CHECK-NEXT: %[[ELEMENT:.*]] = llvm.call @talos_rt_v1_native_handle_offset(%[[ROOT]], %[[INDEX]]) : (i64, i64) -> i64
+  // CHECK-NEXT: %[[INVALID:.*]] = arith.constant -1 : i64
+  // CHECK-NEXT: %[[GUARDED:.*]] = arith.select %[[VALID]], %[[ELEMENT]], %[[INVALID]] : i64
+  // CHECK-NEXT: %[[SUM:.*]] = arith.addi %[[INDEX]], %[[TWO]] : i64
+  // CHECK-NEXT: %[[CHAIN:.*]] = llvm.add %[[ROOT]], %[[SUM]] : i64
+  // CHECK-NEXT: llvm.call @use(%[[ELEMENT]], %[[GUARDED]], %[[CHAIN]])
+  // CHECK: ^[[ELSE]]:
+  // CHECK-NEXT: %[[OTHER:.*]] = llvm.call @talos_rt_v1_native_handle_offset(%[[ROOT]], %[[INDEX]]) : (i64, i64) -> i64
+  // CHECK-NEXT: llvm.call @use(%[[OTHER]], %[[OTHER]], %[[OTHER]])
+  llvm.func @reuse(%root: i64, %index: i64, %valid: i1, %taken: i1) {
+    %zero = arith.constant 0 : i64
+    %two = arith.constant 2 : i64
+    llvm.cond_br %taken, ^then, ^else
+  ^then:
+    %element = schedule.handle.offset %root, %index
+    %guarded = schedule.handle.guard %valid, %element
+    %again = schedule.handle.offset %root, %index in_bounds
+    %same = schedule.handle.offset %guarded, %zero
+    %first = schedule.handle.offset %root, %two in_bounds
+    %chain = schedule.handle.offset %first, %index in_bounds
+    llvm.call @use(%again, %same, %chain) : (i64, i64, i64) -> ()
+    llvm.return
+  ^else:
+    %other = schedule.handle.offset %root, %index
+    llvm.call @use(%other, %other, %other) : (i64, i64, i64) -> ()
+    llvm.return
+  }
+
+  // Unused handle operations, and the offsets only they used, go away.
+  // CHECK-LABEL: llvm.func @unused(
+  // CHECK-NEXT: llvm.return
+  llvm.func @unused(%root: i64, %index: i64, %valid: i1) {
+    %element = schedule.handle.offset %root, %index
+    %guarded = schedule.handle.guard %valid, %element
+    %field = schedule.handle.offset %guarded, %index in_bounds
+    llvm.return
   }
 }

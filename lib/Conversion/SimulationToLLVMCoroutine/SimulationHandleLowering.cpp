@@ -10,8 +10,11 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "llvm/ADT/MapVector.h"
 
 #include <limits>
 
@@ -420,12 +423,79 @@ void populateNativeHandleConversionPatterns(
 } // namespace talos::detail
 
 namespace talos {
-void lowerNativeHandleOps(ModuleOp module) {
+namespace {
+SmallVector<Operation *> collectNativeHandleOps(ModuleOp module) {
   SmallVector<Operation *> handles;
   module.walk([&](Operation *op) {
     if (isa<schedule::NativeHandleOffsetOp, schedule::NativeHandleGuardOp>(op))
       handles.push_back(op);
   });
+  return handles;
+}
+
+// Handle operations are pure (a total function whose invalid selection is
+// the invalid handle, IEEE 1800-2023 7.4.5, 11.5.1), and AOT planning has
+// read every selection by now. An offset recomputing one that dominates it
+// takes that one's handle, whether or not either is proved in bounds: equal
+// operands give an equal handle. Folding then drops offsets by zero, merges
+// offsets proved in bounds and erases handle operations nothing uses, so
+// none of those reaches the runtime.
+void simplifyNativeHandleOps(ModuleOp module, ArrayRef<Operation *> handles) {
+  llvm::MapVector<std::pair<Value, Value>,
+                  SmallVector<schedule::NativeHandleOffsetOp, 2>>
+      offsets;
+  for (Operation *op : handles)
+    if (auto offset = dyn_cast<schedule::NativeHandleOffsetOp>(op))
+      offsets[{offset.getHandle(), offset.getAmount()}].push_back(offset);
+  DominanceInfo dominance(module);
+  for (auto &[key, equal] : offsets) {
+    if (equal.size() < 2)
+      continue;
+    // The offsets dominating one form a chain; its first is not dominated by
+    // any other of them.
+    SmallVector<schedule::NativeHandleOffsetOp, 2> first;
+    for (schedule::NativeHandleOffsetOp offset : equal)
+      if (llvm::none_of(equal, [&](schedule::NativeHandleOffsetOp other) {
+            return dominance.properlyDominates(other.getOperation(),
+                                               offset.getOperation());
+          }))
+        first.push_back(offset);
+    for (schedule::NativeHandleOffsetOp offset : equal) {
+      if (llvm::is_contained(first, offset))
+        continue;
+      // In a graph region the offsets of one block dominate each other, so
+      // none of them is first and each stays.
+      auto dominating =
+          llvm::find_if(first, [&](schedule::NativeHandleOffsetOp other) {
+            return dominance.properlyDominates(other.getOperation(),
+                                               offset.getOperation());
+          });
+      if (dominating == first.end())
+        continue;
+      offset.replaceAllUsesWith(dominating->getResult());
+      offset.erase();
+    }
+  }
+  SmallVector<Operation *> remaining = collectNativeHandleOps(module);
+  if (remaining.empty())
+    return;
+  RewritePatternSet patterns(module.getContext());
+  schedule::NativeHandleOffsetOp::getCanonicalizationPatterns(
+      patterns, module.getContext());
+  GreedyRewriteConfig config;
+  config.setStrictness(GreedyRewriteStrictness::ExistingAndNewOps)
+      .setRegionSimplificationLevel(GreedySimplifyRegionLevel::Disabled)
+      .enableConstantCSE(false);
+  (void)applyOpPatternsGreedily(remaining, std::move(patterns), config);
+}
+} // namespace
+
+void lowerNativeHandleOps(ModuleOp module) {
+  SmallVector<Operation *> handles = collectNativeHandleOps(module);
+  if (handles.empty())
+    return;
+  simplifyNativeHandleOps(module, handles);
+  handles = collectNativeHandleOps(module);
   for (Operation *op : handles) {
     OpBuilder builder(op);
     Location location = op->getLoc();

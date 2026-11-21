@@ -1411,11 +1411,13 @@ def NativeHandleOffsetOp : ScheduleNativeOp<"handle.offset", [Pure]> {
   let description = [{
     The handle of the bit `amount` (signed) bits after the one `handle`
     names: the runtime's `talos_rt_stable_handle_offset`, a total function
-    that never traps. The result is the invalid handle when `handle` is
-    invalid, when the new offset overflows, or when it is not representable
-    for the handle's kind (a global offset must lie in [0, 2^61), a static
-    or automatic one in the signed 32-bit range; a negative static offset is
-    kept for a part-select that only partly overlaps its object, 11.5.1).
+    that never traps. `handle` is a native reference: a stable handle as the
+    runtime encodes it, or the invalid handle. The result is the invalid
+    handle when `handle` is invalid, when the new offset overflows, or when
+    it is not representable for the handle's kind (a global offset must lie
+    in [0, 2^61), a static or automatic one in the signed 32-bit range; a
+    negative static offset is kept for a part-select that only partly
+    overlaps its object, 11.5.1).
 
     `in_bounds` records the compiler's proof that `handle` is valid and that
     its offset and the new offset both lie in [0, INT32_MAX]; the offset
@@ -1425,9 +1427,16 @@ def NativeHandleOffsetOp : ScheduleNativeOp<"handle.offset", [Pure]> {
     Being a total function of its operands, it is pure: it reads and writes
     no state and has no failure to preserve, since an invalid selection is
     the invalid-handle result that its readers and writers handle (IEEE
-    1800-2023 7.4.5, 11.5.1). It does not fold, like the runtime call it
-    stands for: producers offset constant operands when they create the
-    selection, and constant propagation leaves it opaque.
+    1800-2023 7.4.5, 11.5.1).
+
+    An offset by zero is `handle` itself: the runtime re-encodes a stable
+    handle unchanged and keeps the invalid handle. An offset proved in
+    bounds of one proved in bounds is one offset by the sum of the amounts,
+    proved in bounds: its handle is valid and the final offset in range. An
+    offset of one not proved in bounds stays separate, since the runtime
+    checks that each step is representable. Like the runtime call it stands
+    for, it does not fold constant operands: producers offset those when
+    they create the selection.
 
     Native lowering creates it; it becomes the runtime call, or the sum when
     `in_bounds`, once AOT planning has read the selections it is part of.
@@ -1443,6 +1452,8 @@ def NativeHandleOffsetOp : ScheduleNativeOp<"handle.offset", [Pure]> {
     build($_builder, $_state, $_builder.getI64Type(), handle, amount,
           inBounds);
   }]>];
+  let hasFolder = 1;
+  let hasCanonicalizer = 1;
 }
 
 def NativeHandleGuardOp : ScheduleNativeOp<"handle.guard", [Pure]> {

@@ -79,9 +79,10 @@ void declareNativeFunctionActionRuntime(
 
 /// Lower schedule.handle.offset to the runtime's stable-handle offset, or to
 /// the plain sum when proved in bounds, and schedule.handle.guard to a select
-/// of the invalid handle. The native pipeline calls it inside AOT planning,
-/// after the last reader of the typed handle chains, so later passes see only
-/// the LLVM form.
+/// of the invalid handle. The operations are pure, so first an offset reuses
+/// an equal one that dominates it, the folds apply and unused operations go
+/// away. The native pipeline calls it inside AOT planning, after the last
+/// reader of the typed handle chains, so later passes see only the LLVM form.
 void lowerNativeHandleOps(mlir::ModuleOp module);
 
 /// Whether `op` is a handle-addressed state access:
