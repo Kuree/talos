@@ -746,10 +746,15 @@ buildNativeStateLayout(mlir::ModuleOp module,
 void materializeNativeStatePlanes(mlir::ModuleOp module,
                                   const NativeStateLayout &layout);
 void eliminateTwoStateUnknownPlane(mlir::ModuleOp module);
-/// Address an NBA field using its logical four-state offset. The two-state
-/// storage pass compacts the physical record after transaction planning.
-mlir::Value nbaFieldGEP(mlir::OpBuilder &builder, mlir::Location location,
-                        mlir::Value base, uint64_t offset);
+using NBAField = schedule::NBAAccumulatorField;
+/// The byte offset of a generated NBA accumulator field in the record
+/// layout: talos_rt_generated_nba_accumulator_256, or in a two-state
+/// executable the same record without its X/Z field, which has no offset.
+std::optional<uint64_t>
+getNBAAccumulatorFieldOffset(schedule::NBAAccumulatorField field,
+                             bool twoState);
+/// The bytes of a generated NBA accumulator record in that layout.
+uint64_t getNBAAccumulatorRecordBytes(bool twoState);
 /// Number the roots the module's known.roots gates test and materialize
 /// their generated unknown summary, with the root records and ignored ranges
 /// the runtime binds. Runs once the gates are final, before their lowering.

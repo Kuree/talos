@@ -41,4 +41,24 @@ module attributes {native.two_state} {
     %su = llvm.or %u, %cu : i8
     llvm.return %su : i8
   }
+  // A two-state NBA accumulator record has no X/Z field: staged X/Z reads are
+  // zero and staged X/Z writes vanish; the other fields stay.
+  // CHECK-LABEL: llvm.func @record(
+  // CHECK-SAME: %[[STAGED:.*]]: i64)
+  // CHECK: %[[R:.*]] = schedule.nba.acc.address @acc : !llvm.ptr
+  // CHECK-NEXT: schedule.nba.acc.store %[[STAGED]], %[[R]][value] {alignment = 8 : i64} : i64
+  // CHECK-NOT: schedule.nba.acc.{{.*}}[unknown
+  // CHECK: %[[MASK:.*]] = schedule.nba.acc.load %[[R]][write_mask] {alignment = 8 : i64} : i64
+  // CHECK-NEXT: %[[SUM:.*]] = llvm.or %{{.*}}, %[[MASK]] : i64
+  // CHECK-NEXT: llvm.return %[[SUM]] : i64
+  llvm.mlir.global internal @acc(dense<0> : tensor<104xi8>) : !llvm.array<104 x i8>
+  llvm.func @record(%staged: i64) -> i64 {
+    %r = schedule.nba.acc.address @acc : !llvm.ptr
+    schedule.nba.acc.store %staged, %r[value] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %staged, %r[unknown + 8] {alignment = 8 : i64} : i64
+    %x = schedule.nba.acc.load %r[unknown] {alignment = 8 : i64} : i64
+    %m = schedule.nba.acc.load %r[write_mask] {alignment = 8 : i64} : i64
+    %s = llvm.or %x, %m : i64
+    llvm.return %s : i64
+  }
 }

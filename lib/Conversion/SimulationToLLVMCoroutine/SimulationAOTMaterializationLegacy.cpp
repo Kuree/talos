@@ -3,6 +3,7 @@
 #include "NativeStateAccess.h"
 #include "SimulationAOTPlanning.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
+#include "talos/Dialect/Schedule/ScheduleOps.h"
 
 #include "talos/Runtime/Runtime.h"
 
@@ -527,19 +528,12 @@ LogicalResult makeNativeAOTPlanLegacy(
                                 llvmConstant(builder, location, i64,
                                              uint64_t{1} << (rootIndex % 64))),
           llvmConstant(builder, location, i64, 0));
-      Value accumulatorBase =
-          LLVM::AddressOfOp::create(builder, location, pointer, accumulator);
-      Value valid = LLVM::LoadOp::create(
-          builder, location, i32,
-          nbaFieldGEP(builder, location, accumulatorBase,
-                      offsetof(talos_rt_generated_nba_accumulator_256, valid)),
-          4);
-      Value region = LLVM::LoadOp::create(
-          builder, location, i32,
-          nbaFieldGEP(
-              builder, location, accumulatorBase,
-              offsetof(talos_rt_generated_nba_accumulator_256, exec_region)),
-          4);
+      Value accumulatorBase = schedule::NativeNBAAccumulatorAddressOp::create(
+          builder, location, accumulator);
+      Value valid = schedule::NativeNBAAccumulatorLoadOp::create(
+          builder, location, i32, accumulatorBase, NBAField::Valid, 0, 4);
+      Value region = schedule::NativeNBAAccumulatorLoadOp::create(
+          builder, location, i32, accumulatorBase, NBAField::ExecRegion, 0, 4);
       Value validRoot = arith::AndIOp::create(
           builder, location, selected,
           arith::AndIOp::create(
@@ -553,23 +547,12 @@ LogicalResult makeNativeAOTPlanLegacy(
                                ValueRange{}, afterRoot, ValueRange{});
 
       builder.setInsertionPointToStart(commitRoot);
-      Value stagedValue = LLVM::LoadOp::create(
-          builder, location, i64,
-          nbaFieldGEP(builder, location, accumulatorBase,
-                      offsetof(talos_rt_generated_nba_accumulator_256, value)),
-          8);
-      Value stagedUnknown = LLVM::LoadOp::create(
-          builder, location, i64,
-          nbaFieldGEP(
-              builder, location, accumulatorBase,
-              offsetof(talos_rt_generated_nba_accumulator_256, unknown)),
-          8);
-      Value writeMask = LLVM::LoadOp::create(
-          builder, location, i64,
-          nbaFieldGEP(
-              builder, location, accumulatorBase,
-              offsetof(talos_rt_generated_nba_accumulator_256, write_mask)),
-          8);
+      Value stagedValue = schedule::NativeNBAAccumulatorLoadOp::create(
+          builder, location, i64, accumulatorBase, NBAField::Value, 0, 8);
+      Value stagedUnknown = schedule::NativeNBAAccumulatorLoadOp::create(
+          builder, location, i64, accumulatorBase, NBAField::Unknown, 0, 8);
+      Value writeMask = schedule::NativeNBAAccumulatorLoadOp::create(
+          builder, location, i64, accumulatorBase, NBAField::WriteMask, 0, 8);
       writeMask = arith::AndIOp::create(
           builder, location, writeMask,
           llvmConstant(builder, location, i64, scalarMask(root.bit_width)));
@@ -588,17 +571,12 @@ LogicalResult makeNativeAOTPlanLegacy(
           arith::AndIOp::create(builder, location, stagedUnknown, writeMask));
       storeRoot(stateValue, offset, root.bit_width, newValue);
       storeRoot(stateUnknown, offset, root.bit_width, newUnknown);
-      LLVM::StoreOp::create(
+      schedule::NativeNBAAccumulatorStoreOp::create(
           builder, location, llvmConstant(builder, location, i64, 0),
-          nbaFieldGEP(
-              builder, location, accumulatorBase,
-              offsetof(talos_rt_generated_nba_accumulator_256, write_mask)),
-          8);
-      LLVM::StoreOp::create(
+          accumulatorBase, NBAField::WriteMask, 0, 8);
+      schedule::NativeNBAAccumulatorStoreOp::create(
           builder, location, llvmConstant(builder, location, i32, 0),
-          nbaFieldGEP(builder, location, accumulatorBase,
-                      offsetof(talos_rt_generated_nba_accumulator_256, valid)),
-          4);
+          accumulatorBase, NBAField::Valid, 0, 4);
       Value directlyCommitted = LLVM::LoadOp::create(
           builder, location, i64, directlyCommittedByWord[word], 8);
       LLVM::StoreOp::create(
@@ -615,19 +593,17 @@ LogicalResult makeNativeAOTPlanLegacy(
       // within this barrier; a tracked root has no edge watcher.
       if (rootIndex < staticNBAPlan.trackTransients.size() &&
           staticNBAPlan.trackTransients[rootIndex]) {
-        Value transientAddress = nbaFieldGEP(
-            builder, location, accumulatorBase,
-            offsetof(talos_rt_generated_nba_accumulator_256, transient));
         changed = arith::OrIOp::create(
             builder, location, changed,
             arith::AndIOp::create(builder, location,
-                                  LLVM::LoadOp::create(builder, location, i64,
-                                                       transientAddress, 8),
+                                  schedule::NativeNBAAccumulatorLoadOp::create(
+                                      builder, location, i64, accumulatorBase,
+                                      NBAField::Transient, 0, 8),
                                   llvmConstant(builder, location, i64,
                                                scalarMask(root.bit_width))));
-        LLVM::StoreOp::create(builder, location,
-                              llvmConstant(builder, location, i64, 0),
-                              transientAddress, 8);
+        schedule::NativeNBAAccumulatorStoreOp::create(
+            builder, location, llvmConstant(builder, location, i64, 0),
+            accumulatorBase, NBAField::Transient, 0, 8);
       }
       Value rootChanged = arith::CmpIOp::create(
           builder, location, arith::CmpIPredicate::ne, changed,

@@ -93,6 +93,32 @@ std::optional<Address> address(Value pointer) {
   return Address{global.getGlobalName(), offset};
 }
 
+// A field access of a named generated NBA accumulator record. A record
+// pointer read from a table names no record.
+struct RecordAccess {
+  StringRef accumulator;
+  NBAField field;
+  uint64_t offset;
+  Type type;
+};
+
+std::optional<RecordAccess> recordAccess(Operation *operation) {
+  auto named = [](Value record) {
+    auto address =
+        record.getDefiningOp<schedule::NativeNBAAccumulatorAddressOp>();
+    return address ? address.getGlobal() : StringRef{};
+  };
+  if (auto load = dyn_cast<schedule::NativeNBAAccumulatorLoadOp>(operation))
+    if (StringRef name = named(load.getRecord()); !name.empty())
+      return RecordAccess{name, load.getField(), load.getOffset(),
+                          load.getType()};
+  if (auto store = dyn_cast<schedule::NativeNBAAccumulatorStoreOp>(operation))
+    if (StringRef name = named(store.getRecord()); !name.empty())
+      return RecordAccess{name, store.getField(), store.getOffset(),
+                          store.getValue().getType()};
+  return std::nullopt;
+}
+
 bool zero(Value value) {
   APInt constant;
   return matchPattern(value, m_ConstantInt(&constant)) && constant.isZero();
@@ -208,9 +234,8 @@ void transfer(OpBuilder &builder, Location loc, Value frame,
       LLVM::CondBrOp::create(builder, loc, present, copy, ValueRange{}, tail,
                              ValueRange{});
       builder.setInsertionPointToStart(copy);
-      Value accumulator = LLVM::AddressOfOp::create(
-          builder, loc, LLVM::LLVMPointerType::get(builder.getContext()),
-          root.accumulator);
+      Value accumulator = schedule::NativeNBAAccumulatorAddressOp::create(
+          builder, loc, root.accumulator);
       if (!exporting) {
         Value contextAddress = LLVM::AddressOfOp::create(
             builder, loc, LLVM::LLVMPointerType::get(builder.getContext()),
@@ -227,28 +252,19 @@ void transfer(OpBuilder &builder, Location loc, Value frame,
                            llvmConstant(builder, loc, builder.getI32Type(),
                                         root.root)})
                 .getResult();
-        Value valid = LLVM::LoadOp::create(
-            builder, loc, builder.getI32Type(),
-            nbaFieldGEP(
-                builder, loc, accumulator,
-                offsetof(talos_rt_generated_nba_accumulator_256, valid)),
+        Value valid = schedule::NativeNBAAccumulatorLoadOp::create(
+            builder, loc, builder.getI32Type(), accumulator, NBAField::Valid, 0,
             4);
         Value generated = LLVM::ICmpOp::create(
             builder, loc, LLVM::ICmpPredicate::ne,
             LLVM::AndOp::create(builder, loc, allowed, valid),
             llvmConstant(builder, loc, builder.getI32Type(), 0));
-        Value region = LLVM::LoadOp::create(
-            builder, loc, builder.getI32Type(),
-            nbaFieldGEP(
-                builder, loc, accumulator,
-                offsetof(talos_rt_generated_nba_accumulator_256, exec_region)),
-            4);
-        Value capturedMask = LLVM::LoadOp::create(
-            builder, loc, builder.getI64Type(),
-            nbaFieldGEP(
-                builder, loc, accumulator,
-                offsetof(talos_rt_generated_nba_accumulator_256, write_mask)),
-            8);
+        Value region = schedule::NativeNBAAccumulatorLoadOp::create(
+            builder, loc, builder.getI32Type(), accumulator,
+            NBAField::ExecRegion, 0, 4);
+        Value capturedMask = schedule::NativeNBAAccumulatorLoadOp::create(
+            builder, loc, builder.getI64Type(), accumulator,
+            NBAField::WriteMask, 0, 8);
         generated = LLVM::AndOp::create(
             builder, loc, generated,
             LLVM::AndOp::create(
@@ -269,43 +285,32 @@ void transfer(OpBuilder &builder, Location loc, Value frame,
                                tail, ValueRange{});
         builder.setInsertionPointToStart(adopt);
       }
-      constexpr uint64_t offsets[] = {
-          offsetof(talos_rt_generated_nba_accumulator_256, value),
-          offsetof(talos_rt_generated_nba_accumulator_256, unknown),
-          offsetof(talos_rt_generated_nba_accumulator_256, transient)};
+      constexpr NBAField lanes[] = {NBAField::Value, NBAField::Unknown,
+                                    NBAField::Transient};
       for (unsigned lane = 0; lane != 3; ++lane) {
         if ((lane == 1 && root.twoState) || (lane == 2 && !root.transient))
           continue;
-        Value canonical = nbaFieldGEP(builder, loc, accumulator, offsets[lane]);
         if (exporting)
-          LLVM::StoreOp::create(builder, loc,
-                                load(builder, loc, frame, field(root, lane)),
-                                canonical, 8);
+          schedule::NativeNBAAccumulatorStoreOp::create(
+              builder, loc, load(builder, loc, frame, field(root, lane)),
+              accumulator, lanes[lane], 0, 8);
         else
           store(builder, loc, frame, field(root, lane),
-                LLVM::LoadOp::create(builder, loc, builder.getI64Type(),
-                                     canonical, 8));
+                schedule::NativeNBAAccumulatorLoadOp::create(
+                    builder, loc, builder.getI64Type(), accumulator,
+                    lanes[lane], 0, 8));
       }
       if (exporting) {
-        LLVM::StoreOp::create(
-            builder, loc, constant(builder, loc, root.mask),
-            nbaFieldGEP(
-                builder, loc, accumulator,
-                offsetof(talos_rt_generated_nba_accumulator_256, write_mask)),
-            8);
-        LLVM::StoreOp::create(
+        schedule::NativeNBAAccumulatorStoreOp::create(
+            builder, loc, constant(builder, loc, root.mask), accumulator,
+            NBAField::WriteMask, 0, 8);
+        schedule::NativeNBAAccumulatorStoreOp::create(
             builder, loc, llvmConstant(builder, loc, builder.getI32Type(), 1),
-            nbaFieldGEP(
-                builder, loc, accumulator,
-                offsetof(talos_rt_generated_nba_accumulator_256, valid)),
-            4);
-        LLVM::StoreOp::create(
+            accumulator, NBAField::Valid, 0, 4);
+        schedule::NativeNBAAccumulatorStoreOp::create(
             builder, loc,
             llvmConstant(builder, loc, builder.getI32Type(), root.region),
-            nbaFieldGEP(
-                builder, loc, accumulator,
-                offsetof(talos_rt_generated_nba_accumulator_256, exec_region)),
-            4);
+            accumulator, NBAField::ExecRegion, 0, 4);
         Value old =
             LLVM::LoadOp::create(builder, loc, builder.getI64Type(), leaf, 8);
         LLVM::StoreOp::create(
@@ -338,25 +343,16 @@ void transfer(OpBuilder &builder, Location loc, Value frame,
         // snapshots and generated knownness predicates also inspect validity
         // directly. A stale canonical valid/mask could republish this capture
         // after the private consumer commits it (LRM 4.9.4/10.4.2).
-        LLVM::StoreOp::create(
+        schedule::NativeNBAAccumulatorStoreOp::create(
             builder, loc, llvmConstant(builder, loc, builder.getI32Type(), 0),
-            nbaFieldGEP(
-                builder, loc, accumulator,
-                offsetof(talos_rt_generated_nba_accumulator_256, valid)),
-            4);
-        LLVM::StoreOp::create(
-            builder, loc, constant(builder, loc, 0),
-            nbaFieldGEP(
-                builder, loc, accumulator,
-                offsetof(talos_rt_generated_nba_accumulator_256, write_mask)),
-            8);
+            accumulator, NBAField::Valid, 0, 4);
+        schedule::NativeNBAAccumulatorStoreOp::create(
+            builder, loc, constant(builder, loc, 0), accumulator,
+            NBAField::WriteMask, 0, 8);
         if (root.transient)
-          LLVM::StoreOp::create(
-              builder, loc, constant(builder, loc, 0),
-              nbaFieldGEP(
-                  builder, loc, accumulator,
-                  offsetof(talos_rt_generated_nba_accumulator_256, transient)),
-              8);
+          schedule::NativeNBAAccumulatorStoreOp::create(
+              builder, loc, constant(builder, loc, 0), accumulator,
+              NBAField::Transient, 0, 8);
         LLVM::StoreOp::create(
             builder, loc,
             LLVM::AndOp::create(
@@ -522,13 +518,20 @@ static bool accessesOnlyGeneratedStorage(Operation *op) {
                            schedule::NativeStateWindowAddressOp>(
                address.getDefiningOp());
   }
+  // A named generated NBA accumulator record is generated storage; a record
+  // pointer read from memory is not proved to be one.
+  if (auto store = dyn_cast<schedule::NativeNBAAccumulatorStoreOp>(op))
+    return store.getRecord()
+               .getDefiningOp<schedule::NativeNBAAccumulatorAddressOp>() !=
+           nullptr;
   if (isa<CallOpInterface, LLVM::InlineAsmOp>(op))
     return false;
   return isMemoryEffectFree(op) ||
          isa<LLVM::LoadOp, LLVM::AllocaOp, LLVM::ReturnOp,
              schedule::NativeStateLoadOp, schedule::NativeStateStoreOp,
-             schedule::NativeReadyReadOp, schedule::NativeReadyUpdateOp,
-             schedule::NativeReadyCommitOp, schedule::NativeReadyMergeOp>(op);
+             schedule::NativeNBAAccumulatorLoadOp, schedule::NativeReadyReadOp,
+             schedule::NativeReadyUpdateOp, schedule::NativeReadyCommitOp,
+             schedule::NativeReadyMergeOp>(op);
 }
 
 // A periodic clock can call hundreds of capture-only register bodies in
@@ -1097,12 +1100,31 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
   DenseMap<uint32_t, CaptureInventory> captures;
   DenseMap<uint32_t, std::string> commitConsumers;
   llvm::StringMap<MemoryInventory> memoryInventory;
+  // Globals a function addresses with llvm.mlir.addressof. Native code
+  // accesses an accumulator record only through its typed address; an LLVM
+  // address of one is an access this pass cannot see.
+  llvm::StringSet<> rawAddressed;
   for (Operation *operation : reachable) {
     // Inventory every use of an accumulator address, not just recognizable
     // loads/stores. A cast, CFG argument or memory intrinsic can hide an alias
     // from address(). Localizing only the visible accesses would split capture
     // ownership and change the consumed payload (LRM 4.9.4/10.4.2).
+    cast<LLVM::LLVMFuncOp>(operation).walk(
+        [&](schedule::NativeNBAAccumulatorAddressOp record) {
+          auto &memory = memoryInventory[record.getGlobal()];
+          for (OpOperand &use : record.getResult().getUses()) {
+            auto load =
+                dyn_cast<schedule::NativeNBAAccumulatorLoadOp>(use.getOwner());
+            auto store =
+                dyn_cast<schedule::NativeNBAAccumulatorStoreOp>(use.getOwner());
+            if (!(load && load.getRecord() == record.getResult()) &&
+                !(store && store.getRecord() == record.getResult() &&
+                  store.getValue() != record.getResult()))
+              memory.exact = false;
+          }
+        });
     cast<LLVM::LLVMFuncOp>(operation).walk([&](LLVM::AddressOfOp address) {
+      rawAddressed.insert(address.getGlobalName());
       auto &memory = memoryInventory[address.getGlobalName()];
       SmallVector<Value> pointers{address.getResult()};
       DenseSet<Value> seen;
@@ -1145,16 +1167,25 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
         capture.sites.insert(static_cast<uint64_t>(data[5]));
         ++capture.stages;
       }
+      // A field access of a named record: whole words of the bit fields, and
+      // the 32-bit valid and region flags.
+      if (std::optional<RecordAccess> access = recordAccess(nested)) {
+        auto &memory = memoryInventory[access->accumulator];
+        memory.seen = true;
+        bool flag = access->field == NBAField::Valid ||
+                    access->field == NBAField::ExecRegion;
+        memory.exact &=
+            access->offset == 0 && access->type.isInteger(flag ? 32 : 64);
+        // The generated consumer that commits the root tests its capture.
+        auto load = dyn_cast<schedule::NativeNBAAccumulatorLoadOp>(nested);
+        if (load && load.getPendingRoot() && access->field == NBAField::Valid &&
+            access->offset == 0 && access->type.isInteger(32))
+          commitConsumers.try_emplace(*load.getPendingRoot(),
+                                      access->accumulator.str());
+        return;
+      }
       auto read = dyn_cast<LLVM::LoadOp>(nested);
       auto write = dyn_cast<LLVM::StoreOp>(nested);
-      if (read && read.getType().isInteger(32))
-        if (auto root =
-                schedule::get<schedule::Field::EvalPendingDirtyRoot>(read))
-          if (auto at = address(read.getAddr());
-              at && at->offset ==
-                        offsetof(talos_rt_generated_nba_accumulator_256, valid))
-            commitConsumers.try_emplace(root.getValue().getZExtValue(),
-                                        at->global.str());
       if (read || write) {
         Value pointer = read ? read.getAddr() : write.getAddr();
         StringRef name = baseGlobal(pointer);
@@ -1173,29 +1204,10 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
                        read.getOrdering() == LLVM::AtomicOrdering::not_atomic
                  : !write.getVolatile_() &&
                        write.getOrdering() == LLVM::AtomicOrdering::not_atomic;
+        // The readiness index is read and written in whole words; any other
+        // global's raw access is not one this pass can localize.
         bool index = name == dirtyName || name == summaryName;
-        bool word =
-            index
-                ? at->offset % 8 == 0
-                : at->offset == offsetof(talos_rt_generated_nba_accumulator_256,
-                                         value) ||
-                      at->offset ==
-                          offsetof(talos_rt_generated_nba_accumulator_256,
-                                   unknown) ||
-                      at->offset ==
-                          offsetof(talos_rt_generated_nba_accumulator_256,
-                                   write_mask) ||
-                      at->offset ==
-                          offsetof(talos_rt_generated_nba_accumulator_256,
-                                   transient);
-        bool flag =
-            !index &&
-            (at->offset ==
-                 offsetof(talos_rt_generated_nba_accumulator_256, valid) ||
-             at->offset ==
-                 offsetof(talos_rt_generated_nba_accumulator_256, exec_region));
-        memory.exact &=
-            (word && type.isInteger(64)) || (flag && type.isInteger(32));
+        memory.exact &= index && at->offset % 8 == 0 && type.isInteger(64);
       } else if (auto call = dyn_cast<LLVM::CallOp>(nested)) {
         // An accumulator passed as an address cannot be privatized without
         // an explicit capture interface for the receiving function.
@@ -1233,7 +1245,8 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
     auto consumer = commitConsumers.find(data[1]);
     if (capture == captures.end() || !capture->second.exact ||
         !capture->second.stages || memory == memoryInventory.end() ||
-        !memory->second.seen || !memory->second.exact || sites.empty() ||
+        !memory->second.seen || !memory->second.exact ||
+        rawAddressed.contains(name.getValue()) || sites.empty() ||
         consumer == commitConsumers.end() ||
         consumer->second != name.getValue())
       continue;
@@ -1349,6 +1362,16 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
             if (reachable.contains(callee.getOperation()))
               callers[callee.getOperation()].push_back(operation);
       }
+      if (auto load = dyn_cast<schedule::NativeNBAAccumulatorLoadOp>(nested))
+        if (std::optional<uint32_t> pending = load.getPendingRoot())
+          if (auto root = byRoot.find(*pending); root != byRoot.end())
+            scope.set(root->second);
+      if (std::optional<RecordAccess> access = recordAccess(nested)) {
+        if (auto root = byAccumulator.find(access->accumulator);
+            root != byAccumulator.end())
+          scope.set(root->second);
+        return;
+      }
       Value pointer;
       if (auto read = dyn_cast<LLVM::LoadOp>(nested))
         pointer = read.getAddr();
@@ -1356,9 +1379,6 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
         pointer = write.getAddr();
       if (pointer)
         if (auto at = address(pointer)) {
-          if (auto root = byAccumulator.find(at->global);
-              root != byAccumulator.end())
-            scope.set(root->second);
           // Untagged logical index queries can select private captures even
           // when this function has no direct accumulator access. Tagged
           // producers for canonical roots keep their canonical RMW interface.
@@ -1485,119 +1505,134 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
         write.erase();
         continue;
       }
+      // A generated consumer's test of a privatized root's capture reads the
+      // private index.
+      auto access = recordAccess(operation);
+      auto pendingTest =
+          dyn_cast<schedule::NativeNBAAccumulatorLoadOp>(operation);
+      if (pendingTest && pendingTest.getPendingRoot() &&
+          byRoot.contains(*pendingTest.getPendingRoot())) {
+        const auto &root = roots[byRoot.lookup(*pendingTest.getPendingRoot())];
+        Value pending =
+            selected(builder, loc, load(builder, loc, frame, root.bitmapOffset),
+                     root, root.root % 64);
+        if (pendingTest.getType().isInteger(32))
+          pending = LLVM::ZExtOp::create(
+              builder, loc, pendingTest.getType(),
+              LLVM::ICmpOp::create(builder, loc, LLVM::ICmpPredicate::ne,
+                                   pending, constant(builder, loc, 0)));
+        pendingTest.replaceAllUsesWith(pending);
+        pendingTest.erase();
+        continue;
+      }
+      // The fields of a privatized root's record live in the frame.
+      if (auto mapped = access ? byAccumulator.find(access->accumulator)
+                               : byAccumulator.end();
+          mapped != byAccumulator.end()) {
+        const auto &root = roots[mapped->second];
+        auto typedRead =
+            dyn_cast<schedule::NativeNBAAccumulatorLoadOp>(operation);
+        auto typedWrite =
+            dyn_cast<schedule::NativeNBAAccumulatorStoreOp>(operation);
+        std::optional<unsigned> lane;
+        if (access->offset == 0 && access->field == NBAField::Value)
+          lane = 0;
+        else if (access->offset == 0 && access->field == NBAField::Unknown)
+          lane = 1;
+        else if (access->offset == 0 && access->field == NBAField::Transient)
+          lane = 2;
+        if (lane) {
+          if ((*lane == 1 && root.twoState) ||
+              (*lane == 2 && !root.transient)) {
+            if (typedRead)
+              typedRead.replaceAllUsesWith(constant(builder, loc, 0));
+            operation->erase();
+            continue;
+          }
+          Value local = byteGEP(builder, loc, frame, field(root, *lane));
+          if (typedRead) {
+            auto frameRead =
+                LLVM::LoadOp::create(builder, loc, typedRead.getType(), local,
+                                     typedRead.getAlignment());
+            Value value = frameRead;
+            if (*lane < 2 && root.mask != UINT64_MAX) {
+              // Every certified capture writes this same mask. Bits outside
+              // it are not a logical pending value: commit blends them from
+              // CURRENT. Make that interface explicit so a partial stage need
+              // not preserve unused accumulator bits across outlined calls
+              // (LRM 4.9.4/10.4.2).
+              builder.setInsertionPointAfter(frameRead);
+              value = LLVM::AndOp::create(builder, loc, frameRead,
+                                          constant(builder, loc, root.mask));
+            }
+            typedRead.replaceAllUsesWith(value);
+          } else {
+            Value value = typedWrite.getValue();
+            if (*lane < 2 && root.mask != UINT64_MAX)
+              value = LLVM::AndOp::create(builder, loc, value,
+                                          constant(builder, loc, root.mask));
+            LLVM::StoreOp::create(builder, loc, value, local,
+                                  typedWrite.getAlignment());
+          }
+        } else if (typedWrite) {
+          if (access->field == NBAField::Valid && access->offset == 0 &&
+              zero(typedWrite.getValue())) {
+            // Clearing captured validity consumes this local NBA, even when a
+            // private batch clears its leaf word only afterward. Do not
+            // republish an already committed capture at the next opaque cut
+            // (LRM 4.9.4/10.4.2).
+            store(builder, loc, frame, root.bitmapOffset,
+                  LLVM::AndOp::create(
+                      builder, loc,
+                      load(builder, loc, frame, root.bitmapOffset),
+                      constant(builder, loc,
+                               ~(uint64_t{1} << (root.root % 64)))));
+          }
+        } else {
+          Value replacement;
+          if (access->field == NBAField::WriteMask && access->offset == 0) {
+            if (typedRead.getAtCommit()) {
+              replacement = constant(builder, loc, root.mask);
+            } else {
+              Value staged = selected(
+                  builder, loc, load(builder, loc, frame, root.bitmapOffset),
+                  root, 0);
+              replacement = LLVM::SelectOp::create(
+                  builder, loc,
+                  LLVM::ICmpOp::create(builder, loc, LLVM::ICmpPredicate::ne,
+                                       staged, constant(builder, loc, 0)),
+                  constant(builder, loc, root.mask), constant(builder, loc, 0));
+            }
+          } else if (access->field == NBAField::Valid && access->offset == 0) {
+            // A caller can inspect validity outside the commit's selected
+            // root branch (for example a knownness predicate). Preserve the
+            // actual capture bit there too; the existence of a typed consumer
+            // does not prove that this barrier staged the root (LRM
+            // 4.9.4/10.4.2).
+            replacement = LLVM::ZExtOp::create(
+                builder, loc, typedRead.getType(),
+                LLVM::ICmpOp::create(
+                    builder, loc, LLVM::ICmpPredicate::ne,
+                    selected(builder, loc,
+                             load(builder, loc, frame, root.bitmapOffset), root,
+                             0),
+                    constant(builder, loc, 0)));
+          } else {
+            replacement = llvmConstant(builder, loc, typedRead.getType(),
+                                       access->field == NBAField::ExecRegion &&
+                                               access->offset == 0
+                                           ? root.region
+                                           : 1);
+          }
+          typedRead.replaceAllUsesWith(replacement);
+        }
+        operation->erase();
+        continue;
+      }
       if (read || write) {
         auto at = address(read ? read.getAddr() : write.getAddr());
         if (!at)
           continue;
-        auto mapped = byAccumulator.find(at->global);
-        if (mapped != byAccumulator.end()) {
-          const auto &root = roots[mapped->second];
-          std::optional<unsigned> lane;
-          if (at->offset ==
-              offsetof(talos_rt_generated_nba_accumulator_256, value))
-            lane = 0;
-          else if (at->offset ==
-                   offsetof(talos_rt_generated_nba_accumulator_256, unknown))
-            lane = 1;
-          else if (at->offset ==
-                   offsetof(talos_rt_generated_nba_accumulator_256, transient))
-            lane = 2;
-          if (lane) {
-            if ((*lane == 1 && root.twoState) ||
-                (*lane == 2 && !root.transient)) {
-              if (read) {
-                read.replaceAllUsesWith(constant(builder, loc, 0));
-                read.erase();
-              } else {
-                write.erase();
-              }
-              continue;
-            }
-            Value local = byteGEP(builder, loc, frame, field(root, *lane));
-            if (read) {
-              read.getAddrMutable().assign(local);
-              if (*lane < 2 && root.mask != UINT64_MAX) {
-                // Every certified capture writes this same mask. Bits
-                // outside it are not a logical pending value: commit blends
-                // them from CURRENT. Make that interface explicit so a
-                // partial stage need not preserve unused accumulator bits
-                // across outlined calls (LRM 4.9.4/10.4.2).
-                builder.setInsertionPointAfter(read);
-                auto masked =
-                    LLVM::AndOp::create(builder, loc, read.getResult(),
-                                        constant(builder, loc, root.mask));
-                read.getResult().replaceAllUsesExcept(masked, masked);
-              }
-            } else {
-              write.getAddrMutable().assign(local);
-              if (*lane < 2 && root.mask != UINT64_MAX)
-                write.getValueMutable().assign(
-                    LLVM::AndOp::create(builder, loc, write.getValue(),
-                                        constant(builder, loc, root.mask)));
-            }
-          } else if (write) {
-            if (at->offset ==
-                    offsetof(talos_rt_generated_nba_accumulator_256, valid) &&
-                zero(write.getValue())) {
-              // Clearing captured validity consumes this local NBA, even
-              // when a private batch clears its leaf word only afterward.
-              // Do not republish an already committed capture at the next
-              // opaque cut (LRM 4.9.4/10.4.2).
-              store(builder, loc, frame, root.bitmapOffset,
-                    LLVM::AndOp::create(
-                        builder, loc,
-                        load(builder, loc, frame, root.bitmapOffset),
-                        constant(builder, loc,
-                                 ~(uint64_t{1} << (root.root % 64)))));
-            }
-            write.erase();
-          } else {
-            Value replacement;
-            if (at->offset ==
-                offsetof(talos_rt_generated_nba_accumulator_256, write_mask)) {
-              if (schedule::has<schedule::Field::EvalPendingMaskAtCommit>(
-                      read)) {
-                replacement = constant(builder, loc, root.mask);
-              } else {
-                Value staged = selected(
-                    builder, loc, load(builder, loc, frame, root.bitmapOffset),
-                    root, 0);
-                replacement = LLVM::SelectOp::create(
-                    builder, loc,
-                    LLVM::ICmpOp::create(builder, loc, LLVM::ICmpPredicate::ne,
-                                         staged, constant(builder, loc, 0)),
-                    constant(builder, loc, root.mask),
-                    constant(builder, loc, 0));
-              }
-            } else if (at->offset ==
-                       offsetof(talos_rt_generated_nba_accumulator_256,
-                                valid)) {
-              // A caller can inspect validity outside the commit's selected
-              // root branch (for example a knownness predicate). Preserve
-              // the actual capture bit there too; the existence of a typed
-              // consumer does not prove that this barrier staged the root
-              // (LRM 4.9.4/10.4.2).
-              replacement = LLVM::ZExtOp::create(
-                  builder, loc, read.getType(),
-                  LLVM::ICmpOp::create(
-                      builder, loc, LLVM::ICmpPredicate::ne,
-                      selected(builder, loc,
-                               load(builder, loc, frame, root.bitmapOffset),
-                               root, 0),
-                      constant(builder, loc, 0)));
-            } else {
-              replacement = llvmConstant(
-                  builder, loc, read.getType(),
-                  at->offset == offsetof(talos_rt_generated_nba_accumulator_256,
-                                         exec_region)
-                      ? root.region
-                      : 1);
-            }
-            read.replaceAllUsesWith(replacement);
-            read.erase();
-          }
-          continue;
-        }
         if (at->global == dirtyName && at->offset % 8 == 0 && !rootRole &&
             !canonicalIndex) {
           auto mappedWord = byWord.find(at->offset / 8);

@@ -23,8 +23,8 @@
 // CHECK: llvm.cond_br
 // CHECK: %[[PRESENT:.*]] = llvm.icmp "ne"
 // CHECK: %[[EXPORT_ACC:.*]] = llvm.mlir.addressof @__talos_aot_nba_accumulator_1
-// CHECK: %[[MASK_ADDR:.*]] = llvm.getelementptr %[[EXPORT_ACC]][64]
 // CHECK: %[[MASK:.*]] = llvm.select %[[PRESENT]], %{{.*}}, %{{.*}} : i1, i64
+// CHECK: %[[MASK_ADDR:.*]] = llvm.getelementptr %[[EXPORT_ACC]][64]
 // CHECK: llvm.store %[[MASK]], %[[MASK_ADDR]]
 // CHECK: %[[VALID:.*]] = llvm.zext %[[PRESENT]] : i1 to i32
 // CHECK: %[[VALID_ADDR:.*]] = llvm.getelementptr %[[EXPORT_ACC]][96]

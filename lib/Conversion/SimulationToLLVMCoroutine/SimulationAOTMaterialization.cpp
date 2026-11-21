@@ -3420,20 +3420,18 @@ FailureOr<bool> makeNativeEvalPlan(
                                             root->second, positionedUnknown,
                                             continuation);
           }
-          Value accumulator = LLVM::AddressOfOp::create(
-              nbaBuilder, call.getLoc(), pointer,
+          Value accumulator = schedule::NativeNBAAccumulatorAddressOp::create(
+              nbaBuilder, call.getLoc(),
               staticNBAPlan.generatedAccumulators[root->second]);
           if (root->second < staticNBAPlan.trackTransients.size() &&
               staticNBAPlan.trackTransients[root->second])
             emitGeneratedNBATransient(nbaBuilder, call.getLoc(), accumulator, 0,
                                       mask, positionedValue,
                                       positionedUnknown);
-          auto mergeField = [&, &call = call](size_t fieldOffset,
+          auto mergeField = [&, &call = call](NBAField field,
                                               Value positioned) {
-            Value address = nbaFieldGEP(nbaBuilder, call.getLoc(), accumulator,
-                                        fieldOffset);
-            Value previous = LLVM::LoadOp::create(nbaBuilder, call.getLoc(),
-                                                  i64, address, 8);
+            Value previous = schedule::NativeNBAAccumulatorLoadOp::create(
+                nbaBuilder, call.getLoc(), i64, accumulator, field, 0, 8);
             Value merged = arith::OrIOp::create(
                 nbaBuilder, call.getLoc(),
                 arith::AndIOp::create(
@@ -3443,42 +3441,34 @@ FailureOr<bool> makeNativeEvalPlan(
                                                        call.getLoc(), i64,
                                                        UINT64_MAX))),
                 positioned);
-            LLVM::StoreOp::create(nbaBuilder, call.getLoc(), merged, address,
-                                  8);
+            schedule::NativeNBAAccumulatorStoreOp::create(
+                nbaBuilder, call.getLoc(), merged, accumulator, field, 0, 8);
           };
-          mergeField(offsetof(talos_rt_generated_nba_accumulator_256, value),
-                     positionedValue);
-          mergeField(offsetof(talos_rt_generated_nba_accumulator_256, unknown),
-                     positionedUnknown);
-          Value maskAddress = nbaFieldGEP(
-              nbaBuilder, call.getLoc(), accumulator,
-              offsetof(talos_rt_generated_nba_accumulator_256, write_mask));
-          Value previousMask = LLVM::LoadOp::create(nbaBuilder, call.getLoc(),
-                                                    i64, maskAddress, 8);
-          LLVM::StoreOp::create(nbaBuilder, call.getLoc(),
-                                arith::OrIOp::create(nbaBuilder, call.getLoc(),
-                                                     previousMask, mask),
-                                maskAddress, 8);
-          Value validAddress = nbaFieldGEP(
-              nbaBuilder, call.getLoc(), accumulator,
-              offsetof(talos_rt_generated_nba_accumulator_256, valid));
-          Value previousValid = LLVM::LoadOp::create(nbaBuilder, call.getLoc(),
-                                                     i32, validAddress, 4);
-          LLVM::StoreOp::create(
+          mergeField(NBAField::Value, positionedValue);
+          mergeField(NBAField::Unknown, positionedUnknown);
+          Value previousMask = schedule::NativeNBAAccumulatorLoadOp::create(
+              nbaBuilder, call.getLoc(), i64, accumulator, NBAField::WriteMask,
+              0, 8);
+          schedule::NativeNBAAccumulatorStoreOp::create(
+              nbaBuilder, call.getLoc(),
+              arith::OrIOp::create(nbaBuilder, call.getLoc(), previousMask,
+                                   mask),
+              accumulator, NBAField::WriteMask, 0, 8);
+          Value previousValid = schedule::NativeNBAAccumulatorLoadOp::create(
+              nbaBuilder, call.getLoc(), i32, accumulator, NBAField::Valid, 0,
+              4);
+          schedule::NativeNBAAccumulatorStoreOp::create(
               nbaBuilder, call.getLoc(),
               arith::OrIOp::create(nbaBuilder, call.getLoc(), previousValid,
                                    LLVM::ZExtOp::create(nbaBuilder,
                                                         call.getLoc(), i32,
                                                         overlaps)),
-              validAddress, 4);
-          LLVM::StoreOp::create(
+              accumulator, NBAField::Valid, 0, 4);
+          schedule::NativeNBAAccumulatorStoreOp::create(
               nbaBuilder, call.getLoc(),
               llvmConstant(nbaBuilder, call.getLoc(), i32,
                            proof->second.commitRegion),
-              nbaFieldGEP(nbaBuilder, call.getLoc(), accumulator,
-                          offsetof(talos_rt_generated_nba_accumulator_256,
-                                   exec_region)),
-              4);
+              accumulator, NBAField::ExecRegion, 0, 4);
           uint32_t dirtyWord = root->second / 64;
           Value dirtyBase = LLVM::AddressOfOp::create(
               nbaBuilder, call.getLoc(), pointer, nbaDirtyRootsName);
@@ -7438,8 +7428,8 @@ FailureOr<bool> makeNativeEvalPlan(
           arith::ShRUIOp::create(
               builder, location, dirty,
               llvmConstant(builder, location, i64, rootIndex % 64)));
-      Value accumulatorBase =
-          LLVM::AddressOfOp::create(builder, location, pointer, accumulator);
+      Value accumulatorBase = schedule::NativeNBAAccumulatorAddressOp::create(
+          builder, location, accumulator);
       Value regionMatches;
       if (fixedRegionStage) {
         regionMatches = arith::CmpIOp::create(
@@ -7447,17 +7437,10 @@ FailureOr<bool> makeNativeEvalPlan(
             nbaCommitEntry->getArgument(2),
             llvmConstant(builder, location, i32, fixedCommitRegion));
       } else {
-        Value valid = LLVM::LoadOp::create(
-            builder, location, i32,
-            nbaFieldGEP(
-                builder, location, accumulatorBase,
-                offsetof(talos_rt_generated_nba_accumulator_256, valid)),
-            4);
-        Value region = LLVM::LoadOp::create(
-            builder, location, i32,
-            nbaFieldGEP(
-                builder, location, accumulatorBase,
-                offsetof(talos_rt_generated_nba_accumulator_256, exec_region)),
+        Value valid = schedule::NativeNBAAccumulatorLoadOp::create(
+            builder, location, i32, accumulatorBase, NBAField::Valid, 0, 4);
+        Value region = schedule::NativeNBAAccumulatorLoadOp::create(
+            builder, location, i32, accumulatorBase, NBAField::ExecRegion, 0,
             4);
         regionMatches = arith::AndIOp::create(
             builder, location,
@@ -7490,44 +7473,26 @@ FailureOr<bool> makeNativeEvalPlan(
                              ~(uint64_t{1} << (rootIndex % 64)))),
             dirtyAddress, 8);
       }
-      Value stagedValue = LLVM::LoadOp::create(
-          builder, location, i64,
-          nbaFieldGEP(builder, location, accumulatorBase,
-                      offsetof(talos_rt_generated_nba_accumulator_256, value)),
-          8);
+      Value stagedValue = schedule::NativeNBAAccumulatorLoadOp::create(
+          builder, location, i64, accumulatorBase, NBAField::Value, 0, 8);
       Value stagedUnknown;
       if (forcedTwoStateEval) {
         stagedUnknown = llvmConstant(builder, location, i64, 0);
       } else {
-        auto load = LLVM::LoadOp::create(
-            builder, location, i64,
-            nbaFieldGEP(
-                builder, location, accumulatorBase,
-                offsetof(talos_rt_generated_nba_accumulator_256, unknown)),
-            8);
-        // The later two-state commit clone must zero both canonical unknown
-        // loads and staged accumulator unknown data left by an earlier
-        // four-state slot. Mark this semantic role explicitly instead of
-        // reverse-engineering a byte GEP after LLVM lowering.
-        ::talos::schedule::set<
-            ::talos::schedule::Field::EvalTwoStateZeroUnknown>(
-            load, UnitAttr::get(context));
-        stagedUnknown = load;
+        // The two-state commit variants read this staged X/Z data, which an
+        // earlier four-state slot may have left, as zero.
+        stagedUnknown = schedule::NativeNBAAccumulatorLoadOp::create(
+            builder, location, i64, accumulatorBase, NBAField::Unknown, 0, 8);
       }
       Value writeMask;
       if (fixedWriteMask != 0) {
         writeMask = llvmConstant(builder, location, i64, fixedWriteMask);
       } else {
-        auto capturedMask = LLVM::LoadOp::create(
-            builder, location, i64,
-            nbaFieldGEP(
-                builder, location, accumulatorBase,
-                offsetof(talos_rt_generated_nba_accumulator_256, write_mask)),
-            8);
         // The NBA prefix consumes the captured mask even after claiming its
         // dirty word (LRM 4.9.4/10.4.2); it is not a test for a new stage.
-        schedule::set<schedule::Field::EvalPendingMaskAtCommit>(
-            capturedMask, UnitAttr::get(context));
+        auto capturedMask = schedule::NativeNBAAccumulatorLoadOp::create(
+            builder, location, i64, accumulatorBase, NBAField::WriteMask, 0, 8);
+        capturedMask.setAtCommit(true);
         writeMask = arith::AndIOp::create(
             builder, location, capturedMask,
             llvmConstant(builder, location, i64, scalarMask(root.bit_width)));
@@ -7558,18 +7523,12 @@ FailureOr<bool> makeNativeEvalPlan(
         storeRoot(stateUnknown, offset, root.bit_width, newUnknown);
       if (!staticNBAPlan.generatedCompactStages[rootIndex] ||
           (fixedWriteMask == 0 && !fullRootStage)) {
-        LLVM::StoreOp::create(
+        schedule::NativeNBAAccumulatorStoreOp::create(
             builder, location, llvmConstant(builder, location, i64, 0),
-            nbaFieldGEP(
-                builder, location, accumulatorBase,
-                offsetof(talos_rt_generated_nba_accumulator_256, write_mask)),
-            8);
-        LLVM::StoreOp::create(
+            accumulatorBase, NBAField::WriteMask, 0, 8);
+        schedule::NativeNBAAccumulatorStoreOp::create(
             builder, location, llvmConstant(builder, location, i32, 0),
-            nbaFieldGEP(
-                builder, location, accumulatorBase,
-                offsetof(talos_rt_generated_nba_accumulator_256, valid)),
-            4);
+            accumulatorBase, NBAField::Valid, 0, 4);
       }
       Value changed = arith::OrIOp::create(
           builder, location,
@@ -7580,19 +7539,17 @@ FailureOr<bool> makeNativeEvalPlan(
       // root has no edge watcher.
       if (rootIndex < staticNBAPlan.trackTransients.size() &&
           staticNBAPlan.trackTransients[rootIndex]) {
-        Value transientAddress = nbaFieldGEP(
-            builder, location, accumulatorBase,
-            offsetof(talos_rt_generated_nba_accumulator_256, transient));
         changed = arith::OrIOp::create(
             builder, location, changed,
             arith::AndIOp::create(builder, location,
-                                  LLVM::LoadOp::create(builder, location, i64,
-                                                       transientAddress, 8),
+                                  schedule::NativeNBAAccumulatorLoadOp::create(
+                                      builder, location, i64, accumulatorBase,
+                                      NBAField::Transient, 0, 8),
                                   llvmConstant(builder, location, i64,
                                                scalarMask(root.bit_width))));
-        LLVM::StoreOp::create(builder, location,
-                              llvmConstant(builder, location, i64, 0),
-                              transientAddress, 8);
+        schedule::NativeNBAAccumulatorStoreOp::create(
+            builder, location, llvmConstant(builder, location, i64, 0),
+            accumulatorBase, NBAField::Transient, 0, 8);
       }
       struct TriggerGroup {
         uint32_t edge;
@@ -7906,9 +7863,24 @@ FailureOr<bool> makeNativeEvalPlan(
     cf::BranchOp::create(builder, location, mapping.lookup(genericNBACommit));
   }
 
+  // Accumulator field accesses lower to an LLVM access each, plus one field
+  // address per block, record and field offset.
   uint64_t directScalarCost = 0;
-  for (Block *block : scalarBlocks)
-    directScalarCost += block->getOperations().size();
+  for (Block *block : scalarBlocks) {
+    llvm::SmallDenseSet<std::tuple<Value, unsigned, uint64_t>, 8> fields;
+    for (Operation &operation : *block) {
+      ++directScalarCost;
+      if (auto load = dyn_cast<schedule::NativeNBAAccumulatorLoadOp>(operation))
+        fields.insert({load.getRecord(), static_cast<unsigned>(load.getField()),
+                       load.getOffset()});
+      else if (auto store =
+                   dyn_cast<schedule::NativeNBAAccumulatorStoreOp>(operation))
+        fields.insert({store.getRecord(),
+                       static_cast<unsigned>(store.getField()),
+                       store.getOffset()});
+    }
+    directScalarCost += fields.size();
+  }
   // Compare the actual generated direct footprint with the bounded loop
   // footprint. A handful of heavily observed roots can be larger than many
   // sparse simple roots; root count alone does not capture that tradeoff.
@@ -8263,8 +8235,8 @@ FailureOr<bool> makeNativeEvalPlan(
                                 llvmConstant(builder, location, i64,
                                              uint64_t{1} << (rootIndex % 64))),
           llvmConstant(builder, location, i64, 0));
-      Value accumulatorBase =
-          LLVM::AddressOfOp::create(builder, location, pointer, accumulator);
+      Value accumulatorBase = schedule::NativeNBAAccumulatorAddressOp::create(
+          builder, location, accumulator);
       Value regionMatches;
       if (fixedCommitRegion != UINT32_MAX) {
         regionMatches = arith::CmpIOp::create(
@@ -8272,17 +8244,10 @@ FailureOr<bool> makeNativeEvalPlan(
             knownEntry->getArgument(0),
             llvmConstant(builder, location, i32, fixedCommitRegion));
       } else {
-        Value valid = LLVM::LoadOp::create(
-            builder, location, i32,
-            nbaFieldGEP(
-                builder, location, accumulatorBase,
-                offsetof(talos_rt_generated_nba_accumulator_256, valid)),
-            4);
-        Value region = LLVM::LoadOp::create(
-            builder, location, i32,
-            nbaFieldGEP(
-                builder, location, accumulatorBase,
-                offsetof(talos_rt_generated_nba_accumulator_256, exec_region)),
+        Value valid = schedule::NativeNBAAccumulatorLoadOp::create(
+            builder, location, i32, accumulatorBase, NBAField::Valid, 0, 4);
+        Value region = schedule::NativeNBAAccumulatorLoadOp::create(
+            builder, location, i32, accumulatorBase, NBAField::ExecRegion, 0,
             4);
         regionMatches = arith::AndIOp::create(
             builder, location,
@@ -8309,22 +8274,14 @@ FailureOr<bool> makeNativeEvalPlan(
               ? llvmConstant(builder, location, i64, fixedWriteMask)
               : arith::AndIOp::create(
                     builder, location,
-                    LLVM::LoadOp::create(
-                        builder, location, i64,
-                        nbaFieldGEP(
-                            builder, location, accumulatorBase,
-                            offsetof(talos_rt_generated_nba_accumulator_256,
-                                     write_mask)),
-                        8),
+                    schedule::NativeNBAAccumulatorLoadOp::create(
+                        builder, location, i64, accumulatorBase,
+                        NBAField::WriteMask, 0, 8),
                     llvmConstant(builder, location, i64,
                                  scalarMask(root.bit_width)))
                     .getResult();
-      Value stagedUnknown = LLVM::LoadOp::create(
-          builder, location, i64,
-          nbaFieldGEP(
-              builder, location, accumulatorBase,
-              offsetof(talos_rt_generated_nba_accumulator_256, unknown)),
-          8);
+      Value stagedUnknown = schedule::NativeNBAAccumulatorLoadOp::create(
+          builder, location, i64, accumulatorBase, NBAField::Unknown, 0, 8);
       stagedUnknown = arith::SelectOp::create(
           builder, location, knownEntry->getArgument(2), stagedUnknown,
           llvmConstant(builder, location, i64, 0));

@@ -33,7 +33,7 @@ NativeDialect::verifyOperationAttribute(Operation *operation,
   if (failed(discardable::verify<
              OptimizationLevel, MaxStateDomainFunctions,
              DisableTwoStateSpecialization, TwoState, SampledPlacement,
-             NBAField, DebugTiming, FallbackReport, ProcessesMaterialized,
+             DebugTiming, FallbackReport, ProcessesMaterialized,
              ClosedExecutable, Partition, PartitionManifest, PartitionManifests,
              ElementDefaults, PhysicalPartitionManifest, Frame, FrameInputs,
              FrameCheckpoint, EntryKind, ScratchSize, ObserverWidth,

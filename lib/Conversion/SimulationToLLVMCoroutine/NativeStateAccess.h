@@ -22,7 +22,8 @@
 namespace talos::detail {
 
 /// The global an address root names: the plane global of a typed plane
-/// pointer, or the global of an llvm.mlir.addressof. An LLVM address of a
+/// pointer, the record of an NBA accumulator address, or the global of an
+/// llvm.mlir.addressof. An LLVM address of a
 /// state plane, or of a contribution plane's binding, names none: native
 /// code accesses no plane through it, and a pointer of unknown origin may
 /// alias anything.
@@ -75,8 +76,10 @@ struct NativeAddress {
 };
 
 /// A load or store as the native passes that inventory memory see it: a
-/// typed state access, or an LLVM load or store whose address may derive
-/// from a global or a local allocation through GEPs.
+/// typed state access, or a load or store of other memory: an LLVM load or
+/// store whose address may derive from a global or a local allocation
+/// through GEPs, or a typed NBA accumulator field access, whose `pointer` is
+/// its record and whose offset is the field's in the four-state record.
 struct NativeMemoryAccess : NativeAddress {
   mlir::Operation *operation = nullptr;
   /// The type read or written.
@@ -107,13 +110,14 @@ getStatePlaneOfAccess(const NativeAddress &address) {
 /// Whether `operation` is a load or store, typed or LLVM.
 inline bool isNativeMemoryAccess(mlir::Operation *operation) {
   return mlir::isa<mlir::LLVM::LoadOp, mlir::LLVM::StoreOp,
-                   schedule::NativeStateLoadOp, schedule::NativeStateStoreOp>(
-      operation);
+                   schedule::NativeStateLoadOp, schedule::NativeStateStoreOp,
+                   schedule::NativeNBAAccumulatorLoadOp,
+                   schedule::NativeNBAAccumulatorStoreOp>(operation);
 }
 /// Whether `operation` is a store, typed or LLVM.
 inline bool isNativeMemoryStore(mlir::Operation *operation) {
-  return mlir::isa<mlir::LLVM::StoreOp, schedule::NativeStateStoreOp>(
-      operation);
+  return mlir::isa<mlir::LLVM::StoreOp, schedule::NativeStateStoreOp,
+                   schedule::NativeNBAAccumulatorStoreOp>(operation);
 }
 
 /// A state plane's address as a producer takes it: the plane's typed base in

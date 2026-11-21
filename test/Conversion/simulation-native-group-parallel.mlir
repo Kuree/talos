@@ -200,7 +200,7 @@ module {
   // CHECK-NOT: llvm.call @first
   // CHECK: llvm.call @talos_rt_v1_scheduler_static_transition(
   // CHECK: llvm.call @talos_rt_v1_static_nba_batch_guard(
-  // CHECK-NOT: schedule.nba
+  // CHECK-NOT: schedule.nba.{{batch|commit|yield}}
   // CHECK-NOT: schedule.transition
   // CHECK: llvm.return
   llvm.func @lowered(%ctx: !llvm.ptr) attributes {schedule.eval.ranked_members = array<i32: 0, 1>} {

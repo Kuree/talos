@@ -5,6 +5,7 @@
 
 #include "talos/Analysis/SimulationAnalysis.h"
 #include "talos/Conversion/SimulationRuntime.h"
+#include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
 #include "talos/Runtime/StableHandle.h"
 
@@ -33,8 +34,11 @@ materializeGeneratedNBAAccumulators(ModuleOp module,
     return module.emitError("generated NBA accumulator plan is malformed");
   OpBuilder builder(module.getContext());
   Location location = module.getLoc();
+  // A two-state executable's records have no X/Z field (the runtime's
+  // TwoStateNBAAccumulator).
   Type storageType = LLVM::LLVMArrayType::get(
-      builder.getI8Type(), sizeof(talos_rt_generated_nba_accumulator_256));
+      builder.getI8Type(),
+      getNBAAccumulatorRecordBytes(native::has<native::TwoState>(module)));
   // Packed NBA staging references these arrays before coordinator emission.
   // Their sizes are already fixed by the native NBA plan.
   uint64_t words = (plan.roots.size() + 63) / 64;

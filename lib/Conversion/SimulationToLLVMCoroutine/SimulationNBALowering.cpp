@@ -7,6 +7,7 @@
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
+#include "talos/Dialect/Schedule/ScheduleOps.h"
 
 #include "talos/Conversion/SimulationRuntime.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
@@ -1052,17 +1053,15 @@ public:
       Value positionedUnknown = position(sourceUnknown);
       if (adaptor.getValue().size() == 2)
         markGeneratedNBAUnknown(rewriter, op, rootIndex, positionedUnknown);
-      Value accumulator = LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                                    generatedAccumulator);
+      Value accumulator = schedule::NativeNBAAccumulatorAddressOp::create(
+          rewriter, location, generatedAccumulator);
       if (rootIndex < staticPlan->trackTransients.size() &&
           staticPlan->trackTransients[rootIndex])
         emitGeneratedNBATransient(rewriter, location, accumulator, 0, mask,
                                   positionedValue, positionedUnknown);
-      auto mergeField = [&](size_t fieldOffset, Value positioned) {
-        Value address =
-            nbaFieldGEP(rewriter, location, accumulator, fieldOffset);
-        Value previous =
-            LLVM::LoadOp::create(rewriter, location, i64, address, 8);
+      auto mergeField = [&](NBAField field, Value positioned) {
+        Value previous = schedule::NativeNBAAccumulatorLoadOp::create(
+            rewriter, location, i64, accumulator, field, 0, 8);
         Value merged = arith::OrIOp::create(
             rewriter, location,
             arith::AndIOp::create(
@@ -1071,39 +1070,29 @@ public:
                     rewriter, location, mask,
                     llvmConstant(rewriter, location, i64, UINT64_MAX))),
             positioned);
-        LLVM::StoreOp::create(rewriter, location, merged, address, 8);
+        schedule::NativeNBAAccumulatorStoreOp::create(
+            rewriter, location, merged, accumulator, field, 0, 8);
       };
-      mergeField(offsetof(talos_rt_generated_nba_accumulator_256, value),
-                 positionedValue);
-      mergeField(offsetof(talos_rt_generated_nba_accumulator_256, unknown),
-                 positionedUnknown);
-      Value maskAddress = nbaFieldGEP(
-          rewriter, location, accumulator,
-          offsetof(talos_rt_generated_nba_accumulator_256, write_mask));
-      Value previousMask =
-          LLVM::LoadOp::create(rewriter, location, i64, maskAddress, 8);
-      LLVM::StoreOp::create(
+      mergeField(NBAField::Value, positionedValue);
+      mergeField(NBAField::Unknown, positionedUnknown);
+      Value previousMask = schedule::NativeNBAAccumulatorLoadOp::create(
+          rewriter, location, i64, accumulator, NBAField::WriteMask, 0, 8);
+      schedule::NativeNBAAccumulatorStoreOp::create(
           rewriter, location,
           arith::OrIOp::create(rewriter, location, previousMask, mask),
-          maskAddress, 8);
-      Value validAddress =
-          nbaFieldGEP(rewriter, location, accumulator,
-                      offsetof(talos_rt_generated_nba_accumulator_256, valid));
-      Value previousValid =
-          LLVM::LoadOp::create(rewriter, location, i32, validAddress, 4);
-      LLVM::StoreOp::create(
+          accumulator, NBAField::WriteMask, 0, 8);
+      Value previousValid = schedule::NativeNBAAccumulatorLoadOp::create(
+          rewriter, location, i32, accumulator, NBAField::Valid, 0, 4);
+      schedule::NativeNBAAccumulatorStoreOp::create(
           rewriter, location,
           arith::OrIOp::create(
               rewriter, location, previousValid,
               LLVM::ZExtOp::create(rewriter, location, i32, overlaps)),
-          validAddress, 4);
-      LLVM::StoreOp::create(
+          accumulator, NBAField::Valid, 0, 4);
+      schedule::NativeNBAAccumulatorStoreOp::create(
           rewriter, location,
-          llvmConstant(rewriter, location, i32, commitRegion),
-          nbaFieldGEP(
-              rewriter, location, accumulator,
-              offsetof(talos_rt_generated_nba_accumulator_256, exec_region)),
-          4);
+          llvmConstant(rewriter, location, i32, commitRegion), accumulator,
+          NBAField::ExecRegion, 0, 4);
       Value dirtyBit =
           arith::SelectOp::create(rewriter, location, overlaps,
                                   llvmConstant(rewriter, location, i64,
@@ -1510,14 +1499,13 @@ public:
             staticRoot->second < staticPlan->generatedFixedWriteMasks.size()
                 ? staticPlan->generatedFixedWriteMasks[staticRoot->second]
                 : 0;
-        Value base = LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                               generatedAccumulator);
+        Value base = schedule::NativeNBAAccumulatorAddressOp::create(
+            rewriter, location, generatedAccumulator);
         if (directPartialScalarStage) {
           uint64_t sourceMask =
               *width == 64 ? UINT64_MAX : (uint64_t{1} << *width) - 1;
           uint64_t mask = sourceMask << decoded.offset;
-          auto mergeField = [&](size_t fieldOffset, Value fieldValue) {
-            Value address = nbaFieldGEP(rewriter, location, base, fieldOffset);
+          auto mergeField = [&](NBAField field, Value fieldValue) {
             Value positioned = fieldValue;
             if (decoded.offset != 0)
               positioned = arith::ShLIOp::create(
@@ -1528,8 +1516,8 @@ public:
                 llvmConstant(rewriter, location, i64, mask));
             Value merged = masked;
             if (!compactEvalMetadata || fixedWriteMask == 0) {
-              Value old =
-                  LLVM::LoadOp::create(rewriter, location, i64, address, 8);
+              Value old = schedule::NativeNBAAccumulatorLoadOp::create(
+                  rewriter, location, i64, base, field, 0, 8);
               merged = arith::OrIOp::create(
                   rewriter, location,
                   arith::AndIOp::create(
@@ -1537,7 +1525,8 @@ public:
                       llvmConstant(rewriter, location, i64, ~mask)),
                   masked);
             }
-            LLVM::StoreOp::create(rewriter, location, merged, address, 8);
+            schedule::NativeNBAAccumulatorStoreOp::create(
+                rewriter, location, merged, base, field, 0, 8);
           };
           if (staticRoot->second < staticPlan->trackTransients.size() &&
               staticPlan->trackTransients[staticRoot->second]) {
@@ -1590,74 +1579,51 @@ public:
                 llvmConstant(rewriter, location, i64, mask), position(value),
                 position(unknown), staged);
           }
-          mergeField(offsetof(talos_rt_generated_nba_accumulator_256, value),
-                     value);
+          mergeField(NBAField::Value, value);
           // A promoted body can share the generated accumulator with a
           // four-state bootstrap or fallback body.  Explicitly overwrite its
           // selected unknown bits with zero: otherwise a later mixed or
           // checkpoint barrier can replay stale X/Z data from the prior
           // phase into canonical state.
-          mergeField(offsetof(talos_rt_generated_nba_accumulator_256, unknown),
-                     unknown);
+          mergeField(NBAField::Unknown, unknown);
           if (!compactEvalMetadata ||
               (!fullRootEvalStage && fixedWriteMask == 0)) {
-            Value maskAddress = nbaFieldGEP(
-                rewriter, location, base,
-                offsetof(talos_rt_generated_nba_accumulator_256, write_mask));
-            Value oldMask =
-                LLVM::LoadOp::create(rewriter, location, i64, maskAddress, 8);
-            LLVM::StoreOp::create(
+            Value oldMask = schedule::NativeNBAAccumulatorLoadOp::create(
+                rewriter, location, i64, base, NBAField::WriteMask, 0, 8);
+            schedule::NativeNBAAccumulatorStoreOp::create(
                 rewriter, location,
                 arith::OrIOp::create(
                     rewriter, location, oldMask,
                     llvmConstant(rewriter, location, i64, mask)),
-                maskAddress, 8);
+                base, NBAField::WriteMask, 0, 8);
           }
         } else {
           uint64_t laneOffset = static_cast<uint64_t>(decoded.offset / 8);
           Value laneValue =
               LLVM::TruncOp::create(rewriter, location, i32, value);
-          LLVM::StoreOp::create(
-              rewriter, location, laneValue,
-              nbaFieldGEP(
-                  rewriter, location, base,
-                  offsetof(talos_rt_generated_nba_accumulator_256, value) +
-                      laneOffset),
+          schedule::NativeNBAAccumulatorStoreOp::create(
+              rewriter, location, laneValue, base, NBAField::Value, laneOffset,
               4);
           // This lane form is restricted to two-state values, but the same
           // accumulator can have been populated by a four-state phase before
           // promotion.  Clear the selected unknown lane as part of staging so
           // every legal barrier observes the same known value.
-          LLVM::StoreOp::create(
+          schedule::NativeNBAAccumulatorStoreOp::create(
               rewriter, location,
-              llvmConstant(rewriter, location, i32, UINT32_MAX),
-              nbaFieldGEP(
-                  rewriter, location, base,
-                  offsetof(talos_rt_generated_nba_accumulator_256, write_mask) +
-                      laneOffset),
-              4);
-          LLVM::StoreOp::create(
+              llvmConstant(rewriter, location, i32, UINT32_MAX), base,
+              NBAField::WriteMask, laneOffset, 4);
+          schedule::NativeNBAAccumulatorStoreOp::create(
               rewriter, location, llvmConstant(rewriter, location, i32, 0),
-              nbaFieldGEP(
-                  rewriter, location, base,
-                  offsetof(talos_rt_generated_nba_accumulator_256, unknown) +
-                      laneOffset),
-              4);
+              base, NBAField::Unknown, laneOffset, 4);
         }
         if (!fixedRegionEvalStage) {
-          LLVM::StoreOp::create(
+          schedule::NativeNBAAccumulatorStoreOp::create(
               rewriter, location, llvmConstant(rewriter, location, i32, 1),
-              nbaFieldGEP(
-                  rewriter, location, base,
-                  offsetof(talos_rt_generated_nba_accumulator_256, valid)),
-              4);
-          LLVM::StoreOp::create(
+              base, NBAField::Valid, 0, 4);
+          schedule::NativeNBAAccumulatorStoreOp::create(
               rewriter, location,
-              llvmConstant(rewriter, location, i32, commitRegion),
-              nbaFieldGEP(rewriter, location, base,
-                          offsetof(talos_rt_generated_nba_accumulator_256,
-                                   exec_region)),
-              4);
+              llvmConstant(rewriter, location, i32, commitRegion), base,
+              NBAField::ExecRegion, 0, 4);
         }
         Value dirtyBase = LLVM::AddressOfOp::create(
             rewriter, location, pointer, "__talos_aot_nba_dirty_roots_v1");
@@ -2041,39 +2007,26 @@ void emitGeneratedNBATransient(OpBuilder &builder, Location location,
                                Value accumulator, uint64_t word, Value mask,
                                Value newValue, Value newUnknown, Value staged) {
   Type i64 = builder.getI64Type();
-  auto field = [&](size_t offset) {
-    return nbaFieldGEP(builder, location, accumulator,
-                       offset + word * sizeof(uint64_t));
-  };
-  auto load = [&](size_t offset) {
-    return LLVM::LoadOp::create(builder, location, i64, field(offset), 8)
-        .getResult();
+  uint64_t offset = word * sizeof(uint64_t);
+  auto load = [&](NBAField field) -> Value {
+    return schedule::NativeNBAAccumulatorLoadOp::create(
+        builder, location, i64, accumulator, field, offset, 8);
   };
   if (!staged)
-    staged = arith::AndIOp::create(
-        builder, location,
-        load(offsetof(talos_rt_generated_nba_accumulator_256, write_mask)),
-        mask);
+    staged = arith::AndIOp::create(builder, location, load(NBAField::WriteMask),
+                                   mask);
   Value differs = arith::OrIOp::create(
       builder, location,
-      arith::XOrIOp::create(
-          builder, location,
-          load(offsetof(talos_rt_generated_nba_accumulator_256, value)),
-          newValue),
-      arith::XOrIOp::create(
-          builder, location,
-          load(offsetof(talos_rt_generated_nba_accumulator_256, unknown)),
-          newUnknown));
-  Value transientAddress =
-      field(offsetof(talos_rt_generated_nba_accumulator_256, transient));
-  Value transient =
-      LLVM::LoadOp::create(builder, location, i64, transientAddress, 8);
-  LLVM::StoreOp::create(
+      arith::XOrIOp::create(builder, location, load(NBAField::Value), newValue),
+      arith::XOrIOp::create(builder, location, load(NBAField::Unknown),
+                            newUnknown));
+  Value transient = load(NBAField::Transient);
+  schedule::NativeNBAAccumulatorStoreOp::create(
       builder, location,
       arith::OrIOp::create(
           builder, location, transient,
           arith::AndIOp::create(builder, location, staged, differs)),
-      transientAddress, 8);
+      accumulator, NBAField::Transient, offset, 8);
 }
 
 Value buildNativeNBAChange(OpBuilder &builder, Location location,

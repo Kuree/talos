@@ -209,10 +209,12 @@ module attributes {
 // TWO-STATE: llvm.call @__talos_aot_static_nba_commit_two_state_v1
 // TWO-STATE-LABEL: llvm.func internal @__talos_aot_static_nba_commit_two_state_v1
 // TWO-STATE: %[[CANON_ACC:.*]] = llvm.mlir.addressof @__talos_aot_nba_accumulator_0
-// TWO-STATE: llvm.getelementptr %[[CANON_ACC]][32]
+// TWO-STATE: %[[CANON_STAGED:.*]] = llvm.getelementptr %[[CANON_ACC]][0]
+// TWO-STATE-NEXT: llvm.load %[[CANON_STAGED]]
 // TWO-STATE-NEXT: {{.*}} = llvm.mlir.zero : i64
 // TWO-STATE: %[[CANON_UNKNOWN:.*]] = llvm.mlir.addressof @__talos_state_unknown
 // TWO-STATE-NEXT: llvm.load %[[CANON_UNKNOWN]]
+// TWO-STATE-NOT: llvm.getelementptr %[[CANON_ACC]][32]
 // TWO-STATE-LABEL: llvm.func internal @__talos_aot_static_nba_commit_two_state_fast_v1
 // TWO-STATE-SAME: alignment = 128 : i64
 // The production materializer specializes the clone to the steady two-state
@@ -222,7 +224,8 @@ module attributes {
 // TWO-STATE: llvm.mlir.constant(2 : i32) : i32
 // TWO-STATE-NOT: @__talos_state_unknown
 // TWO-STATE: %[[FAST_ACC:.*]] = llvm.mlir.addressof @__talos_aot_nba_accumulator_0
-// TWO-STATE: llvm.getelementptr %[[FAST_ACC]][32]
+// TWO-STATE: %[[FAST_STAGED:.*]] = llvm.getelementptr %[[FAST_ACC]][0]
+// TWO-STATE-NEXT: llvm.load %[[FAST_STAGED]]
 // TWO-STATE-NEXT: {{.*}} = llvm.mlir.zero : i64
 // TWO-STATE: %[[FAST_VALUE_ADDR:.*]] = llvm.mlir.addressof @__talos_state_value
 // TWO-STATE-NEXT: %[[FAST_OLD8:.*]] = llvm.load %[[FAST_VALUE_ADDR]] {{.*}} : !llvm.ptr -> i8

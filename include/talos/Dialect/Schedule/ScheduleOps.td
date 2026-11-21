@@ -1061,6 +1061,88 @@ def NativeStateStoreOp : ScheduleNativeOp<"state.store", [
   let hasVerifier = 1;
 }
 
+// Generated NBA accumulator records (talos_rt_generated_nba_accumulator_256).
+// A generated stage writes a record's fields, the NBA barrier commits and
+// clears them, and the runtime consumes records it is handed at its own
+// barrier (IEEE 1800-2023 4.9.4, 10.4.2). Native passes prove which captures
+// are private to a generated barrier by seeing every access to a record, so
+// the fields are accessed only through the typed operations below. Their
+// physical layout is chosen when they are lowered: a two-state executable's
+// record has no X/Z field.
+def NativeNBAAccumulatorAddressOp : ScheduleNativeOp<"nba.acc.address", [
+    Pure, DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let summary = "address of a generated NBA accumulator record";
+  let description = [{
+    The address of the generated NBA accumulator record `global`. Its fields
+    are read and written by `schedule.nba.acc.load` and
+    `schedule.nba.acc.store`; native finalization rejects any other use of
+    this address.
+  }];
+  let arguments = (ins FlatSymbolRefAttr:$global);
+  let results = (outs LLVM_DefaultPointer:$result);
+  let assemblyFormat = "$global attr-dict `:` qualified(type($result))";
+  let builders = [OpBuilder<(ins "::llvm::StringRef":$global)>];
+  let hasVerifier = 1;
+}
+
+def NativeNBAAccumulatorLoadOp : ScheduleNativeOp<"nba.acc.load"> {
+  let summary = "read a field of a generated NBA accumulator record";
+  let description = [{
+    Reads the bytes of `field` of the accumulator record at `record`, from
+    byte `offset` within the field, as one value with the given alignment.
+    The record is a `schedule.nba.acc.address` or a record pointer read from
+    a table of records.
+
+    - `pending_root`: a read of `valid` by the generated consumer that commits
+      this root, testing whether its capture is still pending. A transaction
+      that keeps the root's captures private answers it from its own index.
+    - `at_commit`: a read of `write_mask` by the barrier that commits the
+      capture, after it claimed the root's dirty bit; not a test for a new
+      stage.
+    - `owner`: the activation-group member whose activation performs the
+      access.
+  }];
+  let arguments = (ins Arg<LLVM_DefaultPointer, "the record", [MemRead]>:$record,
+                       NBAAccumulatorFieldEnum:$field,
+                       DefaultValuedAttr<I64Attr, "0">:$offset,
+                       IntValidAlignment<I64Attr>:$alignment,
+                       OptionalAttr<I32Attr>:$pending_root,
+                       UnitAttr:$at_commit,
+                       OptionalAttr<I32Attr>:$owner);
+  let results = (outs AnySignlessInteger:$result);
+  let assemblyFormat = [{
+    $record `[` custom<AccumulatorField>($field, $offset) `]` attr-dict `:`
+    type($result)
+  }];
+  let builders = [OpBuilder<(ins "::mlir::Type":$type, "::mlir::Value":$record,
+                                 "::talos::schedule::NBAAccumulatorField":$field,
+                                 "uint64_t":$offset, "uint64_t":$alignment)>];
+  let hasVerifier = 1;
+}
+
+def NativeNBAAccumulatorStoreOp : ScheduleNativeOp<"nba.acc.store"> {
+  let summary = "write a field of a generated NBA accumulator record";
+  let description = [{
+    Writes `value` to the bytes of `field` of the accumulator record at
+    `record`, from byte `offset` within the field, with the given alignment.
+    `owner` is the activation-group member whose activation performs it.
+  }];
+  let arguments = (ins AnySignlessInteger:$value,
+                       Arg<LLVM_DefaultPointer, "the record", [MemWrite]>:$record,
+                       NBAAccumulatorFieldEnum:$field,
+                       DefaultValuedAttr<I64Attr, "0">:$offset,
+                       IntValidAlignment<I64Attr>:$alignment,
+                       OptionalAttr<I32Attr>:$owner);
+  let assemblyFormat = [{
+    $value `,` $record `[` custom<AccumulatorField>($field, $offset) `]`
+    attr-dict `:` type($value)
+  }];
+  let builders = [OpBuilder<(ins "::mlir::Value":$value, "::mlir::Value":$record,
+                                 "::talos::schedule::NBAAccumulatorField":$field,
+                                 "uint64_t":$offset, "uint64_t":$alignment)>];
+  let hasVerifier = 1;
+}
+
 def NativeByteAddressOp : ScheduleNativeOp<"bytes.address", [Pure]> {
   let summary = "immutable bytes awaiting executable reachability";
   let arguments = (ins StrAttr:$name, StrAttr:$value, I64Attr:$alignment);

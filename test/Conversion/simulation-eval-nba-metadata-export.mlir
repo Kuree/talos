@@ -30,8 +30,8 @@
 // CHECK: %[[ACC:.*]] = llvm.mlir.addressof @__talos_aot_nba_accumulator_0
 // CHECK-NOT: llvm.getelementptr %[[ACC]][0]
 // CHECK-NOT: llvm.getelementptr %[[ACC]][32]
-// CHECK: %[[MASK_ADDR:.*]] = llvm.getelementptr %[[ACC]][64]
 // CHECK: %[[MASK:.*]] = llvm.select %[[PRESENT]], %{{.*}}, %{{.*}} : i1, i64
+// CHECK: %[[MASK_ADDR:.*]] = llvm.getelementptr %[[ACC]][64]
 // CHECK: llvm.store %[[MASK]], %[[MASK_ADDR]]
 // CHECK: %[[VALID:.*]] = llvm.zext %[[PRESENT]] : i1 to i32
 // CHECK: %[[VALID_ADDR:.*]] = llvm.getelementptr %[[ACC]][96]

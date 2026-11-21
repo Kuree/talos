@@ -147,15 +147,12 @@ public:
           // slots commit. Preserve its dirty bit for the later barrier.
           Value retained = c(0);
           if (auto acc = root.getLayoutAttr().getAccumulator()) {
-            Value stillPending = load32(nbaFieldGEP(
-                b, loc, address(acc),
-                offsetof(talos_rt_generated_nba_accumulator_256, valid)));
             // This tests remaining captures after emitRoot, unlike the
             // entry validity test. LRM 4.9.4/10.4.2: consume each capture
             // exactly once, while retaining a later event-region form.
-            schedule::set<schedule::Field::EvalPendingDirtyRoot>(
-                stillPending.getDefiningOp(),
-                b.getI32IntegerAttr(root.getRoot()));
+            auto stillPending = schedule::NativeNBAAccumulatorLoadOp::create(
+                b, loc, i32, accumulator(acc), NBAField::Valid, 0, 4);
+            stillPending.setPendingRoot(root.getRoot());
             retained = resize(stillPending, i64);
           }
           store(bor(load(consumed), select(ne(retained, c(0)), c(0), c(bit))),
@@ -226,6 +223,19 @@ private:
   Value c(uint64_t n) { return llvmConstant(b, loc, i64, n); }
   Value address(FlatSymbolRefAttr name) {
     return LLVM::AddressOfOp::create(b, loc, ptr, name.getValue());
+  }
+  Value accumulator(FlatSymbolRefAttr name) {
+    return schedule::NativeNBAAccumulatorAddressOp::create(b, loc,
+                                                           name.getValue());
+  }
+  Value loadField(Value record, NBAField field, uint64_t offset = 0) {
+    return schedule::NativeNBAAccumulatorLoadOp::create(b, loc, i64, record,
+                                                        field, offset, 8);
+  }
+  void storeField(Value value, Value record, NBAField field,
+                  uint64_t offset = 0) {
+    schedule::NativeNBAAccumulatorStoreOp::create(b, loc, value, record, field,
+                                                  offset, 8);
   }
   Value load(Value addr) { return LLVM::LoadOp::create(b, loc, i64, addr, 8); }
   Value load32(Value addr) {
@@ -455,14 +465,11 @@ private:
       b.setInsertionPointToStart(next);
     }
     if (auto symbol = root.getAccumulator()) {
-      Value acc = address(symbol);
-      auto field = [&](uint64_t offset) {
-        return nbaFieldGEP(b, loc, acc, offset);
-      };
-      Value valid = load32(
-          field(offsetof(talos_rt_generated_nba_accumulator_256, valid)));
-      Value region = load32(
-          field(offsetof(talos_rt_generated_nba_accumulator_256, exec_region)));
+      Value acc = accumulator(symbol);
+      Value valid = schedule::NativeNBAAccumulatorLoadOp::create(
+          b, loc, i32, acc, NBAField::Valid, 0, 4);
+      Value region = schedule::NativeNBAAccumulatorLoadOp::create(
+          b, loc, i32, acc, NBAField::ExecRegion, 0, 4);
       Value selected =
           band(ne(valid, llvmConstant(b, loc, i32, 0)),
                arith::CmpIOp::create(b, loc, arith::CmpIPredicate::eq, region,
@@ -473,25 +480,17 @@ private:
       for (uint64_t local = 0; local < root.getWidth(); local += 64) {
         unsigned width = std::min<uint64_t>(64, root.getWidth() - local);
         uint64_t word = local / 64;
-        Value maskAddr =
-            field(offsetof(talos_rt_generated_nba_accumulator_256, write_mask) +
-                  word * 8);
-        Value transAddr =
-            field(offsetof(talos_rt_generated_nba_accumulator_256, transient) +
-                  word * 8);
-        Value writeMask = band(load(maskAddr), c(mask(width)));
-        Value value =
-            load(field(offsetof(talos_rt_generated_nba_accumulator_256, value) +
-                       word * 8));
-        Value unknown = load(
-            field(offsetof(talos_rt_generated_nba_accumulator_256, unknown) +
-                  word * 8));
-        Value observed = commitChunk(
-            c(root.getOffset() + local), root.getOffset() + local, width,
-            c(width), writeMask, value, unknown, load(transAddr));
+        Value writeMask =
+            band(loadField(acc, NBAField::WriteMask, word * 8), c(mask(width)));
+        Value value = loadField(acc, NBAField::Value, word * 8);
+        Value unknown = loadField(acc, NBAField::Unknown, word * 8);
+        Value transient = loadField(acc, NBAField::Transient, word * 8);
+        Value observed =
+            commitChunk(c(root.getOffset() + local), root.getOffset() + local,
+                        width, c(width), writeMask, value, unknown, transient);
         activate(root, c(local), c(width), observed, local);
-        store(c(0), maskAddr);
-        store(c(0), transAddr);
+        storeField(c(0), acc, NBAField::WriteMask, word * 8);
+        storeField(c(0), acc, NBAField::Transient, word * 8);
         if (root.getWidth() > 64) {
           increment(stages,
                     resize(ne(band(writeMask, c(UINT32_MAX)), c(0)), i64));
@@ -504,9 +503,8 @@ private:
       if (root.getWidth() <= 64)
         increment(stages, c(1));
       increment(commits, c(1));
-      LLVM::StoreOp::create(
-          b, loc, llvmConstant(b, loc, i32, 0),
-          field(offsetof(talos_rt_generated_nba_accumulator_256, valid)), 4);
+      schedule::NativeNBAAccumulatorStoreOp::create(
+          b, loc, llvmConstant(b, loc, i32, 0), acc, NBAField::Valid, 0, 4);
       cf::BranchOp::create(b, loc, next);
       b.setInsertionPointToStart(next);
     }

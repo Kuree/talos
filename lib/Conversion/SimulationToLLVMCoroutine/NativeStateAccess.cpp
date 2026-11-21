@@ -25,6 +25,8 @@ FlatSymbolRefAttr getAddressedGlobal(Operation *root) {
     return address.getGlobalAttr();
   if (auto window = dyn_cast<schedule::NativeStateWindowAddressOp>(root))
     return window.getGlobalAttr();
+  if (auto record = dyn_cast<schedule::NativeNBAAccumulatorAddressOp>(root))
+    return record.getGlobalAttr();
   return nullptr;
 }
 
@@ -100,6 +102,33 @@ std::optional<NativeMemoryAccess> getNativeMemoryAccess(Operation *operation) {
     access.offset = store.getConstantOffset();
     access.window = store.getWindowAttr();
     access.writtenBits = store.getWrittenBitsAttr();
+    access.owner = store.getOwnerAttr();
+    return access;
+  }
+  // An accumulator field is other memory: the record's global, at the
+  // field's offset in the four-state record, which native passes see until
+  // finalization lowers the record's layout.
+  auto describeField = [&](Value record, schedule::NBAAccumulatorField field,
+                           uint64_t offset) {
+    static_cast<NativeAddress &>(access) =
+        describeNativeAddress(operation, record);
+    // Every field has an offset in the four-state record.
+    uint64_t start = *getNBAAccumulatorFieldOffset(field, /*twoState=*/false);
+    if (access.offset && *access.offset <= UINT64_MAX - start - offset)
+      *access.offset += start + offset;
+    else
+      access.offset.reset();
+  };
+  if (auto load = dyn_cast<schedule::NativeNBAAccumulatorLoadOp>(operation)) {
+    describeField(load.getRecord(), load.getField(), load.getOffset());
+    access.type = load.getType();
+    access.owner = load.getOwnerAttr();
+    return access;
+  }
+  if (auto store = dyn_cast<schedule::NativeNBAAccumulatorStoreOp>(operation)) {
+    describeField(store.getRecord(), store.getField(), store.getOffset());
+    access.type = store.getValue().getType();
+    access.stored = store.getValue();
     access.owner = store.getOwnerAttr();
     return access;
   }
@@ -299,6 +328,12 @@ void setNativeMemoryOwner(Operation *operation, IntegerAttr owner) {
   if (auto load = dyn_cast<schedule::NativeStateLoadOp>(operation))
     load.setOwnerAttr(owner);
   else if (auto store = dyn_cast<schedule::NativeStateStoreOp>(operation))
+    store.setOwnerAttr(owner);
+  else if (auto load =
+               dyn_cast<schedule::NativeNBAAccumulatorLoadOp>(operation))
+    load.setOwnerAttr(owner);
+  else if (auto store =
+               dyn_cast<schedule::NativeNBAAccumulatorStoreOp>(operation))
     store.setOwnerAttr(owner);
   else
     schedule::set<schedule::Field::EvalGroupOwner>(operation, owner);

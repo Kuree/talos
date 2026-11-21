@@ -50,6 +50,35 @@ static void printStateOffset(OpAsmPrinter &printer, Operation *,
     printer << " + " << offset;
 }
 
+// `value`, or `value + 8` for a byte offset inside the field.
+static ParseResult parseAccumulatorField(OpAsmParser &parser,
+                                         NBAAccumulatorFieldAttr &field,
+                                         IntegerAttr &offset) {
+  StringRef keyword;
+  SMLoc location = parser.getCurrentLocation();
+  if (parser.parseKeyword(&keyword))
+    return failure();
+  std::optional<NBAAccumulatorField> parsed =
+      symbolizeNBAAccumulatorField(keyword);
+  if (!parsed)
+    return parser.emitError(location, "unknown NBA accumulator field '")
+           << keyword << "'";
+  field = NBAAccumulatorFieldAttr::get(parser.getContext(), *parsed);
+  uint64_t bytes = 0;
+  if (succeeded(parser.parseOptionalPlus()) && parser.parseInteger(bytes))
+    return failure();
+  offset = parser.getBuilder().getI64IntegerAttr(bytes);
+  return success();
+}
+
+static void printAccumulatorField(OpAsmPrinter &printer, Operation *,
+                                  NBAAccumulatorFieldAttr field,
+                                  IntegerAttr offset) {
+  printer << stringifyNBAAccumulatorField(field.getValue());
+  if (uint64_t bytes = offset.getValue().getZExtValue())
+    printer << " + " << bytes;
+}
+
 } // namespace talos::schedule
 
 #include "talos/Dialect/Schedule/ScheduleOps.cpp.inc"
@@ -94,21 +123,26 @@ bool isValidStateWrittenBits(ArrayRef<int64_t> range) {
   return range.size() == 2 && range[0] >= 0 && range[1] > 0;
 }
 
-static LogicalResult verifyStateAccess(Operation *op, StringRef global) {
-  if (!getStatePlaneOfGlobal(global))
-    return op->emitOpError("names '") << global << "', no native state plane";
-  // Only functions are lowered to LLVM accesses.
+// A typed memory operation: only functions are lowered to LLVM accesses,
+// and what native passes need to know about an access is a property; other
+// dialects may still annotate it.
+static LogicalResult verifyTypedMemoryOp(Operation *op) {
   if (!op->getParentOfType<FunctionOpInterface>())
     return op->emitOpError("must be in a function");
-  // What native passes need to know about an access is a property; other
-  // dialects may still annotate it.
   for (NamedAttribute attribute : op->getDiscardableAttrs())
     if (attribute.getNameDialect() &&
         attribute.getNameDialect()->getNamespace() ==
             ScheduleDialect::getDialectNamespace())
       return op->emitOpError("carries the schedule fact '")
-             << attribute.getName() << "' as a property, not an attribute";
+             << attribute.getName().getValue()
+             << "' as a property, not an attribute";
   return success();
+}
+
+static LogicalResult verifyStateAccess(Operation *op, StringRef global) {
+  if (!getStatePlaneOfGlobal(global))
+    return op->emitOpError("names '") << global << "', no native state plane";
+  return verifyTypedMemoryOp(op);
 }
 
 static LogicalResult verifyRange(Operation *op, StringRef name,
@@ -267,6 +301,89 @@ NativeStateStoreOp::verifySymbolUses(SymbolTableCollection &tables) {
 LogicalResult NativeStateStoreOp::fold(FoldAdaptor adaptor,
                                        SmallVectorImpl<OpFoldResult> &) {
   return success(foldConstantOffset(*this, adaptor.getDynamicOffset()));
+}
+
+uint64_t getNBAAccumulatorFieldBytes(NBAAccumulatorField field) {
+  switch (field) {
+  case NBAAccumulatorField::Value:
+  case NBAAccumulatorField::Unknown:
+  case NBAAccumulatorField::WriteMask:
+  case NBAAccumulatorField::Transient:
+    return 4 * sizeof(uint64_t);
+  case NBAAccumulatorField::Valid:
+  case NBAAccumulatorField::ExecRegion:
+    return sizeof(uint32_t);
+  }
+  llvm_unreachable("unknown NBA accumulator field");
+}
+
+// The accessed bytes lie inside the field.
+static LogicalResult verifyAccumulatorAccess(Operation *op, Type type,
+                                             NBAAccumulatorField field,
+                                             uint64_t offset) {
+  if (failed(verifyTypedMemoryOp(op)))
+    return failure();
+  unsigned width = cast<IntegerType>(type).getWidth();
+  if (width % 8)
+    return op->emitOpError("accesses a value of ")
+           << width << " bits, not whole bytes";
+  uint64_t bytes = getNBAAccumulatorFieldBytes(field);
+  if (offset > bytes || width / 8 > bytes - offset)
+    return op->emitOpError("accesses bytes outside its ")
+           << stringifyNBAAccumulatorField(field) << " field";
+  return success();
+}
+
+void NativeNBAAccumulatorAddressOp::build(OpBuilder &builder,
+                                          OperationState &state,
+                                          StringRef global) {
+  build(builder, state, LLVM::LLVMPointerType::get(builder.getContext()),
+        FlatSymbolRefAttr::get(builder.getContext(), global));
+}
+LogicalResult NativeNBAAccumulatorAddressOp::verify() {
+  return verifyTypedMemoryOp(*this);
+}
+LogicalResult
+NativeNBAAccumulatorAddressOp::verifySymbolUses(SymbolTableCollection &tables) {
+  if (!tables.lookupNearestSymbolFrom<LLVM::GlobalOp>(*this, getGlobalAttr()))
+    return emitOpError("must reference the llvm.mlir.global of its record");
+  return success();
+}
+
+void NativeNBAAccumulatorLoadOp::build(OpBuilder &builder,
+                                       OperationState &state, Type type,
+                                       Value record, NBAAccumulatorField field,
+                                       uint64_t offset, uint64_t alignment) {
+  build(builder, state, type, record,
+        NBAAccumulatorFieldAttr::get(builder.getContext(), field),
+        builder.getI64IntegerAttr(offset), builder.getI64IntegerAttr(alignment),
+        /*pending_root=*/IntegerAttr{},
+        /*at_commit=*/UnitAttr{}, /*owner=*/IntegerAttr{});
+}
+LogicalResult NativeNBAAccumulatorLoadOp::verify() {
+  if (failed(
+          verifyAccumulatorAccess(*this, getType(), getField(), getOffset())))
+    return failure();
+  if (getPendingRoot() && getField() != NBAAccumulatorField::Valid)
+    return emitOpError("tests a pending capture through a field other than "
+                       "valid");
+  if (getAtCommit() && getField() != NBAAccumulatorField::WriteMask)
+    return emitOpError("reads a field other than write_mask at commit");
+  return success();
+}
+
+void NativeNBAAccumulatorStoreOp::build(OpBuilder &builder,
+                                        OperationState &state, Value value,
+                                        Value record, NBAAccumulatorField field,
+                                        uint64_t offset, uint64_t alignment) {
+  build(builder, state, value, record,
+        NBAAccumulatorFieldAttr::get(builder.getContext(), field),
+        builder.getI64IntegerAttr(offset), builder.getI64IntegerAttr(alignment),
+        /*owner=*/IntegerAttr{});
+}
+LogicalResult NativeNBAAccumulatorStoreOp::verify() {
+  return verifyAccumulatorAccess(*this, getValue().getType(), getField(),
+                                 getOffset());
 }
 } // namespace talos::schedule
 namespace talos::schedule {

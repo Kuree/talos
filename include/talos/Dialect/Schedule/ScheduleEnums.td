@@ -273,4 +273,28 @@ def StatePlaneEnum
   let genSpecializedAttr = 0;
 }
 
+// The fields of a generated NBA accumulator record
+// (talos_rt_generated_nba_accumulator_256): the staged value and X/Z bits, the
+// bits written since the last barrier, whether a capture is pending and the
+// region that commits it, and the bits rewritten with a different value
+// before the barrier (IEEE 1800-2023 4.9.4, 10.4.2). Two-state executables
+// keep a record without the X/Z field.
+def NBAAccumulatorFieldValue : I32EnumAttrCase<"Value", 0, "value">;
+def NBAAccumulatorFieldUnknown : I32EnumAttrCase<"Unknown", 1, "unknown">;
+def NBAAccumulatorFieldWriteMask
+    : I32EnumAttrCase<"WriteMask", 2, "write_mask">;
+def NBAAccumulatorFieldValid : I32EnumAttrCase<"Valid", 3, "valid">;
+def NBAAccumulatorFieldExecRegion
+    : I32EnumAttrCase<"ExecRegion", 4, "exec_region">;
+def NBAAccumulatorFieldTransient
+    : I32EnumAttrCase<"Transient", 5, "transient">;
+def NBAAccumulatorFieldEnum
+    : I32EnumAttr<"NBAAccumulatorField", "generated NBA accumulator field", [
+        NBAAccumulatorFieldValue, NBAAccumulatorFieldUnknown,
+        NBAAccumulatorFieldWriteMask, NBAAccumulatorFieldValid,
+        NBAAccumulatorFieldExecRegion, NBAAccumulatorFieldTransient
+      ]> {
+  let cppNamespace = "::talos::schedule";
+}
+
 #endif

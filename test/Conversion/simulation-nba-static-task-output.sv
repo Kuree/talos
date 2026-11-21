@@ -16,8 +16,8 @@
 // CHECK: %[[VALUE_BITS:.*]] = llvm.and %[[STAGED_VALUE]], %[[MASK]] : i64
 // CHECK: %[[MERGED_VALUE:.*]] = llvm.or %{{.*}}, %[[VALUE_BITS]] : i64
 // CHECK-NEXT: llvm.store %[[MERGED_VALUE]], %[[ACC]]
-// CHECK-NEXT: %[[UNKNOWN_ADDR:.*]] = llvm.getelementptr %[[ACC]][32]
 // CHECK-NEXT: %[[UNKNOWN_BITS:.*]] = llvm.and %[[STAGED_UNKNOWN]], %[[MASK]] : i64
+// CHECK-NEXT: %[[UNKNOWN_ADDR:.*]] = llvm.getelementptr %[[ACC]][32]
 // CHECK: %[[MERGED_UNKNOWN:.*]] = llvm.or %{{.*}}, %[[UNKNOWN_BITS]] : i64
 // CHECK-NEXT: llvm.store %[[MERGED_UNKNOWN]], %[[UNKNOWN_ADDR]]
 // CHECK: %[[OLD_DIRTY:.*]] = llvm.load %[[DIRTY]]

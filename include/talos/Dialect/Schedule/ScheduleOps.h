@@ -29,6 +29,10 @@ bool isValidStateWindow(llvm::ArrayRef<int64_t> range);
 /// Whether `range` is a well-formed `written_bits`: [begin, width] bits with
 /// begin >= 0 and width > 0.
 bool isValidStateWrittenBits(llvm::ArrayRef<int64_t> range);
+/// The bytes a generated NBA accumulator field spans in the four-state
+/// record (talos_rt_generated_nba_accumulator_256): four words for a bit
+/// field, one 32-bit word for `valid` and `exec_region`.
+uint64_t getNBAAccumulatorFieldBytes(NBAAccumulatorField field);
 } // namespace talos::schedule
 #define GET_OP_CLASSES
 #include "talos/Dialect/Schedule/ScheduleOps.h.inc"

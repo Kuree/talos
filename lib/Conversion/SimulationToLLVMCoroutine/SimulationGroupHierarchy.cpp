@@ -26,7 +26,8 @@ bool reproducibleSetup(Operation *operation) {
   // Generated entries need only constants and static address construction.
   return isa<LLVM::ConstantOp, LLVM::AddressOfOp, LLVM::GEPOp,
              schedule::NativeStateAddressOp,
-             schedule::NativeStateWindowAddressOp>(operation);
+             schedule::NativeStateWindowAddressOp,
+             schedule::NativeNBAAccumulatorAddressOp>(operation);
 }
 
 /// An entry is an executable readiness load, not an inferred graph rank.

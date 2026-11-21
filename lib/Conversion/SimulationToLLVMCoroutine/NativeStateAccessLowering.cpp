@@ -6,6 +6,8 @@
 // access from another memory access, each becomes the LLVM access it stands
 // for: the plane global's address, or for a contribution plane the pointer
 // its global binds, a byte GEP to the window, and a load or store of it.
+// Generated NBA accumulator records are accessed the same way: their typed
+// field accesses become byte GEPs to the field in the record layout.
 //
 //===----------------------------------------------------------------------===//
 
@@ -99,18 +101,69 @@ LogicalResult verifyStatePointerUses(Value pointer) {
   return success();
 }
 
+// An NBA accumulator record's fields are read and written by typed
+// accumulator accesses only, so native passes before this point see every
+// access to the record (IEEE 1800-2023 4.9.4, 10.4.2: a capture is consumed
+// exactly once). Its address flows nowhere else.
+LogicalResult verifyAccumulatorAddressUses(Value record) {
+  // A field access's only pointer operand is its record.
+  for (Operation *user : record.getUsers())
+    if (!isa<schedule::NativeNBAAccumulatorLoadOp,
+             schedule::NativeNBAAccumulatorStoreOp>(user))
+      return user->emitError("accesses an NBA accumulator record through its "
+                             "address instead of a typed accumulator access");
+  return success();
+}
+
+// Lowers typed accumulator accesses to byte GEPs of the record by the field's
+// offset in the record layout, one per block and offset, at its first use.
+class AccumulatorAccessLowering {
+public:
+  explicit AccumulatorAccessLowering(bool twoState) : twoState(twoState) {}
+
+  FailureOr<Value> field(OpBuilder &builder, Operation *access, Value record,
+                         schedule::NBAAccumulatorField field, uint64_t offset) {
+    std::optional<uint64_t> fieldOffset =
+        detail::getNBAAccumulatorFieldOffset(field, twoState);
+    if (!fieldOffset)
+      return access->emitError("accesses the X/Z field of a two-state NBA "
+                               "accumulator record");
+    uint64_t bytes = *fieldOffset + offset;
+    auto key = std::make_tuple(builder.getInsertionBlock(), record, bytes);
+    if (Value address = addresses.lookup(key))
+      return address;
+    Value address = detail::byteGEP(builder, access->getLoc(), record, bytes);
+    addresses.try_emplace(key, address);
+    return address;
+  }
+
+private:
+  bool twoState;
+  DenseMap<std::tuple<Block *, Value, uint64_t>, Value> addresses;
+};
+
 class LowerNativeStateAccessPass final
     : public impl::LowerNativeStateAccessPassBase<LowerNativeStateAccessPass> {
 public:
+  using Base::Base;
+
   void runOnOperation() override {
     LLVM::LLVMFuncOp function = getOperation();
     SmallVector<Operation *> accesses;
+    SmallVector<Operation *> accumulatorAccesses;
     bool valid = true;
     function.walk([&](Operation *operation) {
       if (isa<schedule::NativeStateAddressOp,
               schedule::NativeStateWindowAddressOp, schedule::NativeStateLoadOp,
               schedule::NativeStateStoreOp>(operation))
         accesses.push_back(operation);
+      if (isa<schedule::NativeNBAAccumulatorAddressOp,
+              schedule::NativeNBAAccumulatorLoadOp,
+              schedule::NativeNBAAccumulatorStoreOp>(operation))
+        accumulatorAccesses.push_back(operation);
+      if (isa<schedule::NativeNBAAccumulatorAddressOp>(operation))
+        valid &=
+            succeeded(verifyAccumulatorAddressUses(operation->getResult(0)));
       if (isa<schedule::NativeStateAddressOp,
               schedule::NativeStateWindowAddressOp>(operation))
         valid &= succeeded(verifyStatePointerUses(operation->getResult(0)));
@@ -138,8 +191,10 @@ public:
     });
     if (!valid)
       return signalPassFailure();
-    if (accesses.empty())
+    if (accesses.empty() && accumulatorAccesses.empty())
       return markAllAnalysesPreserved();
+    if (failed(lowerAccumulatorAccesses(accumulatorAccesses)))
+      return signalPassFailure();
     StateAccessLowering lowering;
     // Typed properties served passes before this point; LLVM needs none.
     for (Operation *operation : accesses) {
@@ -188,6 +243,64 @@ public:
         lowered->setAttr(attribute.getName(), attribute.getValue());
       operation->erase();
     }
+  }
+
+private:
+  // A record's address is taken where its typed address was; its fields are
+  // the LLVM accesses of the same alignment at their layout offsets.
+  LogicalResult lowerAccumulatorAccesses(ArrayRef<Operation *> operations) {
+    // Records first, so the field addresses below are keyed on the LLVM
+    // addresses that stay.
+    SmallVector<Operation *> accesses;
+    for (Operation *operation : operations) {
+      auto address =
+          dyn_cast<schedule::NativeNBAAccumulatorAddressOp>(operation);
+      if (!address) {
+        accesses.push_back(operation);
+        continue;
+      }
+      if (!address.use_empty()) {
+        OpBuilder builder(operation);
+        address.replaceAllUsesWith(
+            LLVM::AddressOfOp::create(
+                builder, operation->getLoc(),
+                LLVM::LLVMPointerType::get(builder.getContext()),
+                address.getGlobal())
+                .getResult());
+      }
+      operation->erase();
+    }
+    AccumulatorAccessLowering lowering(twoState);
+    for (Operation *operation : accesses) {
+      OpBuilder builder(operation);
+      Location location = operation->getLoc();
+      Operation *lowered;
+      if (auto load =
+              dyn_cast<schedule::NativeNBAAccumulatorLoadOp>(operation)) {
+        FailureOr<Value> field =
+            lowering.field(builder, operation, load.getRecord(),
+                           load.getField(), load.getOffset());
+        if (failed(field))
+          return failure();
+        lowered = LLVM::LoadOp::create(builder, location, load.getType(),
+                                       *field, load.getAlignment());
+        load.getResult().replaceAllUsesWith(lowered->getResult(0));
+      } else {
+        auto store = cast<schedule::NativeNBAAccumulatorStoreOp>(operation);
+        FailureOr<Value> field =
+            lowering.field(builder, operation, store.getRecord(),
+                           store.getField(), store.getOffset());
+        if (failed(field))
+          return failure();
+        lowered = LLVM::StoreOp::create(builder, location, store.getValue(),
+                                        *field, store.getAlignment());
+      }
+      // Other dialects' annotations stay with the access.
+      for (NamedAttribute attribute : operation->getDiscardableAttrs())
+        lowered->setAttr(attribute.getName(), attribute.getValue());
+      operation->erase();
+    }
+    return success();
   }
 };
 } // namespace

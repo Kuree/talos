@@ -18,20 +18,18 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
   }
   llvm.func @work.__talos_pending()
   llvm.func @work(%arg: i64) attributes {schedule.eval.call_closure_root} {
-    %acc = llvm.mlir.addressof @acc : !llvm.ptr
-    %valid = llvm.getelementptr %acc[96] : (!llvm.ptr) -> !llvm.ptr, i8
-    %mask = llvm.getelementptr %acc[64] : (!llvm.ptr) -> !llvm.ptr, i8
+    %acc = schedule.nba.acc.address @acc : !llvm.ptr
     %one = llvm.mlir.constant(1 : i32) : i32
     %zero = llvm.mlir.constant(0 : i32) : i32
     %bits = llvm.mlir.constant(4294967295 : i64) : i64
-    llvm.store %bits, %acc : i64, !llvm.ptr
-    llvm.store %bits, %mask : i64, !llvm.ptr
-    llvm.store %one, %valid : i32, !llvm.ptr
+    schedule.nba.acc.store %bits, %acc[value] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %bits, %acc[write_mask] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %one, %acc[valid] {alignment = 4 : i64} : i32
     %dirty = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
     %marked = llvm.mlir.constant(1 : i64) : i64
     llvm.store %marked, %dirty {schedule.eval.pending_dirty_root = 0 : i32, schedule.eval.pending_stage_spec = array<i64: 0, 1, 32, 4294967295, 2, 1>} : i64, !llvm.ptr
-    %present = llvm.load %valid {schedule.eval.pending_dirty_root = 0 : i32} : !llvm.ptr -> i32
-    llvm.store %zero, %valid : i32, !llvm.ptr
+    %present = schedule.nba.acc.load %acc[valid] {alignment = 4 : i64, pending_root = 0 : i32} : i32
+    schedule.nba.acc.store %zero, %acc[valid] {alignment = 4 : i64} : i32
     llvm.return
   }
   llvm.func @caller(%arg: i64) attributes {schedule.eval.call_closure_root} {
@@ -42,7 +40,8 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
 
 // -----
 
-// An escaped accumulator address can alias the capture through inttoptr.
+// An LLVM address of the accumulator record can alias the capture through
+// inttoptr; only typed accumulator accesses are visible to the transaction.
 // LRM 4.9.4/10.4.2 requires one coherent captured payload. Keep it canonical.
 // CHECK-LABEL: module attributes
 // CHECK-NOT: .__talos_pending
@@ -58,23 +57,22 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     llvm.return %null : !llvm.ptr
   }
   llvm.func @work() attributes {schedule.eval.call_closure_root} {
-    %acc = llvm.mlir.addressof @acc : !llvm.ptr
-    %valid = llvm.getelementptr %acc[96] : (!llvm.ptr) -> !llvm.ptr, i8
-    %mask = llvm.getelementptr %acc[64] : (!llvm.ptr) -> !llvm.ptr, i8
+    %acc = schedule.nba.acc.address @acc : !llvm.ptr
     %one = llvm.mlir.constant(1 : i32) : i32
     %zero = llvm.mlir.constant(0 : i32) : i32
     %bits = llvm.mlir.constant(4294967295 : i64) : i64
-    llvm.store %bits, %acc : i64, !llvm.ptr
-    llvm.store %bits, %mask : i64, !llvm.ptr
-    llvm.store %one, %valid : i32, !llvm.ptr
+    schedule.nba.acc.store %bits, %acc[value] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %bits, %acc[write_mask] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %one, %acc[valid] {alignment = 4 : i64} : i32
     %dirty = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
     %marked = llvm.mlir.constant(1 : i64) : i64
     llvm.store %marked, %dirty {schedule.eval.pending_dirty_root = 0 : i32, schedule.eval.pending_stage_spec = array<i64: 0, 1, 32, 4294967295, 2, 1>} : i64, !llvm.ptr
-    %escaped = llvm.ptrtoint %acc : !llvm.ptr to i64
+    %raw = llvm.mlir.addressof @acc : !llvm.ptr
+    %escaped = llvm.ptrtoint %raw : !llvm.ptr to i64
     %alias = llvm.inttoptr %escaped : i64 to !llvm.ptr
     llvm.store %bits, %alias : i64, !llvm.ptr
-    %present = llvm.load %valid {schedule.eval.pending_dirty_root = 0 : i32} : !llvm.ptr -> i32
-    llvm.store %zero, %valid : i32, !llvm.ptr
+    %present = schedule.nba.acc.load %acc[valid] {alignment = 4 : i64, pending_root = 0 : i32} : i32
+    schedule.nba.acc.store %zero, %acc[valid] {alignment = 4 : i64} : i32
     llvm.return
   }
 }
@@ -99,20 +97,18 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     llvm.return %null : !llvm.ptr
   }
   llvm.func @work(%arg: i64) attributes {schedule.eval.call_closure_root} {
-    %acc = llvm.mlir.addressof @acc : !llvm.ptr
-    %valid = llvm.getelementptr %acc[96] : (!llvm.ptr) -> !llvm.ptr, i8
-    %mask = llvm.getelementptr %acc[64] : (!llvm.ptr) -> !llvm.ptr, i8
+    %acc = schedule.nba.acc.address @acc : !llvm.ptr
     %one = llvm.mlir.constant(1 : i32) : i32
     %zero = llvm.mlir.constant(0 : i32) : i32
     %bits = llvm.mlir.constant(4294967295 : i64) : i64
-    llvm.store %bits, %acc : i64, !llvm.ptr
-    llvm.store %bits, %mask : i64, !llvm.ptr
-    llvm.store %one, %valid : i32, !llvm.ptr
+    schedule.nba.acc.store %bits, %acc[value] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %bits, %acc[write_mask] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %one, %acc[valid] {alignment = 4 : i64} : i32
     %dirty = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
     %marked = llvm.mlir.constant(1 : i64) : i64
     llvm.store %marked, %dirty {schedule.eval.pending_dirty_root = 0 : i32, schedule.eval.pending_stage_spec = array<i64: 0, 1, 32, 4294967295, 2, 1>} : i64, !llvm.ptr
-    %present = llvm.load %valid {schedule.eval.pending_dirty_root = 0 : i32} : !llvm.ptr -> i32
-    llvm.store %zero, %valid : i32, !llvm.ptr
+    %present = schedule.nba.acc.load %acc[valid] {alignment = 4 : i64, pending_root = 0 : i32} : i32
+    schedule.nba.acc.store %zero, %acc[valid] {alignment = 4 : i64} : i32
     llvm.return
   }
   llvm.func @caller(%arg: i64) attributes {schedule.eval.call_closure_root} {
@@ -141,22 +137,20 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     llvm.return %null : !llvm.ptr
   }
   llvm.func @work(%offset: i64) attributes {schedule.eval.call_closure_root} {
-    %acc = llvm.mlir.addressof @acc : !llvm.ptr
-    %valid = llvm.getelementptr %acc[96] : (!llvm.ptr) -> !llvm.ptr, i8
-    %mask = llvm.getelementptr %acc[64] : (!llvm.ptr) -> !llvm.ptr, i8
+    %acc = schedule.nba.acc.address @acc : !llvm.ptr
     %one = llvm.mlir.constant(1 : i32) : i32
     %zero = llvm.mlir.constant(0 : i32) : i32
     %bits = llvm.mlir.constant(4294967295 : i64) : i64
-    llvm.store %bits, %acc : i64, !llvm.ptr
-    llvm.store %bits, %mask : i64, !llvm.ptr
-    llvm.store %one, %valid : i32, !llvm.ptr
+    schedule.nba.acc.store %bits, %acc[value] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %bits, %acc[write_mask] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %one, %acc[valid] {alignment = 4 : i64} : i32
     %dirty = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
     %marked = llvm.mlir.constant(1 : i64) : i64
     llvm.store %marked, %dirty {schedule.eval.pending_dirty_root = 0 : i32, schedule.eval.pending_stage_spec = array<i64: 0, 1, 32, 4294967295, 2, 1>} : i64, !llvm.ptr
     %alias = llvm.getelementptr %dirty[%offset] : (!llvm.ptr, i64) -> !llvm.ptr, i8
     %opaqueIndex = llvm.load %alias : !llvm.ptr -> i64
-    %present = llvm.load %valid {schedule.eval.pending_dirty_root = 0 : i32} : !llvm.ptr -> i32
-    llvm.store %zero, %valid : i32, !llvm.ptr
+    %present = schedule.nba.acc.load %acc[valid] {alignment = 4 : i64, pending_root = 0 : i32} : i32
+    schedule.nba.acc.store %zero, %acc[valid] {alignment = 4 : i64} : i32
     llvm.return
   }
 }

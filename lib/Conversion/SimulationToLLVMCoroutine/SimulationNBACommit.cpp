@@ -4,6 +4,7 @@
 #include "SimulationAOTPlanning.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
+#include "talos/Dialect/Schedule/ScheduleOps.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -96,32 +97,26 @@ void materializeNativeNBAMetadataExport(
       Value present =
           arith::CmpIOp::create(b, loc, arith::CmpIPredicate::ne, selected,
                                 llvmConstant(b, loc, i64, 0));
-      Value accumulator = LLVM::AddressOfOp::create(
-          b, loc, ptr, plan.generatedAccumulators[root]);
-      auto field = [&](uint64_t offset) {
-        return nbaFieldGEP(b, loc, accumulator, offset);
-      };
-      Value maskAddress =
-          field(offsetof(talos_rt_generated_nba_accumulator_256, write_mask));
+      Value accumulator = schedule::NativeNBAAccumulatorAddressOp::create(
+          b, loc, plan.generatedAccumulators[root]);
       Value mask =
           plan.generatedFixedWriteMasks[root]
               ? llvmConstant(b, loc, i64, plan.generatedFixedWriteMasks[root])
-              : LLVM::LoadOp::create(b, loc, i64, maskAddress, 8).getResult();
-      LLVM::StoreOp::create(
+              : schedule::NativeNBAAccumulatorLoadOp::create(
+                    b, loc, i64, accumulator, NBAField::WriteMask, 0, 8)
+                    .getResult();
+      schedule::NativeNBAAccumulatorStoreOp::create(
           b, loc,
           arith::SelectOp::create(b, loc, present, mask,
                                   llvmConstant(b, loc, i64, 0)),
-          maskAddress, 8);
+          accumulator, NBAField::WriteMask, 0, 8);
       Value valid = arith::ExtUIOp::create(b, loc, i32, present);
-      LLVM::StoreOp::create(
-          b, loc, valid,
-          field(offsetof(talos_rt_generated_nba_accumulator_256, valid)), 4);
+      schedule::NativeNBAAccumulatorStoreOp::create(b, loc, valid, accumulator,
+                                                    NBAField::Valid, 0, 4);
       Value region =
           llvmConstant(b, loc, i32, plan.generatedCommitRegions[root]);
-      LLVM::StoreOp::create(
-          b, loc, region,
-          field(offsetof(talos_rt_generated_nba_accumulator_256, exec_region)),
-          4);
+      schedule::NativeNBAAccumulatorStoreOp::create(b, loc, region, accumulator,
+                                                    NBAField::ExecRegion, 0, 4);
       Value page = byteGEP(b, loc, summary, uint64_t{root / 4096} * 8);
       Value old = LLVM::LoadOp::create(b, loc, i64, page, 8);
       Value pageBit =
@@ -451,23 +446,18 @@ void emitScalarNBACommitLoop(OpBuilder &b, ModuleOp module,
   Value rest = band(remaining, arith::SubIOp::create(b, loc, remaining, c(1)));
   Value accumulator = LLVM::LoadOp::create(
       b, loc, ptr, gep(address(accumulatorTable), ptr, index));
-  auto field = [&](uint64_t offset) -> Value {
-    return nbaFieldGEP(b, loc, accumulator, offset);
-  };
-  auto field64 = [&](uint64_t offset) -> Value {
-    return LLVM::LoadOp::create(b, loc, i64, field(offset), 8);
+  auto field64 = [&](NBAField field) -> Value {
+    return schedule::NativeNBAAccumulatorLoadOp::create(
+        b, loc, i64, accumulator, field, 0, 8);
   };
   auto region64 = LLVM::ZExtOp::create(b, loc, i64, region);
   Value fixedRegion = load(regionTable, index);
   Value storedRegion = LLVM::ZExtOp::create(
       b, loc, i64,
-      LLVM::LoadOp::create(
-          b, loc, i32,
-          field(offsetof(talos_rt_generated_nba_accumulator_256, exec_region)),
-          4));
-  Value valid = LLVM::LoadOp::create(
-      b, loc, i32,
-      field(offsetof(talos_rt_generated_nba_accumulator_256, valid)), 4);
+      schedule::NativeNBAAccumulatorLoadOp::create(b, loc, i32, accumulator,
+                                                   NBAField::ExecRegion, 0, 4));
+  Value valid = schedule::NativeNBAAccumulatorLoadOp::create(
+      b, loc, i32, accumulator, NBAField::Valid, 0, 4);
   Value regionMatches = select(
       eq(fixedRegion, c(UINT32_MAX)),
       band(eq(storedRegion, region64),
@@ -487,19 +477,11 @@ void emitScalarNBACommitLoop(OpBuilder &b, ModuleOp module,
         widthMask = load(widthTable, index),
         fixedMask = load(fixedTable, index);
   Value writeMask =
-      select(eq(fixedMask, c(0)),
-             band(field64(offsetof(talos_rt_generated_nba_accumulator_256,
-                                   write_mask)),
-                  widthMask),
+      select(eq(fixedMask, c(0)), band(field64(NBAField::WriteMask), widthMask),
              fixedMask);
-  Value stagedValue =
-      field64(offsetof(talos_rt_generated_nba_accumulator_256, value));
-  auto unknownLoad = LLVM::LoadOp::create(
-      b, loc, i64,
-      field(offsetof(talos_rt_generated_nba_accumulator_256, unknown)), 8);
-  schedule::set<schedule::Field::EvalTwoStateZeroUnknown>(unknownLoad,
-                                                          b.getUnitAttr());
-  Value stagedUnknown = unknownLoad;
+  Value stagedValue = field64(NBAField::Value);
+  // The two-state commit variants read staged X/Z data as zero.
+  Value stagedUnknown = field64(NBAField::Unknown);
   // Each plane's window at the root's byte offset.
   constexpr auto valuePlane = schedule::StatePlane::Value;
   constexpr auto unknownPlane = schedule::StatePlane::Unknown;
@@ -581,14 +563,13 @@ void emitScalarNBACommitLoop(OpBuilder &b, ModuleOp module,
                                         load(*summaryMaskTable, index), c(0));
     LLVM::StoreOp::create(b, loc, bor(reported, bit), summaryWord, 8);
   }
-  Value transientAddress =
-      field(offsetof(talos_rt_generated_nba_accumulator_256, transient));
-  Value transient = LLVM::LoadOp::create(b, loc, i64, transientAddress, 8);
+  Value transient = field64(NBAField::Transient);
   Value changed =
       bor(bor(arith::XOrIOp::create(b, loc, oldValue, newValue),
               arith::XOrIOp::create(b, loc, oldUnknown, newUnknown)),
           band(transient, load(transientTable, index)));
-  LLVM::StoreOp::create(b, loc, c(0), transientAddress, 8);
+  schedule::NativeNBAAccumulatorStoreOp::create(b, loc, c(0), accumulator,
+                                                NBAField::Transient, 0, 8);
   Value oldZero = band(inv(oldUnknown), inv(oldValue)),
         oldOne = band(inv(oldUnknown), oldValue),
         newZero = band(inv(newUnknown), inv(newValue)),
@@ -599,12 +580,10 @@ void emitScalarNBACommitLoop(OpBuilder &b, ModuleOp module,
   cf::CondBranchOp::create(b, loc, eq(load(clearTable, index), c(0)), watchHead,
                            ValueRange{start}, reset, ValueRange{});
   b.setInsertionPointToStart(reset);
-  LLVM::StoreOp::create(
-      b, loc, c(0),
-      field(offsetof(talos_rt_generated_nba_accumulator_256, write_mask)), 8);
-  LLVM::StoreOp::create(
-      b, loc, llvmConstant(b, loc, i32, 0),
-      field(offsetof(talos_rt_generated_nba_accumulator_256, valid)), 4);
+  schedule::NativeNBAAccumulatorStoreOp::create(b, loc, c(0), accumulator,
+                                                NBAField::WriteMask, 0, 8);
+  schedule::NativeNBAAccumulatorStoreOp::create(
+      b, loc, llvmConstant(b, loc, i32, 0), accumulator, NBAField::Valid, 0, 4);
   cf::BranchOp::create(b, loc, watchHead, ValueRange{start});
   b.setInsertionPointToStart(watchHead);
   Value watcher = watchHead->getArgument(0);

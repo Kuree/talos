@@ -1353,6 +1353,9 @@ LogicalResult declareNativeImports(ModuleOp module) {
       reference = load.getGlobalAttr();
     else if (auto store = dyn_cast<schedule::NativeStateStoreOp>(operation))
       reference = store.getGlobalAttr();
+    else if (auto record =
+                 dyn_cast<schedule::NativeNBAAccumulatorAddressOp>(operation))
+      reference = record.getGlobalAttr();
     if (!reference || symbols.lookupSymbolIn(design, reference))
       return;
     Operation *definition = moduleSymbols.lookup(reference.getValue());
@@ -3973,47 +3976,41 @@ LogicalResult materializeEvalNBACommitVariants(
   // staged unknown data module-wide (eliminateTwoStateUnknownPlane), and a
   // source without such loads has nothing to zero: either way the variant
   // would equal its source, so its canonical callers keep calling the source.
+  // Staged unknown data is what a commit reads from an accumulator record's
+  // X/Z field. A two-state step stages none, but a record can still hold X/Z
+  // bits an earlier four-state step staged (IEEE 1800-2023 10.4.2): the
+  // two-state variants read them as zero.
+  auto readsStagedUnknown = [](schedule::NativeNBAAccumulatorLoadOp load) {
+    return load.getField() == schedule::NBAAccumulatorField::Unknown;
+  };
   bool twoStateBuild = native::has<native::TwoState>(module);
-  bool stagesUnknown = false;
-  source.walk([&](LLVM::LoadOp load) {
-    if (!::talos::schedule::has<
-            ::talos::schedule::Field::EvalTwoStateZeroUnknown>(load))
-      return;
-    stagesUnknown = true;
-    // The elimination finds staged unknown data by its NBA field address.
-    assert((!twoStateBuild ||
-            [&] {
-              auto field = load.getAddr().getDefiningOp<LLVM::GEPOp>();
-              auto offset =
-                  field ? native::get<native::NBAField>(field) : IntegerAttr{};
-              return offset &&
-                     offset.getValue().getZExtValue() ==
-                         offsetof(talos_rt_generated_nba_accumulator_256,
-                                  unknown);
-            }()) &&
-           "staged unknown load is not an NBA unknown field");
-  });
-  stagesUnknown &= !twoStateBuild;
+  bool stagesUnknown =
+      !twoStateBuild &&
+      source
+          .walk([&](schedule::NativeNBAAccumulatorLoadOp load) {
+            return readsStagedUnknown(load) ? WalkResult::interrupt()
+                                            : WalkResult::advance();
+          })
+          .wasInterrupted();
   // A variant defined here goes right after its source (the canonical one
   // before the fast one); an earlier definition of the fast one stays.
   LLVM::LLVMFuncOp fastClone =
       detail::defineNBABarrierVariant(module, source, fastTwoStateName);
+  // A canonical variant that zeroes staged X/Z data is correct only where its
+  // caller selected the two-state domain; define it only for such a caller.
   LLVM::LLVMFuncOp clone;
-  if (stagesUnknown)
-    clone = detail::defineNBABarrierVariant(module, source, twoStateName);
-  else
+  if (!stagesUnknown)
     redirects[twoStateName] = fourStateName;
-  SmallVector<LLVM::LoadOp> stagedUnknownLoads;
+  else if (module.lookupSymbol(twoStateName))
+    clone = detail::defineNBABarrierVariant(module, source, twoStateName);
+  SmallVector<schedule::NativeNBAAccumulatorLoadOp> stagedUnknownLoads;
   for (auto variant : {clone, fastClone})
     if (variant)
-      variant.walk([&](Operation *operation) {
-        if (auto load = dyn_cast<LLVM::LoadOp>(operation);
-            load &&
-            ::talos::schedule::has<
-                ::talos::schedule::Field::EvalTwoStateZeroUnknown>(load))
+      variant.walk([&](schedule::NativeNBAAccumulatorLoadOp load) {
+        if (readsStagedUnknown(load))
           stagedUnknownLoads.push_back(load);
       });
-  for (LLVM::LoadOp load : stagedUnknownLoads) {
+  for (schedule::NativeNBAAccumulatorLoadOp load : stagedUnknownLoads) {
     builder.setInsertionPoint(load);
     load.replaceAllUsesWith(
         LLVM::ZeroOp::create(builder, load.getLoc(), load.getType())
@@ -4089,10 +4086,6 @@ LogicalResult materializeEvalNBACommitVariants(
     });
   }
 
-  source.walk([](LLVM::LoadOp load) {
-    ::talos::schedule::remove<
-        ::talos::schedule::Field::EvalTwoStateZeroUnknown>(load);
-  });
   return success();
 }
 
@@ -4237,7 +4230,9 @@ public:
           schedule::NativeReadyUpdateOp, schedule::NativeReadyCommitOp,
           schedule::NativeReadyMergeOp, schedule::NativeStateAddressOp,
           schedule::NativeStateWindowAddressOp, schedule::NativeStateLoadOp,
-          schedule::NativeStateStoreOp, UnrealizedConversionCastOp>();
+          schedule::NativeStateStoreOp, schedule::NativeNBAAccumulatorAddressOp,
+          schedule::NativeNBAAccumulatorLoadOp,
+          schedule::NativeNBAAccumulatorStoreOp, UnrealizedConversionCastOp>();
       target->markUnknownOpDynamicallyLegal([](Operation *operation) {
         return isa<LLVM::LLVMFuncOp>(operation);
       });
@@ -4461,7 +4456,10 @@ public:
         schedule::NativeReadyReadOp, schedule::NativeReadyUpdateOp,
         schedule::NativeReadyCommitOp, schedule::NativeReadyMergeOp,
         schedule::NativeStateAddressOp, schedule::NativeStateWindowAddressOp,
-        schedule::NativeStateLoadOp, schedule::NativeStateStoreOp>();
+        schedule::NativeStateLoadOp, schedule::NativeStateStoreOp,
+        schedule::NativeNBAAccumulatorAddressOp,
+        schedule::NativeNBAAccumulatorLoadOp,
+        schedule::NativeNBAAccumulatorStoreOp>();
     target.markUnknownOpDynamicallyLegal(
         [](Operation *operation) { return isa<LLVM::LLVMFuncOp>(operation); });
     FrozenRewritePatternSet frozenPatterns(std::move(patterns));
@@ -4657,9 +4655,11 @@ public:
       return signalPassFailure();
     OpPassManager finalization(ModuleOp::getOperationName());
     auto &functions = finalization.nest<LLVM::LLVMFuncOp>();
-    // Function finalization and LLVM translation see state accesses as the
-    // LLVM memory accesses they stand for.
-    functions.addPass(createLowerNativeStateAccessPass());
+    // Function finalization and LLVM translation see state and NBA
+    // accumulator accesses as the LLVM memory accesses they stand for.
+    functions.addPass(
+        createLowerNativeStateAccessPass(LowerNativeStateAccessPassOptions{
+            native::has<native::TwoState>(module)}));
     if (*partitionInventory)
       functions.addPass(detail::createInventoryNativeFunctionSymbolsPass());
     functions.addPass(detail::createNativeFunctionFinalizationPass());

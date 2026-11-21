@@ -6,13 +6,13 @@
 // value and unknown with the same shift and mask, then mark the root before
 // the generated merge so a value-only barrier cannot discard X/Z.
 // CHECK-LABEL: llvm.func @{{.*}}.__talos_eval_body_0.__talos_two_state_0(
-// CHECK: %[[ONE:.*]] = llvm.mlir.constant(1 : i64)
-// CHECK: %[[TRUE:.*]] = llvm.mlir.constant(1 : i8)
-// CHECK: %[[ALL_ONES:.*]] = llvm.mlir.constant(-1 : i64)
-// CHECK: %[[ZERO:.*]] = llvm.mlir.constant(0 : i64)
-// CHECK: %[[FALLBACK:.*]] = llvm.mlir.addressof @__talos_eval_step_four_state_fallback_v1
-// CHECK: %[[TAINT:.*]] = llvm.mlir.addressof @__talos_eval_step_four_state_nba_roots_v1
-// CHECK: %[[ACC:.*]] = llvm.mlir.addressof @__talos_aot_nba_accumulator_0
+// CHECK-DAG: %[[ONE:.*]] = llvm.mlir.constant(1 : i64)
+// CHECK-DAG: %[[TRUE:.*]] = llvm.mlir.constant(1 : i8)
+// CHECK-DAG: %[[ALL_ONES:.*]] = llvm.mlir.constant(-1 : i64)
+// CHECK-DAG: %[[ZERO:.*]] = llvm.mlir.constant(0 : i64)
+// CHECK-DAG: %[[FALLBACK:.*]] = llvm.mlir.addressof @__talos_eval_step_four_state_fallback_v1
+// CHECK-DAG: %[[TAINT:.*]] = llvm.mlir.addressof @__talos_eval_step_four_state_nba_roots_v1
+// CHECK-DAG: %[[ACC:.*]] = llvm.mlir.addressof @__talos_aot_nba_accumulator_0
 // CHECK: %[[VALUE_BIT:.*]] = llvm.load %{{.*}} {{.*}} : !llvm.ptr -> i1
 // CHECK-NEXT: %[[VALUE:.*]] = llvm.zext %[[VALUE_BIT]] : i1 to i64
 // CHECK: %[[UNKNOWN_BIT:.*]] = llvm.load %{{.*}} {{.*}} : !llvm.ptr -> i1

@@ -538,9 +538,21 @@ def LowerNativeStateAccessPass
     passes before this point and are dropped. Fails when the function takes a
     plane's address with llvm.mlir.addressof, or loads, stores or computes an
     address through a typed plane pointer: native passes before this point
-    see a plane's accesses only as typed operations. Runs first in
+    see a plane's accesses only as typed operations.
+
+    Also replaces schedule.nba.acc.address with llvm.mlir.addressof of its
+    record, and schedule.nba.acc.load/store with an LLVM load or store at the
+    field's byte offset in the record layout: the four-state
+    talos_rt_generated_nba_accumulator_256, or with two-state, the same
+    record without its X/Z field. Fails on any other use of a record's
+    address, and on an X/Z field access in the two-state layout: a two-state
+    build removes those before this point. Runs first in
     finalize-native-functions.
   }];
+  let options = [
+    Option<"twoState", "two-state", "bool", /*default=*/"false",
+           "Lower NBA accumulator records in the two-state layout">
+  ];
   let dependentDialects = ["mlir::LLVM::LLVMDialect"];
 }
 

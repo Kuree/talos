@@ -23,7 +23,7 @@ module attributes {
   llvm.mlir.global external @dirty() : i64
   llvm.mlir.global external @summary() : i64
   llvm.mlir.global external @ingress() : i64
-  llvm.mlir.global external @__talos_aot_nba_accumulator_0() : !llvm.array<136 x i8>
+  llvm.mlir.global external @__talos_aot_nba_accumulator_0() : !llvm.array<104 x i8>
   llvm.func @specialized(%ctx: !llvm.ptr, %region: i32, %changed: !llvm.ptr) {
     %status = schedule.nba.batch %ctx, %region, %changed {
       schedule.nba.commit 0 {layout = #root}

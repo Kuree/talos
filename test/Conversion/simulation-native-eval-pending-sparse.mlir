@@ -49,24 +49,19 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
   llvm.func @talos_rt_v1_scheduler_prepare_eval_nba(!llvm.ptr, !llvm.ptr) -> i32
 
   llvm.func @capture0() {
-    %acc = llvm.mlir.addressof @acc0 : !llvm.ptr
-    %xz = llvm.getelementptr %acc[32] : (!llvm.ptr) -> !llvm.ptr, i8
-    %mask = llvm.getelementptr %acc[64] : (!llvm.ptr) -> !llvm.ptr, i8
-    %valid = llvm.getelementptr %acc[96] : (!llvm.ptr) -> !llvm.ptr, i8
-    %region = llvm.getelementptr %acc[100] : (!llvm.ptr) -> !llvm.ptr, i8
-    %transient = llvm.getelementptr %acc[104] : (!llvm.ptr) -> !llvm.ptr, i8
+    %acc = schedule.nba.acc.address @acc0 : !llvm.ptr
     %value = llvm.mlir.constant(1 : i64) : i64
     %unknown = llvm.mlir.constant(1 : i64) : i64
     %bits = llvm.mlir.constant(4294967295 : i64) : i64
     %one = llvm.mlir.constant(1 : i32) : i32
     %nba = llvm.mlir.constant(2 : i32) : i32
     %zero = llvm.mlir.constant(0 : i64) : i64
-    llvm.store %value, %acc : i64, !llvm.ptr
-    llvm.store %unknown, %xz : i64, !llvm.ptr
-    llvm.store %bits, %mask : i64, !llvm.ptr
-    llvm.store %one, %valid : i32, !llvm.ptr
-    llvm.store %nba, %region : i32, !llvm.ptr
-    llvm.store %zero, %transient : i64, !llvm.ptr
+    schedule.nba.acc.store %value, %acc[value] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %unknown, %acc[unknown] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %bits, %acc[write_mask] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %one, %acc[valid] {alignment = 4 : i64} : i32
+    schedule.nba.acc.store %nba, %acc[exec_region] {alignment = 4 : i64} : i32
+    schedule.nba.acc.store %zero, %acc[transient] {alignment = 8 : i64} : i64
     %dirty = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
     %leaf = llvm.getelementptr %dirty[0] : (!llvm.ptr) -> !llvm.ptr, i8
     %old = llvm.load %leaf {schedule.eval.pending_dirty_root = 0 : i32} : !llvm.ptr -> i64
@@ -82,12 +77,10 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     llvm.return
   }
   llvm.func @consume0() -> i64 {
-    %acc = llvm.mlir.addressof @acc0 : !llvm.ptr
-    %valid = llvm.getelementptr %acc[96] : (!llvm.ptr) -> !llvm.ptr, i8
-    %ready = llvm.load %valid {schedule.eval.pending_dirty_root = 0 : i32} : !llvm.ptr -> i32
-    %xz = llvm.getelementptr %acc[32] : (!llvm.ptr) -> !llvm.ptr, i8
-    %value = llvm.load %acc : !llvm.ptr -> i64
-    %unknown = llvm.load %xz : !llvm.ptr -> i64
+    %acc = schedule.nba.acc.address @acc0 : !llvm.ptr
+    %ready = schedule.nba.acc.load %acc[valid] {alignment = 4 : i64, pending_root = 0 : i32} : i32
+    %value = schedule.nba.acc.load %acc[value] {alignment = 8 : i64} : i64
+    %unknown = schedule.nba.acc.load %acc[unknown] {alignment = 8 : i64} : i64
     %scale = llvm.mlir.constant(128 : i64) : i64
     %zero = llvm.mlir.constant(0 : i32) : i32
     %zero64 = llvm.mlir.constant(0 : i64) : i64
@@ -95,28 +88,23 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     %sum = llvm.add %value, %weighted : i64
     %present = llvm.icmp "ne" %ready, %zero : i32
     %result = llvm.select %present, %sum, %zero64 : i1, i64
-    llvm.store %zero, %valid : i32, !llvm.ptr
+    schedule.nba.acc.store %zero, %acc[valid] {alignment = 4 : i64} : i32
     llvm.return %result : i64
   }
   llvm.func @capture1() {
-    %acc = llvm.mlir.addressof @acc1 : !llvm.ptr
-    %xz = llvm.getelementptr %acc[32] : (!llvm.ptr) -> !llvm.ptr, i8
-    %mask = llvm.getelementptr %acc[64] : (!llvm.ptr) -> !llvm.ptr, i8
-    %valid = llvm.getelementptr %acc[96] : (!llvm.ptr) -> !llvm.ptr, i8
-    %region = llvm.getelementptr %acc[100] : (!llvm.ptr) -> !llvm.ptr, i8
-    %transient = llvm.getelementptr %acc[104] : (!llvm.ptr) -> !llvm.ptr, i8
+    %acc = schedule.nba.acc.address @acc1 : !llvm.ptr
     %value = llvm.mlir.constant(2 : i64) : i64
     %unknown = llvm.mlir.constant(0 : i64) : i64
     %bits = llvm.mlir.constant(4294967295 : i64) : i64
     %one = llvm.mlir.constant(1 : i32) : i32
     %nba = llvm.mlir.constant(2 : i32) : i32
     %zero = llvm.mlir.constant(0 : i64) : i64
-    llvm.store %value, %acc : i64, !llvm.ptr
-    llvm.store %unknown, %xz : i64, !llvm.ptr
-    llvm.store %bits, %mask : i64, !llvm.ptr
-    llvm.store %one, %valid : i32, !llvm.ptr
-    llvm.store %nba, %region : i32, !llvm.ptr
-    llvm.store %zero, %transient : i64, !llvm.ptr
+    schedule.nba.acc.store %value, %acc[value] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %unknown, %acc[unknown] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %bits, %acc[write_mask] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %one, %acc[valid] {alignment = 4 : i64} : i32
+    schedule.nba.acc.store %nba, %acc[exec_region] {alignment = 4 : i64} : i32
+    schedule.nba.acc.store %zero, %acc[transient] {alignment = 8 : i64} : i64
     %dirty = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
     %leaf = llvm.getelementptr %dirty[0] : (!llvm.ptr) -> !llvm.ptr, i8
     %old = llvm.load %leaf {schedule.eval.pending_dirty_root = 1 : i32} : !llvm.ptr -> i64
@@ -132,12 +120,10 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     llvm.return
   }
   llvm.func @consume1() -> i64 {
-    %acc = llvm.mlir.addressof @acc1 : !llvm.ptr
-    %valid = llvm.getelementptr %acc[96] : (!llvm.ptr) -> !llvm.ptr, i8
-    %ready = llvm.load %valid {schedule.eval.pending_dirty_root = 1 : i32} : !llvm.ptr -> i32
-    %xz = llvm.getelementptr %acc[32] : (!llvm.ptr) -> !llvm.ptr, i8
-    %value = llvm.load %acc : !llvm.ptr -> i64
-    %unknown = llvm.load %xz : !llvm.ptr -> i64
+    %acc = schedule.nba.acc.address @acc1 : !llvm.ptr
+    %ready = schedule.nba.acc.load %acc[valid] {alignment = 4 : i64, pending_root = 1 : i32} : i32
+    %value = schedule.nba.acc.load %acc[value] {alignment = 8 : i64} : i64
+    %unknown = schedule.nba.acc.load %acc[unknown] {alignment = 8 : i64} : i64
     %scale = llvm.mlir.constant(128 : i64) : i64
     %zero = llvm.mlir.constant(0 : i32) : i32
     %zero64 = llvm.mlir.constant(0 : i64) : i64
@@ -145,28 +131,23 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     %sum = llvm.add %value, %weighted : i64
     %present = llvm.icmp "ne" %ready, %zero : i32
     %result = llvm.select %present, %sum, %zero64 : i1, i64
-    llvm.store %zero, %valid : i32, !llvm.ptr
+    schedule.nba.acc.store %zero, %acc[valid] {alignment = 4 : i64} : i32
     llvm.return %result : i64
   }
   llvm.func @capture63() {
-    %acc = llvm.mlir.addressof @acc63 : !llvm.ptr
-    %xz = llvm.getelementptr %acc[32] : (!llvm.ptr) -> !llvm.ptr, i8
-    %mask = llvm.getelementptr %acc[64] : (!llvm.ptr) -> !llvm.ptr, i8
-    %valid = llvm.getelementptr %acc[96] : (!llvm.ptr) -> !llvm.ptr, i8
-    %region = llvm.getelementptr %acc[100] : (!llvm.ptr) -> !llvm.ptr, i8
-    %transient = llvm.getelementptr %acc[104] : (!llvm.ptr) -> !llvm.ptr, i8
+    %acc = schedule.nba.acc.address @acc63 : !llvm.ptr
     %value = llvm.mlir.constant(3 : i64) : i64
     %unknown = llvm.mlir.constant(0 : i64) : i64
     %bits = llvm.mlir.constant(4294967295 : i64) : i64
     %one = llvm.mlir.constant(1 : i32) : i32
     %nba = llvm.mlir.constant(2 : i32) : i32
     %zero = llvm.mlir.constant(0 : i64) : i64
-    llvm.store %value, %acc : i64, !llvm.ptr
-    llvm.store %unknown, %xz : i64, !llvm.ptr
-    llvm.store %bits, %mask : i64, !llvm.ptr
-    llvm.store %one, %valid : i32, !llvm.ptr
-    llvm.store %nba, %region : i32, !llvm.ptr
-    llvm.store %zero, %transient : i64, !llvm.ptr
+    schedule.nba.acc.store %value, %acc[value] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %unknown, %acc[unknown] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %bits, %acc[write_mask] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %one, %acc[valid] {alignment = 4 : i64} : i32
+    schedule.nba.acc.store %nba, %acc[exec_region] {alignment = 4 : i64} : i32
+    schedule.nba.acc.store %zero, %acc[transient] {alignment = 8 : i64} : i64
     %dirty = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
     %leaf = llvm.getelementptr %dirty[0] : (!llvm.ptr) -> !llvm.ptr, i8
     %old = llvm.load %leaf {schedule.eval.pending_dirty_root = 63 : i32} : !llvm.ptr -> i64
@@ -182,12 +163,10 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     llvm.return
   }
   llvm.func @consume63() -> i64 {
-    %acc = llvm.mlir.addressof @acc63 : !llvm.ptr
-    %valid = llvm.getelementptr %acc[96] : (!llvm.ptr) -> !llvm.ptr, i8
-    %ready = llvm.load %valid {schedule.eval.pending_dirty_root = 63 : i32} : !llvm.ptr -> i32
-    %xz = llvm.getelementptr %acc[32] : (!llvm.ptr) -> !llvm.ptr, i8
-    %value = llvm.load %acc : !llvm.ptr -> i64
-    %unknown = llvm.load %xz : !llvm.ptr -> i64
+    %acc = schedule.nba.acc.address @acc63 : !llvm.ptr
+    %ready = schedule.nba.acc.load %acc[valid] {alignment = 4 : i64, pending_root = 63 : i32} : i32
+    %value = schedule.nba.acc.load %acc[value] {alignment = 8 : i64} : i64
+    %unknown = schedule.nba.acc.load %acc[unknown] {alignment = 8 : i64} : i64
     %scale = llvm.mlir.constant(128 : i64) : i64
     %zero = llvm.mlir.constant(0 : i32) : i32
     %zero64 = llvm.mlir.constant(0 : i64) : i64
@@ -195,28 +174,23 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     %sum = llvm.add %value, %weighted : i64
     %present = llvm.icmp "ne" %ready, %zero : i32
     %result = llvm.select %present, %sum, %zero64 : i1, i64
-    llvm.store %zero, %valid : i32, !llvm.ptr
+    schedule.nba.acc.store %zero, %acc[valid] {alignment = 4 : i64} : i32
     llvm.return %result : i64
   }
   llvm.func @capture64() {
-    %acc = llvm.mlir.addressof @acc64 : !llvm.ptr
-    %xz = llvm.getelementptr %acc[32] : (!llvm.ptr) -> !llvm.ptr, i8
-    %mask = llvm.getelementptr %acc[64] : (!llvm.ptr) -> !llvm.ptr, i8
-    %valid = llvm.getelementptr %acc[96] : (!llvm.ptr) -> !llvm.ptr, i8
-    %region = llvm.getelementptr %acc[100] : (!llvm.ptr) -> !llvm.ptr, i8
-    %transient = llvm.getelementptr %acc[104] : (!llvm.ptr) -> !llvm.ptr, i8
+    %acc = schedule.nba.acc.address @acc64 : !llvm.ptr
     %value = llvm.mlir.constant(4 : i64) : i64
     %unknown = llvm.mlir.constant(0 : i64) : i64
     %bits = llvm.mlir.constant(4294967295 : i64) : i64
     %one = llvm.mlir.constant(1 : i32) : i32
     %nba = llvm.mlir.constant(2 : i32) : i32
     %zero = llvm.mlir.constant(0 : i64) : i64
-    llvm.store %value, %acc : i64, !llvm.ptr
-    llvm.store %unknown, %xz : i64, !llvm.ptr
-    llvm.store %bits, %mask : i64, !llvm.ptr
-    llvm.store %one, %valid : i32, !llvm.ptr
-    llvm.store %nba, %region : i32, !llvm.ptr
-    llvm.store %zero, %transient : i64, !llvm.ptr
+    schedule.nba.acc.store %value, %acc[value] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %unknown, %acc[unknown] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %bits, %acc[write_mask] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %one, %acc[valid] {alignment = 4 : i64} : i32
+    schedule.nba.acc.store %nba, %acc[exec_region] {alignment = 4 : i64} : i32
+    schedule.nba.acc.store %zero, %acc[transient] {alignment = 8 : i64} : i64
     %dirty = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
     %leaf = llvm.getelementptr %dirty[8] : (!llvm.ptr) -> !llvm.ptr, i8
     %old = llvm.load %leaf {schedule.eval.pending_dirty_root = 64 : i32} : !llvm.ptr -> i64
@@ -232,12 +206,10 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     llvm.return
   }
   llvm.func @consume64() -> i64 {
-    %acc = llvm.mlir.addressof @acc64 : !llvm.ptr
-    %valid = llvm.getelementptr %acc[96] : (!llvm.ptr) -> !llvm.ptr, i8
-    %ready = llvm.load %valid {schedule.eval.pending_dirty_root = 64 : i32} : !llvm.ptr -> i32
-    %xz = llvm.getelementptr %acc[32] : (!llvm.ptr) -> !llvm.ptr, i8
-    %value = llvm.load %acc : !llvm.ptr -> i64
-    %unknown = llvm.load %xz : !llvm.ptr -> i64
+    %acc = schedule.nba.acc.address @acc64 : !llvm.ptr
+    %ready = schedule.nba.acc.load %acc[valid] {alignment = 4 : i64, pending_root = 64 : i32} : i32
+    %value = schedule.nba.acc.load %acc[value] {alignment = 8 : i64} : i64
+    %unknown = schedule.nba.acc.load %acc[unknown] {alignment = 8 : i64} : i64
     %scale = llvm.mlir.constant(128 : i64) : i64
     %zero = llvm.mlir.constant(0 : i32) : i32
     %zero64 = llvm.mlir.constant(0 : i64) : i64
@@ -245,28 +217,23 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     %sum = llvm.add %value, %weighted : i64
     %present = llvm.icmp "ne" %ready, %zero : i32
     %result = llvm.select %present, %sum, %zero64 : i1, i64
-    llvm.store %zero, %valid : i32, !llvm.ptr
+    schedule.nba.acc.store %zero, %acc[valid] {alignment = 4 : i64} : i32
     llvm.return %result : i64
   }
   llvm.func @capture127() {
-    %acc = llvm.mlir.addressof @acc127 : !llvm.ptr
-    %xz = llvm.getelementptr %acc[32] : (!llvm.ptr) -> !llvm.ptr, i8
-    %mask = llvm.getelementptr %acc[64] : (!llvm.ptr) -> !llvm.ptr, i8
-    %valid = llvm.getelementptr %acc[96] : (!llvm.ptr) -> !llvm.ptr, i8
-    %region = llvm.getelementptr %acc[100] : (!llvm.ptr) -> !llvm.ptr, i8
-    %transient = llvm.getelementptr %acc[104] : (!llvm.ptr) -> !llvm.ptr, i8
+    %acc = schedule.nba.acc.address @acc127 : !llvm.ptr
     %value = llvm.mlir.constant(5 : i64) : i64
     %unknown = llvm.mlir.constant(0 : i64) : i64
     %bits = llvm.mlir.constant(4294967295 : i64) : i64
     %one = llvm.mlir.constant(1 : i32) : i32
     %nba = llvm.mlir.constant(2 : i32) : i32
     %zero = llvm.mlir.constant(0 : i64) : i64
-    llvm.store %value, %acc : i64, !llvm.ptr
-    llvm.store %unknown, %xz : i64, !llvm.ptr
-    llvm.store %bits, %mask : i64, !llvm.ptr
-    llvm.store %one, %valid : i32, !llvm.ptr
-    llvm.store %nba, %region : i32, !llvm.ptr
-    llvm.store %zero, %transient : i64, !llvm.ptr
+    schedule.nba.acc.store %value, %acc[value] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %unknown, %acc[unknown] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %bits, %acc[write_mask] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %one, %acc[valid] {alignment = 4 : i64} : i32
+    schedule.nba.acc.store %nba, %acc[exec_region] {alignment = 4 : i64} : i32
+    schedule.nba.acc.store %zero, %acc[transient] {alignment = 8 : i64} : i64
     %dirty = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
     %leaf = llvm.getelementptr %dirty[8] : (!llvm.ptr) -> !llvm.ptr, i8
     %old = llvm.load %leaf {schedule.eval.pending_dirty_root = 127 : i32} : !llvm.ptr -> i64
@@ -282,12 +249,10 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     llvm.return
   }
   llvm.func @consume127() -> i64 {
-    %acc = llvm.mlir.addressof @acc127 : !llvm.ptr
-    %valid = llvm.getelementptr %acc[96] : (!llvm.ptr) -> !llvm.ptr, i8
-    %ready = llvm.load %valid {schedule.eval.pending_dirty_root = 127 : i32} : !llvm.ptr -> i32
-    %xz = llvm.getelementptr %acc[32] : (!llvm.ptr) -> !llvm.ptr, i8
-    %value = llvm.load %acc : !llvm.ptr -> i64
-    %unknown = llvm.load %xz : !llvm.ptr -> i64
+    %acc = schedule.nba.acc.address @acc127 : !llvm.ptr
+    %ready = schedule.nba.acc.load %acc[valid] {alignment = 4 : i64, pending_root = 127 : i32} : i32
+    %value = schedule.nba.acc.load %acc[value] {alignment = 8 : i64} : i64
+    %unknown = schedule.nba.acc.load %acc[unknown] {alignment = 8 : i64} : i64
     %scale = llvm.mlir.constant(128 : i64) : i64
     %zero = llvm.mlir.constant(0 : i32) : i32
     %zero64 = llvm.mlir.constant(0 : i64) : i64
@@ -295,28 +260,23 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     %sum = llvm.add %value, %weighted : i64
     %present = llvm.icmp "ne" %ready, %zero : i32
     %result = llvm.select %present, %sum, %zero64 : i1, i64
-    llvm.store %zero, %valid : i32, !llvm.ptr
+    schedule.nba.acc.store %zero, %acc[valid] {alignment = 4 : i64} : i32
     llvm.return %result : i64
   }
   llvm.func @capture128() {
-    %acc = llvm.mlir.addressof @acc128 : !llvm.ptr
-    %xz = llvm.getelementptr %acc[32] : (!llvm.ptr) -> !llvm.ptr, i8
-    %mask = llvm.getelementptr %acc[64] : (!llvm.ptr) -> !llvm.ptr, i8
-    %valid = llvm.getelementptr %acc[96] : (!llvm.ptr) -> !llvm.ptr, i8
-    %region = llvm.getelementptr %acc[100] : (!llvm.ptr) -> !llvm.ptr, i8
-    %transient = llvm.getelementptr %acc[104] : (!llvm.ptr) -> !llvm.ptr, i8
+    %acc = schedule.nba.acc.address @acc128 : !llvm.ptr
     %value = llvm.mlir.constant(6 : i64) : i64
     %unknown = llvm.mlir.constant(1 : i64) : i64
     %bits = llvm.mlir.constant(4294967295 : i64) : i64
     %one = llvm.mlir.constant(1 : i32) : i32
     %nba = llvm.mlir.constant(2 : i32) : i32
     %zero = llvm.mlir.constant(0 : i64) : i64
-    llvm.store %value, %acc : i64, !llvm.ptr
-    llvm.store %unknown, %xz : i64, !llvm.ptr
-    llvm.store %bits, %mask : i64, !llvm.ptr
-    llvm.store %one, %valid : i32, !llvm.ptr
-    llvm.store %nba, %region : i32, !llvm.ptr
-    llvm.store %zero, %transient : i64, !llvm.ptr
+    schedule.nba.acc.store %value, %acc[value] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %unknown, %acc[unknown] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %bits, %acc[write_mask] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %one, %acc[valid] {alignment = 4 : i64} : i32
+    schedule.nba.acc.store %nba, %acc[exec_region] {alignment = 4 : i64} : i32
+    schedule.nba.acc.store %zero, %acc[transient] {alignment = 8 : i64} : i64
     %dirty = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
     %leaf = llvm.getelementptr %dirty[16] : (!llvm.ptr) -> !llvm.ptr, i8
     %old = llvm.load %leaf {schedule.eval.pending_dirty_root = 128 : i32} : !llvm.ptr -> i64
@@ -332,12 +292,10 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     llvm.return
   }
   llvm.func @consume128() -> i64 {
-    %acc = llvm.mlir.addressof @acc128 : !llvm.ptr
-    %valid = llvm.getelementptr %acc[96] : (!llvm.ptr) -> !llvm.ptr, i8
-    %ready = llvm.load %valid {schedule.eval.pending_dirty_root = 128 : i32} : !llvm.ptr -> i32
-    %xz = llvm.getelementptr %acc[32] : (!llvm.ptr) -> !llvm.ptr, i8
-    %value = llvm.load %acc : !llvm.ptr -> i64
-    %unknown = llvm.load %xz : !llvm.ptr -> i64
+    %acc = schedule.nba.acc.address @acc128 : !llvm.ptr
+    %ready = schedule.nba.acc.load %acc[valid] {alignment = 4 : i64, pending_root = 128 : i32} : i32
+    %value = schedule.nba.acc.load %acc[value] {alignment = 8 : i64} : i64
+    %unknown = schedule.nba.acc.load %acc[unknown] {alignment = 8 : i64} : i64
     %scale = llvm.mlir.constant(128 : i64) : i64
     %zero = llvm.mlir.constant(0 : i32) : i32
     %zero64 = llvm.mlir.constant(0 : i64) : i64
@@ -345,28 +303,23 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     %sum = llvm.add %value, %weighted : i64
     %present = llvm.icmp "ne" %ready, %zero : i32
     %result = llvm.select %present, %sum, %zero64 : i1, i64
-    llvm.store %zero, %valid : i32, !llvm.ptr
+    schedule.nba.acc.store %zero, %acc[valid] {alignment = 4 : i64} : i32
     llvm.return %result : i64
   }
   llvm.func @capture4095() {
-    %acc = llvm.mlir.addressof @acc4095 : !llvm.ptr
-    %xz = llvm.getelementptr %acc[32] : (!llvm.ptr) -> !llvm.ptr, i8
-    %mask = llvm.getelementptr %acc[64] : (!llvm.ptr) -> !llvm.ptr, i8
-    %valid = llvm.getelementptr %acc[96] : (!llvm.ptr) -> !llvm.ptr, i8
-    %region = llvm.getelementptr %acc[100] : (!llvm.ptr) -> !llvm.ptr, i8
-    %transient = llvm.getelementptr %acc[104] : (!llvm.ptr) -> !llvm.ptr, i8
+    %acc = schedule.nba.acc.address @acc4095 : !llvm.ptr
     %value = llvm.mlir.constant(7 : i64) : i64
     %unknown = llvm.mlir.constant(0 : i64) : i64
     %bits = llvm.mlir.constant(4294967295 : i64) : i64
     %one = llvm.mlir.constant(1 : i32) : i32
     %nba = llvm.mlir.constant(2 : i32) : i32
     %zero = llvm.mlir.constant(0 : i64) : i64
-    llvm.store %value, %acc : i64, !llvm.ptr
-    llvm.store %unknown, %xz : i64, !llvm.ptr
-    llvm.store %bits, %mask : i64, !llvm.ptr
-    llvm.store %one, %valid : i32, !llvm.ptr
-    llvm.store %nba, %region : i32, !llvm.ptr
-    llvm.store %zero, %transient : i64, !llvm.ptr
+    schedule.nba.acc.store %value, %acc[value] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %unknown, %acc[unknown] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %bits, %acc[write_mask] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %one, %acc[valid] {alignment = 4 : i64} : i32
+    schedule.nba.acc.store %nba, %acc[exec_region] {alignment = 4 : i64} : i32
+    schedule.nba.acc.store %zero, %acc[transient] {alignment = 8 : i64} : i64
     %dirty = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
     %leaf = llvm.getelementptr %dirty[504] : (!llvm.ptr) -> !llvm.ptr, i8
     %old = llvm.load %leaf {schedule.eval.pending_dirty_root = 4095 : i32} : !llvm.ptr -> i64
@@ -382,12 +335,10 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     llvm.return
   }
   llvm.func @consume4095() -> i64 {
-    %acc = llvm.mlir.addressof @acc4095 : !llvm.ptr
-    %valid = llvm.getelementptr %acc[96] : (!llvm.ptr) -> !llvm.ptr, i8
-    %ready = llvm.load %valid {schedule.eval.pending_dirty_root = 4095 : i32} : !llvm.ptr -> i32
-    %xz = llvm.getelementptr %acc[32] : (!llvm.ptr) -> !llvm.ptr, i8
-    %value = llvm.load %acc : !llvm.ptr -> i64
-    %unknown = llvm.load %xz : !llvm.ptr -> i64
+    %acc = schedule.nba.acc.address @acc4095 : !llvm.ptr
+    %ready = schedule.nba.acc.load %acc[valid] {alignment = 4 : i64, pending_root = 4095 : i32} : i32
+    %value = schedule.nba.acc.load %acc[value] {alignment = 8 : i64} : i64
+    %unknown = schedule.nba.acc.load %acc[unknown] {alignment = 8 : i64} : i64
     %scale = llvm.mlir.constant(128 : i64) : i64
     %zero = llvm.mlir.constant(0 : i32) : i32
     %zero64 = llvm.mlir.constant(0 : i64) : i64
@@ -395,28 +346,23 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     %sum = llvm.add %value, %weighted : i64
     %present = llvm.icmp "ne" %ready, %zero : i32
     %result = llvm.select %present, %sum, %zero64 : i1, i64
-    llvm.store %zero, %valid : i32, !llvm.ptr
+    schedule.nba.acc.store %zero, %acc[valid] {alignment = 4 : i64} : i32
     llvm.return %result : i64
   }
   llvm.func @capture4096() {
-    %acc = llvm.mlir.addressof @acc4096 : !llvm.ptr
-    %xz = llvm.getelementptr %acc[32] : (!llvm.ptr) -> !llvm.ptr, i8
-    %mask = llvm.getelementptr %acc[64] : (!llvm.ptr) -> !llvm.ptr, i8
-    %valid = llvm.getelementptr %acc[96] : (!llvm.ptr) -> !llvm.ptr, i8
-    %region = llvm.getelementptr %acc[100] : (!llvm.ptr) -> !llvm.ptr, i8
-    %transient = llvm.getelementptr %acc[104] : (!llvm.ptr) -> !llvm.ptr, i8
+    %acc = schedule.nba.acc.address @acc4096 : !llvm.ptr
     %value = llvm.mlir.constant(8 : i64) : i64
     %unknown = llvm.mlir.constant(0 : i64) : i64
     %bits = llvm.mlir.constant(4294967295 : i64) : i64
     %one = llvm.mlir.constant(1 : i32) : i32
     %nba = llvm.mlir.constant(2 : i32) : i32
     %zero = llvm.mlir.constant(0 : i64) : i64
-    llvm.store %value, %acc : i64, !llvm.ptr
-    llvm.store %unknown, %xz : i64, !llvm.ptr
-    llvm.store %bits, %mask : i64, !llvm.ptr
-    llvm.store %one, %valid : i32, !llvm.ptr
-    llvm.store %nba, %region : i32, !llvm.ptr
-    llvm.store %zero, %transient : i64, !llvm.ptr
+    schedule.nba.acc.store %value, %acc[value] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %unknown, %acc[unknown] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %bits, %acc[write_mask] {alignment = 8 : i64} : i64
+    schedule.nba.acc.store %one, %acc[valid] {alignment = 4 : i64} : i32
+    schedule.nba.acc.store %nba, %acc[exec_region] {alignment = 4 : i64} : i32
+    schedule.nba.acc.store %zero, %acc[transient] {alignment = 8 : i64} : i64
     %dirty = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
     %leaf = llvm.getelementptr %dirty[512] : (!llvm.ptr) -> !llvm.ptr, i8
     %old = llvm.load %leaf {schedule.eval.pending_dirty_root = 4096 : i32} : !llvm.ptr -> i64
@@ -432,12 +378,10 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     llvm.return
   }
   llvm.func @consume4096() -> i64 {
-    %acc = llvm.mlir.addressof @acc4096 : !llvm.ptr
-    %valid = llvm.getelementptr %acc[96] : (!llvm.ptr) -> !llvm.ptr, i8
-    %ready = llvm.load %valid {schedule.eval.pending_dirty_root = 4096 : i32} : !llvm.ptr -> i32
-    %xz = llvm.getelementptr %acc[32] : (!llvm.ptr) -> !llvm.ptr, i8
-    %value = llvm.load %acc : !llvm.ptr -> i64
-    %unknown = llvm.load %xz : !llvm.ptr -> i64
+    %acc = schedule.nba.acc.address @acc4096 : !llvm.ptr
+    %ready = schedule.nba.acc.load %acc[valid] {alignment = 4 : i64, pending_root = 4096 : i32} : i32
+    %value = schedule.nba.acc.load %acc[value] {alignment = 8 : i64} : i64
+    %unknown = schedule.nba.acc.load %acc[unknown] {alignment = 8 : i64} : i64
     %scale = llvm.mlir.constant(128 : i64) : i64
     %zero = llvm.mlir.constant(0 : i32) : i32
     %zero64 = llvm.mlir.constant(0 : i64) : i64
@@ -445,7 +389,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     %sum = llvm.add %value, %weighted : i64
     %present = llvm.icmp "ne" %ready, %zero : i32
     %result = llvm.select %present, %sum, %zero64 : i1, i64
-    llvm.store %zero, %valid : i32, !llvm.ptr
+    schedule.nba.acc.store %zero, %acc[valid] {alignment = 4 : i64} : i32
     llvm.return %result : i64
   }
   llvm.func @canonical_only() -> i64 {

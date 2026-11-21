@@ -30,8 +30,6 @@ def NativeDialect : Dialect {
     "::mlir::UnitAttr":$two_state,
     // Storage/net descriptor pairs placed together for Preponed sampling.
     "::mlir::DenseI64ArrayAttr":$sampled_placement,
-    // Logical NBA field addresses, retained until transaction planning ends.
-    "::mlir::IntegerAttr":$nba_field,
     // Print native planning and timing diagnostics to stderr.
     "::mlir::UnitAttr":$debug_timing,
     // Report every executor, cohort or design-wide mode that leaves the

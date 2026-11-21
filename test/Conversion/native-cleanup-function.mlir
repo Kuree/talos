@@ -86,13 +86,13 @@ module attributes {native.optimization_level = 3 : i32} {
 
 // -----
 
-// The tags later native steps read stay on their operations: an NBA field
-// GEP whose constant index folds into it keeps its field, and a store keeps
-// its unknown write range. Equal tagged addresses merge.
+// The tags later native steps read stay on their operations: a store keeps
+// its unknown write range when its constant address index folds. Equal
+// addresses merge.
 
 // CHECK-LABEL: func.func @tagged(
 // CHECK: %[[BASE:.*]] = llvm.mlir.addressof @accumulator
-// CHECK-NEXT: %[[FIELD:.*]] = llvm.getelementptr %[[BASE]][72] {native.nba_field = 72 : i64}
+// CHECK-NEXT: %[[FIELD:.*]] = llvm.getelementptr %[[BASE]][72] :
 // CHECK-NEXT: llvm.store %{{.*}}, %[[FIELD]] {schedule.eval.unknown_write_range = array<i64: 0, 8>}
 // CHECK-NEXT: llvm.load %[[FIELD]]
 module attributes {native.optimization_level = 3 : i32} {
@@ -100,11 +100,11 @@ module attributes {native.optimization_level = 3 : i32} {
   func.func @tagged(%v: i64) -> i64 {
     %k = llvm.mlir.constant(72 : i64) : i64
     %base = llvm.mlir.addressof @accumulator : !llvm.ptr
-    %field = llvm.getelementptr %base[%k] {native.nba_field = 72 : i64} : (!llvm.ptr, i64) -> !llvm.ptr, i8
+    %field = llvm.getelementptr %base[%k] : (!llvm.ptr, i64) -> !llvm.ptr, i8
     llvm.store %v, %field {schedule.eval.unknown_write_range = array<i64: 0, 8>} : i64, !llvm.ptr
     %k2 = llvm.mlir.constant(72 : i64) : i64
     %base2 = llvm.mlir.addressof @accumulator : !llvm.ptr
-    %field2 = llvm.getelementptr %base2[%k2] {native.nba_field = 72 : i64} : (!llvm.ptr, i64) -> !llvm.ptr, i8
+    %field2 = llvm.getelementptr %base2[%k2] : (!llvm.ptr, i64) -> !llvm.ptr, i8
     %r = llvm.load %field2 : !llvm.ptr -> i64
     return %r : i64
   }

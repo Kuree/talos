@@ -231,8 +231,6 @@ def EvalTrustedTwoStateClosure : ScheduleField<"EvalTrustedTwoStateClosure", "sc
     "::mlir::UnitAttr">;
 def EvalTwoStateVariant : ScheduleField<"EvalTwoStateVariant", "schedule.eval.two_state_variant",
     "::mlir::FlatSymbolRefAttr">;
-def EvalTwoStateZeroUnknown : ScheduleField<"EvalTwoStateZeroUnknown", "schedule.eval.two_state_zero_unknown",
-    "::mlir::UnitAttr">;
 def EvalUnknownWriteRange : ScheduleField<"EvalUnknownWriteRange", "schedule.eval.unknown_write_range",
     "::mlir::DenseI64ArrayAttr">;
 // Conservative physical byte interval [begin, end) of a bounds-checked
@@ -254,8 +252,6 @@ def EvalPendingStageSpec : ScheduleField<"EvalPendingStageSpec", "schedule.eval.
     "::mlir::DenseI64ArrayAttr">;
 def EvalPendingRuntimeRoot : ScheduleField<"EvalPendingRuntimeRoot", "schedule.eval.pending_runtime_root",
     "::mlir::IntegerAttr">;
-def EvalPendingMaskAtCommit : ScheduleField<"EvalPendingMaskAtCommit", "schedule.eval.pending_mask_at_commit",
-    "::mlir::UnitAttr">;
 def EvalUnsupportedCheckpointOwner : ScheduleField<"EvalUnsupportedCheckpointOwner", "schedule.eval.unsupported_checkpoint_owner",
     "::mlir::StringAttr">;
 def NativeAssumeCleanSpecialization : ScheduleField<"NativeAssumeCleanSpecialization", "schedule.native.assume_clean_specialization",

@@ -21,15 +21,55 @@ using namespace mlir;
 
 namespace talos::detail {
 
-Value nbaFieldGEP(OpBuilder &builder, Location location, Value base,
-                  uint64_t offset) {
-  Value address = byteGEP(builder, location, base, offset);
-  auto module =
-      builder.getInsertionBlock()->getParentOp()->getParentOfType<ModuleOp>();
-  if (module && native::get<native::TwoState>(module))
-    native::set<native::NBAField>(address.getDefiningOp(),
-                                  builder.getI64IntegerAttr(offset));
-  return address;
+// The two-state record (the runtime's TwoStateNBAAccumulator) omits the X/Z
+// field and keeps every other field, in order, after closing its hole.
+static constexpr uint64_t nbaUnknownBytes =
+    sizeof(talos_rt_generated_nba_accumulator_256::unknown);
+static_assert(
+    sizeof(talos_rt_generated_nba_accumulator_256::value) == 32 &&
+        nbaUnknownBytes == 32 &&
+        sizeof(talos_rt_generated_nba_accumulator_256::write_mask) == 32 &&
+        sizeof(talos_rt_generated_nba_accumulator_256::valid) == 4 &&
+        sizeof(talos_rt_generated_nba_accumulator_256::exec_region) == 4 &&
+        sizeof(talos_rt_generated_nba_accumulator_256::transient) == 32,
+    "schedule::getNBAAccumulatorFieldBytes describes this record");
+
+std::optional<uint64_t>
+getNBAAccumulatorFieldOffset(schedule::NBAAccumulatorField field,
+                             bool twoState) {
+  using Field = schedule::NBAAccumulatorField;
+  using Record = talos_rt_generated_nba_accumulator_256;
+  uint64_t offset = 0;
+  switch (field) {
+  case Field::Value:
+    offset = offsetof(Record, value);
+    break;
+  case Field::Unknown:
+    if (twoState)
+      return std::nullopt;
+    offset = offsetof(Record, unknown);
+    break;
+  case Field::WriteMask:
+    offset = offsetof(Record, write_mask);
+    break;
+  case Field::Valid:
+    offset = offsetof(Record, valid);
+    break;
+  case Field::ExecRegion:
+    offset = offsetof(Record, exec_region);
+    break;
+  case Field::Transient:
+    offset = offsetof(Record, transient);
+    break;
+  }
+  if (twoState && offset > offsetof(Record, unknown))
+    offset -= nbaUnknownBytes;
+  return offset;
+}
+
+uint64_t getNBAAccumulatorRecordBytes(bool twoState) {
+  return sizeof(talos_rt_generated_nba_accumulator_256) -
+         (twoState ? nbaUnknownBytes : 0);
 }
 
 FailureOr<NativeStateLayout>
@@ -321,13 +361,6 @@ void assignUnknownSummary(ModuleOp module, NativeStateLayout &layout) {
 void eliminateTwoStateUnknownPlane(ModuleOp module) {
   if (!native::get<native::TwoState>(module))
     return;
-  constexpr uint64_t unknownOffset =
-      offsetof(talos_rt_generated_nba_accumulator_256, unknown);
-  constexpr uint64_t afterUnknown =
-      offsetof(talos_rt_generated_nba_accumulator_256, write_mask);
-  constexpr uint64_t unknownBytes = afterUnknown - unknownOffset;
-  static_assert(unknownBytes ==
-                sizeof(talos_rt_generated_nba_accumulator_256::unknown));
   // The unknown plane and the NBA batches' private unknown buffers. Functions
   // address the plane through typed state operations; global initializers,
   // like the schedule plan's, take its address as a constant, which becomes
@@ -365,37 +398,6 @@ void eliminateTwoStateUnknownPlane(ModuleOp module) {
       worklist.push_back(address.getResult());
     }
   });
-  // The generated accumulator's value, write mask and control fields keep
-  // their logical addresses during planning. Physically omit its 32-byte
-  // unknown array and close that hole only after pending-frame rewriting.
-  module.walk([&](LLVM::GEPOp gep) {
-    auto field = native::get<native::NBAField>(gep);
-    if (!field)
-      return;
-    native::remove<native::NBAField>(gep);
-    uint64_t offset = field.getValue().getZExtValue();
-    if (offset >= unknownOffset && offset < afterUnknown) {
-      if (pointers.insert(gep.getResult()).second)
-        worklist.push_back(gep.getResult());
-    } else if (offset >= afterUnknown) {
-      // nbaFieldGEP addresses the record as bytes with one constant index.
-      assert(gep.getDynamicIndices().empty() &&
-             gep.getRawConstantIndices().size() == 1 &&
-             "NBA field address is not a constant byte offset");
-      gep.setRawConstantIndices(
-          ArrayRef<int32_t>{int32_t(offset - unknownBytes)});
-    }
-  });
-  for (auto accumulator : module.getOps<LLVM::GlobalOp>()) {
-    if (!accumulator.getSymName().starts_with("__talos_aot_nba_accumulator_"))
-      continue;
-    auto type = LLVM::LLVMArrayType::get(
-        IntegerType::get(module.getContext(), 8),
-        sizeof(talos_rt_generated_nba_accumulator_256) - unknownBytes);
-    accumulator.setGlobalType(type);
-    accumulator.getInitializerRegion().walk(
-        [&](LLVM::ZeroOp zero) { zero.getResult().setType(type); });
-  }
   for (size_t i = 0; i != worklist.size(); ++i)
     for (Operation *user : worklist[i].getUsers())
       if (isa<LLVM::GEPOp, LLVM::BitcastOp>(user) &&
@@ -413,6 +415,17 @@ void eliminateTwoStateUnknownPlane(ModuleOp module) {
       }
     } else if (auto store = dyn_cast<schedule::NativeStateStoreOp>(op)) {
       if (unknownPlane(store.getPlane()))
+        erase.push_back(op);
+    } else if (auto load = dyn_cast<schedule::NativeNBAAccumulatorLoadOp>(op)) {
+      // A two-state record has no X/Z field: staged data is known.
+      if (load.getField() == schedule::NBAAccumulatorField::Unknown) {
+        load.getResult().replaceAllUsesWith(
+            LLVM::ZeroOp::create(builder, op->getLoc(), load.getType()));
+        erase.push_back(op);
+      }
+    } else if (auto store =
+                   dyn_cast<schedule::NativeNBAAccumulatorStoreOp>(op)) {
+      if (store.getField() == schedule::NBAAccumulatorField::Unknown)
         erase.push_back(op);
     } else if (auto load = dyn_cast<LLVM::LoadOp>(op)) {
       if (pointers.contains(load.getAddr())) {

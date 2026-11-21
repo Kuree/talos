@@ -15,9 +15,9 @@
 // CHECK: %[[ACC:.*]] = llvm.mlir.addressof @__talos_aot_nba_accumulator_0
 // CHECK: %[[VALUE:.*]] = llvm.getelementptr %[[ACC]][0]
 // CHECK: llvm.store {{.*}}, %[[VALUE]]
-// CHECK: %[[STAGE_UNKNOWN:.*]] = llvm.getelementptr %[[ACC]][32]
 // CHECK: %[[STAGE_ZERO:.*]] = llvm.mlir.constant(0 : i64)
-// CHECK: llvm.store %[[STAGE_ZERO]], %[[STAGE_UNKNOWN]]
+// CHECK-NEXT: %[[STAGE_UNKNOWN:.*]] = llvm.getelementptr %[[ACC]][32]
+// CHECK-NEXT: llvm.store %[[STAGE_ZERO]], %[[STAGE_UNKNOWN]]
 // CHECK-NOT: llvm.getelementptr %[[ACC]][64]
 // CHECK-NOT: llvm.getelementptr %[[ACC]][96]
 // CHECK-NOT: llvm.getelementptr %[[ACC]][100]
@@ -169,9 +169,9 @@ module @inductive attributes {
 // CHECK: %[[SELECTED_ACC:.*]] = llvm.mlir.addressof @__talos_aot_nba_accumulator_0
 // CHECK: %[[SELECTED_VALUE:.*]] = llvm.getelementptr %[[SELECTED_ACC]][0]
 // CHECK: llvm.store {{.*}}, %[[SELECTED_VALUE]]
-// CHECK: %[[SELECTED_UNKNOWN:.*]] = llvm.getelementptr %[[SELECTED_ACC]][32]
 // CHECK: %[[MASKED_ZERO:.*]] = llvm.and %[[ZERO64]], {{.*}} : i64
-// CHECK: llvm.store %[[MASKED_ZERO]], %[[SELECTED_UNKNOWN]]
+// CHECK-NEXT: %[[SELECTED_UNKNOWN:.*]] = llvm.getelementptr %[[SELECTED_ACC]][32]
+// CHECK-NEXT: llvm.store %[[MASKED_ZERO]], %[[SELECTED_UNKNOWN]]
 // CHECK-NOT: llvm.getelementptr %[[SELECTED_ACC]][64]
 // CHECK-NOT: llvm.getelementptr %[[SELECTED_ACC]][96]
 // CHECK-NOT: llvm.getelementptr %[[SELECTED_ACC]][100]
