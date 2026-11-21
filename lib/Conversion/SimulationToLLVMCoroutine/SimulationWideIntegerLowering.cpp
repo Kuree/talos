@@ -6,6 +6,7 @@
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/EvalRoles.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
+#include "talos/Dialect/Schedule/ScheduleOps.h"
 #include "talos/LLVM/FunctionRoles.h"
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -573,7 +574,12 @@ struct NativeFunctionFinalizationPass
     if (inlineOperationLimit) {
       uint64_t operations = 0;
       function.walk([&](Operation *operation) {
-        operations += operation != function.getOperation();
+        // The driver expands the scheduler main's lifecycle operations after
+        // this pass; they are not part of the body this policy sizes.
+        operations += operation != function.getOperation() &&
+                      !isa<schedule::NativeLifecycleStartOp,
+                           schedule::NativeLifecycleFinishOp,
+                           schedule::NativeLifecycleShutdownOp>(operation);
         return operations > inlineOperationLimit ? WalkResult::interrupt()
                                                  : WalkResult::advance();
       });

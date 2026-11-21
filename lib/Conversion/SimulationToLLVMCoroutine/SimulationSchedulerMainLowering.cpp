@@ -3,7 +3,10 @@
 #include "NativeStateAccess.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 
+#include "talos/Dialect/Native/NativeDialect.h"
+#include "talos/Dialect/Runtime/RuntimeDialect.h"
 #include "talos/Dialect/SAIF/SAIFDialect.h"
+#include "talos/Dialect/Schedule/ScheduleOps.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Runtime/Runtime.h"
@@ -871,6 +874,20 @@ LogicalResult makeSchedulerMain(ModuleOp module,
         SymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"),
         ValueRange{runtimeContext, installStatus});
   }
+  // The driver asks for the startup steps; they run before the root process
+  // spawns (IEEE 1800-2023 36.10.2: VPI startup routines and cbEndOfCompile
+  // precede simulation).
+  bool startupVPI = native::has<native::StartupVpi>(module);
+  if (startupVPI || native::has<native::StartupStateSync>(module)) {
+    auto stateBits = runtime::get<runtime::StateBits>(module);
+    auto start = schedule::NativeLifecycleStartOp::create(
+        builder, location,
+        builder.getI64IntegerAttr(stateBits ? stateBits.getUInt() : 0));
+    start.setStateSync(native::has<native::StartupStateSync>(module));
+    start.setResolveInitialDrivers(
+        native::has<native::StartupResolveInitialDrivers>(module));
+    start.setVpi(startupVPI);
+  }
   LLVM::CallOp::create(builder, location, TypeRange{i64},
                        SymbolRefAttr::get(context, rootSpawnName),
                        runtimeContext);
@@ -892,7 +909,7 @@ LogicalResult makeSchedulerMain(ModuleOp module,
   // Report the simulation result before snapshot I/O can replace the
   // thread-local diagnostic.  If both fail, the simulation remains the exit
   // status and each failure is described by the operation that produced it.
-  LLVM::CallOp::create(
+  auto lastReport = LLVM::CallOp::create(
       builder, location, TypeRange{},
       SymbolRefAttr::get(context, "talos_rt_v1_scheduler_report_status"),
       ValueRange{runtimeContext, run.getResult()});
@@ -910,7 +927,7 @@ LogicalResult makeSchedulerMain(ModuleOp module,
         llvmConstant(builder, location, i32, TALOS_RT_OK));
     finalStatus = LLVM::SelectOp::create(builder, location, runSucceeded,
                                          coverageStatus, run.getResult());
-    LLVM::CallOp::create(
+    lastReport = LLVM::CallOp::create(
         builder, location, TypeRange{},
         SymbolRefAttr::get(context, "talos_rt_v1_scheduler_report_status"),
         ValueRange{runtimeContext, coverageStatus});
@@ -925,9 +942,23 @@ LogicalResult makeSchedulerMain(ModuleOp module,
         llvmConstant(builder, location, i32, TALOS_RT_OK));
     finalStatus = LLVM::SelectOp::create(builder, location, succeeded, status,
                                          finalStatus);
-    LLVM::CallOp::create(builder, location, TypeRange{},
-                         "talos_rt_v1_scheduler_report_status",
-                         ValueRange{runtimeContext, status});
+    lastReport = LLVM::CallOp::create(builder, location, TypeRange{},
+                                      "talos_rt_v1_scheduler_report_status",
+                                      ValueRange{runtimeContext, status});
+  }
+  if (startupVPI) {
+    // cbEndOfSimulation runs before the last status report (IEEE 1800-2023
+    // 38.36.3). Its status is the result unless the reported one failed.
+    {
+      OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPoint(lastReport);
+      finalStatus = schedule::NativeLifecycleFinishOp::create(
+          builder, location, i32, runtimeContext,
+          lastReport.getArgOperands()[1]);
+      lastReport.getArgOperandsMutable()[1].set(finalStatus);
+    }
+    schedule::NativeLifecycleShutdownOp::create(builder, location,
+                                                runtimeContext);
   }
   LLVM::CallOp::create(
       builder, location, TypeRange{},
@@ -1078,3 +1109,196 @@ LogicalResult makeSchedulerMain(ModuleOp module,
 }
 
 } // namespace talos::detail
+
+namespace talos {
+
+LogicalResult
+lowerNativeStartupLifecycle(ModuleOp module,
+                            ArrayRef<std::string> startupModules) {
+  bool required = native::has<native::StartupStateSync>(module) ||
+                  native::has<native::StartupVpi>(module);
+  native::remove<native::StartupStateSync>(module);
+  native::remove<native::StartupResolveInitialDrivers>(module);
+  native::remove<native::StartupVpi>(module);
+  auto main = module.lookupSymbol<LLVM::LLVMFuncOp>("main");
+  schedule::NativeLifecycleStartOp start;
+  SmallVector<schedule::NativeLifecycleFinishOp> finishes;
+  SmallVector<schedule::NativeLifecycleShutdownOp> shutdowns;
+  if (main)
+    main.walk([&](Operation *operation) {
+      if (auto op = dyn_cast<schedule::NativeLifecycleStartOp>(operation))
+        start = op;
+      else if (auto op = dyn_cast<schedule::NativeLifecycleFinishOp>(operation))
+        finishes.push_back(op);
+      else if (auto op =
+                   dyn_cast<schedule::NativeLifecycleShutdownOp>(operation))
+        shutdowns.push_back(op);
+    });
+  if (!required && !start)
+    return success();
+  auto current = module.lookupSymbol<LLVM::GlobalOp>("__talos_current_context");
+  auto stateValue = module.lookupSymbol<LLVM::GlobalOp>(
+      schedule::getStatePlaneGlobalName(schedule::StatePlane::Value));
+  auto stateUnknown = module.lookupSymbol<LLVM::GlobalOp>(
+      schedule::getStatePlaneGlobalName(schedule::StatePlane::Unknown));
+  if (!main || !current || !stateValue)
+    return module.emitError("native state synchronization requires a "
+                            "generated scheduler main");
+  bool vpi = start && start.getVpi();
+  if (!start || (vpi && (finishes.size() != 1 || shutdowns.size() != 1)))
+    return module.emitError("generated scheduler lifecycle is incomplete");
+  auto valueArray = dyn_cast<LLVM::LLVMArrayType>(stateValue.getGlobalType());
+  auto unknownArray =
+      stateUnknown ? dyn_cast<LLVM::LLVMArrayType>(stateUnknown.getGlobalType())
+                   : LLVM::LLVMArrayType();
+  if (!valueArray ||
+      (stateUnknown && (!unknownArray || valueArray.getNumElements() !=
+                                             unknownArray.getNumElements())))
+    return module.emitError("generated native state planes disagree");
+  if (start.getStateBits() > valueArray.getNumElements() * uint64_t{8})
+    return module.emitError(
+        "execution descriptor disagrees with generated native state planes");
+  if (!stateUnknown &&
+      !runtime::bitEnumContainsAll(runtime::getExecutionFlags(module),
+                                   runtime::ExecutionFlags::TwoState))
+    return module.emitError("four-state execution requires an unknown plane");
+
+  MLIRContext *context = module.getContext();
+  Location location = start.getLoc();
+  Type pointer = LLVM::LLVMPointerType::get(context);
+  OpBuilder builder(context);
+  Type i32 = builder.getI32Type();
+  Type i64 = builder.getI64Type();
+  Type voidType = LLVM::LLVMVoidType::get(context);
+  // Startup library names and the runtime entries are appended after every
+  // other symbol, in this order.
+  OpBuilder atEnd = OpBuilder::atBlockEnd(module.getBody());
+  SmallVector<LLVM::GlobalOp> names;
+  for (auto [index, name] : llvm::enumerate(startupModules)) {
+    std::string bytes = name;
+    bytes.push_back('\0');
+    auto global = LLVM::GlobalOp::create(
+        atEnd, location,
+        LLVM::LLVMArrayType::get(builder.getI8Type(), bytes.size()),
+        /*isConstant=*/true, LLVM::Linkage::Private,
+        ("__talos_vpi_module_" + Twine(index)).str(),
+        atEnd.getStringAttr(bytes));
+    global.setUnnamedAddr(LLVM::UnnamedAddr::Global);
+    names.push_back(global);
+  }
+  LLVM::GlobalOp nameArray;
+  if (!names.empty()) {
+    auto arrayType = LLVM::LLVMArrayType::get(pointer, names.size());
+    nameArray =
+        LLVM::GlobalOp::create(atEnd, location, arrayType,
+                               /*isConstant=*/true, LLVM::Linkage::Private,
+                               "__talos_vpi_startup_modules", Attribute());
+    OpBuilder initializer(context);
+    initializer.setInsertionPointToStart(
+        initializer.createBlock(&nameArray.getInitializerRegion()));
+    Value array = LLVM::UndefOp::create(initializer, location, arrayType);
+    for (auto [index, global] : llvm::enumerate(names))
+      array = LLVM::InsertValueOp::create(
+          initializer, location, array,
+          LLVM::AddressOfOp::create(initializer, location, global),
+          ArrayRef<int64_t>{static_cast<int64_t>(index)});
+    LLVM::ReturnOp::create(initializer, location, array);
+  }
+  auto declare = [&](StringRef name, Type result,
+                     ArrayRef<Type> arguments) -> LLVM::LLVMFuncOp {
+    if (auto existing = module.lookupSymbol<LLVM::LLVMFuncOp>(name))
+      return existing;
+    return LLVM::LLVMFuncOp::create(
+        atEnd, location, name,
+        LLVM::LLVMFunctionType::get(result, arguments, false));
+  };
+  LLVM::LLVMFuncOp fail =
+      declare("talos_rt_v1_scheduler_fail", voidType, {pointer, i32});
+
+  builder.setInsertionPoint(start);
+  Value runtimeContext = LLVM::LoadOp::create(
+      builder, location, pointer,
+      LLVM::AddressOfOp::create(builder, location, current), 8);
+  auto check = [&](Value status) {
+    LLVM::CallOp::create(builder, location, fail,
+                         ValueRange{runtimeContext, status});
+  };
+  if (start.getStateSync()) {
+    LLVM::LLVMFuncOp sync = declare("talos_rt_v1_native_state_sync", i32,
+                                    {pointer, pointer, pointer, i64});
+    Value unknown =
+        stateUnknown
+            ? Value(LLVM::AddressOfOp::create(builder, location, stateUnknown))
+            : Value(LLVM::ZeroOp::create(builder, location, pointer));
+    check(
+        LLVM::CallOp::create(
+            builder, location, sync,
+            ValueRange{runtimeContext,
+                       LLVM::AddressOfOp::create(builder, location, stateValue),
+                       unknown,
+                       detail::llvmConstant(builder, location, i64,
+                                            start.getStateBits())})
+            .getResult());
+  }
+  if (start.getResolveInitialDrivers()) {
+    LLVM::LLVMFuncOp resolve = declare(
+        "talos_rt_v1_scheduler_resolve_initial_drivers", i32, {pointer});
+    check(LLVM::CallOp::create(builder, location, resolve, runtimeContext)
+              .getResult());
+  }
+  if (vpi) {
+    // IEEE 1800-2023 36.9.1, 36.10.2: the startup routines register their
+    // system tasks and callbacks; cbEndOfCompile and cbStartOfSimulation then
+    // run before the first process (38.36.3).
+    LLVM::LLVMFuncOp startup =
+        declare("talos_rt_v1_vpi_startup", i32, {pointer, pointer, i64});
+    Value moduleNames =
+        nameArray
+            ? LLVM::GEPOp::create(
+                  builder, location, pointer, nameArray.getGlobalType(),
+                  LLVM::AddressOfOp::create(builder, location, nameArray),
+                  ArrayRef<LLVM::GEPArg>{0, 0}, LLVM::GEPNoWrapFlags::inbounds)
+                  .getResult()
+            : LLVM::ZeroOp::create(builder, location, pointer).getResult();
+    check(LLVM::CallOp::create(
+              builder, location, startup,
+              ValueRange{
+                  runtimeContext, moduleNames,
+                  detail::llvmConstant(builder, location, i64, names.size())})
+              .getResult());
+    LLVM::LLVMFuncOp endCompile =
+        declare("talos_rt_v1_vpi_end_compile", i32, {pointer});
+    check(LLVM::CallOp::create(builder, location, endCompile, runtimeContext)
+              .getResult());
+    LLVM::LLVMFuncOp startSimulation =
+        declare("talos_rt_v1_vpi_start_simulation", i32, {pointer});
+    check(
+        LLVM::CallOp::create(builder, location, startSimulation, runtimeContext)
+            .getResult());
+    LLVM::LLVMFuncOp endSimulation =
+        declare("talos_rt_v1_vpi_end_simulation", i32, {pointer});
+    LLVM::LLVMFuncOp shutdown =
+        declare("talos_rt_v1_vpi_shutdown", voidType, {pointer});
+    schedule::NativeLifecycleFinishOp finish = finishes.front();
+    builder.setInsertionPoint(finish);
+    Value status = finish.getStatus();
+    Value ended = LLVM::CallOp::create(builder, location, endSimulation,
+                                       finish.getContext())
+                      .getResult();
+    Value failed =
+        LLVM::ICmpOp::create(builder, location, LLVM::ICmpPredicate::ne, status,
+                             detail::llvmConstant(builder, location, i32, 0));
+    finish.replaceAllUsesWith(
+        LLVM::SelectOp::create(builder, location, failed, status, ended)
+            .getResult());
+    finish.erase();
+    schedule::NativeLifecycleShutdownOp release = shutdowns.front();
+    builder.setInsertionPoint(release);
+    LLVM::CallOp::create(builder, location, shutdown, release.getContext());
+    release.erase();
+  }
+  start.erase();
+  return success();
+}
+
+} // namespace talos

@@ -41,6 +41,13 @@ def NativeDialect : Dialect {
     // The driver lowers a complete executable and may omit unreferenced
     // implementation helpers. Object and IR emission keep public helpers.
     "::mlir::UnitAttr":$closed_executable,
+    // Module: startup steps the driver requests of the generated scheduler
+    // main, which places them as schedule.lifecycle operations: synchronize
+    // the native state planes with the canonical image, resolve initial
+    // driver values, and run the VPI startup and shutdown callbacks.
+    "::mlir::UnitAttr":$startup_state_sync,
+    "::mlir::UnitAttr":$startup_resolve_initial_drivers,
+    "::mlir::UnitAttr":$startup_vpi,
 
     // Stable semantic partition of a function or global, independent of the
     // worker count, so object emission and caches share one boundary.

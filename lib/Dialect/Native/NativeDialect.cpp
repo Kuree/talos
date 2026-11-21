@@ -34,7 +34,8 @@ NativeDialect::verifyOperationAttribute(Operation *operation,
              OptimizationLevel, MaxStateDomainFunctions,
              DisableTwoStateSpecialization, TwoState, SampledPlacement,
              DebugTiming, FallbackReport, ProcessesMaterialized,
-             ClosedExecutable, Partition, PartitionManifest, PartitionManifests,
+             ClosedExecutable, StartupStateSync, StartupResolveInitialDrivers,
+             StartupVpi, Partition, PartitionManifest, PartitionManifests,
              ElementDefaults, PhysicalPartitionManifest, Frame, FrameInputs,
              FrameCheckpoint, EntryKind, ScratchSize, ObserverWidth,
              ObserverFourState, SpawnCaptureOffsets, SpawnCaptureSize,
@@ -67,6 +68,9 @@ NativeDialect::verifyOperationAttribute(Operation *operation,
                       name == FallbackReport::getNameStr() ||
                       name == ProcessesMaterialized::getNameStr() ||
                       name == ClosedExecutable::getNameStr() ||
+                      name == StartupStateSync::getNameStr() ||
+                      name == StartupResolveInitialDrivers::getNameStr() ||
+                      name == StartupVpi::getNameStr() ||
                       name == PartitionManifests::getNameStr() ||
                       name == ElementDefaults::getNameStr() ||
                       name == PhysicalPartitionManifest::getNameStr() ||

@@ -19,7 +19,7 @@ using namespace llvm;
 
 namespace {
 
-TEST(NativeModulePruning, SymbolDCEKeepsCallbacksExportsAndLifecycleRoots) {
+TEST(NativeModulePruning, SymbolDCEKeepsCallbacksAndExports) {
   mlir::MLIRContext context;
   context.loadDialect<mlir::LLVM::LLVMDialect>();
   auto module = mlir::parseSourceString<mlir::ModuleOp>(R"mlir(
@@ -44,10 +44,6 @@ TEST(NativeModulePruning, SymbolDCEKeepsCallbacksExportsAndLifecycleRoots) {
         llvm.call @dead_a() : () -> ()
         llvm.return
       }
-      llvm.mlir.global internal @__talos_current_context(0 : i64) : i64
-      llvm.mlir.global internal @__talos_state_value(0 : i64) : i64
-      llvm.mlir.global internal @__talos_state_unknown(0 : i64) : i64
-      llvm.mlir.global internal @__talos_execution_descriptor_v1(0 : i64) : i64
       llvm.mlir.global internal @unused_data(0 : i64) : i64
     }
   )mlir",
@@ -55,22 +51,15 @@ TEST(NativeModulePruning, SymbolDCEKeepsCallbacksExportsAndLifecycleRoots) {
   ASSERT_TRUE(module);
   llvm::StringSet<> exports;
   exports.insert("foreign_entry");
-  auto removed = talos::driver::detail::pruneNativeExecutableSymbols(
-      *module, exports, true);
+  auto removed =
+      talos::driver::detail::pruneNativeExecutableSymbols(*module, exports);
   ASSERT_TRUE(mlir::succeeded(removed));
   EXPECT_EQ(removed->size(), 3u);
   EXPECT_TRUE(removed->contains("dead_a"));
   EXPECT_TRUE(removed->contains("dead_b"));
   EXPECT_TRUE(removed->contains("unused_data"));
-  for (StringRef name :
-       {"main", "foreign_entry", "callback", "callback_table",
-        "__talos_current_context", "__talos_state_value",
-        "__talos_state_unknown", "__talos_execution_descriptor_v1"})
+  for (StringRef name : {"main", "foreign_entry", "callback", "callback_table"})
     EXPECT_NE(module->lookupSymbol(name), nullptr) << name.str();
-  auto noLifecycle = talos::driver::detail::pruneNativeExecutableSymbols(
-      *module, exports, false);
-  ASSERT_TRUE(mlir::succeeded(noLifecycle));
-  EXPECT_EQ(noLifecycle->size(), 4u);
 }
 
 TEST(NativeModulePruning, PreservesExportsAndCallbacksButDropsDeadCycles) {

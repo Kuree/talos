@@ -4198,7 +4198,9 @@ public:
           schedule::NativeStateStoreOp, schedule::NativeNBAAccumulatorAddressOp,
           schedule::NativeNBAAccumulatorLoadOp,
           schedule::NativeNBAAccumulatorStoreOp, schedule::NativeNBAIndexLoadOp,
-          schedule::NativeNBAIndexStoreOp, UnrealizedConversionCastOp>();
+          schedule::NativeNBAIndexStoreOp, schedule::NativeLifecycleStartOp,
+          schedule::NativeLifecycleFinishOp,
+          schedule::NativeLifecycleShutdownOp, UnrealizedConversionCastOp>();
       target->markUnknownOpDynamicallyLegal([](Operation *operation) {
         return isa<LLVM::LLVMFuncOp>(operation);
       });
@@ -4426,7 +4428,9 @@ public:
         schedule::NativeNBAAccumulatorAddressOp,
         schedule::NativeNBAAccumulatorLoadOp,
         schedule::NativeNBAAccumulatorStoreOp, schedule::NativeNBAIndexLoadOp,
-        schedule::NativeNBAIndexStoreOp>();
+        schedule::NativeNBAIndexStoreOp, schedule::NativeLifecycleStartOp,
+        schedule::NativeLifecycleFinishOp,
+        schedule::NativeLifecycleShutdownOp>();
     target.markUnknownOpDynamicallyLegal(
         [](Operation *operation) { return isa<LLVM::LLVMFuncOp>(operation); });
     FrozenRewritePatternSet frozenPatterns(std::move(patterns));

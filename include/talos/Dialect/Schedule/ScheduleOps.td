@@ -1340,6 +1340,53 @@ def NativeManagedRootPushOp : ScheduleNativeOp<"gc.root_range.push", [
     qualified(type($record)) `,` qualified(type($slots))
   }];
 }
+// The startup and shutdown steps a generated scheduler main runs around the
+// root spawn when the executable synchronizes its native state with the
+// canonical image or hosts VPI. Main lowering places them; the driver lowers
+// them to runtime calls after its last module-level rewrites, when it knows
+// the VPI startup libraries.
+def NativeLifecycleStartOp : ScheduleNativeOp<"lifecycle.start", [
+    MemoryEffects<[MemRead, MemWrite, MemRead<SimSchedulerResource>,
+                   MemWrite<SimSchedulerResource>, MemWrite<SimStorageResource>]>
+  ]> {
+  let summary = "run the startup steps before the root process spawns";
+  let description = [{
+    In order:
+    - with `state_sync`: copy the canonical image's `state_bits` bits into the
+      native state planes;
+    - with `resolve_initial_drivers`: resolve the initial driver values;
+    - with `vpi`: run the vlog_startup_routines of the VPI startup libraries,
+      then the cbEndOfCompile and cbStartOfSimulation callbacks (IEEE
+      1800-2023 36.9.1, 36.10.2, 38.36.3).
+    Each step fails the scheduler with its status.
+  }];
+  let arguments = (ins I64Attr:$state_bits, UnitAttr:$state_sync,
+                       UnitAttr:$resolve_initial_drivers, UnitAttr:$vpi);
+  let assemblyFormat = [{
+    `state_bits` $state_bits (`state_sync` $state_sync^)?
+    (`resolve_initial_drivers` $resolve_initial_drivers^)? (`vpi` $vpi^)?
+    attr-dict
+  }];
+}
+def NativeLifecycleFinishOp : ScheduleNativeOp<"lifecycle.finish", [
+    MemoryEffects<[MemRead, MemWrite, MemRead<SimSchedulerResource>,
+                   MemWrite<SimSchedulerResource>]>
+  ]> {
+  let summary = "run the VPI end-of-simulation callbacks";
+  let description = [{
+    Runs the cbEndOfSimulation callbacks (IEEE 1800-2023 38.36.3). The result
+    is `status` when it reports a failure, else the callbacks' status.
+  }];
+  let arguments = (ins LLVM_AnyPointer:$context, I32:$status);
+  let results = (outs I32:$result);
+}
+def NativeLifecycleShutdownOp : ScheduleNativeOp<"lifecycle.shutdown", [
+    MemoryEffects<[MemRead, MemWrite, MemRead<SimSchedulerResource>,
+                   MemWrite<SimSchedulerResource>]>
+  ]> {
+  let summary = "release the VPI session before the context is destroyed";
+  let arguments = (ins LLVM_AnyPointer:$context);
+}
 // A designated managed-heap collection point. Generated schedules place
 // these where no activation is running, such as between time slots, and the
 // runtime then reclaims deferred allocation pressure only here (IEEE

@@ -88,6 +88,14 @@ void lowerNativeHandleOps(mlir::ModuleOp module);
 /// plane global. Run last, just before translation to LLVM IR.
 mlir::LogicalResult addressNativeStateThroughBases(mlir::ModuleOp module);
 
+/// Lower the scheduler main's schedule.lifecycle operations to runtime calls.
+/// `startupModules` names the VPI startup libraries, in load order. Run after
+/// addressNativeStateThroughBases, just before translation to LLVM IR: the
+/// calls take the state planes' and libraries' globals directly.
+mlir::LogicalResult
+lowerNativeStartupLifecycle(mlir::ModuleOp module,
+                            llvm::ArrayRef<std::string> startupModules);
+
 /// Add terminal conversion patterns after the native preparation pipeline.
 void populateSimulationCoroutineToLLVMPatterns(
     const mlir::LLVMTypeConverter &converter,

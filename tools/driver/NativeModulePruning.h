@@ -141,12 +141,10 @@ inline bool eraseDeadModuleSymbols(mlir::ModuleOp module) {
 
 /// Give SymbolDCE the closed-world visibility of a generated executable.
 /// LLVM linkage is left intact for translation and subsequent partitioning.
-/// Keep the state globals consumed by the LLVM-level lifecycle builder until
-/// it has materialized its references; LLVM DCE can then prune any unused ones.
 inline mlir::FailureOr<llvm::StringSet<>>
 pruneNativeExecutableSymbols(mlir::ModuleOp module,
                              const llvm::StringSet<> &exports,
-                             bool requiresLifecycle, bool verifyEach = true) {
+                             bool verifyEach = true) {
   llvm::StringSet<> candidates;
   for (mlir::Operation &operation : module.getBody()->getOperations()) {
     auto symbol = mlir::dyn_cast<mlir::SymbolOpInterface>(&operation);
@@ -154,11 +152,6 @@ pruneNativeExecutableSymbols(mlir::ModuleOp module,
       continue;
     llvm::StringRef name = symbol.getName();
     if (name == "main" || exports.contains(name) || name.starts_with("llvm."))
-      continue;
-    if (requiresLifecycle &&
-        (name == "__talos_current_context" || name == "__talos_state_value" ||
-         name == "__talos_state_unknown" ||
-         name == "__talos_execution_descriptor_v1"))
       continue;
     if (auto function = mlir::dyn_cast<mlir::LLVM::LLVMFuncOp>(&operation)) {
       if (function.isExternal())

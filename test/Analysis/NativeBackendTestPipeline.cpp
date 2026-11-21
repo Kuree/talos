@@ -11,6 +11,9 @@
 
 #include "AnalysisTestPasses.h"
 
+#include "talos/Conversion/SimulationToLLVMCoroutine.h"
+
+#include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "llvm/ADT/StringSwitch.h"
@@ -188,10 +191,42 @@ void buildNativeBackendTestPipeline(
     llvm::report_fatal_error("test-talos-native-backend: " + Twine(error));
 }
 
+/// The driver's last module rewrite before LLVM translation: expand the
+/// scheduler main's lifecycle operations, naming `modules` as the VPI startup
+/// libraries.
+class LowerStartupLifecycleTestPass
+    : public PassWrapper<LowerStartupLifecycleTestPass,
+                         OperationPass<ModuleOp>> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LowerStartupLifecycleTestPass)
+
+  LowerStartupLifecycleTestPass() = default;
+  LowerStartupLifecycleTestPass(const LowerStartupLifecycleTestPass &other)
+      : PassWrapper(other) {}
+
+  StringRef getArgument() const final {
+    return "test-talos-lower-startup-lifecycle";
+  }
+  StringRef getDescription() const final {
+    return "lower schedule.lifecycle operations as the native driver does";
+  }
+
+  ListOption<std::string> modules{
+      *this, "modules",
+      llvm::cl::desc("VPI startup library names, in load order")};
+
+  void runOnOperation() final {
+    SmallVector<std::string> names(modules.begin(), modules.end());
+    if (failed(talos::lowerNativeStartupLifecycle(getOperation(), names)))
+      signalPassFailure();
+  }
+};
+
 } // namespace
 
 namespace talos {
 void registerNativeBackendTestPipeline() {
+  PassRegistration<LowerStartupLifecycleTestPass>();
   PassPipelineRegistration<NativeBackendTestPipelineOptions>(
       "test-talos-native-backend",
       "Lower Slang dialect input to native LLVM as an executable build does",

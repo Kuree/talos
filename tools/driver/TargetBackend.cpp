@@ -12,6 +12,7 @@
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
+#include "talos/Dialect/Schedule/ScheduleOps.h"
 #include "talos/Dialect/Schedule/Transforms/Passes.h"
 #include "talos/Runtime/Runtime.h"
 
@@ -63,7 +64,6 @@
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
-#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LegacyPassManager.h"
@@ -771,13 +771,13 @@ static bool formattedOutputMayReadNetStrength(ValueRange items,
   return false;
 }
 
-LogicalResult
-lowerToLLVM(ModuleOp module, TargetMachine &targetMachine, StringRef triple,
-            bool bytecode, StringRef vpi, StringRef bytecodeScope,
-            talos::schedule::NativeSchedulerMode nativeScheduler,
-            uint32_t optLevel, bool planSemanticPartitions, bool timing,
-            bool verifyEach, const PassIRDumpOptions &irDump,
-            bool &requiresStateSync, bool &resolveInitialDrivers) {
+LogicalResult lowerToLLVM(ModuleOp module, TargetMachine &targetMachine,
+                          StringRef triple, bool bytecode, StringRef vpi,
+                          StringRef bytecodeScope,
+                          talos::schedule::NativeSchedulerMode nativeScheduler,
+                          uint32_t optLevel, bool planSemanticPartitions,
+                          bool timing, bool verifyEach,
+                          const PassIRDumpOptions &irDump) {
   if (bytecode && nativeScheduler == talos::schedule::NativeSchedulerMode::Auto)
     nativeScheduler = talos::schedule::NativeSchedulerMode::Generic;
   module->setAttr("llvm.target_triple",
@@ -834,10 +834,10 @@ lowerToLLVM(ModuleOp module, TargetMachine &targetMachine, StringRef triple,
     hasEventSnapshots |=
         mlir::isa<talos::sim::SimEventSnapshotRegisterOp>(operation);
   });
-  requiresStateSync = vpi != "off" || hasLanguageOverride || hasDriverNBA ||
-                      hasDelayedNet || hasInertialDriver ||
-                      hasClockOccurrenceCondition || hasEventSnapshots;
-  resolveInitialDrivers = hasInertialDriver;
+  bool requiresStateSync = vpi != "off" || hasLanguageOverride ||
+                           hasDriverNBA || hasDelayedNet || hasInertialDriver ||
+                           hasClockOccurrenceCondition || hasEventSnapshots;
+  bool resolveInitialDrivers = hasInertialDriver;
   ::talos::schedule::set<::talos::schedule::Field::NativeScheduler>(
       module, talos::schedule::NativeSchedulerModeAttr::get(module.getContext(),
                                                             nativeScheduler));
@@ -885,6 +885,17 @@ lowerToLLVM(ModuleOp module, TargetMachine &targetMachine, StringRef triple,
   bool needsStandaloneStatePlan =
       needsSampledStatePlan || hasClockOccurrenceCondition || hasEventSnapshots;
   requiresStateSync |= needsStandaloneStatePlan && !needsDesignEncoding;
+  // The generated scheduler main places these startup steps around its root
+  // spawn (lowerNativeStartupLifecycle expands them before translation).
+  native::remove<native::StartupStateSync>(module);
+  native::remove<native::StartupResolveInitialDrivers>(module);
+  native::remove<native::StartupVpi>(module);
+  if (requiresStateSync)
+    native::mark<native::StartupStateSync>(module);
+  if (requiresStateSync && resolveInitialDrivers)
+    native::mark<native::StartupResolveInitialDrivers>(module);
+  if (vpi != "off")
+    native::mark<native::StartupVpi>(module);
   // Both tiers share the polls that bound garbage between collections, so
   // place them before bytecode is frozen.
   manager.addPass(createTalosSimInsertGCPollsPass());
@@ -1085,225 +1096,6 @@ LogicalResult lowerLLVMCoroutines(llvm::Module &module,
   return success();
 }
 
-LogicalResult
-addVPIStartupLifecycle(llvm::Module &module, StringRef vpi,
-                       ArrayRef<SharedLibraryInput> sharedLibraryInputs,
-                       bool requiresStateSync, bool resolveInitialDrivers) {
-  bool enableVPI = vpi != "off";
-  if (!enableVPI && !requiresStateSync)
-    return success();
-  llvm::Function *main = module.getFunction("main");
-  llvm::GlobalVariable *current =
-      module.getNamedGlobal("__talos_current_context");
-  llvm::GlobalVariable *stateValue =
-      module.getNamedGlobal("__talos_state_value");
-  llvm::GlobalVariable *stateUnknown =
-      module.getNamedGlobal("__talos_state_unknown");
-  if (!main || !current || !stateValue) {
-    errs() << "talos: error: native state synchronization requires a "
-              "generated scheduler main\n";
-    return failure();
-  }
-  llvm::CallBase *spawn = nullptr;
-  llvm::CallBase *report = nullptr;
-  llvm::CallBase *destroy = nullptr;
-  for (llvm::BasicBlock &block : *main)
-    for (llvm::Instruction &instruction : block)
-      if (auto *call = dyn_cast<llvm::CallBase>(&instruction))
-        if (llvm::Function *callee = call->getCalledFunction()) {
-          if (callee->getName().ends_with(".__talos_spawn"))
-            spawn = call;
-          else if (callee->getName() == "talos_rt_v1_scheduler_report_status")
-            report = call;
-        }
-  if (report)
-    for (llvm::Instruction &instruction : *report->getParent())
-      if (auto *call = dyn_cast<llvm::CallBase>(&instruction))
-        if (llvm::Function *callee = call->getCalledFunction())
-          if (callee->getName() == "talos_rt_v1_context_destroy")
-            destroy = call;
-  auto *returnStatus =
-      destroy
-          ? dyn_cast<llvm::ReturnInst>(destroy->getParent()->getTerminator())
-          : nullptr;
-  if (!spawn || (enableVPI && (!report || !destroy || !returnStatus ||
-                               report->arg_size() != 2 ||
-                               returnStatus->getNumOperands() != 1))) {
-    errs() << "talos: error: generated scheduler lifecycle is incomplete\n";
-    return failure();
-  }
-
-  llvm::LLVMContext &context = module.getContext();
-  llvm::Type *pointer = llvm::PointerType::get(context, 0);
-  llvm::Type *i64 = llvm::Type::getInt64Ty(context);
-  SmallVector<llvm::Constant *> names;
-  unsigned stringIndex = 0;
-  for (const SharedLibraryInput &input : sharedLibraryInputs) {
-    if (!input.hasVPIStartup)
-      continue;
-    llvm::Constant *bytes =
-        llvm::ConstantDataArray::getString(context, input.loaderName, true);
-    auto *global = new llvm::GlobalVariable(
-        module, bytes->getType(), true, llvm::GlobalValue::PrivateLinkage,
-        bytes, (Twine("__talos_vpi_module_") + Twine(stringIndex++)).str());
-    global->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
-    names.push_back(global);
-  }
-  llvm::Constant *nameArrayPointer =
-      llvm::ConstantPointerNull::get(cast<llvm::PointerType>(pointer));
-  if (!names.empty()) {
-    llvm::ArrayType *arrayType = llvm::ArrayType::get(pointer, names.size());
-    auto *array = new llvm::GlobalVariable(
-        module, arrayType, true, llvm::GlobalValue::PrivateLinkage,
-        llvm::ConstantArray::get(arrayType, names),
-        "__talos_vpi_startup_modules");
-    llvm::Constant *zero = llvm::ConstantInt::get(i64, 0);
-    SmallVector<llvm::Constant *, 2> indices{zero, zero};
-    nameArrayPointer =
-        llvm::ConstantExpr::getInBoundsGetElementPtr(arrayType, array, indices);
-  }
-  llvm::FunctionCallee fail = module.getOrInsertFunction(
-      "talos_rt_v1_scheduler_fail",
-      llvm::FunctionType::get(llvm::Type::getVoidTy(context),
-                              {pointer, llvm::Type::getInt32Ty(context)},
-                              false));
-  llvm::IRBuilder<> beforeSpawn(spawn);
-  llvm::Value *runtimeContext =
-      beforeSpawn.CreateLoad(pointer, current, "talos.vpi.context");
-  auto *valueArray = dyn_cast<llvm::ArrayType>(stateValue->getValueType());
-  auto *unknownArray =
-      stateUnknown ? dyn_cast<llvm::ArrayType>(stateUnknown->getValueType())
-                   : nullptr;
-  if (!valueArray ||
-      (stateUnknown && (!unknownArray || valueArray->getNumElements() !=
-                                             unknownArray->getNumElements()))) {
-    errs() << "talos: error: generated native state planes disagree\n";
-    return failure();
-  }
-  llvm::GlobalVariable *execution =
-      module.getNamedGlobal("__talos_execution_descriptor_v1");
-  auto *executionInitializer =
-      execution ? dyn_cast<llvm::ConstantStruct>(execution->getInitializer())
-                : nullptr;
-  // Sampled designs store the descriptor and its extension in one aggregate
-  // so `reserved` can be a target-layout-relative offset on wasm32. Peel that
-  // storage wrapper before inspecting descriptor fields.
-  auto isExecutionDescriptor = [](llvm::ConstantStruct *value) {
-    auto *type = value ? dyn_cast<llvm::StructType>(value->getType()) : nullptr;
-    return type && type->getNumElements() == 17 &&
-           value->getNumOperands() == 17 &&
-           type->getElementType(0)->isIntegerTy(32) &&
-           type->getElementType(1)->isIntegerTy(32) &&
-           type->getElementType(7)->isIntegerTy(64);
-  };
-  if (!isExecutionDescriptor(executionInitializer) && executionInitializer &&
-      executionInitializer->getNumOperands() == 2) {
-    auto *nested =
-        dyn_cast<llvm::ConstantStruct>(executionInitializer->getOperand(0));
-    auto *extension =
-        dyn_cast<llvm::ConstantStruct>(executionInitializer->getOperand(1));
-    // The extension is deliberately an evolving v1 record.  Its field count
-    // is not part of the storage-wrapper contract; the descriptor in element
-    // zero is sufficient to identify the generated aggregate.  Requiring a
-    // particular extension shape here made adding an in-place v1 field look
-    // like a malformed state descriptor.
-    if (isExecutionDescriptor(nested) && extension)
-      executionInitializer = nested;
-  }
-  auto *stateBitCount =
-      executionInitializer && executionInitializer->getNumOperands() > 7
-          ? dyn_cast<llvm::ConstantInt>(executionInitializer->getOperand(7))
-          : nullptr;
-  if (!stateBitCount ||
-      stateBitCount->getZExtValue() > valueArray->getNumElements() * 8) {
-    errs() << "talos: error: execution descriptor disagrees with generated "
-              "native state planes\n";
-    return failure();
-  }
-  auto *executionFlags =
-      executionInitializer
-          ? dyn_cast<llvm::ConstantInt>(executionInitializer->getOperand(1))
-          : nullptr;
-  if (!stateUnknown && (!executionFlags || !(executionFlags->getZExtValue() &
-                                             TALOS_RT_EXECUTION_TWO_STATE))) {
-    errs() << "talos: error: four-state execution requires an unknown plane\n";
-    return failure();
-  }
-  llvm::Constant *unknownPointer =
-      stateUnknown
-          ? static_cast<llvm::Constant *>(stateUnknown)
-          : llvm::ConstantPointerNull::get(cast<llvm::PointerType>(pointer));
-  if (requiresStateSync) {
-    llvm::FunctionCallee sync = module.getOrInsertFunction(
-        "talos_rt_v1_native_state_sync",
-        llvm::FunctionType::get(llvm::Type::getInt32Ty(context),
-                                {pointer, pointer, pointer, i64}, false));
-    llvm::Value *syncStatus = beforeSpawn.CreateCall(
-        sync,
-        {runtimeContext, stateValue, unknownPointer,
-         llvm::ConstantInt::get(i64, stateBitCount->getZExtValue())},
-        "talos.state.sync");
-    beforeSpawn.CreateCall(fail, {runtimeContext, syncStatus});
-  }
-  if (resolveInitialDrivers) {
-    llvm::FunctionCallee resolve = module.getOrInsertFunction(
-        "talos_rt_v1_scheduler_resolve_initial_drivers",
-        llvm::FunctionType::get(llvm::Type::getInt32Ty(context), {pointer},
-                                false));
-    llvm::Value *resolveStatus = beforeSpawn.CreateCall(
-        resolve, {runtimeContext}, "talos.initial.drivers");
-    beforeSpawn.CreateCall(fail, {runtimeContext, resolveStatus});
-  }
-  if (enableVPI) {
-    llvm::FunctionCallee startup = module.getOrInsertFunction(
-        "talos_rt_v1_vpi_startup",
-        llvm::FunctionType::get(llvm::Type::getInt32Ty(context),
-                                {pointer, pointer, i64}, false));
-    llvm::Value *status =
-        beforeSpawn.CreateCall(startup,
-                               {runtimeContext, nameArrayPointer,
-                                llvm::ConstantInt::get(i64, names.size())},
-                               "talos.vpi.startup");
-    beforeSpawn.CreateCall(fail, {runtimeContext, status});
-    llvm::FunctionCallee endCompile = module.getOrInsertFunction(
-        "talos_rt_v1_vpi_end_compile",
-        llvm::FunctionType::get(llvm::Type::getInt32Ty(context), {pointer},
-                                false));
-    status = beforeSpawn.CreateCall(endCompile, {runtimeContext},
-                                    "talos.vpi.end_compile");
-    beforeSpawn.CreateCall(fail, {runtimeContext, status});
-    llvm::FunctionCallee startSimulation = module.getOrInsertFunction(
-        "talos_rt_v1_vpi_start_simulation",
-        llvm::FunctionType::get(llvm::Type::getInt32Ty(context), {pointer},
-                                false));
-    status = beforeSpawn.CreateCall(startSimulation, {runtimeContext},
-                                    "talos.vpi.start_simulation");
-    beforeSpawn.CreateCall(fail, {runtimeContext, status});
-    llvm::FunctionCallee endSimulation = module.getOrInsertFunction(
-        "talos_rt_v1_vpi_end_simulation",
-        llvm::FunctionType::get(llvm::Type::getInt32Ty(context), {pointer},
-                                false));
-    llvm::FunctionCallee shutdown = module.getOrInsertFunction(
-        "talos_rt_v1_vpi_shutdown",
-        llvm::FunctionType::get(llvm::Type::getVoidTy(context), {pointer},
-                                false));
-    llvm::IRBuilder<> beforeReport(report);
-    llvm::Value *endStatus = beforeReport.CreateCall(
-        endSimulation, {report->getArgOperand(0)}, "talos.vpi.end_simulation");
-    llvm::Value *runStatus = report->getArgOperand(1);
-    llvm::Value *runFailed = beforeReport.CreateICmpNE(
-        runStatus, llvm::ConstantInt::get(runStatus->getType(), 0),
-        "talos.vpi.run_failed");
-    llvm::Value *finalStatus = beforeReport.CreateSelect(
-        runFailed, runStatus, endStatus, "talos.vpi.final_status");
-    report->setArgOperand(1, finalStatus);
-    returnStatus->setOperand(0, finalStatus);
-    llvm::IRBuilder<> beforeDestroy(destroy);
-    beforeDestroy.CreateCall(shutdown, {destroy->getArgOperand(0)});
-  }
-  return success();
-}
-
 namespace {
 
 // Large native kernels need GlobalISel to bound selection time. The outlined
@@ -1464,8 +1256,6 @@ LogicalResult emitTargetOutput(ModuleOp module,
            << " target: " << targetError << '\n';
     return failure();
   }
-  bool requiresStateSync = false;
-  bool resolveInitialDrivers = false;
   std::optional<talos::schedule::NativeSchedulerMode> nativeScheduler =
       talos::schedule::symbolizeNativeSchedulerMode(options.nativeScheduler);
   if (!nativeScheduler) {
@@ -1522,8 +1312,7 @@ LogicalResult emitTargetOutput(ModuleOp module,
                          useBytecode, options.vpi, options.bytecodeScope,
                          *nativeScheduler, options.optLevel,
                          backend->supportsSemanticPartitions() && !useBytecode,
-                         options.timing, options.verifyEach, options.irDump,
-                         requiresStateSync, resolveInitialDrivers)))
+                         options.timing, options.verifyEach, options.irDump)))
     return failure();
   auto lastBackendTiming = std::chrono::steady_clock::now();
   auto markBackendTiming = [&](StringRef name) {
@@ -1568,9 +1357,8 @@ LogicalResult emitTargetOutput(ModuleOp module,
     // The manifest is an ownership inventory, not a set of live entry points.
     // It has been read above; retain only surviving members in the C++ plan.
     native::remove<native::PhysicalPartitionManifest>(module);
-    auto removed = detail::pruneNativeExecutableSymbols(
-        module, nativeExports, options.vpi != "off" || requiresStateSync,
-        options.verifyEach);
+    auto removed = detail::pruneNativeExecutableSymbols(module, nativeExports,
+                                                        options.verifyEach);
     if (failed(removed))
       return failure();
     prunePartitionInventory(*removed);
@@ -1594,6 +1382,13 @@ LogicalResult emitTargetOutput(ModuleOp module,
   }
   if (failed(addressNativeStateThroughBases(module)))
     return failure();
+  SmallVector<std::string> startupModules;
+  for (const SharedLibraryInput &input : options.sharedLibraryInputs)
+    if (input.hasVPIStartup)
+      startupModules.push_back(input.loaderName);
+  if (failed(lowerNativeStartupLifecycle(module, startupModules)))
+    return failure();
+  markBackendTiming("startup lifecycle lowering");
   auto llvmContext = std::make_unique<llvm::LLVMContext>();
   std::unique_ptr<llvm::Module> llvmModule =
       translateModuleToLLVMIR(module, *llvmContext, "talos");
@@ -1623,15 +1418,11 @@ LogicalResult emitTargetOutput(ModuleOp module,
   });
   llvmModule->setTargetTriple(Triple(backend->getTriple()));
   llvmModule->setDataLayout(targetMachine->createDataLayout());
-  if (failed(addVPIStartupLifecycle(*llvmModule, options.vpi,
-                                    options.sharedLibraryInputs,
-                                    requiresStateSync, resolveInitialDrivers)))
-    return failure();
   if (options.target == TargetKind::Native) {
     applyNativeFunctionTargetAttributes(*llvmModule, *targetMachine);
     markGeneratedFunctionsNoUnwind(*llvmModule);
   }
-  markBackendTiming("VPI lifecycle materialization");
+  markBackendTiming("native function attributes");
   if (options.debugNativeExecutionCounts &&
       !detail::addNativeExecutionCounts(*llvmModule)) {
     errs() << "talos: error: execution counts require a generated main\n";

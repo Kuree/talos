@@ -29,6 +29,10 @@ using DebugTiming = NativeDialect::DebugTimingAttrHelper;
 using FallbackReport = NativeDialect::FallbackReportAttrHelper;
 using ProcessesMaterialized = NativeDialect::ProcessesMaterializedAttrHelper;
 using ClosedExecutable = NativeDialect::ClosedExecutableAttrHelper;
+using StartupStateSync = NativeDialect::StartupStateSyncAttrHelper;
+using StartupResolveInitialDrivers =
+    NativeDialect::StartupResolveInitialDriversAttrHelper;
+using StartupVpi = NativeDialect::StartupVpiAttrHelper;
 using Partition = NativeDialect::PartitionAttrHelper;
 using PartitionManifest = NativeDialect::PartitionManifestAttrHelper;
 using PartitionManifests = NativeDialect::PartitionManifestsAttrHelper;
