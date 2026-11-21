@@ -1244,6 +1244,53 @@ def NativeNBAStageOp : ScheduleNativeOp<"nba.stage"> {
   let hasVerifier = 1;
 }
 
+// Stable native state handles (talos_rt_stable_handle_v1, Runtime
+// StableHandle.h). A handle encodes a state object and a bit offset in it;
+// the invalid handle UINT64_MAX names no storage. An index that is out of
+// bounds or has X/Z bits is invalid: a read through the invalid handle yields
+// the invalid-index value and a write through it does nothing
+// (IEEE 1800-2023 7.4.5, 11.5.1, 11.5.2). A selection is a chain of these
+// operations above a root handle.
+def NativeHandleOffsetOp : ScheduleNativeOp<"handle.offset"> {
+  let summary = "offset a stable native state handle";
+  let description = [{
+    The handle of the bit `amount` (signed) bits after the one `handle`
+    names: the runtime's `talos_rt_stable_handle_offset`, a total function
+    that never traps. The result is the invalid handle when `handle` is
+    invalid, when the new offset overflows, or when it is not representable
+    for the handle's kind (a global offset must lie in [0, 2^61), a static
+    or automatic one in the signed 32-bit range; a negative static offset is
+    kept for a part-select that only partly overlaps its object, 11.5.1).
+
+    `in_bounds` records the compiler's proof that `handle` is valid and that
+    its offset and the new offset both lie in [0, INT32_MAX]; the offset
+    field then neither carries nor borrows, so the result is the plain sum
+    `handle + amount`.
+
+    Its memory effects are those of the runtime call it stands for.
+  }];
+  let arguments = (ins I64:$handle, I64:$amount, UnitAttr:$in_bounds);
+  let results = (outs I64:$result);
+  let assemblyFormat = [{
+    $handle `,` $amount (`in_bounds` $in_bounds^)? attr-dict
+  }];
+  let hasFolder = 1;
+}
+
+def NativeHandleGuardOp : ScheduleNativeOp<"handle.guard", [Pure]> {
+  let summary = "select a stable native state handle or the invalid handle";
+  let description = [{
+    `handle` when `valid` holds, otherwise the invalid handle UINT64_MAX:
+    `valid` is the validity of the selection that produced `handle`, e.g.
+    its index being in range and free of X/Z bits (IEEE 1800-2023 7.4.5,
+    11.5.1).
+  }];
+  let arguments = (ins I1:$valid, I64:$handle);
+  let results = (outs I64:$result);
+  let assemblyFormat = "$valid `,` $handle attr-dict";
+  let hasFolder = 1;
+}
+
 def NativeByteAddressOp : ScheduleNativeOp<"bytes.address", [Pure]> {
   let summary = "immutable bytes awaiting executable reachability";
   let arguments = (ins StrAttr:$name, StrAttr:$value, I64Attr:$alignment);

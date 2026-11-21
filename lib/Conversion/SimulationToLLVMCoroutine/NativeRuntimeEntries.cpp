@@ -56,6 +56,10 @@ bool hasNativeRuntimeEffect(mlir::Operation *op, Effect effect) {
     return (getNativeRuntimeEffects(NativeRuntimeEntry::SchedulerStaticNba) &
             getNativeRuntimeEffects(NativeRuntimeEntry::SchedulerFail) &
             effect) == effect;
+  // A stable-handle offset is the runtime's handle arithmetic.
+  if (llvm::isa<schedule::NativeHandleOffsetOp>(op))
+    return (getNativeRuntimeEffects(NativeRuntimeEntry::NativeHandleOffset) &
+            effect) == effect;
   return false;
 }
 

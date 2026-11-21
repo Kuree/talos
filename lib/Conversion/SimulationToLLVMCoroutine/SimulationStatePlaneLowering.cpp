@@ -1,5 +1,6 @@
 //===- SimulationStatePlaneLowering.cpp - Native state planes --------===//
 
+#include "NativeHandleChain.h"
 #include "NativeStateAccess.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Dialect/Native/NativeDialect.h"
@@ -201,24 +202,18 @@ resolveDirectDynamicStateRange(Value handle, unsigned width,
   // storage. Retain every guard and handle-offset validity check when
   // resolving nested aggregate fields to one fixed physical root.
   SmallVector<Value> guards, amounts;
-  Value root = handle;
-  while (true) {
-    if (auto selected = root.getDefiningOp<arith::SelectOp>()) {
-      if (resolveCFGConstantInteger(selected.getFalseValue()) !=
-          std::optional<uint64_t>{UINT64_MAX})
-        return std::nullopt;
-      guards.push_back(selected.getCondition());
-      root = selected.getTrueValue();
+  NativeHandleChain chain = getNativeHandleChain(handle);
+  for (const NativeHandleLink &link : chain.links) {
+    if (const auto *offset = std::get_if<NativeHandleOffset>(&link)) {
+      amounts.push_back(offset->amount);
       continue;
     }
-    auto offset = root.getDefiningOp<LLVM::CallOp>();
-    if (!offset || !offset.getCallee() ||
-        *offset.getCallee() != "talos_rt_v1_native_handle_offset" ||
-        offset.getArgOperands().size() != 2)
-      break;
-    amounts.push_back(offset.getArgOperands()[1]);
-    root = offset.getArgOperands()[0];
+    const auto &guard = std::get<NativeHandleGuard>(link);
+    if (guard.inverted)
+      return std::nullopt;
+    guards.push_back(guard.valid);
   }
+  Value root = chain.root;
   if (amounts.empty() || (guards.empty() && (!access || !access->inBounds)))
     return std::nullopt;
   std::optional<uint64_t> base = resolveCFGConstantInteger(root);

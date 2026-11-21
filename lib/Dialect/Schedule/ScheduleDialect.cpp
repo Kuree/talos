@@ -51,11 +51,15 @@ struct ReadyInlinerInterface final : DialectInlinerInterface {
 Operation *ScheduleDialect::materializeConstant(OpBuilder &builder,
                                                Attribute value, Type type,
                                                Location loc) {
-  // Only a canonical plane's address is a constant.
+  // A canonical plane's address is a constant; a contribution plane's is not.
   auto plane = dyn_cast<StatePlaneAttr>(value);
   if (plane && isCanonicalStatePlane(plane.getValue()) &&
       type == LLVM::LLVMPointerType::get(builder.getContext()))
     return NativeStateAddressOp::create(builder, loc, plane.getValue());
+  // Handle operations fold to i64 handle constants.
+  auto integer = dyn_cast<IntegerAttr>(value);
+  if (integer && type.isSignlessInteger(64) && integer.getType() == type)
+    return arith::ConstantOp::create(builder, loc, type, integer);
   return nullptr;
 }
 

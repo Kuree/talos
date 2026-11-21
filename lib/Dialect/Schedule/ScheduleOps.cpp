@@ -12,6 +12,7 @@
 #include "talos/Dialect/Schedule/ScheduleDialect.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
+#include "talos/Runtime/StableHandle.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/TypeSwitch.h"
 using namespace mlir;
@@ -412,6 +413,31 @@ LogicalResult NativeNBAStageOp::verify() {
   if (getWidth() == 0)
     return emitOpError("stages no bits");
   return success();
+}
+
+OpFoldResult NativeHandleOffsetOp::fold(FoldAdaptor adaptor) {
+  // Constant operands offset as the runtime does. `in_bounds` does not
+  // change the result: under its proof that is the plain sum.
+  auto handle = dyn_cast_or_null<IntegerAttr>(adaptor.getHandle());
+  auto amount = dyn_cast_or_null<IntegerAttr>(adaptor.getAmount());
+  if (!handle || !amount)
+    return {};
+  return IntegerAttr::get(getType(),
+                          APInt(64, talos_rt_stable_handle_offset(
+                                        handle.getValue().getZExtValue(),
+                                        amount.getValue().getSExtValue())));
+}
+
+OpFoldResult NativeHandleGuardOp::fold(FoldAdaptor adaptor) {
+  if (auto valid = dyn_cast_or_null<IntegerAttr>(adaptor.getValid()))
+    return valid.getValue().isOne() ? OpFoldResult(getHandle())
+                                    : OpFoldResult(IntegerAttr::get(
+                                          getType(), APInt::getAllOnes(64)));
+  // Guarding the invalid handle gives the invalid handle.
+  if (auto handle = dyn_cast_or_null<IntegerAttr>(adaptor.getHandle());
+      handle && handle.getValue().isAllOnes())
+    return getHandle();
+  return {};
 }
 
 uint64_t getNBAAccumulatorFieldBytes(NBAAccumulatorField field) {

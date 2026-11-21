@@ -1,5 +1,6 @@
 //===- SimulationAOTMaterialization.cpp - Native AOT LLVM plan --------===//
 
+#include "NativeHandleChain.h"
 #include "NativeRuntimeEntries.h"
 #include "NativeStateAccess.h"
 #include "SimulationAOTPlanning.h"
@@ -701,20 +702,10 @@ proveDynamicEvalNBA(schedule::NativeNBAStageOp stage,
   std::optional<uint64_t> width = stage.getWidth();
   auto root = staticNBAPlan.siteRoots.find(*site);
   Value handle = stage.getHandle();
-  auto offsetCall = handle.getDefiningOp<LLVM::CallOp>();
-  if (!offsetCall) {
-    Operation *selected = handle.getDefiningOp();
-    if (isa_and_nonnull<arith::SelectOp, LLVM::SelectOp>(selected)) {
-      std::optional<uint64_t> trueConstant =
-          constantU64(selected->getOperand(1));
-      std::optional<uint64_t> falseConstant =
-          constantU64(selected->getOperand(2));
-      if (falseConstant && *falseConstant == UINT64_MAX)
-        offsetCall = selected->getOperand(1).getDefiningOp<LLVM::CallOp>();
-      else if (trueConstant && *trueConstant == UINT64_MAX)
-        offsetCall = selected->getOperand(2).getDefiningOp<LLVM::CallOp>();
-    }
-  }
+  // The destination is a dynamic offset of its root, possibly guarded.
+  std::optional<NativeHandleGuard> guard = matchNativeHandleGuard(handle);
+  bool dynamicRoot =
+      matchNativeHandleOffset(guard ? guard->handle : handle).has_value();
 
   DynamicEvalNBAProof proof;
   sim::SimFuncOp enclosing = stage->getParentOfType<sim::SimFuncOp>();
@@ -777,10 +768,6 @@ proveDynamicEvalNBA(schedule::NativeNBAStageOp stage,
           staticNBAPlan.roots[root->second].bit_width &&
       *width <= staticNBAPlan.roots[root->second].bit_width -
                     static_cast<uint64_t>(fixedDestination.offset);
-  bool dynamicRoot =
-      offsetCall && offsetCall.getCallee() &&
-      *offsetCall.getCallee() == "talos_rt_v1_native_handle_offset" &&
-      offsetCall.getArgOperands().size() == 2;
   bool commonDynamicRoot =
       site && width && *width != 0 && *width <= 64 &&
       root != staticNBAPlan.siteRoots.end() &&
@@ -926,7 +913,8 @@ materializeGenericNBAQueueWindows(ModuleOp module,
     // change the binding or introduce another writer between captures.
     // Recheck authority at each original query in such a body.
     WalkResult window = function.walk([&](Operation *op) {
-      if (isa<LLVM::CallOp, schedule::NativeNBAStageOp>(op))
+      if (isa<LLVM::CallOp, schedule::NativeNBAStageOp,
+              schedule::NativeHandleOffsetOp>(op))
         return hasNativeRuntimeEffect(op, native_runtime::QueueStable)
                    ? WalkResult::advance()
                    : WalkResult::interrupt();
@@ -2696,36 +2684,24 @@ FailureOr<bool> makeNativeEvalPlan(
           });
         });
     for (auto [nbaStage, twoState] : runtimeEscapes) {
-      LLVM::CallOp handleOffsetToErase;
+      Operation *handleOffsetToErase = nullptr;
       Operation *handleSelectToErase = nullptr;
       {
         std::optional<uint64_t> site = nbaStage.getSite();
         std::optional<uint64_t> width = nbaStage.getWidth();
         auto root = staticNBAPlan.siteRoots.find(*site);
         Value handle = nbaStage.getHandle();
-        auto offsetCall = handle.getDefiningOp<LLVM::CallOp>();
-        Value dynamicValid;
-        bool invertDynamicValid = false;
-        if (!offsetCall) {
-          Operation *selected = handle.getDefiningOp();
-          if (isa_and_nonnull<arith::SelectOp, LLVM::SelectOp>(selected)) {
-            handleSelectToErase = selected;
-            std::optional<uint64_t> trueConstant =
-                constantU64(selected->getOperand(1));
-            std::optional<uint64_t> falseConstant =
-                constantU64(selected->getOperand(2));
-            if (falseConstant && *falseConstant == UINT64_MAX) {
-              dynamicValid = selected->getOperand(0);
-              offsetCall =
-                  selected->getOperand(1).getDefiningOp<LLVM::CallOp>();
-            } else if (trueConstant && *trueConstant == UINT64_MAX) {
-              dynamicValid = selected->getOperand(0);
-              invertDynamicValid = true;
-              offsetCall =
-                  selected->getOperand(2).getDefiningOp<LLVM::CallOp>();
-            }
-          }
-        }
+        // The proof admits a fixed handle, or an offset of the root under at
+        // most one validity guard.
+        std::optional<NativeHandleGuard> destinationGuard =
+            matchNativeHandleGuard(handle);
+        std::optional<NativeHandleOffset> destinationOffset =
+            matchNativeHandleOffset(destinationGuard ? destinationGuard->handle
+                                                     : handle);
+        Value dynamicValid =
+            destinationGuard ? destinationGuard->valid : Value{};
+        bool invertDynamicValid =
+            destinationGuard && destinationGuard->inverted;
         auto proof = dynamicNBAProofs.find(nbaStage.getOperation());
         if (proof == dynamicNBAProofs.end() || !proof->second.eligible) {
           const DynamicEvalNBAProof emptyProof;
@@ -2743,9 +2719,7 @@ FailureOr<bool> makeNativeEvalPlan(
               << (root != staticNBAPlan.siteRoots.end() &&
                   root->second < staticNBAPlan.generatedAccumulators.size() &&
                   !staticNBAPlan.generatedAccumulators[root->second].empty())
-              << ", offset-call=" << static_cast<bool>(offsetCall)
-              << ", offset-arity="
-              << (offsetCall ? offsetCall.getArgOperands().size() : 0)
+              << ", handle-offset=" << destinationOffset.has_value()
               << ", root-width="
               << (root != staticNBAPlan.siteRoots.end() &&
                           root->second < staticNBAPlan.roots.size()
@@ -2776,11 +2750,14 @@ FailureOr<bool> makeNativeEvalPlan(
         uint64_t slotSourceSite = proof->second.coalescedWholeRoot
                                       ? proof->second.firstRootSite
                                       : *site;
-        handleOffsetToErase = offsetCall;
+        handleSelectToErase = destinationGuard ? destinationGuard->op : nullptr;
+        handleOffsetToErase =
+            destinationOffset ? destinationOffset->op : nullptr;
         OpBuilder nbaBuilder(nbaStage);
         Value dynamicBit =
-            offsetCall ? offsetCall.getArgOperands()[1]
-                       : llvmConstant(nbaBuilder, nbaStage.getLoc(), i64, 0);
+            destinationOffset
+                ? destinationOffset->amount
+                : llvmConstant(nbaBuilder, nbaStage.getLoc(), i64, 0);
         // Load record chunk `index` (bits [64 * index, 64 * index + 64)) of
         // the staged payload. A payload of at most 64 bits is one chunk.
         auto loadChunk = [&, &nbaStage = nbaStage](Value payload,
@@ -2825,7 +2802,7 @@ FailureOr<bool> makeNativeEvalPlan(
         // contrary to IEEE 1800-2017 4.6 and 10.4.2.
         uint64_t rootWidth = staticNBAPlan.roots[root->second].bit_width;
         Value encodedBase =
-            offsetCall ? offsetCall.getArgOperands()[0] : handle;
+            destinationOffset ? destinationOffset->handle : handle;
         uint64_t expectedPrefix =
             TALOS_RT_STABLE_HANDLE_STATIC_TAG |
             (uint64_t{staticNBAPlan.roots[root->second].static_state} << 32);
@@ -3449,7 +3426,7 @@ FailureOr<bool> makeNativeEvalPlan(
       if (handleSelectToErase && handleSelectToErase->use_empty())
         handleSelectToErase->erase();
       if (handleOffsetToErase && handleOffsetToErase->use_empty())
-        handleOffsetToErase.erase();
+        handleOffsetToErase->erase();
     }
     // Every stage of a generated body is lowered above. A stage the runtime
     // keeps is a runtime call to the rest of the plan, e.g. a ranked group's
@@ -3516,24 +3493,16 @@ FailureOr<bool> makeNativeEvalPlan(
       Value sourceValid;
       bool invertSourceValid = false;
       Operation *handleSelect = handle.getDefiningOp();
-      if (isa_and_nonnull<arith::SelectOp, LLVM::SelectOp>(handleSelect)) {
-        Value condition = handleSelect->getOperand(0);
-        Value trueValue = handleSelect->getOperand(1);
-        Value falseValue = handleSelect->getOperand(2);
-        std::optional<uint64_t> trueConstant = constantU64(trueValue);
-        std::optional<uint64_t> falseConstant = constantU64(falseValue);
-        if (falseConstant && *falseConstant == UINT64_MAX) {
-          sourceValid = condition;
-          handle = trueValue;
-        } else if (trueConstant && *trueConstant == UINT64_MAX) {
-          sourceValid = condition;
-          invertSourceValid = true;
-          handle = falseValue;
-        } else {
-          return call.emitError(
-                     "dynamic state handle has no invalid-handle guard"),
-                 failure();
-        }
+      if (std::optional<NativeHandleGuard> guard =
+              matchNativeHandleGuard(handleSelect)) {
+        sourceValid = guard->valid;
+        invertSourceValid = guard->inverted;
+        handle = guard->handle;
+      } else if (isa_and_nonnull<arith::SelectOp, LLVM::SelectOp>(
+                     handleSelect)) {
+        return call.emitError(
+                   "dynamic state handle has no invalid-handle guard"),
+               failure();
       }
       auto owner = call->getParentOfType<sim::SimFuncOp>();
       // Local references, including slices with a handle-offset operation,
@@ -3558,11 +3527,9 @@ FailureOr<bool> makeNativeEvalPlan(
                 owner) &&
             ::talos::schedule::has<schedule::metadata::evalTwoStateVariant>(
                 owner)));
-      auto offsetCall = handle.getDefiningOp<LLVM::CallOp>();
-      bool hasOffset =
-          offsetCall && offsetCall.getCallee() &&
-          *offsetCall.getCallee() == "talos_rt_v1_native_handle_offset" &&
-          offsetCall.getArgOperands().size() == 2;
+      std::optional<NativeHandleOffset> handleOffset =
+          matchNativeHandleOffset(handle);
+      bool hasOffset = handleOffset.has_value();
       if (!hasOffset && !constantU64(handle)) {
         if (deferColdReference)
           continue;
@@ -3585,9 +3552,9 @@ FailureOr<bool> makeNativeEvalPlan(
       // SSA forwarding can expose a fixed handle after state-access lowering
       // has already emitted the general ABI. It is the zero-offset case of
       // the same certified root, independent of its original CFG position.
-      Value chainBase = hasOffset ? offsetCall.getArgOperands()[0] : handle;
+      Value chainBase = hasOffset ? handleOffset->handle : handle;
       Value dynamicOffset =
-          hasOffset ? offsetCall.getArgOperands()[1]
+          hasOffset ? handleOffset->amount
                     : llvmConstant(chainBuilder, call.getLoc(), i64, 0);
       bool chainedOffsets = false;
       auto requireValid = [&, &call = call](Value guard) {
@@ -3604,39 +3571,24 @@ FailureOr<bool> makeNativeEvalPlan(
                                                chainBuilder.getI1Type(), 1));
         invertSourceValid = false;
       }
-      while (true) {
-        if (auto inner = chainBase.getDefiningOp<LLVM::CallOp>();
-            inner && inner.getCallee() &&
-            *inner.getCallee() == "talos_rt_v1_native_handle_offset" &&
-            inner.getArgOperands().size() == 2) {
+      NativeHandleChain chain = getNativeHandleChain(chainBase);
+      for (const NativeHandleLink &link : chain.links) {
+        if (const auto *inner = std::get_if<NativeHandleOffset>(&link)) {
           chainedOffsets = true;
-          dynamicOffset =
-              arith::AddIOp::create(chainBuilder, call.getLoc(),
-                                    inner.getArgOperands()[1], dynamicOffset);
-          chainBase = inner.getArgOperands()[0];
+          dynamicOffset = arith::AddIOp::create(chainBuilder, call.getLoc(),
+                                                inner->amount, dynamicOffset);
           continue;
         }
-        Operation *select = chainBase.getDefiningOp();
-        if (!isa_and_nonnull<arith::SelectOp, LLVM::SelectOp>(select))
-          break;
-        std::optional<uint64_t> trueConstant =
-            constantU64(select->getOperand(1));
-        std::optional<uint64_t> falseConstant =
-            constantU64(select->getOperand(2));
-        Value guard = select->getOperand(0);
-        if (falseConstant && *falseConstant == UINT64_MAX) {
-          chainBase = select->getOperand(1);
-        } else if (trueConstant && *trueConstant == UINT64_MAX) {
-          guard =
-              arith::XOrIOp::create(chainBuilder, call.getLoc(), guard,
+        const auto &guard = std::get<NativeHandleGuard>(link);
+        Value valid = guard.valid;
+        if (guard.inverted)
+          valid =
+              arith::XOrIOp::create(chainBuilder, call.getLoc(), valid,
                                     llvmConstant(chainBuilder, call.getLoc(),
                                                  chainBuilder.getI1Type(), 1));
-          chainBase = select->getOperand(2);
-        } else {
-          break;
-        }
-        requireValid(guard);
+        requireValid(valid);
       }
+      chainBase = chain.root;
       // A common packed view can leave offset(selected-root, constant) after
       // branch canonicalization. Retry the finite-handle proof on the base
       // with that projection, checking each leaf's read and handle bounds.
@@ -3660,8 +3612,8 @@ FailureOr<bool> makeNativeEvalPlan(
           call.getResult().replaceAllUsesWith(
               llvmConstant(chainBuilder, call.getLoc(), i32, TALOS_RT_OK));
           call.erase();
-          if (offsetCall->use_empty())
-            offsetCall.erase();
+          if (handleOffset->op->use_empty())
+            handleOffset->op->erase();
           continue;
         }
       }
@@ -3864,48 +3816,32 @@ FailureOr<bool> makeNativeEvalPlan(
         module, [&](sim::SimFuncOp function) {
           if (!isGeneratedEvalBody(function, selectedRawBodies))
             return;
-          SmallVector<LLVM::CallOp> offsets;
-          function.walk([&](LLVM::CallOp call) {
-            if (call.getCallee() &&
-                *call.getCallee() == "talos_rt_v1_native_handle_offset" &&
-                call.getArgOperands().size() == 2 && !call->use_empty())
-              offsets.push_back(call);
+          SmallVector<Operation *> offsets;
+          function.walk([&](Operation *op) {
+            if (!op->use_empty() && matchNativeHandleOffset(op))
+              offsets.push_back(op);
           });
-          for (LLVM::CallOp call : llvm::reverse(offsets)) {
-            Value base = call.getArgOperands()[0];
-            Value physicalRoot = base;
-            while (true) {
-              if (auto selected = physicalRoot.getDefiningOp<arith::SelectOp>();
-                  selected && constantU64(selected.getFalseValue()) ==
-                                  std::optional<uint64_t>{UINT64_MAX}) {
-                physicalRoot = selected.getTrueValue();
-                continue;
-              }
-              if (auto inner = physicalRoot.getDefiningOp<LLVM::CallOp>();
-                  inner && inner.getCallee() &&
-                  *inner.getCallee() == "talos_rt_v1_native_handle_offset" &&
-                  inner.getArgOperands().size() == 2) {
-                physicalRoot = inner.getArgOperands()[0];
-                continue;
-              }
-              break;
-            }
-            auto root = constantU64(physicalRoot);
+          for (Operation *op : llvm::reverse(offsets)) {
+            // Read the operands now: an inner offset may already have been
+            // replaced.
+            NativeHandleOffset handleOffset = *matchNativeHandleOffset(op);
+            Value base = handleOffset.handle;
+            auto root = constantU64(getNativeHandleChain(base).root);
             talos_rt_stable_handle_v1 decoded{};
             if (!root || !talos_rt_stable_handle_decode(*root, &decoded) ||
                 decoded.kind != TALOS_RT_STABLE_HANDLE_STATIC)
               continue;
-            OpBuilder offsetBuilder(call);
-            Location loc = call.getLoc();
+            OpBuilder offsetBuilder(op);
+            Location loc = op->getLoc();
             auto constant = [&](int64_t value) {
               return llvmConstant(offsetBuilder, loc, i64, value);
             };
-            Value amount = call.getArgOperands()[1];
-            if (native::has<native::InBoundsHandleOffset>(call)) {
+            Value amount = handleOffset.amount;
+            if (handleOffset.inBounds) {
               Value result =
                   arith::AddIOp::create(offsetBuilder, loc, base, amount);
-              call.getResult().replaceAllUsesWith(result);
-              call.erase();
+              op->getResult(0).replaceAllUsesWith(result);
+              op->erase();
               continue;
             }
             Value baseOffset = LLVM::SExtOp::create(
@@ -3935,13 +3871,14 @@ FailureOr<bool> makeNativeEvalPlan(
                 constant(*root & UINT64_C(0xffffffff00000000)));
             Value result = arith::SelectOp::create(offsetBuilder, loc, valid,
                                                    encoded, constant(-1));
-            call.getResult().replaceAllUsesWith(result);
-            call.erase();
+            op->getResult(0).replaceAllUsesWith(result);
+            op->erase();
           }
         });
     // Reference lowering can leave a short chain of now-dead validity selects
-    // above a handle-offset call.  Peel it to a fixed point so the hot-closure
-    // verifier sees neither the obsolete runtime call nor its guard plumbing.
+    // or guards above a handle offset.  Peel it to a fixed point so the
+    // hot-closure verifier sees neither the obsolete runtime call nor its
+    // guard plumbing.
     while (true) {
       SmallVector<Operation *> deadHandleOperations;
       ::talos::detail::walkNativeFunctions<sim::SimFuncOp>(
@@ -3951,20 +3888,16 @@ FailureOr<bool> makeNativeEvalPlan(
             function.walk([&](Operation *operation) {
               if (!operation->use_empty())
                 return;
-              if (auto call = dyn_cast<LLVM::CallOp>(operation)) {
-                if (call.getCallee() &&
-                    *call.getCallee() == "talos_rt_v1_native_handle_offset")
-                  deadHandleOperations.push_back(operation);
+              if (matchNativeHandleOffset(operation)) {
+                deadHandleOperations.push_back(operation);
                 return;
               }
-              if (!isa<arith::SelectOp, LLVM::SelectOp>(operation))
+              if (!isa<arith::SelectOp, LLVM::SelectOp,
+                       schedule::NativeHandleGuardOp>(operation))
                 return;
               bool selectsHandleOffset = llvm::any_of(
                   operation->getOperands().drop_front(), [](Value operand) {
-                    auto producer = operand.getDefiningOp<LLVM::CallOp>();
-                    return producer && producer.getCallee() &&
-                           *producer.getCallee() ==
-                               "talos_rt_v1_native_handle_offset";
+                    return matchNativeHandleOffset(operand).has_value();
                   });
               if (selectsHandleOffset)
                 deadHandleOperations.push_back(operation);

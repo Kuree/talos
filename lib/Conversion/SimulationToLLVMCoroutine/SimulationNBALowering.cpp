@@ -1,6 +1,7 @@
 //===- SimulationNBALowering.cpp - Native NBA rewrite patterns ----------===//
 
 #include "SimulationNBALowering.h"
+#include "NativeHandleChain.h"
 #include "NativeStateAccess.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Dialect/Native/NativeDialect.h"
@@ -828,26 +829,20 @@ public:
     // retaining the latter would keep native_handle_offset on the hot path.
     Value directValid = valid;
     bool exactDestinationValidity = true;
-    Operation *destinationSelect =
-        adaptor.getDestination().front().getDefiningOp();
-    if (isa_and_nonnull<arith::SelectOp, LLVM::SelectOp>(destinationSelect)) {
-      std::optional<uint64_t> trueValue =
-          resolveCFGConstantInteger(destinationSelect->getOperand(1));
-      std::optional<uint64_t> falseValue =
-          resolveCFGConstantInteger(destinationSelect->getOperand(2));
-      Value condition = destinationSelect->getOperand(0);
-      if (falseValue && *falseValue == UINT64_MAX) {
-        directValid =
-            arith::AndIOp::create(rewriter, location, directValid, condition);
-      } else if (trueValue && *trueValue == UINT64_MAX) {
-        Value inverted = arith::XOrIOp::create(
+    Value destination = adaptor.getDestination().front();
+    if (std::optional<NativeHandleGuard> guard =
+            matchNativeHandleGuard(destination)) {
+      Value condition = guard->valid;
+      if (guard->inverted)
+        condition = arith::XOrIOp::create(
             rewriter, location, condition,
             llvmConstant(rewriter, location, rewriter.getI1Type(), 1));
-        directValid =
-            arith::AndIOp::create(rewriter, location, directValid, inverted);
-      } else {
-        exactDestinationValidity = false;
-      }
+      directValid =
+          arith::AndIOp::create(rewriter, location, directValid, condition);
+    } else if (isa_and_nonnull<arith::SelectOp, LLVM::SelectOp>(
+                   destination.getDefiningOp())) {
+      // Any other select hides which of its handles are valid.
+      exactDestinationValidity = false;
     }
     schedule::NBASiteAttr site = op.getSiteAttr();
     bool mappedSite =

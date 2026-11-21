@@ -1,5 +1,6 @@
 add_mlir_library(TalosSimulationToLLVMCoroutine
   NativeFunctionCleanup.cpp
+  NativeHandleChain.cpp
   NativePipeline.cpp
   NativeRuntimeEntries.cpp
   NativeStateAccess.cpp
