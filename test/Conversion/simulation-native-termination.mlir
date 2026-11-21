@@ -8,7 +8,12 @@
 // no further activation or NBA commit runs in that time step.
 
 // CHECK-LABEL: llvm.func @__talos_eval_checkpoint_body_v1_0(
-// CHECK: llvm.store {{.*}}schedule.eval.pending_dirty_root
+// CHECK: %[[DIRTY:.*]] = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1
+// CHECK-NEXT: %[[MARK:.*]] = llvm.getelementptr %[[DIRTY]][0]
+// CHECK-NEXT: %[[PENDING:.*]] = llvm.load %[[MARK]]
+// CHECK-NEXT: %[[ROOT:.*]] = llvm.mlir.constant(1 : i64)
+// CHECK-NEXT: %[[MARKED:.*]] = llvm.or %[[PENDING]], %[[ROOT]]
+// CHECK-NEXT: llvm.store %[[MARKED]], %[[MARK]]
 // CHECK: %[[STATUS:.*]] = llvm.call @talos_rt_v1_scheduler_fatal(%arg0,
 // CHECK-NEXT: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
 // CHECK-NEXT: %[[CONTINUE:.*]] = llvm.icmp "eq" %[[STATUS]], %[[ZERO]]
@@ -90,7 +95,12 @@ module attributes {
 // -----
 
 // CHECK-LABEL: llvm.func @__talos_eval_checkpoint_body_v1_0(
-// CHECK: llvm.store {{.*}}schedule.eval.pending_dirty_root
+// CHECK: %[[DIRTY:.*]] = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1
+// CHECK-NEXT: %[[MARK:.*]] = llvm.getelementptr %[[DIRTY]][0]
+// CHECK-NEXT: %[[PENDING:.*]] = llvm.load %[[MARK]]
+// CHECK-NEXT: %[[ROOT:.*]] = llvm.mlir.constant(1 : i64)
+// CHECK-NEXT: %[[MARKED:.*]] = llvm.or %[[PENDING]], %[[ROOT]]
+// CHECK-NEXT: llvm.store %[[MARKED]], %[[MARK]]
 // CHECK: %[[STATUS:.*]] = llvm.call @talos_rt_v1_scheduler_finish(%arg0,
 // CHECK-NEXT: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
 // CHECK-NEXT: %[[CONTINUE:.*]] = llvm.icmp "eq" %[[STATUS]], %[[ZERO]]
@@ -172,7 +182,12 @@ module attributes {
 // -----
 
 // CHECK-LABEL: llvm.func @__talos_eval_checkpoint_body_v1_0(
-// CHECK: llvm.store {{.*}}schedule.eval.pending_dirty_root
+// CHECK: %[[DIRTY:.*]] = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1
+// CHECK-NEXT: %[[MARK:.*]] = llvm.getelementptr %[[DIRTY]][0]
+// CHECK-NEXT: %[[PENDING:.*]] = llvm.load %[[MARK]]
+// CHECK-NEXT: %[[ROOT:.*]] = llvm.mlir.constant(1 : i64)
+// CHECK-NEXT: %[[MARKED:.*]] = llvm.or %[[PENDING]], %[[ROOT]]
+// CHECK-NEXT: llvm.store %[[MARKED]], %[[MARK]]
 // CHECK: %[[STATUS:.*]] = llvm.call @talos_rt_v1_scheduler_stop(%arg0,
 // CHECK-NEXT: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
 // CHECK-NEXT: %[[CONTINUE:.*]] = llvm.icmp "eq" %[[STATUS]], %[[ZERO]]

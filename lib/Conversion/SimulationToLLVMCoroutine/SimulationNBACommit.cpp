@@ -61,10 +61,6 @@ void materializeNativeNBAMetadataExport(
   function.setLinkage(LLVM::Linkage::Internal);
   Block *current = function.addEntryBlock(b);
   b.setInsertionPointToStart(current);
-  Value dirty =
-      LLVM::AddressOfOp::create(b, loc, ptr, "__talos_aot_nba_dirty_roots_v1");
-  Value summary = LLVM::AddressOfOp::create(b, loc, ptr,
-                                            "__talos_aot_nba_dirty_summary_v1");
   Value exported = LLVM::AddressOfOp::create(b, loc, ptr, exportedName);
   Value live = llvmConstant(b, loc, i64, 0);
   for (auto [slot, entry] : llvm::enumerate(words)) {
@@ -74,8 +70,8 @@ void materializeNativeNBAMetadataExport(
       compactMask |= uint64_t{1} << (root % 64);
     // Hoist operands that build IR: argument evaluation order is
     // unspecified (MSVC goes right to left) and tests pin the emitted order.
-    Value dirtyWord = LLVM::LoadOp::create(
-        b, loc, i64, byteGEP(b, loc, dirty, uint64_t{word} * 8), 8);
+    Value dirtyWord =
+        loadNBAIndex(b, loc, schedule::NBAIndex::DirtyRoots, word);
     Value compact = llvmConstant(b, loc, i64, compactMask);
     Value bits = arith::AndIOp::create(b, loc, dirtyWord, compact);
     Value shadowAddress = byteGEP(b, loc, exported, uint64_t{slot} * 8);
@@ -117,15 +113,15 @@ void materializeNativeNBAMetadataExport(
           llvmConstant(b, loc, i32, plan.generatedCommitRegions[root]);
       schedule::NativeNBAAccumulatorStoreOp::create(b, loc, region, accumulator,
                                                     NBAField::ExecRegion, 0, 4);
-      Value page = byteGEP(b, loc, summary, uint64_t{root / 4096} * 8);
-      Value old = LLVM::LoadOp::create(b, loc, i64, page, 8);
+      Value old =
+          loadNBAIndex(b, loc, schedule::NBAIndex::DirtySummary, root / 4096);
       Value pageBit =
           llvmConstant(b, loc, i64, uint64_t{1} << ((root / 64) % 64));
       Value noPageBit = llvmConstant(b, loc, i64, 0);
       Value added =
           arith::SelectOp::create(b, loc, present, pageBit, noPageBit);
-      LLVM::StoreOp::create(b, loc, arith::OrIOp::create(b, loc, old, added),
-                            page, 8);
+      storeNBAIndex(b, loc, arith::OrIOp::create(b, loc, old, added),
+                    schedule::NBAIndex::DirtySummary, root / 4096);
     }
     LLVM::StoreOp::create(b, loc, bits, shadowAddress, 8);
     cf::BranchOp::create(b, loc, next,
@@ -427,9 +423,9 @@ void emitScalarNBACommitLoop(OpBuilder &b, ModuleOp module,
       b, loc, cmp(arith::CmpIPredicate::ult, word, c(masks.size())), wordLoad,
       ValueRange{}, exit, ValueRange{});
   b.setInsertionPointToStart(wordLoad);
-  Value dirtyAddress =
-      gep(address("__talos_aot_nba_dirty_roots_v1"), i64, word);
-  Value dirty = LLVM::LoadOp::create(b, loc, i64, dirtyAddress, 8);
+  constexpr auto dirtyRoots = schedule::NBAIndex::DirtyRoots;
+  Value dirty =
+      schedule::NativeNBAIndexLoadOp::create(b, loc, dirtyRoots, word, 0);
   Value selectedMask = load(maskTable, word);
   cf::BranchOp::create(b, loc, rootHead, ValueRange{band(dirty, selectedMask)});
   b.setInsertionPointToStart(rootHead);
@@ -469,10 +465,11 @@ void emitScalarNBACommitLoop(OpBuilder &b, ModuleOp module,
   // Match the unrolled barrier: consume only the roots committed here. A
   // root staged in the canonical accumulator by a runtime-executed actor keeps
   // its bit for the canonical index owner (IEEE 1800-2023 4.9.4, 10.4.2).
-  LLVM::StoreOp::create(b, loc,
-                        band(LLVM::LoadOp::create(b, loc, i64, dirtyAddress, 8),
-                             inv(arith::ShLIOp::create(b, loc, c(1), bit))),
-                        dirtyAddress, 8);
+  schedule::NativeNBAIndexStoreOp::create(
+      b, loc,
+      band(schedule::NativeNBAIndexLoadOp::create(b, loc, dirtyRoots, word, 0),
+           inv(arith::ShLIOp::create(b, loc, c(1), bit))),
+      dirtyRoots, word, 0);
   Value offset = load(offsetTable, index), shift = load(shiftTable, index),
         widthMask = load(widthTable, index),
         fixedMask = load(fixedTable, index);

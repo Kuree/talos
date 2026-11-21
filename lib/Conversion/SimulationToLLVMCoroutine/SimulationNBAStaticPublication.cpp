@@ -107,13 +107,10 @@ void materializeNativeNBAStaticPublication(
     blocked = arith::OrIOp::create(b, loc, blocked, value);
   };
   auto pointer = LLVM::LLVMPointerType::get(b.getContext());
-  Value dirty = LLVM::AddressOfOp::create(b, loc, pointer,
-                                          "__talos_aot_nba_dirty_roots_v1");
   for (auto [word, mask] : llvm::enumerate(plan.scalarRoots)) {
     if (mask == UINT64_MAX)
       continue;
-    Value pending = LLVM::LoadOp::create(b, loc, b.getI64Type(),
-                                         byteGEP(b, loc, dirty, word * 8), 8);
+    Value pending = loadNBAIndex(b, loc, schedule::NBAIndex::DirtyRoots, word);
     include(arith::AndIOp::create(b, loc, pending,
                                   llvmConstant(b, loc, b.getI64Type(), ~mask)));
   }

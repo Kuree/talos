@@ -67,6 +67,28 @@ getNBAAccumulatorFieldOffset(schedule::NBAAccumulatorField field,
   return offset;
 }
 
+schedule::NativeNBAIndexLoadOp
+loadNBAIndex(OpBuilder &builder, Location location, schedule::NBAIndex index,
+             uint64_t word, std::optional<uint32_t> root,
+             bool canonicalCapture) {
+  auto load = schedule::NativeNBAIndexLoadOp::create(builder, location, index,
+                                                     Value(), word);
+  load.setRoot(root);
+  load.setCanonicalCapture(canonicalCapture);
+  return load;
+}
+
+schedule::NativeNBAIndexStoreOp
+storeNBAIndex(OpBuilder &builder, Location location, Value value,
+              schedule::NBAIndex index, uint64_t word,
+              std::optional<uint32_t> root, bool canonicalCapture) {
+  auto store = schedule::NativeNBAIndexStoreOp::create(builder, location, value,
+                                                       index, Value(), word);
+  store.setRoot(root);
+  store.setCanonicalCapture(canonicalCapture);
+  return store;
+}
+
 uint64_t getNBAAccumulatorRecordBytes(bool twoState) {
   return sizeof(talos_rt_generated_nba_accumulator_256) -
          (twoState ? nbaUnknownBytes : 0);

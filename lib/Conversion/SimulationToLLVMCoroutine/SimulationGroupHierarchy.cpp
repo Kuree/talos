@@ -1,5 +1,6 @@
 //===- SimulationGroupHierarchy.cpp - Refine collapsed execution groups ---===//
 
+#include "SimulationNativeInlineCost.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Dialect/Schedule/ScheduleEnums.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
@@ -270,7 +271,8 @@ SmallVector<LLVM::LLVMFuncOp> splitNativeEvalGroup(LLVM::LLVMFuncOp original,
     return {};
   uint64_t cost = 0;
   for (auto function : {original, candidate})
-    function.walk([&](Operation *) { ++cost; });
+    function.walk(
+        [&](Operation *operation) { cost += nativeLoweredSize(operation); });
   if (cost > budget)
     return {};
   auto slowEntries = entries(original, members);
@@ -305,7 +307,8 @@ SmallVector<LLVM::LLVMFuncOp> splitNativeEvalGroup(LLVM::LLVMFuncOp original,
 
   cost = 0;
   for (auto child : children)
-    child.walk([&](Operation *) { ++cost; });
+    child.walk(
+        [&](Operation *operation) { cost += nativeLoweredSize(operation); });
   if (cost > budget) {
     for (auto child : children)
       symbols.erase(child);

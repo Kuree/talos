@@ -24,9 +24,6 @@ using namespace mlir;
 namespace talos::detail {
 namespace {
 
-constexpr StringLiteral dirtyName = "__talos_aot_nba_dirty_roots_v1";
-constexpr StringLiteral summaryName = "__talos_aot_nba_dirty_summary_v1";
-
 struct PendingRoot {
   uint32_t root, ordinal;
   uint64_t mask;
@@ -42,11 +39,6 @@ struct PendingWord {
   uint32_t canonicalWord;
   uint64_t offset, mask = 0;
   SmallVector<unsigned> roots{};
-};
-
-struct Address {
-  StringRef global;
-  uint64_t offset;
 };
 
 StringRef baseGlobal(Value pointer) {
@@ -67,31 +59,6 @@ struct MemoryInventory {
   bool seen = false;
   bool exact = true;
 };
-
-// This decodes the explicit lowering interface only. Logical ownership and
-// captured-target identity came from NativeEvalTransactionPlan, before packing.
-std::optional<Address> address(Value pointer) {
-  uint64_t offset = 0;
-  while (auto gep = pointer.getDefiningOp<LLVM::GEPOp>()) {
-    if (!gep.getElemType().isInteger(8) || gep.getIndices().size() != 1)
-      return std::nullopt;
-    APInt index;
-    if (auto constant = dyn_cast<IntegerAttr>(gep.getIndices()[0]))
-      index = constant.getValue();
-    else if (!matchPattern(cast<Value>(gep.getIndices()[0]),
-                           m_ConstantInt(&index)))
-      return std::nullopt;
-    if (index.isNegative() || index.getActiveBits() > 64 ||
-        index.getZExtValue() > UINT64_MAX - offset)
-      return std::nullopt;
-    offset += index.getZExtValue();
-    pointer = gep.getBase();
-  }
-  auto global = pointer.getDefiningOp<LLVM::AddressOfOp>();
-  if (!global)
-    return std::nullopt;
-  return Address{global.getGlobalName(), offset};
-}
 
 // A field access of a named generated NBA accumulator record. A record
 // pointer read from a table names no record.
@@ -116,6 +83,39 @@ std::optional<RecordAccess> recordAccess(Operation *operation) {
     if (StringRef name = named(store.getRecord()); !name.empty())
       return RecordAccess{name, store.getField(), store.getOffset(),
                           store.getValue().getType()};
+  return std::nullopt;
+}
+
+// An access of a word of the NBA readiness index, with the role its
+// producer gave it. A dynamic word has no static index.
+struct IndexAccess {
+  schedule::NBAIndex index;
+  std::optional<uint64_t> word;
+  std::optional<uint32_t> root;
+  bool canonicalCapture;
+  DenseI64ArrayAttr capture;
+  bool write;
+};
+
+std::optional<IndexAccess> indexAccess(Operation *operation) {
+  if (auto load = dyn_cast<schedule::NativeNBAIndexLoadOp>(operation))
+    return IndexAccess{load.getIndex(),
+                       load.getDynamicWord()
+                           ? std::nullopt
+                           : std::optional<uint64_t>(load.getStaticWord()),
+                       load.getRoot(),
+                       load.getCanonicalCapture(),
+                       DenseI64ArrayAttr{},
+                       /*write=*/false};
+  if (auto store = dyn_cast<schedule::NativeNBAIndexStoreOp>(operation))
+    return IndexAccess{store.getIndex(),
+                       store.getDynamicWord()
+                           ? std::nullopt
+                           : std::optional<uint64_t>(store.getStaticWord()),
+                       store.getRoot(),
+                       store.getCanonicalCapture(),
+                       store.getCaptureAttr(),
+                       /*write=*/true};
   return std::nullopt;
 }
 
@@ -188,12 +188,8 @@ void transfer(OpBuilder &builder, Location loc, Value frame,
     if (exporting) {
       available = load(builder, loc, frame, word.offset);
     } else {
-      Value dirty = LLVM::AddressOfOp::create(
-          builder, loc, LLVM::LLVMPointerType::get(builder.getContext()),
-          dirtyName);
-      available = LLVM::LoadOp::create(
-          builder, loc, builder.getI64Type(),
-          byteGEP(builder, loc, dirty, uint64_t{word.canonicalWord} * 8), 8);
+      available = loadNBAIndex(builder, loc, schedule::NBAIndex::DirtyRoots,
+                               word.canonicalWord);
     }
     Value any =
         LLVM::ICmpOp::create(builder, loc, LLVM::ICmpPredicate::ne,
@@ -212,14 +208,11 @@ void transfer(OpBuilder &builder, Location loc, Value frame,
       const auto &root = roots[ordinal];
       if (!mask.test(root.ordinal))
         continue;
-      Value dirty = LLVM::AddressOfOp::create(
-          builder, loc, LLVM::LLVMPointerType::get(builder.getContext()),
-          dirtyName);
-      Value leaf = byteGEP(builder, loc, dirty, uint64_t{root.root / 64} * 8);
-      Value bits = exporting ? load(builder, loc, frame, word.offset)
-                             : LLVM::LoadOp::create(
-                                   builder, loc, builder.getI64Type(), leaf, 8)
-                                   .getResult();
+      constexpr auto dirtyRoots = schedule::NBAIndex::DirtyRoots;
+      uint64_t leaf = root.root / 64;
+      Value bits = exporting
+                       ? load(builder, loc, frame, word.offset)
+                       : Value(loadNBAIndex(builder, loc, dirtyRoots, leaf));
       unsigned bit = root.root % 64;
       Value present = LLVM::ICmpOp::create(
           builder, loc, LLVM::ICmpPredicate::ne,
@@ -311,27 +304,22 @@ void transfer(OpBuilder &builder, Location loc, Value frame,
             builder, loc,
             llvmConstant(builder, loc, builder.getI32Type(), root.region),
             accumulator, NBAField::ExecRegion, 0, 4);
-        Value old =
-            LLVM::LoadOp::create(builder, loc, builder.getI64Type(), leaf, 8);
-        LLVM::StoreOp::create(
+        Value old = loadNBAIndex(builder, loc, dirtyRoots, leaf);
+        storeNBAIndex(
             builder, loc,
             LLVM::OrOp::create(
                 builder, loc, old,
                 constant(builder, loc, uint64_t{1} << (root.root % 64))),
-            leaf, 8);
-        Value summary = LLVM::AddressOfOp::create(
-            builder, loc, LLVM::LLVMPointerType::get(builder.getContext()),
-            summaryName);
-        Value page =
-            byteGEP(builder, loc, summary, uint64_t{root.root / 4096} * 8);
+            dirtyRoots, leaf);
+        constexpr auto dirtySummary = schedule::NBAIndex::DirtySummary;
         Value oldPage =
-            LLVM::LoadOp::create(builder, loc, builder.getI64Type(), page, 8);
-        LLVM::StoreOp::create(
+            loadNBAIndex(builder, loc, dirtySummary, root.root / 4096);
+        storeNBAIndex(
             builder, loc,
             LLVM::OrOp::create(
                 builder, loc, oldPage,
                 constant(builder, loc, uint64_t{1} << ((root.root / 64) % 64))),
-            page, 8);
+            dirtySummary, root.root / 4096);
         store(
             builder, loc, frame, word.offset,
             LLVM::AndOp::create(builder, loc, bits,
@@ -353,12 +341,12 @@ void transfer(OpBuilder &builder, Location loc, Value frame,
           schedule::NativeNBAAccumulatorStoreOp::create(
               builder, loc, constant(builder, loc, 0), accumulator,
               NBAField::Transient, 0, 8);
-        LLVM::StoreOp::create(
+        storeNBAIndex(
             builder, loc,
             LLVM::AndOp::create(
                 builder, loc, bits,
                 constant(builder, loc, ~(uint64_t{1} << (root.root % 64)))),
-            leaf, 8);
+            dirtyRoots, leaf);
         store(builder, loc, frame, word.offset,
               LLVM::OrOp::create(builder, loc,
                                  load(builder, loc, frame, word.offset),
@@ -526,12 +514,14 @@ static bool accessesOnlyGeneratedStorage(Operation *op) {
            nullptr;
   if (isa<CallOpInterface, LLVM::InlineAsmOp>(op))
     return false;
+  // The NBA readiness index is generated storage too.
   return isMemoryEffectFree(op) ||
          isa<LLVM::LoadOp, LLVM::AllocaOp, LLVM::ReturnOp,
              schedule::NativeStateLoadOp, schedule::NativeStateStoreOp,
-             schedule::NativeNBAAccumulatorLoadOp, schedule::NativeReadyReadOp,
-             schedule::NativeReadyUpdateOp, schedule::NativeReadyCommitOp,
-             schedule::NativeReadyMergeOp>(op);
+             schedule::NativeNBAAccumulatorLoadOp,
+             schedule::NativeNBAIndexLoadOp, schedule::NativeNBAIndexStoreOp,
+             schedule::NativeReadyReadOp, schedule::NativeReadyUpdateOp,
+             schedule::NativeReadyCommitOp, schedule::NativeReadyMergeOp>(op);
 }
 
 // A periodic clock can call hundreds of capture-only register bodies in
@@ -1101,14 +1091,15 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
   DenseMap<uint32_t, std::string> commitConsumers;
   llvm::StringMap<MemoryInventory> memoryInventory;
   // Globals a function addresses with llvm.mlir.addressof. Native code
-  // accesses an accumulator record only through its typed address; an LLVM
-  // address of one is an access this pass cannot see.
+  // accesses accumulator records and the NBA readiness index only through
+  // typed operations; an LLVM address of one is an access this pass cannot
+  // see.
   llvm::StringSet<> rawAddressed;
   for (Operation *operation : reachable) {
-    // Inventory every use of an accumulator address, not just recognizable
-    // loads/stores. A cast, CFG argument or memory intrinsic can hide an alias
-    // from address(). Localizing only the visible accesses would split capture
-    // ownership and change the consumed payload (LRM 4.9.4/10.4.2).
+    // Inventory every use of an accumulator address, not just typed field
+    // accesses. A cast, CFG argument or memory intrinsic can hide an alias.
+    // Localizing only the visible accesses would split capture ownership and
+    // change the consumed payload (LRM 4.9.4/10.4.2).
     cast<LLVM::LLVMFuncOp>(operation).walk(
         [&](schedule::NativeNBAAccumulatorAddressOp record) {
           auto &memory = memoryInventory[record.getGlobal()];
@@ -1125,37 +1116,19 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
         });
     cast<LLVM::LLVMFuncOp>(operation).walk([&](LLVM::AddressOfOp address) {
       rawAddressed.insert(address.getGlobalName());
-      auto &memory = memoryInventory[address.getGlobalName()];
-      SmallVector<Value> pointers{address.getResult()};
-      DenseSet<Value> seen;
-      while (!pointers.empty()) {
-        Value pointer = pointers.pop_back_val();
-        if (!seen.insert(pointer).second)
-          continue;
-        for (OpOperand &use : pointer.getUses()) {
-          Operation *user = use.getOwner();
-          if (auto gep = dyn_cast<LLVM::GEPOp>(user)) {
-            if (gep.getBase() == pointer) {
-              pointers.push_back(gep.getResult());
-              continue;
-            }
-          } else if (auto load = dyn_cast<LLVM::LoadOp>(user)) {
-            if (load.getAddr() == pointer)
-              continue;
-          } else if (auto store = dyn_cast<LLVM::StoreOp>(user)) {
-            if (store.getAddr() == pointer && store.getValue() != pointer)
-              continue;
-          }
-          memory.exact = false;
-        }
-      }
     });
     cast<LLVM::LLVMFuncOp>(operation).walk([&](Operation *nested) {
+      std::optional<IndexAccess> index = indexAccess(nested);
       if (auto runtime =
               schedule::get<schedule::Field::EvalPendingRuntimeRoot>(nested))
         captures[runtime.getValue().getZExtValue()].exact = false;
-      if (auto spec =
-              schedule::get<schedule::Field::EvalPendingStageSpec>(nested)) {
+      // A runtime-held capture keeps its root canonical.
+      if (index && index->canonicalCapture)
+        captures[*index->root].exact = false;
+      DenseI64ArrayAttr spec =
+          index ? index->capture
+                : schedule::get<schedule::Field::EvalPendingStageSpec>(nested);
+      if (spec) {
         auto data = spec.asArrayRef();
         if (data.size() != 6 || data[0] < 0 || data[0] > UINT32_MAX)
           return;
@@ -1166,6 +1139,14 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
           capture.exact &= llvm::equal(capture.target, data.take_front(5));
         capture.sites.insert(static_cast<uint64_t>(data[5]));
         ++capture.stages;
+      }
+      // The readiness index projects onto the private index word by word.
+      if (index) {
+        auto &memory =
+            memoryInventory[schedule::getNBAIndexGlobalName(index->index)];
+        memory.seen = true;
+        memory.exact &= index->word.has_value();
+        return;
       }
       // A field access of a named record: whole words of the bit fields, and
       // the 32-bit valid and region flags.
@@ -1184,30 +1165,17 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
                                       access->accumulator.str());
         return;
       }
-      auto read = dyn_cast<LLVM::LoadOp>(nested);
-      auto write = dyn_cast<LLVM::StoreOp>(nested);
-      if (read || write) {
-        Value pointer = read ? read.getAddr() : write.getAddr();
-        StringRef name = baseGlobal(pointer);
-        if (name.empty())
-          return;
-        auto &memory = memoryInventory[name];
-        memory.seen = true;
-        auto at = address(pointer);
-        if (!at) {
+      // The index and accumulator records are accessed only through typed
+      // operations; a raw access of a global is not one this pass localizes.
+      if (isa<LLVM::LoadOp, LLVM::StoreOp>(nested)) {
+        Value pointer = isa<LLVM::LoadOp>(nested)
+                            ? cast<LLVM::LoadOp>(nested).getAddr()
+                            : cast<LLVM::StoreOp>(nested).getAddr();
+        if (StringRef name = baseGlobal(pointer); !name.empty()) {
+          auto &memory = memoryInventory[name];
+          memory.seen = true;
           memory.exact = false;
-          return;
         }
-        Type type = read ? read.getType() : write.getValue().getType();
-        memory.exact &=
-            read ? !read.getVolatile_() &&
-                       read.getOrdering() == LLVM::AtomicOrdering::not_atomic
-                 : !write.getVolatile_() &&
-                       write.getOrdering() == LLVM::AtomicOrdering::not_atomic;
-        // The readiness index is read and written in whole words; any other
-        // global's raw access is not one this pass can localize.
-        bool index = name == dirtyName || name == summaryName;
-        memory.exact &= index && at->offset % 8 == 0 && type.isInteger(64);
       } else if (auto call = dyn_cast<LLVM::CallOp>(nested)) {
         // An accumulator passed as an address cannot be privatized without
         // an explicit capture interface for the receiving function.
@@ -1221,10 +1189,14 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
   // Dynamic or escaping readiness addresses cannot be projected onto the
   // private sparse index. Retain one canonical owner rather than localizing
   // only the visible constant-offset queries (LRM 4.9.4/10.4.2).
-  for (StringRef name : {StringRef(dirtyName), StringRef(summaryName)})
+  for (schedule::NBAIndex index :
+       {schedule::NBAIndex::DirtyRoots, schedule::NBAIndex::DirtySummary}) {
+    StringRef name = schedule::getNBAIndexGlobalName(index);
     if (auto memory = memoryInventory.find(name);
-        memory != memoryInventory.end() && !memory->second.exact)
+        (memory != memoryInventory.end() && !memory->second.exact) ||
+        rawAddressed.contains(name))
       return success();
+  }
   SmallVector<PendingRoot> candidates;
   for (Attribute raw : certificate) {
     auto record = dyn_cast<DictionaryAttr>(raw);
@@ -1349,13 +1321,6 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
         (function.isVarArg() || function.getCConv() != LLVM::CConv::C))
       return success();
     function.walk([&](Operation *nested) {
-      for (auto role :
-           {schedule::get<schedule::Field::EvalPendingDirtyRoot>(nested),
-            schedule::get<schedule::Field::EvalPendingSummaryRoot>(nested)})
-        if (role)
-          if (auto root = byRoot.find(role.getValue().getZExtValue());
-              root != byRoot.end())
-            scope.set(root->second);
       if (auto call = dyn_cast<LLVM::CallOp>(nested)) {
         if (call.getCallee())
           if (auto callee = functions.lookup(*call.getCallee()))
@@ -1372,32 +1337,28 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
           scope.set(root->second);
         return;
       }
-      Value pointer;
-      if (auto read = dyn_cast<LLVM::LoadOp>(nested))
-        pointer = read.getAddr();
-      else if (auto write = dyn_cast<LLVM::StoreOp>(nested))
-        pointer = write.getAddr();
-      if (pointer)
-        if (auto at = address(pointer)) {
-          // Untagged logical index queries can select private captures even
-          // when this function has no direct accumulator access. Tagged
-          // producers for canonical roots keep their canonical RMW interface.
-          if (schedule::has<schedule::Field::EvalPendingRuntimeRoot>(nested))
-            return;
-          if (at->global == dirtyName &&
-              !schedule::has<schedule::Field::EvalPendingDirtyRoot>(nested)) {
-            if (auto word = byWord.find(at->offset / 8); word != byWord.end())
-              for (unsigned ordinal : words[word->second].roots)
-                scope.set(ordinal);
-          } else if (at->global == summaryName &&
-                     !schedule::has<schedule::Field::EvalPendingSummaryRoot>(
-                         nested)) {
-            for (const auto &word : words)
-              if (word.canonicalWord / 64 == at->offset / 8)
-                for (unsigned ordinal : word.roots)
-                  scope.set(ordinal);
-          }
-        }
+      std::optional<IndexAccess> index = indexAccess(nested);
+      if (!index || !index->word || index->canonicalCapture)
+        return;
+      // A root's own index access concerns that root only.
+      if (index->root) {
+        if (auto root = byRoot.find(*index->root); root != byRoot.end())
+          scope.set(root->second);
+        return;
+      }
+      // Other logical index queries can select private captures even when
+      // this function has no direct accumulator access. Producers for
+      // canonical roots keep their canonical RMW interface.
+      if (index->index == schedule::NBAIndex::DirtyRoots) {
+        if (auto word = byWord.find(*index->word); word != byWord.end())
+          for (unsigned ordinal : words[word->second].roots)
+            scope.set(ordinal);
+        return;
+      }
+      for (const auto &word : words)
+        if (word.canonicalWord / 64 == *index->word)
+          for (unsigned ordinal : word.roots)
+            scope.set(ordinal);
     });
   }
   if (native::has<native::DebugTiming>(module)) {
@@ -1468,41 +1429,31 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
     SmallVector<Operation *> operations;
     core.walk([&](Operation *operation) { operations.push_back(operation); });
     for (Operation *operation : operations) {
-      auto read = dyn_cast<LLVM::LoadOp>(operation);
-      auto write = dyn_cast<LLVM::StoreOp>(operation);
-      auto rootRole =
-          schedule::get<schedule::Field::EvalPendingDirtyRoot>(operation);
-      auto summaryRole =
-          schedule::get<schedule::Field::EvalPendingSummaryRoot>(operation);
-      bool canonicalIndex =
-          schedule::has<schedule::Field::EvalPendingRuntimeRoot>(operation);
       OpBuilder builder(operation);
       Location loc = operation->getLoc();
-      if (rootRole && byRoot.contains(rootRole.getValue().getZExtValue())) {
-        const auto &root =
-            roots[byRoot.lookup(rootRole.getValue().getZExtValue())];
-        Value bits = load(builder, loc, frame, root.bitmapOffset);
-        if (read) {
-          Value pending = selected(builder, loc, bits, root, root.root % 64);
-          if (read.getType().isInteger(32))
-            pending = LLVM::ZExtOp::create(
-                builder, loc, read.getType(),
-                LLVM::ICmpOp::create(builder, loc, LLVM::ICmpPredicate::ne,
-                                     pending, constant(builder, loc, 0)));
-          read.replaceAllUsesWith(pending);
-          read.erase();
-        } else if (write) {
-          store(builder, loc, frame, root.bitmapOffset,
-                LLVM::OrOp::create(
-                    builder, loc, bits,
-                    constant(builder, loc, uint64_t{1} << (root.root % 64))));
-          write.erase();
-        }
+      std::optional<IndexAccess> index = indexAccess(operation);
+      // A runtime-held capture's root stays in the canonical index.
+      if (index && index->canonicalCapture)
         continue;
-      }
-      if (summaryRole && write &&
-          byRoot.contains(summaryRole.getValue().getZExtValue())) {
-        write.erase();
+      // A privatized root's own test or mark uses its private index bit; its
+      // summary mark is the private index's own business.
+      if (index && index->root && byRoot.contains(*index->root)) {
+        const auto &root = roots[byRoot.lookup(*index->root)];
+        if (index->index == schedule::NBAIndex::DirtyRoots) {
+          Value bits = load(builder, loc, frame, root.bitmapOffset);
+          if (!index->write) {
+            operation->getResult(0).replaceAllUsesWith(
+                selected(builder, loc, bits, root, root.root % 64));
+          } else {
+            store(builder, loc, frame, root.bitmapOffset,
+                  LLVM::OrOp::create(
+                      builder, loc, bits,
+                      constant(builder, loc, uint64_t{1} << (root.root % 64))));
+          }
+          operation->erase();
+        } else if (index->write) {
+          operation->erase();
+        }
         continue;
       }
       // A generated consumer's test of a privatized root's capture reads the
@@ -1629,13 +1580,13 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
         operation->erase();
         continue;
       }
-      if (read || write) {
-        auto at = address(read ? read.getAddr() : write.getAddr());
-        if (!at)
-          continue;
-        if (at->global == dirtyName && at->offset % 8 == 0 && !rootRole &&
-            !canonicalIndex) {
-          auto mappedWord = byWord.find(at->offset / 8);
+      // Other logical index queries see private bits too, and updates leave
+      // privatized roots' bits to the private index.
+      if (index && !index->root && index->word) {
+        auto read = dyn_cast<schedule::NativeNBAIndexLoadOp>(operation);
+        auto write = dyn_cast<schedule::NativeNBAIndexStoreOp>(operation);
+        if (index->index == schedule::NBAIndex::DirtyRoots) {
+          auto mappedWord = byWord.find(*index->word);
           if (mappedWord == byWord.end())
             continue;
           const auto &word = words[mappedWord->second];
@@ -1650,18 +1601,18 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
             // That value may reach an update through CFG block arguments or
             // be shared by a selection and a read/modify/write. Project at
             // the write, rather than suppressing private bits at the read.
-            // An untagged update cannot create a canonical capture for a
-            // localized root: its producers use the explicit root role above
-            // or an opaque captured-value ABI. Preserve canonical bits only
+            // An index update without a root cannot create a canonical
+            // capture for a localized root: its producers mark their root or
+            // use an opaque captured-value ABI. Preserve canonical bits only
             // when the old canonical index and this update both retain them
             // (LRM 4.9.4/10.4.2: one owner and one consumption per capture).
-            Value prior = LLVM::LoadOp::create(
-                builder, loc, builder.getI64Type(), write.getAddr(), 8);
+            Value prior = loadNBAIndex(
+                builder, loc, schedule::NBAIndex::DirtyRoots, *index->word);
             Value canonical = LLVM::OrOp::create(
                 builder, loc, prior, constant(builder, loc, ~localMask));
             write.getValueMutable().assign(
                 LLVM::AndOp::create(builder, loc, write.getValue(), canonical));
-          } else if (read) {
+          } else {
             OpBuilder after(read);
             after.setInsertionPointAfter(read);
             Value bits = load(after, loc, frame, word.offset);
@@ -1673,52 +1624,47 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
           }
           continue;
         }
-        if (at->global == summaryName && at->offset % 8 == 0 && !summaryRole &&
-            !canonicalIndex) {
-          Value privatePage = constant(builder, loc, 0);
-          uint64_t localMask = 0;
-          for (const auto &word : words) {
-            if (word.canonicalWord / 64 != at->offset / 8)
-              continue;
-            uint64_t bit = uint64_t{1} << (word.canonicalWord % 64);
-            localMask |= bit;
-            Value bits;
-            if (read) {
-              bits = load(builder, loc, frame, word.offset);
-            } else {
-              // A logical page may contain private-only leaf words. The
-              // canonical summary indexes canonical payloads only; testing
-              // the canonical leaf also preserves mixed private/canonical
-              // words (LRM 4.9.4/10.4.2: coherent ownership at both levels).
-              Value dirty = LLVM::AddressOfOp::create(
-                  builder, loc, LLVM::LLVMPointerType::get(context), dirtyName);
-              bits =
-                  load(builder, loc, dirty, uint64_t{word.canonicalWord} * 8);
-            }
-            Value present =
-                LLVM::ICmpOp::create(builder, loc, LLVM::ICmpPredicate::ne,
-                                     bits, constant(builder, loc, 0));
-            privatePage = LLVM::OrOp::create(
-                builder, loc, privatePage,
-                LLVM::SelectOp::create(builder, loc, present,
-                                       constant(builder, loc, bit),
-                                       constant(builder, loc, 0)));
-          }
-          if (!localMask)
+        Value privatePage = constant(builder, loc, 0);
+        uint64_t localMask = 0;
+        for (const auto &word : words) {
+          if (word.canonicalWord / 64 != *index->word)
             continue;
+          uint64_t bit = uint64_t{1} << (word.canonicalWord % 64);
+          localMask |= bit;
+          Value bits;
           if (read) {
-            builder.setInsertionPointAfter(read);
-            auto merged =
-                LLVM::OrOp::create(builder, loc, read.getResult(), privatePage);
-            read.getResult().replaceAllUsesExcept(merged, merged);
+            bits = load(builder, loc, frame, word.offset);
           } else {
-            Value canonical = LLVM::OrOp::create(
-                builder, loc, privatePage, constant(builder, loc, ~localMask));
-            write.getValueMutable().assign(
-                LLVM::AndOp::create(builder, loc, write.getValue(), canonical));
+            // A logical page may contain private-only leaf words. The
+            // canonical summary indexes canonical payloads only; testing the
+            // canonical leaf also preserves mixed private/canonical words
+            // (LRM 4.9.4/10.4.2: coherent ownership at both levels).
+            bits = loadNBAIndex(builder, loc, schedule::NBAIndex::DirtyRoots,
+                                word.canonicalWord);
           }
-          continue;
+          Value present =
+              LLVM::ICmpOp::create(builder, loc, LLVM::ICmpPredicate::ne, bits,
+                                   constant(builder, loc, 0));
+          privatePage = LLVM::OrOp::create(
+              builder, loc, privatePage,
+              LLVM::SelectOp::create(builder, loc, present,
+                                     constant(builder, loc, bit),
+                                     constant(builder, loc, 0)));
         }
+        if (!localMask)
+          continue;
+        if (read) {
+          builder.setInsertionPointAfter(read);
+          auto merged =
+              LLVM::OrOp::create(builder, loc, read.getResult(), privatePage);
+          read.getResult().replaceAllUsesExcept(merged, merged);
+        } else {
+          Value canonical = LLVM::OrOp::create(
+              builder, loc, privatePage, constant(builder, loc, ~localMask));
+          write.getValueMutable().assign(
+              LLVM::AndOp::create(builder, loc, write.getValue(), canonical));
+        }
+        continue;
       }
       auto call = dyn_cast<LLVM::CallOp>(operation);
       if (!call)

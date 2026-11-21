@@ -135,7 +135,9 @@ module attributes {
 // COMMIT-NEXT: %[[WORD:.*]] = llvm.getelementptr %[[DIRTY]][0]
 // COMMIT-NEXT: llvm.load %[[WORD]]
 // COMMIT-NOT: llvm.store {{.*}}, %[[WORD]]
-// COMMIT: %[[CURRENT:.*]] = llvm.load %[[WORD]]
+// COMMIT: %[[CLAIM_DIRTY:.*]] = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1
+// COMMIT-NEXT: %[[CLAIM_WORD:.*]] = llvm.getelementptr %[[CLAIM_DIRTY]][0]
+// COMMIT-NEXT: %[[CURRENT:.*]] = llvm.load %[[CLAIM_WORD]]
 // COMMIT-NEXT: %[[KEEP:.*]] = llvm.mlir.constant(-2 : i64)
 // COMMIT-NEXT: %[[REST:.*]] = llvm.and %[[CURRENT]], %[[KEEP]]
-// COMMIT-NEXT: llvm.store %[[REST]], %[[WORD]]
+// COMMIT-NEXT: llvm.store %[[REST]], %[[CLAIM_WORD]]

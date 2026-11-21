@@ -15,10 +15,10 @@
 // CHECK-NOT: llvm.call @__talos_eval_export_nba_metadata_v1()
 // CHECK: llvm.call @talos_rt_v1_static_nba_commit_roots
 // CHECK-LABEL: llvm.func internal @__talos_eval_export_nba_metadata_v1()
-// CHECK: %[[DIRTY:.*]] = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1
-// CHECK: %[[SUMMARY:.*]] = llvm.mlir.addressof @__talos_aot_nba_dirty_summary_v1
 // CHECK: %[[SHADOW:.*]] = llvm.mlir.addressof @__talos_eval_nba_exported_roots_v1
-// CHECK: %[[WORD:.*]] = llvm.load %{{.*}} : !llvm.ptr -> i64
+// CHECK: %[[DIRTY:.*]] = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1
+// CHECK-NEXT: %[[DIRTY_WORD:.*]] = llvm.getelementptr %[[DIRTY]][0]
+// CHECK-NEXT: %[[WORD:.*]] = llvm.load %[[DIRTY_WORD]] {{.*}} : !llvm.ptr -> i64
 // CHECK: %[[BITS:.*]] = llvm.and %[[WORD]], %{{.*}} : i64
 // CHECK: %[[SHADOW_ADDR:.*]] = llvm.getelementptr %[[SHADOW]][0]
 // CHECK: %[[PREVIOUS:.*]] = llvm.load %[[SHADOW_ADDR]]
@@ -39,7 +39,8 @@
 // CHECK: %[[REGION:.*]] = llvm.mlir.constant(2 : i32)
 // CHECK: %[[REGION_ADDR:.*]] = llvm.getelementptr %[[ACC]][100]
 // CHECK: llvm.store %[[REGION]], %[[REGION_ADDR]]
-// CHECK: llvm.getelementptr %[[SUMMARY]][0]
+// CHECK: %[[SUMMARY:.*]] = llvm.mlir.addressof @__talos_aot_nba_dirty_summary_v1
+// CHECK-NEXT: llvm.getelementptr %[[SUMMARY]][0]
 // CHECK: llvm.store %[[BITS]], %[[SHADOW_ADDR]]
 // CHECK: llvm.mlir.addressof @__talos_eval_nba_exported_live_v1
 // CHECK-LABEL: llvm.func internal @__talos_eval_export_nba_metadata_on_return_v1()

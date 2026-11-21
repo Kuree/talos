@@ -297,4 +297,18 @@ def NBAAccumulatorFieldEnum
   let cppNamespace = "::talos::schedule";
 }
 
+// The two-level index of NBA roots with a pending capture, shared by
+// generated stages and the runtime (IEEE 1800-2023 4.9.4, 10.4.2): one bit
+// per root in its 64-bit dirty word, and one bit per dirty word in its
+// summary word.
+def NBAIndexDirtyRoots : I32EnumAttrCase<"DirtyRoots", 0, "dirty_roots">;
+def NBAIndexDirtySummary : I32EnumAttrCase<"DirtySummary", 1, "dirty_summary">;
+def NBAIndexEnum
+    : I32EnumAttr<"NBAIndex", "generated NBA readiness index", [
+        NBAIndexDirtyRoots, NBAIndexDirtySummary
+      ]> {
+  let cppNamespace = "::talos::schedule";
+  let genSpecializedAttr = 0;
+}
+
 #endif

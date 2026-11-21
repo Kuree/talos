@@ -96,8 +96,8 @@ public:
     store(c(0), changed);
     valuePlane = base(layout.getValue());
     unknownPlane = base(layout.getUnknown());
-    dirty = address(layout.getDirty());
-    summary = address(layout.getSummary());
+    dirty = IndexWords(*this, layout.getDirty());
+    summary = IndexWords(*this, layout.getSummary());
     std::map<uint32_t, SmallVector<schedule::NativeNBACommitOp>> words;
     for (auto commit : op.getBody().getOps<schedule::NativeNBACommitOp>()) {
       words[commit.getRoot() / 64].push_back(commit);
@@ -114,7 +114,7 @@ public:
       uint64_t eligible = 0;
       for (auto root : roots)
         eligible |= uint64_t{1} << (root.getRoot() % 64);
-      Value dirtyAddress = byteGEP(b, loc, dirty, uint64_t(word) * 8);
+      IndexWord dirtyAddress = dirty.at(word);
       Value pending = band(load(dirtyAddress), c(eligible));
       // No admitted root in this word has an update at this barrier. Leave
       // both the leaf and its summary alone, including non-batch owners.
@@ -168,7 +168,7 @@ public:
       store(band(load(dirtyAddress), bxor(load(consumed), c(UINT64_MAX))),
             dirtyAddress);
       // Clear only this leaf's summary bit, and only if all owners consumed it.
-      Value summaryAddress = byteGEP(b, loc, summary, uint64_t(word / 64) * 8);
+      IndexWord summaryAddress = summary.at(word / 64);
       Value previous = load(summaryAddress);
       store(select(ne(load(dirtyAddress), c(0)), previous,
                    band(previous, c(~(uint64_t{1} << (word % 64))))),
@@ -238,6 +238,40 @@ private:
                                                   offset, 8);
   }
   Value load(Value addr) { return LLVM::LoadOp::create(b, loc, i64, addr, 8); }
+  // A word of the batch's readiness index: a typed index word when the layout
+  // names the NBA readiness index, an LLVM word of another global otherwise.
+  struct IndexWord {
+    std::optional<schedule::NBAIndex> index;
+    Value address;
+    uint64_t word;
+  };
+  struct IndexWords {
+    IndexWords() = default;
+    IndexWords(BatchLowering &lowering, FlatSymbolRefAttr global)
+        : index(schedule::getNBAIndexOfGlobal(global.getValue())) {
+      if (!index)
+        base = lowering.address(global);
+      this->lowering = &lowering;
+    }
+    IndexWord at(uint64_t word) {
+      if (index)
+        return {index, Value(), word};
+      return {index, byteGEP(lowering->b, lowering->loc, base, word * 8), word};
+    }
+    BatchLowering *lowering = nullptr;
+    std::optional<schedule::NBAIndex> index;
+    Value base;
+  };
+  Value load(const IndexWord &word) {
+    return word.index ? Value(loadNBAIndex(b, loc, *word.index, word.word))
+                      : load(word.address);
+  }
+  void store(Value value, const IndexWord &word) {
+    if (word.index)
+      storeNBAIndex(b, loc, value, *word.index, word.word);
+    else
+      store(value, word.address);
+  }
   Value load32(Value addr) {
     return LLVM::LoadOp::create(b, loc, i32, addr, 4);
   }
@@ -518,7 +552,8 @@ private:
   LLVM::LLVMPointerType ptr;
   Block *done = nullptr;
   PlaneBase valuePlane, unknownPlane;
-  Value dirty, summary, stages, commits, changed;
+  IndexWords dirty, summary;
+  Value stages, commits, changed;
   std::map<uint32_t, Value> ready;
   SmallVector<PromotableAllocationOpInterface> allocations;
 };

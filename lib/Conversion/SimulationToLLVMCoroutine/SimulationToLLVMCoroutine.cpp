@@ -1356,6 +1356,10 @@ LogicalResult declareNativeImports(ModuleOp module) {
     else if (auto record =
                  dyn_cast<schedule::NativeNBAAccumulatorAddressOp>(operation))
       reference = record.getGlobalAttr();
+    else if (auto load = dyn_cast<schedule::NativeNBAIndexLoadOp>(operation))
+      reference = load.getGlobalAttr();
+    else if (auto store = dyn_cast<schedule::NativeNBAIndexStoreOp>(operation))
+      reference = store.getGlobalAttr();
     if (!reference || symbols.lookupSymbolIn(design, reference))
       return;
     Operation *definition = moduleSymbols.lookup(reference.getValue());
@@ -4232,7 +4236,8 @@ public:
           schedule::NativeStateWindowAddressOp, schedule::NativeStateLoadOp,
           schedule::NativeStateStoreOp, schedule::NativeNBAAccumulatorAddressOp,
           schedule::NativeNBAAccumulatorLoadOp,
-          schedule::NativeNBAAccumulatorStoreOp, UnrealizedConversionCastOp>();
+          schedule::NativeNBAAccumulatorStoreOp, schedule::NativeNBAIndexLoadOp,
+          schedule::NativeNBAIndexStoreOp, UnrealizedConversionCastOp>();
       target->markUnknownOpDynamicallyLegal([](Operation *operation) {
         return isa<LLVM::LLVMFuncOp>(operation);
       });
@@ -4459,7 +4464,8 @@ public:
         schedule::NativeStateLoadOp, schedule::NativeStateStoreOp,
         schedule::NativeNBAAccumulatorAddressOp,
         schedule::NativeNBAAccumulatorLoadOp,
-        schedule::NativeNBAAccumulatorStoreOp>();
+        schedule::NativeNBAAccumulatorStoreOp, schedule::NativeNBAIndexLoadOp,
+        schedule::NativeNBAIndexStoreOp>();
     target.markUnknownOpDynamicallyLegal(
         [](Operation *operation) { return isa<LLVM::LLVMFuncOp>(operation); });
     FrozenRewritePatternSet frozenPatterns(std::move(patterns));

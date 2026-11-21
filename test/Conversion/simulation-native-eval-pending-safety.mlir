@@ -25,9 +25,8 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     schedule.nba.acc.store %bits, %acc[value] {alignment = 8 : i64} : i64
     schedule.nba.acc.store %bits, %acc[write_mask] {alignment = 8 : i64} : i64
     schedule.nba.acc.store %one, %acc[valid] {alignment = 4 : i64} : i32
-    %dirty = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
     %marked = llvm.mlir.constant(1 : i64) : i64
-    llvm.store %marked, %dirty {schedule.eval.pending_dirty_root = 0 : i32, schedule.eval.pending_stage_spec = array<i64: 0, 1, 32, 4294967295, 2, 1>} : i64, !llvm.ptr
+    schedule.nba.index.store %marked, @__talos_aot_nba_dirty_roots_v1[0] {capture = array<i64: 0, 1, 32, 4294967295, 2, 1>, root = 0 : i32}
     %present = schedule.nba.acc.load %acc[valid] {alignment = 4 : i64, pending_root = 0 : i32} : i32
     schedule.nba.acc.store %zero, %acc[valid] {alignment = 4 : i64} : i32
     llvm.return
@@ -64,9 +63,8 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     schedule.nba.acc.store %bits, %acc[value] {alignment = 8 : i64} : i64
     schedule.nba.acc.store %bits, %acc[write_mask] {alignment = 8 : i64} : i64
     schedule.nba.acc.store %one, %acc[valid] {alignment = 4 : i64} : i32
-    %dirty = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
     %marked = llvm.mlir.constant(1 : i64) : i64
-    llvm.store %marked, %dirty {schedule.eval.pending_dirty_root = 0 : i32, schedule.eval.pending_stage_spec = array<i64: 0, 1, 32, 4294967295, 2, 1>} : i64, !llvm.ptr
+    schedule.nba.index.store %marked, @__talos_aot_nba_dirty_roots_v1[0] {capture = array<i64: 0, 1, 32, 4294967295, 2, 1>, root = 0 : i32}
     %raw = llvm.mlir.addressof @acc : !llvm.ptr
     %escaped = llvm.ptrtoint %raw : !llvm.ptr to i64
     %alias = llvm.inttoptr %escaped : i64 to !llvm.ptr
@@ -104,9 +102,8 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     schedule.nba.acc.store %bits, %acc[value] {alignment = 8 : i64} : i64
     schedule.nba.acc.store %bits, %acc[write_mask] {alignment = 8 : i64} : i64
     schedule.nba.acc.store %one, %acc[valid] {alignment = 4 : i64} : i32
-    %dirty = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
     %marked = llvm.mlir.constant(1 : i64) : i64
-    llvm.store %marked, %dirty {schedule.eval.pending_dirty_root = 0 : i32, schedule.eval.pending_stage_spec = array<i64: 0, 1, 32, 4294967295, 2, 1>} : i64, !llvm.ptr
+    schedule.nba.index.store %marked, @__talos_aot_nba_dirty_roots_v1[0] {capture = array<i64: 0, 1, 32, 4294967295, 2, 1>, root = 0 : i32}
     %present = schedule.nba.acc.load %acc[valid] {alignment = 4 : i64, pending_root = 0 : i32} : i32
     schedule.nba.acc.store %zero, %acc[valid] {alignment = 4 : i64} : i32
     llvm.return
@@ -136,7 +133,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     %null = llvm.mlir.zero : !llvm.ptr
     llvm.return %null : !llvm.ptr
   }
-  llvm.func @work(%offset: i64) attributes {schedule.eval.call_closure_root} {
+  llvm.func @work(%word: i64) attributes {schedule.eval.call_closure_root} {
     %acc = schedule.nba.acc.address @acc : !llvm.ptr
     %one = llvm.mlir.constant(1 : i32) : i32
     %zero = llvm.mlir.constant(0 : i32) : i32
@@ -144,11 +141,9 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     schedule.nba.acc.store %bits, %acc[value] {alignment = 8 : i64} : i64
     schedule.nba.acc.store %bits, %acc[write_mask] {alignment = 8 : i64} : i64
     schedule.nba.acc.store %one, %acc[valid] {alignment = 4 : i64} : i32
-    %dirty = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
     %marked = llvm.mlir.constant(1 : i64) : i64
-    llvm.store %marked, %dirty {schedule.eval.pending_dirty_root = 0 : i32, schedule.eval.pending_stage_spec = array<i64: 0, 1, 32, 4294967295, 2, 1>} : i64, !llvm.ptr
-    %alias = llvm.getelementptr %dirty[%offset] : (!llvm.ptr, i64) -> !llvm.ptr, i8
-    %opaqueIndex = llvm.load %alias : !llvm.ptr -> i64
+    schedule.nba.index.store %marked, @__talos_aot_nba_dirty_roots_v1[0] {capture = array<i64: 0, 1, 32, 4294967295, 2, 1>, root = 0 : i32}
+    %opaqueIndex = schedule.nba.index.load @__talos_aot_nba_dirty_roots_v1[%word]
     %present = schedule.nba.acc.load %acc[valid] {alignment = 4 : i64, pending_root = 0 : i32} : i32
     schedule.nba.acc.store %zero, %acc[valid] {alignment = 4 : i64} : i32
     llvm.return

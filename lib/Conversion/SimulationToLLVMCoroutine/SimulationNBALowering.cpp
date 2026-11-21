@@ -1098,46 +1098,31 @@ public:
                                   llvmConstant(rewriter, location, i64,
                                                uint64_t{1} << (rootIndex % 64)),
                                   zero);
-      Value dirtyBase = LLVM::AddressOfOp::create(
-          rewriter, location, pointer, "__talos_aot_nba_dirty_roots_v1");
-      Value dirtyAddress =
-          byteGEP(rewriter, location, dirtyBase,
-                  static_cast<uint64_t>(rootIndex / 64) * sizeof(uint64_t));
-      Value previousDirty =
-          LLVM::LoadOp::create(rewriter, location, i64, dirtyAddress, 8);
-      auto markDirty = LLVM::StoreOp::create(
-          rewriter, location,
-          arith::OrIOp::create(rewriter, location, previousDirty, dirtyBit),
-          dirtyAddress, 8);
       // A variable overlap/mask keeps the fixed-slot canonical capture ABI.
       // These RMWs do not query private captures in the same leaf/page, and
       // cannot be admitted as unconditional scalar producers (LRM 4.9.4).
-      auto rootRole = rewriter.getI32IntegerAttr(rootIndex);
-      schedule::set<schedule::Field::EvalPendingRuntimeRoot>(
-          previousDirty.getDefiningOp(), rootRole);
-      schedule::set<schedule::Field::EvalPendingRuntimeRoot>(markDirty,
-                                                             rootRole);
+      constexpr auto dirtyRoots = schedule::NBAIndex::DirtyRoots;
+      constexpr auto dirtySummary = schedule::NBAIndex::DirtySummary;
       uint32_t dirtyWord = rootIndex / 64;
-      Value summaryBase = LLVM::AddressOfOp::create(
-          rewriter, location, pointer, "__talos_aot_nba_dirty_summary_v1");
-      Value summaryAddress =
-          byteGEP(rewriter, location, summaryBase,
-                  static_cast<uint64_t>(dirtyWord / 64) * sizeof(uint64_t));
+      Value previousDirty =
+          loadNBAIndex(rewriter, location, dirtyRoots, dirtyWord, rootIndex,
+                       /*canonicalCapture=*/true);
+      storeNBAIndex(
+          rewriter, location,
+          arith::OrIOp::create(rewriter, location, previousDirty, dirtyBit),
+          dirtyRoots, dirtyWord, rootIndex, /*canonicalCapture=*/true);
       Value summaryBit =
           arith::SelectOp::create(rewriter, location, overlaps,
                                   llvmConstant(rewriter, location, i64,
                                                uint64_t{1} << (dirtyWord % 64)),
                                   zero);
       Value previousSummary =
-          LLVM::LoadOp::create(rewriter, location, i64, summaryAddress, 8);
-      auto markSummary = LLVM::StoreOp::create(
+          loadNBAIndex(rewriter, location, dirtySummary, dirtyWord / 64,
+                       rootIndex, /*canonicalCapture=*/true);
+      storeNBAIndex(
           rewriter, location,
           arith::OrIOp::create(rewriter, location, previousSummary, summaryBit),
-          summaryAddress, 8);
-      schedule::set<schedule::Field::EvalPendingRuntimeRoot>(
-          previousSummary.getDefiningOp(), rootRole);
-      schedule::set<schedule::Field::EvalPendingRuntimeRoot>(markSummary,
-                                                             rootRole);
+          dirtySummary, dirtyWord / 64, rootIndex, /*canonicalCapture=*/true);
     };
 
     Block *guardContinuation = nullptr;
@@ -1422,7 +1407,9 @@ public:
           !generatedAccumulator.empty() && rootWidth <= 64;
       bool directGeneratedStage = commitRegion != UINT32_MAX &&
                                   (directPartialScalarStage || directLaneStage);
-      auto certifyCapture = [&](Operation *stage) {
+      // The certified target of this capture: root, static state, width,
+      // mask, commit region and source site.
+      auto captureSpec = [&] {
         uint64_t origin = site.getId();
         if (auto source = schedule::get<schedule::Field::EvalOriginNbaSite>(op))
           origin = source.getValue().getZExtValue();
@@ -1435,13 +1422,11 @@ public:
         uint64_t mask =
             (*width == 64 ? UINT64_MAX : (uint64_t{1} << *width) - 1)
             << decoded.offset;
-        schedule::set<schedule::Field::EvalPendingStageSpec>(
-            stage,
-            rewriter.getDenseI64ArrayAttr(
-                {staticRoot->second,
-                 staticPlan->roots[staticRoot->second].static_state,
-                 static_cast<int64_t>(rootWidth), static_cast<int64_t>(mask),
-                 commitRegion, static_cast<int64_t>(origin)}));
+        return rewriter.getDenseI64ArrayAttr(
+            {staticRoot->second,
+             staticPlan->roots[staticRoot->second].static_state,
+             static_cast<int64_t>(rootWidth), static_cast<int64_t>(mask),
+             commitRegion, static_cast<int64_t>(origin)});
       };
       auto emitDirectGeneratedStage = [&] {
         Block *unchangedContinuation = nullptr;
@@ -1456,17 +1441,9 @@ public:
               staticPlan->generatedOffsets[staticRoot->second] + decoded.offset;
           Value changed = buildGeneratedNBAChange(rewriter, location, bitOffset,
                                                   *width, value, unknown);
-          Value dirty = LLVM::LoadOp::create(
-              rewriter, location, i64,
-              byteGEP(
-                  rewriter, location,
-                  LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                            "__talos_aot_nba_dirty_roots_v1"),
-                  uint64_t{staticRoot->second / 64} * 8),
-              8);
-          schedule::set<schedule::Field::EvalPendingDirtyRoot>(
-              dirty.getDefiningOp(),
-              rewriter.getI32IntegerAttr(staticRoot->second));
+          Value dirty =
+              loadNBAIndex(rewriter, location, schedule::NBAIndex::DirtyRoots,
+                           staticRoot->second / 64, staticRoot->second);
           Value pending = arith::AndIOp::create(
               rewriter, location, dirty,
               llvmConstant(rewriter, location, i64,
@@ -1550,18 +1527,9 @@ public:
                 staticPlan->generatedFullRootStages[staticRoot->second];
             Value staged;
             if (planFullRoot || fixedWriteMask != 0) {
-              Value dirty = LLVM::LoadOp::create(
-                  rewriter, location, i64,
-                  byteGEP(rewriter, location,
-                          LLVM::AddressOfOp::create(
-                              rewriter, location, pointer,
-                              "__talos_aot_nba_dirty_roots_v1"),
-                          static_cast<uint64_t>(staticRoot->second / 64) *
-                              sizeof(uint64_t)),
-                  8);
-              schedule::set<schedule::Field::EvalPendingDirtyRoot>(
-                  dirty.getDefiningOp(),
-                  rewriter.getI32IntegerAttr(staticRoot->second));
+              Value dirty = loadNBAIndex(
+                  rewriter, location, schedule::NBAIndex::DirtyRoots,
+                  staticRoot->second / 64, staticRoot->second);
               Value bit = arith::AndIOp::create(
                   rewriter, location, dirty,
                   llvmConstant(rewriter, location, i64,
@@ -1625,48 +1593,32 @@ public:
               llvmConstant(rewriter, location, i32, commitRegion), base,
               NBAField::ExecRegion, 0, 4);
         }
-        Value dirtyBase = LLVM::AddressOfOp::create(
-            rewriter, location, pointer, "__talos_aot_nba_dirty_roots_v1");
-        Value dirtyWord = byteGEP(
-            rewriter, location, dirtyBase,
-            static_cast<uint64_t>(staticRoot->second / 64) * sizeof(uint64_t));
+        uint32_t dirtyWordIndex = staticRoot->second / 64;
         Value previous =
-            LLVM::LoadOp::create(rewriter, location, i64, dirtyWord, 8);
-        schedule::set<schedule::Field::EvalPendingDirtyRoot>(
-            previous.getDefiningOp(),
-            rewriter.getI32IntegerAttr(staticRoot->second));
+            loadNBAIndex(rewriter, location, schedule::NBAIndex::DirtyRoots,
+                         dirtyWordIndex, staticRoot->second);
         Value marked = LLVM::OrOp::create(
             rewriter, location, previous,
             llvmConstant(rewriter, location, i64,
                          uint64_t{1} << (staticRoot->second % 64)));
-        auto markDirty =
-            LLVM::StoreOp::create(rewriter, location, marked, dirtyWord, 8);
-        schedule::set<schedule::Field::EvalPendingDirtyRoot>(
-            markDirty, rewriter.getI32IntegerAttr(staticRoot->second));
-        certifyCapture(markDirty);
+        storeNBAIndex(rewriter, location, marked,
+                      schedule::NBAIndex::DirtyRoots, dirtyWordIndex,
+                      staticRoot->second)
+            .setCaptureAttr(captureSpec());
         if (!compactEvalMetadata) {
-          Value summaryBase = LLVM::AddressOfOp::create(
-              rewriter, location, pointer, "__talos_aot_nba_dirty_summary_v1");
-          uint32_t dirtyWordIndex = staticRoot->second / 64;
-          Value summaryWord = byteGEP(
-              rewriter, location, summaryBase,
-              static_cast<uint64_t>(dirtyWordIndex / 64) * sizeof(uint64_t));
-          Value previousSummary =
-              LLVM::LoadOp::create(rewriter, location, i64, summaryWord, 8);
           // This is a producer's canonical RMW, not a query of every root in
-          // the summary page. Keep the exact role across physical lowering so
-          // private pending scopes remain local (LRM 4.9.4/10.4.2).
-          schedule::set<schedule::Field::EvalPendingSummaryRoot>(
-              previousSummary.getDefiningOp(),
-              rewriter.getI32IntegerAttr(staticRoot->second));
+          // the summary page: it keeps the root's role so private pending
+          // scopes remain local (LRM 4.9.4/10.4.2).
+          Value previousSummary =
+              loadNBAIndex(rewriter, location, schedule::NBAIndex::DirtySummary,
+                           dirtyWordIndex / 64, staticRoot->second);
           Value markedSummary = LLVM::OrOp::create(
               rewriter, location, previousSummary,
               llvmConstant(rewriter, location, i64,
                            uint64_t{1} << (dirtyWordIndex % 64)));
-          auto markSummary = LLVM::StoreOp::create(
-              rewriter, location, markedSummary, summaryWord, 8);
-          schedule::set<schedule::Field::EvalPendingSummaryRoot>(
-              markSummary, rewriter.getI32IntegerAttr(staticRoot->second));
+          storeNBAIndex(rewriter, location, markedSummary,
+                        schedule::NBAIndex::DirtySummary, dirtyWordIndex / 64,
+                        staticRoot->second);
         }
         if (unchangedContinuation) {
           cf::BranchOp::create(rewriter, location, unchangedContinuation);
@@ -1722,7 +1674,8 @@ public:
                     llvmConstant(rewriter, location, i64, *width), value,
                     unknown})
                 .getResult();
-        certifyCapture(status.getDefiningOp());
+        schedule::set<schedule::Field::EvalPendingStageSpec>(
+            status.getDefiningOp(), captureSpec());
         LLVM::CallOp::create(rewriter, location, TypeRange{},
                              SymbolRefAttr::get(rewriter.getContext(),
                                                 "talos_rt_v1_scheduler_fail"),

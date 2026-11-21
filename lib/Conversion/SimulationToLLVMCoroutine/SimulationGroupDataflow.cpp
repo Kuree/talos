@@ -1,5 +1,6 @@
 //===- SimulationGroupDataflow.cpp - Group dataflow candidates ------------===//
 
+#include "SimulationNativeInlineCost.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
@@ -67,7 +68,7 @@ bool materializeNativeGroupDataflow(LLVM::LLVMFuncOp function,
         if (!isa<IntegerType>(arg.getType()))
           return false;
     for (Operation &operation : block) {
-      ++originalOperations;
+      originalOperations += nativeLoweredSize(&operation);
       if (operation.getNumRegions())
         return false;
       if (auto load = dyn_cast<LLVM::LoadOp>(operation)) {

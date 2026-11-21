@@ -53,8 +53,8 @@ module {
 
 module {
   llvm.func @schedule_tag(%r: !llvm.ptr) -> i32 {
-    // expected-error @below {{carries the schedule fact 'schedule.eval.pending_dirty_root' as a property, not an attribute}}
-    %x = schedule.nba.acc.load %r[valid] {alignment = 4 : i64, schedule.eval.pending_dirty_root = 1 : i32} : i32
+    // expected-error @below {{carries the schedule fact 'schedule.eval.group_owner' as a property, not an attribute}}
+    %x = schedule.nba.acc.load %r[valid] {alignment = 4 : i64, schedule.eval.group_owner = 1 : i32} : i32
     llvm.return %x : i32
   }
 }

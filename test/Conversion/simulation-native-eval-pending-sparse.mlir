@@ -62,18 +62,14 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     schedule.nba.acc.store %one, %acc[valid] {alignment = 4 : i64} : i32
     schedule.nba.acc.store %nba, %acc[exec_region] {alignment = 4 : i64} : i32
     schedule.nba.acc.store %zero, %acc[transient] {alignment = 8 : i64} : i64
-    %dirty = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
-    %leaf = llvm.getelementptr %dirty[0] : (!llvm.ptr) -> !llvm.ptr, i8
-    %old = llvm.load %leaf {schedule.eval.pending_dirty_root = 0 : i32} : !llvm.ptr -> i64
+    %old = schedule.nba.index.load @__talos_aot_nba_dirty_roots_v1[0] {root = 0 : i32}
     %bit = llvm.mlir.constant(1 : i64) : i64
     %marked = llvm.or %old, %bit : i64
-    llvm.store %marked, %leaf {schedule.eval.pending_dirty_root = 0 : i32, schedule.eval.pending_stage_spec = array<i64: 0, 1, 32, 4294967295, 2, 1>} : i64, !llvm.ptr
-    %summary = llvm.mlir.addressof @__talos_aot_nba_dirty_summary_v1 : !llvm.ptr
-    %page = llvm.getelementptr %summary[0] : (!llvm.ptr) -> !llvm.ptr, i8
-    %prior = llvm.load %page {schedule.eval.pending_summary_root = 0 : i32} : !llvm.ptr -> i64
+    schedule.nba.index.store %marked, @__talos_aot_nba_dirty_roots_v1[0] {capture = array<i64: 0, 1, 32, 4294967295, 2, 1>, root = 0 : i32}
+    %prior = schedule.nba.index.load @__talos_aot_nba_dirty_summary_v1[0] {root = 0 : i32}
     %pagebit = llvm.mlir.constant(1 : i64) : i64
     %markedpage = llvm.or %prior, %pagebit : i64
-    llvm.store %markedpage, %page {schedule.eval.pending_summary_root = 0 : i32} : i64, !llvm.ptr
+    schedule.nba.index.store %markedpage, @__talos_aot_nba_dirty_summary_v1[0] {root = 0 : i32}
     llvm.return
   }
   llvm.func @consume0() -> i64 {
@@ -105,18 +101,14 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     schedule.nba.acc.store %one, %acc[valid] {alignment = 4 : i64} : i32
     schedule.nba.acc.store %nba, %acc[exec_region] {alignment = 4 : i64} : i32
     schedule.nba.acc.store %zero, %acc[transient] {alignment = 8 : i64} : i64
-    %dirty = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
-    %leaf = llvm.getelementptr %dirty[0] : (!llvm.ptr) -> !llvm.ptr, i8
-    %old = llvm.load %leaf {schedule.eval.pending_dirty_root = 1 : i32} : !llvm.ptr -> i64
+    %old = schedule.nba.index.load @__talos_aot_nba_dirty_roots_v1[0] {root = 1 : i32}
     %bit = llvm.mlir.constant(2 : i64) : i64
     %marked = llvm.or %old, %bit : i64
-    llvm.store %marked, %leaf {schedule.eval.pending_dirty_root = 1 : i32, schedule.eval.pending_stage_spec = array<i64: 1, 2, 32, 4294967295, 2, 2>} : i64, !llvm.ptr
-    %summary = llvm.mlir.addressof @__talos_aot_nba_dirty_summary_v1 : !llvm.ptr
-    %page = llvm.getelementptr %summary[0] : (!llvm.ptr) -> !llvm.ptr, i8
-    %prior = llvm.load %page {schedule.eval.pending_summary_root = 1 : i32} : !llvm.ptr -> i64
+    schedule.nba.index.store %marked, @__talos_aot_nba_dirty_roots_v1[0] {capture = array<i64: 1, 2, 32, 4294967295, 2, 2>, root = 1 : i32}
+    %prior = schedule.nba.index.load @__talos_aot_nba_dirty_summary_v1[0] {root = 1 : i32}
     %pagebit = llvm.mlir.constant(1 : i64) : i64
     %markedpage = llvm.or %prior, %pagebit : i64
-    llvm.store %markedpage, %page {schedule.eval.pending_summary_root = 1 : i32} : i64, !llvm.ptr
+    schedule.nba.index.store %markedpage, @__talos_aot_nba_dirty_summary_v1[0] {root = 1 : i32}
     llvm.return
   }
   llvm.func @consume1() -> i64 {
@@ -148,18 +140,14 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     schedule.nba.acc.store %one, %acc[valid] {alignment = 4 : i64} : i32
     schedule.nba.acc.store %nba, %acc[exec_region] {alignment = 4 : i64} : i32
     schedule.nba.acc.store %zero, %acc[transient] {alignment = 8 : i64} : i64
-    %dirty = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
-    %leaf = llvm.getelementptr %dirty[0] : (!llvm.ptr) -> !llvm.ptr, i8
-    %old = llvm.load %leaf {schedule.eval.pending_dirty_root = 63 : i32} : !llvm.ptr -> i64
+    %old = schedule.nba.index.load @__talos_aot_nba_dirty_roots_v1[0] {root = 63 : i32}
     %bit = llvm.mlir.constant(9223372036854775808 : i64) : i64
     %marked = llvm.or %old, %bit : i64
-    llvm.store %marked, %leaf {schedule.eval.pending_dirty_root = 63 : i32, schedule.eval.pending_stage_spec = array<i64: 63, 64, 32, 4294967295, 2, 3>} : i64, !llvm.ptr
-    %summary = llvm.mlir.addressof @__talos_aot_nba_dirty_summary_v1 : !llvm.ptr
-    %page = llvm.getelementptr %summary[0] : (!llvm.ptr) -> !llvm.ptr, i8
-    %prior = llvm.load %page {schedule.eval.pending_summary_root = 63 : i32} : !llvm.ptr -> i64
+    schedule.nba.index.store %marked, @__talos_aot_nba_dirty_roots_v1[0] {capture = array<i64: 63, 64, 32, 4294967295, 2, 3>, root = 63 : i32}
+    %prior = schedule.nba.index.load @__talos_aot_nba_dirty_summary_v1[0] {root = 63 : i32}
     %pagebit = llvm.mlir.constant(1 : i64) : i64
     %markedpage = llvm.or %prior, %pagebit : i64
-    llvm.store %markedpage, %page {schedule.eval.pending_summary_root = 63 : i32} : i64, !llvm.ptr
+    schedule.nba.index.store %markedpage, @__talos_aot_nba_dirty_summary_v1[0] {root = 63 : i32}
     llvm.return
   }
   llvm.func @consume63() -> i64 {
@@ -191,18 +179,14 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     schedule.nba.acc.store %one, %acc[valid] {alignment = 4 : i64} : i32
     schedule.nba.acc.store %nba, %acc[exec_region] {alignment = 4 : i64} : i32
     schedule.nba.acc.store %zero, %acc[transient] {alignment = 8 : i64} : i64
-    %dirty = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
-    %leaf = llvm.getelementptr %dirty[8] : (!llvm.ptr) -> !llvm.ptr, i8
-    %old = llvm.load %leaf {schedule.eval.pending_dirty_root = 64 : i32} : !llvm.ptr -> i64
+    %old = schedule.nba.index.load @__talos_aot_nba_dirty_roots_v1[1] {root = 64 : i32}
     %bit = llvm.mlir.constant(1 : i64) : i64
     %marked = llvm.or %old, %bit : i64
-    llvm.store %marked, %leaf {schedule.eval.pending_dirty_root = 64 : i32, schedule.eval.pending_stage_spec = array<i64: 64, 65, 32, 4294967295, 2, 4>} : i64, !llvm.ptr
-    %summary = llvm.mlir.addressof @__talos_aot_nba_dirty_summary_v1 : !llvm.ptr
-    %page = llvm.getelementptr %summary[0] : (!llvm.ptr) -> !llvm.ptr, i8
-    %prior = llvm.load %page {schedule.eval.pending_summary_root = 64 : i32} : !llvm.ptr -> i64
+    schedule.nba.index.store %marked, @__talos_aot_nba_dirty_roots_v1[1] {capture = array<i64: 64, 65, 32, 4294967295, 2, 4>, root = 64 : i32}
+    %prior = schedule.nba.index.load @__talos_aot_nba_dirty_summary_v1[0] {root = 64 : i32}
     %pagebit = llvm.mlir.constant(2 : i64) : i64
     %markedpage = llvm.or %prior, %pagebit : i64
-    llvm.store %markedpage, %page {schedule.eval.pending_summary_root = 64 : i32} : i64, !llvm.ptr
+    schedule.nba.index.store %markedpage, @__talos_aot_nba_dirty_summary_v1[0] {root = 64 : i32}
     llvm.return
   }
   llvm.func @consume64() -> i64 {
@@ -234,18 +218,14 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     schedule.nba.acc.store %one, %acc[valid] {alignment = 4 : i64} : i32
     schedule.nba.acc.store %nba, %acc[exec_region] {alignment = 4 : i64} : i32
     schedule.nba.acc.store %zero, %acc[transient] {alignment = 8 : i64} : i64
-    %dirty = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
-    %leaf = llvm.getelementptr %dirty[8] : (!llvm.ptr) -> !llvm.ptr, i8
-    %old = llvm.load %leaf {schedule.eval.pending_dirty_root = 127 : i32} : !llvm.ptr -> i64
+    %old = schedule.nba.index.load @__talos_aot_nba_dirty_roots_v1[1] {root = 127 : i32}
     %bit = llvm.mlir.constant(9223372036854775808 : i64) : i64
     %marked = llvm.or %old, %bit : i64
-    llvm.store %marked, %leaf {schedule.eval.pending_dirty_root = 127 : i32, schedule.eval.pending_stage_spec = array<i64: 127, 128, 32, 4294967295, 2, 5>} : i64, !llvm.ptr
-    %summary = llvm.mlir.addressof @__talos_aot_nba_dirty_summary_v1 : !llvm.ptr
-    %page = llvm.getelementptr %summary[0] : (!llvm.ptr) -> !llvm.ptr, i8
-    %prior = llvm.load %page {schedule.eval.pending_summary_root = 127 : i32} : !llvm.ptr -> i64
+    schedule.nba.index.store %marked, @__talos_aot_nba_dirty_roots_v1[1] {capture = array<i64: 127, 128, 32, 4294967295, 2, 5>, root = 127 : i32}
+    %prior = schedule.nba.index.load @__talos_aot_nba_dirty_summary_v1[0] {root = 127 : i32}
     %pagebit = llvm.mlir.constant(2 : i64) : i64
     %markedpage = llvm.or %prior, %pagebit : i64
-    llvm.store %markedpage, %page {schedule.eval.pending_summary_root = 127 : i32} : i64, !llvm.ptr
+    schedule.nba.index.store %markedpage, @__talos_aot_nba_dirty_summary_v1[0] {root = 127 : i32}
     llvm.return
   }
   llvm.func @consume127() -> i64 {
@@ -277,18 +257,14 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     schedule.nba.acc.store %one, %acc[valid] {alignment = 4 : i64} : i32
     schedule.nba.acc.store %nba, %acc[exec_region] {alignment = 4 : i64} : i32
     schedule.nba.acc.store %zero, %acc[transient] {alignment = 8 : i64} : i64
-    %dirty = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
-    %leaf = llvm.getelementptr %dirty[16] : (!llvm.ptr) -> !llvm.ptr, i8
-    %old = llvm.load %leaf {schedule.eval.pending_dirty_root = 128 : i32} : !llvm.ptr -> i64
+    %old = schedule.nba.index.load @__talos_aot_nba_dirty_roots_v1[2] {root = 128 : i32}
     %bit = llvm.mlir.constant(1 : i64) : i64
     %marked = llvm.or %old, %bit : i64
-    llvm.store %marked, %leaf {schedule.eval.pending_dirty_root = 128 : i32, schedule.eval.pending_stage_spec = array<i64: 128, 129, 32, 4294967295, 2, 6>} : i64, !llvm.ptr
-    %summary = llvm.mlir.addressof @__talos_aot_nba_dirty_summary_v1 : !llvm.ptr
-    %page = llvm.getelementptr %summary[0] : (!llvm.ptr) -> !llvm.ptr, i8
-    %prior = llvm.load %page {schedule.eval.pending_summary_root = 128 : i32} : !llvm.ptr -> i64
+    schedule.nba.index.store %marked, @__talos_aot_nba_dirty_roots_v1[2] {capture = array<i64: 128, 129, 32, 4294967295, 2, 6>, root = 128 : i32}
+    %prior = schedule.nba.index.load @__talos_aot_nba_dirty_summary_v1[0] {root = 128 : i32}
     %pagebit = llvm.mlir.constant(4 : i64) : i64
     %markedpage = llvm.or %prior, %pagebit : i64
-    llvm.store %markedpage, %page {schedule.eval.pending_summary_root = 128 : i32} : i64, !llvm.ptr
+    schedule.nba.index.store %markedpage, @__talos_aot_nba_dirty_summary_v1[0] {root = 128 : i32}
     llvm.return
   }
   llvm.func @consume128() -> i64 {
@@ -320,18 +296,14 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     schedule.nba.acc.store %one, %acc[valid] {alignment = 4 : i64} : i32
     schedule.nba.acc.store %nba, %acc[exec_region] {alignment = 4 : i64} : i32
     schedule.nba.acc.store %zero, %acc[transient] {alignment = 8 : i64} : i64
-    %dirty = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
-    %leaf = llvm.getelementptr %dirty[504] : (!llvm.ptr) -> !llvm.ptr, i8
-    %old = llvm.load %leaf {schedule.eval.pending_dirty_root = 4095 : i32} : !llvm.ptr -> i64
+    %old = schedule.nba.index.load @__talos_aot_nba_dirty_roots_v1[63] {root = 4095 : i32}
     %bit = llvm.mlir.constant(9223372036854775808 : i64) : i64
     %marked = llvm.or %old, %bit : i64
-    llvm.store %marked, %leaf {schedule.eval.pending_dirty_root = 4095 : i32, schedule.eval.pending_stage_spec = array<i64: 4095, 4096, 32, 4294967295, 2, 7>} : i64, !llvm.ptr
-    %summary = llvm.mlir.addressof @__talos_aot_nba_dirty_summary_v1 : !llvm.ptr
-    %page = llvm.getelementptr %summary[0] : (!llvm.ptr) -> !llvm.ptr, i8
-    %prior = llvm.load %page {schedule.eval.pending_summary_root = 4095 : i32} : !llvm.ptr -> i64
+    schedule.nba.index.store %marked, @__talos_aot_nba_dirty_roots_v1[63] {capture = array<i64: 4095, 4096, 32, 4294967295, 2, 7>, root = 4095 : i32}
+    %prior = schedule.nba.index.load @__talos_aot_nba_dirty_summary_v1[0] {root = 4095 : i32}
     %pagebit = llvm.mlir.constant(9223372036854775808 : i64) : i64
     %markedpage = llvm.or %prior, %pagebit : i64
-    llvm.store %markedpage, %page {schedule.eval.pending_summary_root = 4095 : i32} : i64, !llvm.ptr
+    schedule.nba.index.store %markedpage, @__talos_aot_nba_dirty_summary_v1[0] {root = 4095 : i32}
     llvm.return
   }
   llvm.func @consume4095() -> i64 {
@@ -363,18 +335,14 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     schedule.nba.acc.store %one, %acc[valid] {alignment = 4 : i64} : i32
     schedule.nba.acc.store %nba, %acc[exec_region] {alignment = 4 : i64} : i32
     schedule.nba.acc.store %zero, %acc[transient] {alignment = 8 : i64} : i64
-    %dirty = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
-    %leaf = llvm.getelementptr %dirty[512] : (!llvm.ptr) -> !llvm.ptr, i8
-    %old = llvm.load %leaf {schedule.eval.pending_dirty_root = 4096 : i32} : !llvm.ptr -> i64
+    %old = schedule.nba.index.load @__talos_aot_nba_dirty_roots_v1[64] {root = 4096 : i32}
     %bit = llvm.mlir.constant(1 : i64) : i64
     %marked = llvm.or %old, %bit : i64
-    llvm.store %marked, %leaf {schedule.eval.pending_dirty_root = 4096 : i32, schedule.eval.pending_stage_spec = array<i64: 4096, 4097, 32, 4294967295, 2, 8>} : i64, !llvm.ptr
-    %summary = llvm.mlir.addressof @__talos_aot_nba_dirty_summary_v1 : !llvm.ptr
-    %page = llvm.getelementptr %summary[8] : (!llvm.ptr) -> !llvm.ptr, i8
-    %prior = llvm.load %page {schedule.eval.pending_summary_root = 4096 : i32} : !llvm.ptr -> i64
+    schedule.nba.index.store %marked, @__talos_aot_nba_dirty_roots_v1[64] {capture = array<i64: 4096, 4097, 32, 4294967295, 2, 8>, root = 4096 : i32}
+    %prior = schedule.nba.index.load @__talos_aot_nba_dirty_summary_v1[1] {root = 4096 : i32}
     %pagebit = llvm.mlir.constant(1 : i64) : i64
     %markedpage = llvm.or %prior, %pagebit : i64
-    llvm.store %markedpage, %page {schedule.eval.pending_summary_root = 4096 : i32} : i64, !llvm.ptr
+    schedule.nba.index.store %markedpage, @__talos_aot_nba_dirty_summary_v1[1] {root = 4096 : i32}
     llvm.return
   }
   llvm.func @consume4096() -> i64 {
@@ -393,46 +361,29 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     llvm.return %result : i64
   }
   llvm.func @canonical_only() -> i64 {
-    %summary = llvm.mlir.addressof @__talos_aot_nba_dirty_summary_v1 : !llvm.ptr
-    %bits = llvm.load %summary {schedule.eval.pending_runtime_root = 5000 : i32} : !llvm.ptr -> i64
+    %bits = schedule.nba.index.load @__talos_aot_nba_dirty_summary_v1[1] {canonical_capture, root = 5000 : i32}
     llvm.return %bits : i64
   }
   llvm.func @query() -> i64 {
     %zero = llvm.mlir.constant(0 : i64) : i64
-    %base0 = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
-    %ptr0 = llvm.getelementptr %base0[0] : (!llvm.ptr) -> !llvm.ptr, i8
-    %bits0 = llvm.load %ptr0 : !llvm.ptr -> i64
+    %bits0 = schedule.nba.index.load @__talos_aot_nba_dirty_roots_v1[0]
     %sum0 = llvm.xor %zero, %bits0 : i64
-    %base1 = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
-    %ptr1 = llvm.getelementptr %base1[8] : (!llvm.ptr) -> !llvm.ptr, i8
-    %bits1 = llvm.load %ptr1 : !llvm.ptr -> i64
+    %bits1 = schedule.nba.index.load @__talos_aot_nba_dirty_roots_v1[1]
     %sum1 = llvm.xor %sum0, %bits1 : i64
-    %base2 = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
-    %ptr2 = llvm.getelementptr %base2[16] : (!llvm.ptr) -> !llvm.ptr, i8
-    %bits2 = llvm.load %ptr2 : !llvm.ptr -> i64
+    %bits2 = schedule.nba.index.load @__talos_aot_nba_dirty_roots_v1[2]
     %sum2 = llvm.xor %sum1, %bits2 : i64
-    %base3 = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
-    %ptr3 = llvm.getelementptr %base3[504] : (!llvm.ptr) -> !llvm.ptr, i8
-    %bits3 = llvm.load %ptr3 : !llvm.ptr -> i64
+    %bits3 = schedule.nba.index.load @__talos_aot_nba_dirty_roots_v1[63]
     %sum3 = llvm.xor %sum2, %bits3 : i64
-    %base4 = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
-    %ptr4 = llvm.getelementptr %base4[512] : (!llvm.ptr) -> !llvm.ptr, i8
-    %bits4 = llvm.load %ptr4 : !llvm.ptr -> i64
+    %bits4 = schedule.nba.index.load @__talos_aot_nba_dirty_roots_v1[64]
     %sum4 = llvm.xor %sum3, %bits4 : i64
-    %base5 = llvm.mlir.addressof @__talos_aot_nba_dirty_summary_v1 : !llvm.ptr
-    %ptr5 = llvm.getelementptr %base5[0] : (!llvm.ptr) -> !llvm.ptr, i8
-    %bits5 = llvm.load %ptr5 : !llvm.ptr -> i64
+    %bits5 = schedule.nba.index.load @__talos_aot_nba_dirty_summary_v1[0]
     %sum5 = llvm.xor %sum4, %bits5 : i64
-    %base6 = llvm.mlir.addressof @__talos_aot_nba_dirty_summary_v1 : !llvm.ptr
-    %ptr6 = llvm.getelementptr %base6[8] : (!llvm.ptr) -> !llvm.ptr, i8
-    %bits6 = llvm.load %ptr6 : !llvm.ptr -> i64
+    %bits6 = schedule.nba.index.load @__talos_aot_nba_dirty_summary_v1[1]
     %sum6 = llvm.xor %sum5, %bits6 : i64
     llvm.return %sum6 : i64
   }
   llvm.func @pending4096() -> i64 {
-    %dirty = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
-    %leaf = llvm.getelementptr %dirty[512] : (!llvm.ptr) -> !llvm.ptr, i8
-    %bits = llvm.load %leaf {schedule.eval.pending_dirty_root = 4096 : i32} : !llvm.ptr -> i64
+    %bits = schedule.nba.index.load @__talos_aot_nba_dirty_roots_v1[64] {root = 4096 : i32}
     %one = llvm.mlir.constant(1 : i64) : i64
     %result = llvm.and %bits, %one : i64
     llvm.return %result : i64
@@ -475,27 +426,13 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     %sum6 = llvm.add %sum5, %value6 : i64
     %value7 = llvm.call @consume4096() : () -> i64
     %sum7 = llvm.add %sum6, %value7 : i64
-    %base0 = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
-    %ptr0 = llvm.getelementptr %base0[0] : (!llvm.ptr) -> !llvm.ptr, i8
-    llvm.store %zero, %ptr0 : i64, !llvm.ptr
-    %base1 = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
-    %ptr1 = llvm.getelementptr %base1[8] : (!llvm.ptr) -> !llvm.ptr, i8
-    llvm.store %zero, %ptr1 : i64, !llvm.ptr
-    %base2 = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
-    %ptr2 = llvm.getelementptr %base2[16] : (!llvm.ptr) -> !llvm.ptr, i8
-    llvm.store %zero, %ptr2 : i64, !llvm.ptr
-    %base3 = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
-    %ptr3 = llvm.getelementptr %base3[504] : (!llvm.ptr) -> !llvm.ptr, i8
-    llvm.store %zero, %ptr3 : i64, !llvm.ptr
-    %base4 = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
-    %ptr4 = llvm.getelementptr %base4[512] : (!llvm.ptr) -> !llvm.ptr, i8
-    llvm.store %zero, %ptr4 : i64, !llvm.ptr
-    %base5 = llvm.mlir.addressof @__talos_aot_nba_dirty_summary_v1 : !llvm.ptr
-    %ptr5 = llvm.getelementptr %base5[0] : (!llvm.ptr) -> !llvm.ptr, i8
-    llvm.store %zero, %ptr5 : i64, !llvm.ptr
-    %base6 = llvm.mlir.addressof @__talos_aot_nba_dirty_summary_v1 : !llvm.ptr
-    %ptr6 = llvm.getelementptr %base6[8] : (!llvm.ptr) -> !llvm.ptr, i8
-    llvm.store %zero, %ptr6 : i64, !llvm.ptr
+    schedule.nba.index.store %zero, @__talos_aot_nba_dirty_roots_v1[0]
+    schedule.nba.index.store %zero, @__talos_aot_nba_dirty_roots_v1[1]
+    schedule.nba.index.store %zero, @__talos_aot_nba_dirty_roots_v1[2]
+    schedule.nba.index.store %zero, @__talos_aot_nba_dirty_roots_v1[63]
+    schedule.nba.index.store %zero, @__talos_aot_nba_dirty_roots_v1[64]
+    schedule.nba.index.store %zero, @__talos_aot_nba_dirty_summary_v1[0]
+    schedule.nba.index.store %zero, @__talos_aot_nba_dirty_summary_v1[1]
     %after = llvm.call @query() : () -> i64
     %empty = llvm.icmp "eq" %after, %zero : i64
     %validCut = llvm.and %queryOK, %cutOK : i1

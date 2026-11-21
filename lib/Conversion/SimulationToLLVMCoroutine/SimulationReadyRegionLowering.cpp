@@ -112,8 +112,8 @@ bool isBoundary(Operation *op, const std::map<Key, unsigned> &keys,
   if (auto access = detail::getNativeMemoryAccess(op)) {
     if (!access->plain)
       return true;
-    // A typed state access names its plane, a global distinct from every
-    // ready set.
+    // A typed access names its global: a state plane or the NBA readiness
+    // index, distinct from every ready set.
     if (access->isTyped())
       return llvm::any_of(keys, [&](const auto &entry) {
         return entry.first.global == access->global;

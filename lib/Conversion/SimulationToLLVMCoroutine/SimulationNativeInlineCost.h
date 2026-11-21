@@ -8,6 +8,18 @@
 
 namespace talos::detail {
 
+/// The operations `operation` stands for in LLVM IR, as op-count budgets
+/// count them: an NBA accumulator field or readiness index access is its
+/// address computation and the access.
+inline uint64_t nativeLoweredSize(mlir::Operation *operation) {
+  return mlir::isa<schedule::NativeNBAAccumulatorLoadOp,
+                   schedule::NativeNBAAccumulatorStoreOp,
+                   schedule::NativeNBAIndexLoadOp,
+                   schedule::NativeNBAIndexStoreOp>(operation)
+             ? 2
+             : 1;
+}
+
 inline uint64_t nativeOperationCost(mlir::Operation *operation) {
   if (auto merge = mlir::dyn_cast<schedule::NativeReadyMergeOp>(operation)) {
     EvalReadySetLayout layout(merge.getCapacity());
@@ -37,7 +49,9 @@ inline uint64_t nativeOperationCost(mlir::Operation *operation) {
     // Charge deferred leaf/index maintenance before action lowering expands it.
     return 12 * layout.levels;
   }
-  return mlir::isa<schedule::NativeReadyReadOp>(operation) ? 2 : 1;
+  return mlir::isa<schedule::NativeReadyReadOp>(operation)
+             ? 2
+             : nativeLoweredSize(operation);
 }
 
 inline uint64_t nativeInlineCost(mlir::Operation *root) {

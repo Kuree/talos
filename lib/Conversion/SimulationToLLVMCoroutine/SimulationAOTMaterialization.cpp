@@ -178,22 +178,16 @@ static constexpr StringLiteral nbaDirtySummaryName =
 // root. The coordinator consults these at the Active/Inactive to NBA cut.
 static void markPendingNBARoot(OpBuilder &builder, Location loc,
                                uint32_t root) {
-  Type pointer = LLVM::LLVMPointerType::get(builder.getContext());
   Type i64 = builder.getI64Type();
-  auto mark = [&](StringRef name, uint32_t bit) {
-    Value plane = LLVM::AddressOfOp::create(builder, loc, pointer, name);
-    Value at = byteGEP(builder, loc, plane, (bit / 64) * uint64_t{8});
-    Value prior = LLVM::LoadOp::create(builder, loc, i64, at, 8);
+  auto mark = [&](schedule::NBAIndex index, uint32_t bit) {
+    Value prior = loadNBAIndex(builder, loc, index, bit / 64, root,
+                               /*canonicalCapture=*/true);
     Value mask = llvmConstant(builder, loc, i64, uint64_t{1} << (bit % 64));
-    auto update = LLVM::StoreOp::create(
-        builder, loc, arith::OrIOp::create(builder, loc, prior, mask), at, 8);
-    auto role = builder.getI32IntegerAttr(root);
-    schedule::set<schedule::Field::EvalPendingRuntimeRoot>(
-        prior.getDefiningOp(), role);
-    schedule::set<schedule::Field::EvalPendingRuntimeRoot>(update, role);
+    storeNBAIndex(builder, loc, arith::OrIOp::create(builder, loc, prior, mask),
+                  index, bit / 64, root, /*canonicalCapture=*/true);
   };
-  mark(nbaDirtyRootsName, root);
-  mark(nbaDirtySummaryName, root / 64);
+  mark(schedule::NBAIndex::DirtyRoots, root);
+  mark(schedule::NBAIndex::DirtySummary, root / 64);
 }
 
 static Value wholeNBAField(OpBuilder &builder, Location loc, StringRef bank,
@@ -2962,16 +2956,9 @@ FailureOr<bool> makeNativeEvalPlan(
                  schedule::has<schedule::Field::EvalRuntimeCalendar>(module)))
               orderedChunkDifferences.push_back(delta);
           }
-          Value dirty = LLVM::LoadOp::create(
-              nbaBuilder, call.getLoc(), i64,
-              byteGEP(nbaBuilder, call.getLoc(),
-                      LLVM::AddressOfOp::create(nbaBuilder, call.getLoc(),
-                                                pointer, nbaDirtyRootsName),
-                      uint64_t{root->second / 64} * 8),
-              8);
-          schedule::set<schedule::Field::EvalPendingRuntimeRoot>(
-              dirty.getDefiningOp(),
-              nbaBuilder.getI32IntegerAttr(root->second));
+          Value dirty = loadNBAIndex(
+              nbaBuilder, call.getLoc(), schedule::NBAIndex::DirtyRoots,
+              root->second / 64, root->second, /*canonicalCapture=*/true);
           Value pending = arith::AndIOp::create(
               nbaBuilder, call.getLoc(), dirty,
               llvmConstant(nbaBuilder, call.getLoc(), i64,
@@ -3318,34 +3305,27 @@ FailureOr<bool> makeNativeEvalPlan(
             // Fixed slots share the canonical barrier's sparse root index.
             // No runtime staging call or event allocation is needed.
             uint32_t word = root->second / 64;
-            auto setBit = [&, &call = call](StringRef name, uint32_t word,
-                                            uint64_t mask) {
-              Value address =
-                  byteGEP(nbaBuilder, call.getLoc(),
-                          LLVM::AddressOfOp::create(nbaBuilder, call.getLoc(),
-                                                    pointer, name),
-                          uint64_t{word} * 8);
-              Value previous = LLVM::LoadOp::create(nbaBuilder, call.getLoc(),
-                                                    i64, address, 8);
+            // The fixed-slot ABI retains canonical ownership. Its producer
+            // RMW does not query private captures elsewhere in this page
+            // (LRM 4.9.4/10.4.2).
+            auto setBit = [&, &call = call](schedule::NBAIndex index,
+                                            uint32_t word, uint64_t mask) {
+              Value previous =
+                  loadNBAIndex(nbaBuilder, call.getLoc(), index, word,
+                               root->second, /*canonicalCapture=*/true);
               Value selected = arith::SelectOp::create(
                   nbaBuilder, call.getLoc(), overlaps,
                   llvmConstant(nbaBuilder, call.getLoc(), i64, mask), zero64);
-              auto marked = LLVM::StoreOp::create(
-                  nbaBuilder, call.getLoc(),
-                  arith::OrIOp::create(nbaBuilder, call.getLoc(), previous,
-                                       selected),
-                  address, 8);
-              // The fixed-slot ABI retains canonical ownership. Its producer
-              // RMW does not query private captures elsewhere in this page
-              // (LRM 4.9.4/10.4.2). Preserve that role through LLVM lowering.
-              auto rootRole = nbaBuilder.getI32IntegerAttr(root->second);
-              schedule::set<schedule::Field::EvalPendingRuntimeRoot>(
-                  previous.getDefiningOp(), rootRole);
-              schedule::set<schedule::Field::EvalPendingRuntimeRoot>(marked,
-                                                                     rootRole);
+              storeNBAIndex(nbaBuilder, call.getLoc(),
+                            arith::OrIOp::create(nbaBuilder, call.getLoc(),
+                                                 previous, selected),
+                            index, word, root->second,
+                            /*canonicalCapture=*/true);
             };
-            setBit(nbaDirtyRootsName, word, uint64_t{1} << (root->second % 64));
-            setBit(nbaDirtySummaryName, word / 64, uint64_t{1} << (word % 64));
+            setBit(schedule::NBAIndex::DirtyRoots, word,
+                   uint64_t{1} << (root->second % 64));
+            setBit(schedule::NBAIndex::DirtySummary, word / 64,
+                   uint64_t{1} << (word % 64));
           }
           if (inertContinuation) {
             cf::BranchOp::create(nbaBuilder, call.getLoc(), inertContinuation);
@@ -3470,49 +3450,32 @@ FailureOr<bool> makeNativeEvalPlan(
                            proof->second.commitRegion),
               accumulator, NBAField::ExecRegion, 0, 4);
           uint32_t dirtyWord = root->second / 64;
-          Value dirtyBase = LLVM::AddressOfOp::create(
-              nbaBuilder, call.getLoc(), pointer, nbaDirtyRootsName);
-          Value dirtyAddress =
-              byteGEP(nbaBuilder, call.getLoc(), dirtyBase,
-                      static_cast<uint64_t>(dirtyWord) * sizeof(uint64_t));
-          Value previousDirty = LLVM::LoadOp::create(nbaBuilder, call.getLoc(),
-                                                     i64, dirtyAddress, 8);
+          Value previousDirty = loadNBAIndex(
+              nbaBuilder, call.getLoc(), schedule::NBAIndex::DirtyRoots,
+              dirtyWord, root->second, /*canonicalCapture=*/true);
           Value dirtyBit = arith::SelectOp::create(
               nbaBuilder, call.getLoc(), overlaps,
               llvmConstant(nbaBuilder, call.getLoc(), i64,
                            uint64_t{1} << (root->second % 64)),
               zero64);
-          auto markedDirty = LLVM::StoreOp::create(
-              nbaBuilder, call.getLoc(),
-              arith::OrIOp::create(nbaBuilder, call.getLoc(), previousDirty,
-                                   dirtyBit),
-              dirtyAddress, 8);
-          auto rootRole = nbaBuilder.getI32IntegerAttr(root->second);
-          schedule::set<schedule::Field::EvalPendingRuntimeRoot>(
-              previousDirty.getDefiningOp(), rootRole);
-          schedule::set<schedule::Field::EvalPendingRuntimeRoot>(markedDirty,
-                                                                 rootRole);
-          Value summaryBase = LLVM::AddressOfOp::create(
-              nbaBuilder, call.getLoc(), pointer, nbaDirtySummaryName);
-          Value summaryAddress =
-              byteGEP(nbaBuilder, call.getLoc(), summaryBase,
-                      static_cast<uint64_t>(dirtyWord / 64) * sizeof(uint64_t));
-          Value previousSummary = LLVM::LoadOp::create(
-              nbaBuilder, call.getLoc(), i64, summaryAddress, 8);
+          storeNBAIndex(nbaBuilder, call.getLoc(),
+                        arith::OrIOp::create(nbaBuilder, call.getLoc(),
+                                             previousDirty, dirtyBit),
+                        schedule::NBAIndex::DirtyRoots, dirtyWord, root->second,
+                        /*canonicalCapture=*/true);
+          Value previousSummary = loadNBAIndex(
+              nbaBuilder, call.getLoc(), schedule::NBAIndex::DirtySummary,
+              dirtyWord / 64, root->second, /*canonicalCapture=*/true);
           Value summaryBit = arith::SelectOp::create(
               nbaBuilder, call.getLoc(), overlaps,
               llvmConstant(nbaBuilder, call.getLoc(), i64,
                            uint64_t{1} << (dirtyWord % 64)),
               zero64);
-          auto markedSummary = LLVM::StoreOp::create(
-              nbaBuilder, call.getLoc(),
-              arith::OrIOp::create(nbaBuilder, call.getLoc(), previousSummary,
-                                   summaryBit),
-              summaryAddress, 8);
-          schedule::set<schedule::Field::EvalPendingRuntimeRoot>(
-              previousSummary.getDefiningOp(), rootRole);
-          schedule::set<schedule::Field::EvalPendingRuntimeRoot>(markedSummary,
-                                                                 rootRole);
+          storeNBAIndex(nbaBuilder, call.getLoc(),
+                        arith::OrIOp::create(nbaBuilder, call.getLoc(),
+                                             previousSummary, summaryBit),
+                        schedule::NBAIndex::DirtySummary, dirtyWord / 64,
+                        root->second, /*canonicalCapture=*/true);
         }
       }
       if (call.getNumResults() != 0) {
@@ -7348,11 +7311,8 @@ FailureOr<bool> makeNativeEvalPlan(
     if (!wordBlocks[word])
       continue;
     builder.setInsertionPointToStart(wordBlocks[word]);
-    Value dirtyBase = LLVM::AddressOfOp::create(builder, location, pointer,
-                                                nbaDirtyRootsName);
-    Value dirtyAddress = byteGEP(builder, location, dirtyBase,
-                                 uint64_t{word} * sizeof(uint64_t));
-    Value dirty = LLVM::LoadOp::create(builder, location, i64, dirtyAddress, 8);
+    Value dirty =
+        loadNBAIndex(builder, location, schedule::NBAIndex::DirtyRoots, word);
     Value wordEmpty =
         arith::CmpIOp::create(builder, location, arith::CmpIPredicate::eq,
                               dirty, llvmConstant(builder, location, i64, 0));
@@ -7463,15 +7423,14 @@ FailureOr<bool> makeNativeEvalPlan(
       // 10.4.2); that root, or any other root sharing the word, keeps its bit
       // for the canonical index owner instead of losing its update.
       {
-        Value current =
-            LLVM::LoadOp::create(builder, location, i64, dirtyAddress, 8);
-        LLVM::StoreOp::create(
-            builder, location,
-            arith::AndIOp::create(
-                builder, location, current,
-                llvmConstant(builder, location, i64,
-                             ~(uint64_t{1} << (rootIndex % 64)))),
-            dirtyAddress, 8);
+        Value current = loadNBAIndex(builder, location,
+                                     schedule::NBAIndex::DirtyRoots, word);
+        storeNBAIndex(builder, location,
+                      arith::AndIOp::create(
+                          builder, location, current,
+                          llvmConstant(builder, location, i64,
+                                       ~(uint64_t{1} << (rootIndex % 64)))),
+                      schedule::NBAIndex::DirtyRoots, word);
       }
       Value stagedValue = schedule::NativeNBAAccumulatorLoadOp::create(
           builder, location, i64, accumulatorBase, NBAField::Value, 0, 8);
@@ -7863,24 +7822,38 @@ FailureOr<bool> makeNativeEvalPlan(
     cf::BranchOp::create(builder, location, mapping.lookup(genericNBACommit));
   }
 
-  // Accumulator field accesses lower to an LLVM access each, plus one field
-  // address per block, record and field offset.
+  // The unrolled commit's size in its LLVM form: each accumulator field
+  // access has its own field address, except that a transient field read and
+  // its clear share one, and each index word read or written has an index
+  // base and a word address.
   uint64_t directScalarCost = 0;
+  llvm::SmallDenseSet<std::pair<StringRef, uint64_t>, 8> indexWords;
   for (Block *block : scalarBlocks) {
-    llvm::SmallDenseSet<std::tuple<Value, unsigned, uint64_t>, 8> fields;
+    llvm::SmallPtrSet<Value, 4> transientReads;
     for (Operation &operation : *block) {
       ++directScalarCost;
-      if (auto load = dyn_cast<schedule::NativeNBAAccumulatorLoadOp>(operation))
-        fields.insert({load.getRecord(), static_cast<unsigned>(load.getField()),
-                       load.getOffset()});
-      else if (auto store =
-                   dyn_cast<schedule::NativeNBAAccumulatorStoreOp>(operation))
-        fields.insert({store.getRecord(),
-                       static_cast<unsigned>(store.getField()),
-                       store.getOffset()});
+      if (auto load =
+              dyn_cast<schedule::NativeNBAAccumulatorLoadOp>(operation)) {
+        ++directScalarCost;
+        if (load.getField() == NBAField::Transient)
+          transientReads.insert(load.getRecord());
+      } else if (auto store = dyn_cast<schedule::NativeNBAAccumulatorStoreOp>(
+                     operation)) {
+        if (store.getField() != NBAField::Transient ||
+            !transientReads.contains(store.getRecord()))
+          ++directScalarCost;
+      } else if (auto load =
+                     dyn_cast<schedule::NativeNBAIndexLoadOp>(operation)) {
+        if (!load.getDynamicWord())
+          indexWords.insert({load.getGlobal(), load.getStaticWord()});
+      } else if (auto store =
+                     dyn_cast<schedule::NativeNBAIndexStoreOp>(operation)) {
+        if (!store.getDynamicWord())
+          indexWords.insert({store.getGlobal(), store.getStaticWord()});
+      }
     }
-    directScalarCost += fields.size();
   }
+  directScalarCost += 2 * indexWords.size();
   // Compare the actual generated direct footprint with the bounded loop
   // footprint. A handful of heavily observed roots can be larger than many
   // sparse simple roots; root count alone does not capture that tradeoff.
@@ -8170,13 +8143,8 @@ FailureOr<bool> makeNativeEvalPlan(
     if (scalarRootsByWord[word].empty())
       continue;
     builder.setInsertionPointToStart(wordCursor);
-    Value knownDirtyBase = LLVM::AddressOfOp::create(builder, location, pointer,
-                                                     nbaDirtyRootsName);
     Value dirty =
-        LLVM::LoadOp::create(builder, location, i64,
-                             byteGEP(builder, location, knownDirtyBase,
-                                     uint64_t{word} * sizeof(uint64_t)),
-                             8);
+        loadNBAIndex(builder, location, schedule::NBAIndex::DirtyRoots, word);
     Value taintBase = LLVM::AddressOfOp::create(builder, location, pointer,
                                                 evalStepFourStateNBARootsName);
     Value taintedRoots =

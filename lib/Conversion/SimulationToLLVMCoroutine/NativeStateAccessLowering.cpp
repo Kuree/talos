@@ -142,6 +142,45 @@ private:
   DenseMap<std::tuple<Block *, Value, uint64_t>, Value> addresses;
 };
 
+// Lowers NBA index accesses to whole-word LLVM accesses of the index global:
+// its address once per block, then a byte GEP to a static word or an i64 GEP
+// by a dynamic one, shared per block like a state window's.
+class IndexAccessLowering {
+public:
+  Value word(OpBuilder &builder, Location location, StringRef global,
+             Value dynamicWord, uint64_t staticWord) {
+    auto key = std::make_tuple(builder.getInsertionBlock(), global, dynamicWord,
+                               staticWord);
+    if (Value address = words.lookup(key))
+      return address;
+    auto pointer = LLVM::LLVMPointerType::get(builder.getContext());
+    auto baseKey = std::make_pair(builder.getInsertionBlock(), global);
+    Value base = bases.lookup(baseKey);
+    if (!base) {
+      base = LLVM::AddressOfOp::create(builder, location, pointer, global);
+      bases.try_emplace(baseKey, base);
+    }
+    Value address;
+    if (!dynamicWord)
+      address = detail::byteGEP(builder, location, base,
+                                staticWord * sizeof(uint64_t));
+    else if (!staticWord)
+      address =
+          LLVM::GEPOp::create(builder, location, pointer, builder.getI64Type(),
+                              base, ValueRange{dynamicWord});
+    else
+      address = detail::byteGEP(builder, location,
+                                word(builder, location, global, dynamicWord, 0),
+                                staticWord * sizeof(uint64_t));
+    words.try_emplace(key, address);
+    return address;
+  }
+
+private:
+  DenseMap<std::pair<Block *, StringRef>, Value> bases;
+  DenseMap<std::tuple<Block *, StringRef, Value, uint64_t>, Value> words;
+};
+
 class LowerNativeStateAccessPass final
     : public impl::LowerNativeStateAccessPassBase<LowerNativeStateAccessPass> {
 public:
@@ -151,6 +190,7 @@ public:
     LLVM::LLVMFuncOp function = getOperation();
     SmallVector<Operation *> accesses;
     SmallVector<Operation *> accumulatorAccesses;
+    SmallVector<Operation *> indexAccesses;
     bool valid = true;
     function.walk([&](Operation *operation) {
       if (isa<schedule::NativeStateAddressOp,
@@ -161,6 +201,9 @@ public:
               schedule::NativeNBAAccumulatorLoadOp,
               schedule::NativeNBAAccumulatorStoreOp>(operation))
         accumulatorAccesses.push_back(operation);
+      if (isa<schedule::NativeNBAIndexLoadOp, schedule::NativeNBAIndexStoreOp>(
+              operation))
+        indexAccesses.push_back(operation);
       if (isa<schedule::NativeNBAAccumulatorAddressOp>(operation))
         valid &=
             succeeded(verifyAccumulatorAddressUses(operation->getResult(0)));
@@ -170,6 +213,14 @@ public:
       // Before this point a function names a plane only through typed
       // operations. A contribution plane's binding global is otherwise only
       // handed to the runtime, as a call argument, which binds it.
+      // A function names the NBA readiness index only through typed index
+      // operations too.
+      if (auto address = dyn_cast<LLVM::AddressOfOp>(operation);
+          address && schedule::getNBAIndexOfGlobal(address.getGlobalName())) {
+        address.emitError("takes an NBA readiness index's address outside "
+                          "typed index operations");
+        valid = false;
+      }
       if (auto address = dyn_cast<LLVM::AddressOfOp>(operation)) {
         std::optional<schedule::StatePlane> plane =
             schedule::getStatePlaneOfGlobal(address.getGlobalName());
@@ -191,10 +242,12 @@ public:
     });
     if (!valid)
       return signalPassFailure();
-    if (accesses.empty() && accumulatorAccesses.empty())
+    if (accesses.empty() && accumulatorAccesses.empty() &&
+        indexAccesses.empty())
       return markAllAnalysesPreserved();
     if (failed(lowerAccumulatorAccesses(accumulatorAccesses)))
       return signalPassFailure();
+    lowerIndexAccesses(indexAccesses);
     StateAccessLowering lowering;
     // Typed properties served passes before this point; LLVM needs none.
     for (Operation *operation : accesses) {
@@ -246,6 +299,35 @@ public:
   }
 
 private:
+  // Index words are whole 64-bit words, accessed with their natural alignment.
+  void lowerIndexAccesses(ArrayRef<Operation *> operations) {
+    IndexAccessLowering lowering;
+    for (Operation *operation : operations) {
+      OpBuilder builder(operation);
+      Location location = operation->getLoc();
+      Operation *lowered;
+      if (auto load = dyn_cast<schedule::NativeNBAIndexLoadOp>(operation)) {
+        lowered = LLVM::LoadOp::create(
+            builder, location, builder.getI64Type(),
+            lowering.word(builder, location, load.getGlobal(),
+                          load.getDynamicWord(), load.getStaticWord()),
+            sizeof(uint64_t));
+        load.getResult().replaceAllUsesWith(lowered->getResult(0));
+      } else {
+        auto store = cast<schedule::NativeNBAIndexStoreOp>(operation);
+        lowered = LLVM::StoreOp::create(
+            builder, location, store.getValue(),
+            lowering.word(builder, location, store.getGlobal(),
+                          store.getDynamicWord(), store.getStaticWord()),
+            sizeof(uint64_t));
+      }
+      // Other dialects' annotations stay with the access.
+      for (NamedAttribute attribute : operation->getDiscardableAttrs())
+        lowered->setAttr(attribute.getName(), attribute.getValue());
+      operation->erase();
+    }
+  }
+
   // A record's address is taken where its typed address was; its fields are
   // the LLVM accesses of the same alignment at their layout offsets.
   LogicalResult lowerAccumulatorAccesses(ArrayRef<Operation *> operations) {

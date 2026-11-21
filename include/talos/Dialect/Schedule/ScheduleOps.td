@@ -1143,6 +1143,79 @@ def NativeNBAAccumulatorStoreOp : ScheduleNativeOp<"nba.acc.store"> {
   let hasVerifier = 1;
 }
 
+// The NBA readiness index (NBAIndex): words of the dirty-root and summary
+// globals, read and written whole. Native passes that keep a root's captures
+// private to a generated barrier rewrite that root's index accesses, so the
+// index is accessed only through these operations in functions.
+//
+// What native passes need to know about an access is a property:
+// - root: the access is root `root`'s own: the dirty word holding its bit or
+//   the summary word holding its dirty word's bit, read to test or written to
+//   mark the root's pending capture;
+// - canonical_capture: with `root`, the capture's payload is held where the
+//   runtime commits it (a runtime-routed or fixed-slot capture), so the root
+//   stays in the canonical index;
+// - capture (stores): the certified target of the generated capture the
+//   store marks: root, static state, width, mask, commit region and source
+//   site;
+// - owner: the activation-group member whose activation performs the access.
+def NativeNBAIndexLoadOp : ScheduleNativeOp<"nba.index.load", [
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let summary = "read a word of the NBA readiness index";
+  let description = [{
+    Reads the 64-bit word `static_word` plus the optional `dynamic_word` of
+    the NBA readiness index `global`.
+  }];
+  let arguments = (ins Arg<FlatSymbolRefAttr, "the index's global",
+                           [MemRead]>:$global,
+                       Optional<I64>:$dynamic_word,
+                       I64Attr:$static_word,
+                       OptionalAttr<I32Attr>:$root,
+                       UnitAttr:$canonical_capture,
+                       OptionalAttr<I32Attr>:$owner);
+  let results = (outs I64:$result);
+  let assemblyFormat = [{
+    $global `[` custom<StateOffset>($dynamic_word, $static_word) `]` attr-dict
+  }];
+  let builders = [OpBuilder<(ins "::talos::schedule::NBAIndex":$index,
+                                 "::mlir::Value":$dynamicWord,
+                                 "uint64_t":$staticWord)>];
+  let extraClassDeclaration = [{
+    ::talos::schedule::NBAIndex getIndex();
+  }];
+  let hasVerifier = 1;
+}
+
+def NativeNBAIndexStoreOp : ScheduleNativeOp<"nba.index.store", [
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let summary = "write a word of the NBA readiness index";
+  let description = [{
+    Writes `value` to the 64-bit word `static_word` plus the optional
+    `dynamic_word` of the NBA readiness index `global`.
+  }];
+  let arguments = (ins I64:$value,
+                       Arg<FlatSymbolRefAttr, "the index's global",
+                           [MemWrite]>:$global,
+                       Optional<I64>:$dynamic_word,
+                       I64Attr:$static_word,
+                       OptionalAttr<I32Attr>:$root,
+                       UnitAttr:$canonical_capture,
+                       OptionalAttr<DenseI64ArrayAttr>:$capture,
+                       OptionalAttr<I32Attr>:$owner);
+  let assemblyFormat = [{
+    $value `,` $global `[` custom<StateOffset>($dynamic_word, $static_word)
+    `]` attr-dict
+  }];
+  let builders = [OpBuilder<(ins "::mlir::Value":$value,
+                                 "::talos::schedule::NBAIndex":$index,
+                                 "::mlir::Value":$dynamicWord,
+                                 "uint64_t":$staticWord)>];
+  let extraClassDeclaration = [{
+    ::talos::schedule::NBAIndex getIndex();
+  }];
+  let hasVerifier = 1;
+}
+
 def NativeByteAddressOp : ScheduleNativeOp<"bytes.address", [Pure]> {
   let summary = "immutable bytes awaiting executable reachability";
   let arguments = (ins StrAttr:$name, StrAttr:$value, I64Attr:$alignment);

@@ -8,6 +8,7 @@
 #include "talos/Analysis/ClockInferenceAnalysis.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
 #include "talos/Dialect/Schedule/ScheduleFieldEnums.h"
+#include "talos/Dialect/Schedule/ScheduleOps.h"
 
 #include "talos/Analysis/NativeStateLayoutAnalysis.h"
 
@@ -755,6 +756,19 @@ getNBAAccumulatorFieldOffset(schedule::NBAAccumulatorField field,
                              bool twoState);
 /// The bytes of a generated NBA accumulator record in that layout.
 uint64_t getNBAAccumulatorRecordBytes(bool twoState);
+/// A typed access of word `word` of an NBA readiness index. With `root`, the
+/// access is that root's own test or mark; with `canonicalCapture` too, the
+/// root's capture is held where the runtime commits it.
+schedule::NativeNBAIndexLoadOp
+loadNBAIndex(mlir::OpBuilder &builder, mlir::Location location,
+             schedule::NBAIndex index, uint64_t word,
+             std::optional<uint32_t> root = std::nullopt,
+             bool canonicalCapture = false);
+schedule::NativeNBAIndexStoreOp
+storeNBAIndex(mlir::OpBuilder &builder, mlir::Location location,
+              mlir::Value value, schedule::NBAIndex index, uint64_t word,
+              std::optional<uint32_t> root = std::nullopt,
+              bool canonicalCapture = false);
 /// Number the roots the module's known.roots gates test and materialize
 /// their generated unknown summary, with the root records and ignored ranges
 /// the runtime binds. Runs once the gates are final, before their lowering.

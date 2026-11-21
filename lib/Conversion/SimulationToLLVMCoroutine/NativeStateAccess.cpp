@@ -132,6 +132,28 @@ std::optional<NativeMemoryAccess> getNativeMemoryAccess(Operation *operation) {
     access.owner = store.getOwnerAttr();
     return access;
   }
+  // An NBA readiness index word is other memory: a whole word of the
+  // index's global.
+  auto describeWord = [&](StringRef global, Value dynamicWord,
+                          uint64_t staticWord) {
+    access.global = global;
+    if (!dynamicWord)
+      access.offset = staticWord * sizeof(uint64_t);
+  };
+  if (auto load = dyn_cast<schedule::NativeNBAIndexLoadOp>(operation)) {
+    describeWord(load.getGlobal(), load.getDynamicWord(), load.getStaticWord());
+    access.type = load.getType();
+    access.owner = load.getOwnerAttr();
+    return access;
+  }
+  if (auto store = dyn_cast<schedule::NativeNBAIndexStoreOp>(operation)) {
+    describeWord(store.getGlobal(), store.getDynamicWord(),
+                 store.getStaticWord());
+    access.type = store.getValue().getType();
+    access.stored = store.getValue();
+    access.owner = store.getOwnerAttr();
+    return access;
+  }
   if (auto load = dyn_cast<LLVM::LoadOp>(operation)) {
     static_cast<NativeAddress &>(access) =
         describeNativeAddress(operation, load.getAddr());
@@ -334,6 +356,10 @@ void setNativeMemoryOwner(Operation *operation, IntegerAttr owner) {
     load.setOwnerAttr(owner);
   else if (auto store =
                dyn_cast<schedule::NativeNBAAccumulatorStoreOp>(operation))
+    store.setOwnerAttr(owner);
+  else if (auto load = dyn_cast<schedule::NativeNBAIndexLoadOp>(operation))
+    load.setOwnerAttr(owner);
+  else if (auto store = dyn_cast<schedule::NativeNBAIndexStoreOp>(operation))
     store.setOwnerAttr(owner);
   else
     schedule::set<schedule::Field::EvalGroupOwner>(operation, owner);

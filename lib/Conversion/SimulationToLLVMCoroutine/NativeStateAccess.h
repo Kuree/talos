@@ -78,8 +78,9 @@ struct NativeAddress {
 /// A load or store as the native passes that inventory memory see it: a
 /// typed state access, or a load or store of other memory: an LLVM load or
 /// store whose address may derive from a global or a local allocation
-/// through GEPs, or a typed NBA accumulator field access, whose `pointer` is
-/// its record and whose offset is the field's in the four-state record.
+/// through GEPs, a typed NBA accumulator field access, whose `pointer` is
+/// its record and whose offset is the field's in the four-state record, or a
+/// typed NBA readiness index access of a word of the index's global.
 struct NativeMemoryAccess : NativeAddress {
   mlir::Operation *operation = nullptr;
   /// The type read or written.
@@ -109,15 +110,17 @@ getStatePlaneOfAccess(const NativeAddress &address) {
 
 /// Whether `operation` is a load or store, typed or LLVM.
 inline bool isNativeMemoryAccess(mlir::Operation *operation) {
-  return mlir::isa<mlir::LLVM::LoadOp, mlir::LLVM::StoreOp,
-                   schedule::NativeStateLoadOp, schedule::NativeStateStoreOp,
-                   schedule::NativeNBAAccumulatorLoadOp,
-                   schedule::NativeNBAAccumulatorStoreOp>(operation);
+  return mlir::isa<
+      mlir::LLVM::LoadOp, mlir::LLVM::StoreOp, schedule::NativeStateLoadOp,
+      schedule::NativeStateStoreOp, schedule::NativeNBAAccumulatorLoadOp,
+      schedule::NativeNBAAccumulatorStoreOp, schedule::NativeNBAIndexLoadOp,
+      schedule::NativeNBAIndexStoreOp>(operation);
 }
 /// Whether `operation` is a store, typed or LLVM.
 inline bool isNativeMemoryStore(mlir::Operation *operation) {
   return mlir::isa<mlir::LLVM::StoreOp, schedule::NativeStateStoreOp,
-                   schedule::NativeNBAAccumulatorStoreOp>(operation);
+                   schedule::NativeNBAAccumulatorStoreOp,
+                   schedule::NativeNBAIndexStoreOp>(operation);
 }
 
 /// A state plane's address as a producer takes it: the plane's typed base in

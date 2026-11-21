@@ -546,8 +546,10 @@ def LowerNativeStateAccessPass
     talos_rt_generated_nba_accumulator_256, or with two-state, the same
     record without its X/Z field. Fails on any other use of a record's
     address, and on an X/Z field access in the two-state layout: a two-state
-    build removes those before this point. Runs first in
-    finalize-native-functions.
+    build removes those before this point. Replaces schedule.nba.index.load/
+    store with a whole-word, 8-byte aligned LLVM access of the index global,
+    and fails on a function's llvm.mlir.addressof of an index global. Runs
+    first in finalize-native-functions.
   }];
   let options = [
     Option<"twoState", "two-state", "bool", /*default=*/"false",

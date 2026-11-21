@@ -11,7 +11,9 @@
 // LOWER: %[[UNKNOWN:.*]] = llvm.mlir.addressof @__talos_state_unknown
 // LOWER-NEXT: llvm.load %[[UNKNOWN]]
 // LOWER: %[[DELTA:.*]] = llvm.and
-// LOWER: llvm.load {{.*}}schedule.eval.pending_dirty_root
+// LOWER: %[[DIRTY:.*]] = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1
+// LOWER-NEXT: %[[DIRTY_WORD:.*]] = llvm.getelementptr %[[DIRTY]][0]
+// LOWER-NEXT: llvm.load %[[DIRTY_WORD]]
 // LOWER: %[[PENDING:.*]] = llvm.and
 // LOWER-NOT: llvm.store
 // LOWER-NOT: llvm.call

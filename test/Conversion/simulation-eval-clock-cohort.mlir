@@ -3,6 +3,7 @@
 // RUN: diff %t.mlir %t.serial
 // RUN: FileCheck %s --check-prefix=TRACE < %t.trace
 // RUN: FileCheck %s --check-prefix=GROUP < %t.mlir
+// RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-suspension),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),convert-talos-sim-processes-to-llvm-coroutines)' --mlir-print-ir-before=lower-native-state-access -o /dev/null 2>&1 | FileCheck %s --check-prefix=OWNER
 
 // Exact physical edge identity determines cohorts. Each member still tests its
 // own ready bit; opposite edges, other clocks, and async resets cannot cause
@@ -212,5 +213,10 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
 // GROUP: llvm.icmp "ne"
 // GROUP: llvm.cond_br
 // GROUP: llvm.mlir.addressof @__talos_aot_nba_accumulator_
-// GROUP: llvm.store {{.*}}schedule.eval.group_owner = 6 : i32
-// GROUP: llvm.store {{.*}}schedule.eval.group_owner = 7 : i32
+// Each inlined member's NBA stage keeps its owner: its accumulator field
+// stores and its dirty-root mark, which certifies the member's capture.
+// OWNER-LABEL: llvm.func @__talos_eval_ranked_group_2(
+// OWNER: schedule.nba.acc.store %{{.*}}[value] {alignment = 8 : i64, owner = 6 : i32} : i64
+// OWNER: schedule.nba.index.store %{{.*}}, @__talos_aot_nba_dirty_roots_v1[0] {capture = array<i64: 0, 3, 8, 255, 2, 6>, owner = 6 : i32, root = 0 : i32}
+// OWNER: schedule.nba.acc.store %{{.*}}[value] {alignment = 8 : i64, owner = 7 : i32} : i64
+// OWNER: schedule.nba.index.store %{{.*}}, @__talos_aot_nba_dirty_roots_v1[0] {capture = array<i64: 1, 4, 8, 255, 2, 7>, owner = 7 : i32, root = 1 : i32}

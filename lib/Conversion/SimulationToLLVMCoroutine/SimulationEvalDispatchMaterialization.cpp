@@ -32,7 +32,6 @@ constexpr StringLiteral promotionPendingMaskName =
     "__talos_eval_promotion_pending_mask_v1";
 constexpr StringLiteral periodicTerminationName =
     "__talos_periodic_termination_v1";
-constexpr StringLiteral nbaDirtyRootsName = "__talos_aot_nba_dirty_roots_v1";
 constexpr StringLiteral nbaKnownName = "__talos_eval_nba_known_v1";
 constexpr StringLiteral evalFourStateNBAHandoffName =
     "__talos_eval_four_state_nba_handoff_v1";
@@ -1822,14 +1821,9 @@ materializeNativeEvalDispatch(ModuleOp module,
   // must be empty. This does not clear any four-state/promotion evidence.
   Value pendingNBA = llvmConstant(builder, location, i64, 0);
   if (nbaTaintWordCount != 0) {
-    Value dirtyBase = LLVM::AddressOfOp::create(builder, location, pointer,
-                                                nbaDirtyRootsName);
     for (uint32_t word = 0; word != nbaTaintWordCount; ++word) {
       Value dirty =
-          LLVM::LoadOp::create(builder, location, i64,
-                               byteGEP(builder, location, dirtyBase,
-                                       uint64_t{word} * sizeof(uint64_t)),
-                               8);
+          loadNBAIndex(builder, location, schedule::NBAIndex::DirtyRoots, word);
       pendingNBA = arith::OrIOp::create(builder, location, pendingNBA, dirty);
     }
   }
@@ -1951,16 +1945,11 @@ materializeNativeEvalDispatch(ModuleOp module,
     auto markCurrentDirtyRootsFast = [&] {
       if (nbaTaintWordCount == 0)
         return;
-      Value dirtyBase = LLVM::AddressOfOp::create(builder, location, pointer,
-                                                  nbaDirtyRootsName);
       Value fastRootsBase = LLVM::AddressOfOp::create(
           builder, location, pointer, evalFastNBARootsName);
       for (uint32_t word = 0; word != nbaTaintWordCount; ++word) {
-        Value dirty =
-            LLVM::LoadOp::create(builder, location, i64,
-                                 byteGEP(builder, location, dirtyBase,
-                                         uint64_t{word} * sizeof(uint64_t)),
-                                 8);
+        Value dirty = loadNBAIndex(builder, location,
+                                   schedule::NBAIndex::DirtyRoots, word);
         Value fastAddress = byteGEP(builder, location, fastRootsBase,
                                     uint64_t{word} * sizeof(uint64_t));
         Value fastRoots =
@@ -1975,18 +1964,13 @@ materializeNativeEvalDispatch(ModuleOp module,
     Value fastRootsKnown =
         llvmConstant(builder, location, builder.getI1Type(), 0);
     if (nbaTaintWordCount != 0) {
-      Value dirtyBase = LLVM::AddressOfOp::create(builder, location, pointer,
-                                                  nbaDirtyRootsName);
       Value fastRootsBase = LLVM::AddressOfOp::create(
           builder, location, pointer, evalFastNBARootsName);
       Value missingFastRoot =
           llvmConstant(builder, location, builder.getI1Type(), 0);
       for (uint32_t word = 0; word != nbaTaintWordCount; ++word) {
-        Value dirty =
-            LLVM::LoadOp::create(builder, location, i64,
-                                 byteGEP(builder, location, dirtyBase,
-                                         uint64_t{word} * sizeof(uint64_t)),
-                                 8);
+        Value dirty = loadNBAIndex(builder, location,
+                                   schedule::NBAIndex::DirtyRoots, word);
         Value fastRoots =
             LLVM::LoadOp::create(builder, location, i64,
                                  byteGEP(builder, location, fastRootsBase,

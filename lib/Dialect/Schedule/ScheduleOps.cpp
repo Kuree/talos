@@ -303,6 +303,109 @@ LogicalResult NativeStateStoreOp::fold(FoldAdaptor adaptor,
   return success(foldConstantOffset(*this, adaptor.getDynamicOffset()));
 }
 
+StringRef getNBAIndexGlobalName(NBAIndex index) {
+  switch (index) {
+  case NBAIndex::DirtyRoots:
+    return "__talos_aot_nba_dirty_roots_v1";
+  case NBAIndex::DirtySummary:
+    return "__talos_aot_nba_dirty_summary_v1";
+  }
+  llvm_unreachable("unknown NBA index");
+}
+
+std::optional<NBAIndex> getNBAIndexOfGlobal(StringRef name) {
+  return llvm::StringSwitch<std::optional<NBAIndex>>(name)
+      .Case("__talos_aot_nba_dirty_roots_v1", NBAIndex::DirtyRoots)
+      .Case("__talos_aot_nba_dirty_summary_v1", NBAIndex::DirtySummary)
+      .Default(std::nullopt);
+}
+
+// A root's own access is to the dirty word that holds its bit, or to the
+// summary word that holds its dirty word's bit.
+static LogicalResult verifyIndexAccess(Operation *op, StringRef global,
+                                       Value dynamicWord, uint64_t staticWord,
+                                       std::optional<uint32_t> root,
+                                       bool canonicalCapture) {
+  std::optional<NBAIndex> index = getNBAIndexOfGlobal(global);
+  if (!index)
+    return op->emitOpError("names '") << global << "', no NBA readiness index";
+  if (failed(verifyTypedMemoryOp(op)))
+    return failure();
+  if (canonicalCapture && !root)
+    return op->emitOpError("marks a canonical capture without its root");
+  if (!root || dynamicWord)
+    return success();
+  uint64_t word =
+      *index == NBAIndex::DirtyRoots ? *root / 64 : *root / (64 * 64);
+  if (staticWord != word)
+    return op->emitOpError("accesses word ")
+           << staticWord << ", not the word " << word << " of root " << *root;
+  return success();
+}
+
+static LogicalResult verifyIndexUse(Operation *op, FlatSymbolRefAttr global,
+                                    SymbolTableCollection &tables) {
+  if (!tables.lookupNearestSymbolFrom<LLVM::GlobalOp>(op, global))
+    return op->emitOpError("must reference the llvm.mlir.global of its index");
+  return success();
+}
+
+void NativeNBAIndexLoadOp::build(OpBuilder &builder, OperationState &state,
+                                 NBAIndex index, Value dynamicWord,
+                                 uint64_t staticWord) {
+  build(builder, state, builder.getI64Type(),
+        FlatSymbolRefAttr::get(builder.getContext(),
+                               getNBAIndexGlobalName(index)),
+        dynamicWord, builder.getI64IntegerAttr(staticWord),
+        /*root=*/IntegerAttr{}, /*canonical_capture=*/UnitAttr{},
+        /*owner=*/IntegerAttr{});
+}
+NBAIndex NativeNBAIndexLoadOp::getIndex() {
+  return *getNBAIndexOfGlobal(getGlobal());
+}
+LogicalResult NativeNBAIndexLoadOp::verify() {
+  return verifyIndexAccess(*this, getGlobal(), getDynamicWord(),
+                           getStaticWord(), getRoot(), getCanonicalCapture());
+}
+LogicalResult
+NativeNBAIndexLoadOp::verifySymbolUses(SymbolTableCollection &tables) {
+  return verifyIndexUse(*this, getGlobalAttr(), tables);
+}
+
+void NativeNBAIndexStoreOp::build(OpBuilder &builder, OperationState &state,
+                                  Value value, NBAIndex index,
+                                  Value dynamicWord, uint64_t staticWord) {
+  build(builder, state, value,
+        FlatSymbolRefAttr::get(builder.getContext(),
+                               getNBAIndexGlobalName(index)),
+        dynamicWord, builder.getI64IntegerAttr(staticWord),
+        /*root=*/IntegerAttr{}, /*canonical_capture=*/UnitAttr{},
+        /*capture=*/DenseI64ArrayAttr{}, /*owner=*/IntegerAttr{});
+}
+NBAIndex NativeNBAIndexStoreOp::getIndex() {
+  return *getNBAIndexOfGlobal(getGlobal());
+}
+LogicalResult NativeNBAIndexStoreOp::verify() {
+  if (failed(verifyIndexAccess(*this, getGlobal(), getDynamicWord(),
+                               getStaticWord(), getRoot(),
+                               getCanonicalCapture())))
+    return failure();
+  if (DenseI64ArrayAttr capture = getCaptureAttr()) {
+    if (getIndex() != NBAIndex::DirtyRoots || !getRoot() ||
+        getCanonicalCapture())
+      return emitOpError("certifies a capture without marking a generated "
+                         "capture's dirty root");
+    if (capture.size() != 6 || capture[0] != int64_t(*getRoot()))
+      return emitOpError("certifies a malformed capture of root ")
+             << *getRoot();
+  }
+  return success();
+}
+LogicalResult
+NativeNBAIndexStoreOp::verifySymbolUses(SymbolTableCollection &tables) {
+  return verifyIndexUse(*this, getGlobalAttr(), tables);
+}
+
 uint64_t getNBAAccumulatorFieldBytes(NBAAccumulatorField field) {
   switch (field) {
   case NBAAccumulatorField::Value:

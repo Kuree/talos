@@ -144,3 +144,53 @@ module attributes {schedule.eval.runtime_calendar, native.closed_executable} {
     llvm.return %barrier : i32
   }
 }
+
+// -----
+
+// A register body that stages a generated NBA writes only generated storage:
+// its accumulator record and its root's dirty-index and summary marks. It
+// stays quiet, so every body shares the cut (1800-2023 4.4.2.3-4, 4.5).
+// CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1(
+// CHECK: llvm.call @talos_rt_v1_scheduler_prepare_quiet_eval_nba(
+// CHECK: llvm.call @__talos_clocked_a(
+// CHECK-NEXT: {{.*}}llvm.call @talos_rt_v1_scheduler_prepare_quiet_eval_nba(
+// CHECK-NEXT: llvm.call @__talos_clocked_b(
+// CHECK-NEXT: {{.*}}llvm.call @talos_rt_v1_scheduler_prepare_quiet_eval_nba(
+module attributes {schedule.eval.runtime_calendar, native.closed_executable} {
+  llvm.mlir.global internal @acc0(dense<0> : tensor<136xi8>) : !llvm.array<136 x i8>
+  llvm.mlir.global internal @acc1(dense<0> : tensor<136xi8>) : !llvm.array<136 x i8>
+  llvm.mlir.global internal @__talos_aot_nba_dirty_roots_v1(dense<0> : tensor<8xi8>) : !llvm.array<8 x i8>
+  llvm.mlir.global internal @__talos_aot_nba_dirty_summary_v1(dense<0> : tensor<8xi8>) : !llvm.array<8 x i8>
+  llvm.func @talos_rt_v1_scheduler_prepare_eval_nba(!llvm.ptr, !llvm.ptr) -> i32
+  llvm.func @talos_rt_v1_scheduler_prepare_quiet_eval_nba(!llvm.ptr, !llvm.ptr, !llvm.ptr) -> i32
+  llvm.func @__talos_clocked_a(%v: i64) {
+    %r = schedule.nba.acc.address @acc0 : !llvm.ptr
+    schedule.nba.acc.store %v, %r[value] {alignment = 8 : i64} : i64
+    %old = schedule.nba.index.load @__talos_aot_nba_dirty_roots_v1[0] {root = 0 : i32}
+    %bit = llvm.mlir.constant(1 : i64) : i64
+    %marked = llvm.or %old, %bit : i64
+    schedule.nba.index.store %marked, @__talos_aot_nba_dirty_roots_v1[0] {capture = array<i64: 0, 0, 8, 255, 2, 1>, root = 0 : i32}
+    %page = schedule.nba.index.load @__talos_aot_nba_dirty_summary_v1[0] {root = 0 : i32}
+    %pageBit = llvm.mlir.constant(1 : i64) : i64
+    %markedPage = llvm.or %page, %pageBit : i64
+    schedule.nba.index.store %markedPage, @__talos_aot_nba_dirty_summary_v1[0] {root = 0 : i32}
+    llvm.return
+  }
+  llvm.func @__talos_clocked_b(%v: i64) {
+    %r = schedule.nba.acc.address @acc1 : !llvm.ptr
+    schedule.nba.acc.store %v, %r[value] {alignment = 8 : i64} : i64
+    %old = schedule.nba.index.load @__talos_aot_nba_dirty_roots_v1[0] {root = 1 : i32}
+    %bit = llvm.mlir.constant(2 : i64) : i64
+    %marked = llvm.or %old, %bit : i64
+    schedule.nba.index.store %marked, @__talos_aot_nba_dirty_roots_v1[0] {capture = array<i64: 1, 1, 8, 255, 2, 2>, root = 1 : i32}
+    llvm.return
+  }
+  llvm.func @__talos_eval_dispatch_v1(%ctx: !llvm.ptr, %out: !llvm.ptr, %v: i64) {
+    %s0 = llvm.call @talos_rt_v1_scheduler_prepare_eval_nba(%ctx, %out) : (!llvm.ptr, !llvm.ptr) -> i32
+    llvm.call @__talos_clocked_a(%v) : (i64) -> ()
+    %s1 = llvm.call @talos_rt_v1_scheduler_prepare_eval_nba(%ctx, %out) : (!llvm.ptr, !llvm.ptr) -> i32
+    llvm.call @__talos_clocked_b(%v) : (i64) -> ()
+    %s2 = llvm.call @talos_rt_v1_scheduler_prepare_eval_nba(%ctx, %out) : (!llvm.ptr, !llvm.ptr) -> i32
+    llvm.return
+  }
+}

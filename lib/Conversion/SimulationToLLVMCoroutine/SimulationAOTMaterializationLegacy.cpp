@@ -491,13 +491,8 @@ LogicalResult makeNativeAOTPlanLegacy(
     if (!wordBlocks[word])
       continue;
     builder.setInsertionPointToStart(wordBlocks[word]);
-    Value dirtyBase = LLVM::AddressOfOp::create(builder, location, pointer,
-                                                nbaDirtyRootsName);
     Value dirty =
-        LLVM::LoadOp::create(builder, location, i64,
-                             byteGEP(builder, location, dirtyBase,
-                                     uint64_t{word} * sizeof(uint64_t)),
-                             8);
+        loadNBAIndex(builder, location, schedule::NBAIndex::DirtyRoots, word);
     Value wordEmpty =
         arith::CmpIOp::create(builder, location, arith::CmpIPredicate::eq,
                               dirty, llvmConstant(builder, location, i64, 0));
@@ -741,26 +736,20 @@ LogicalResult makeNativeAOTPlanLegacy(
                            "talos_rt_v1_scheduler_activate_static_nodes"),
         ValueRange{nbaCommitEntry->getArgument(1), activatedNodes,
                    llvmConstant(builder, location, i32, activationWordCount)});
-  Value dirtyBase;
-  if (nbaDirtyWordCount != 0)
-    dirtyBase = LLVM::AddressOfOp::create(builder, location, pointer,
-                                          nbaDirtyRootsName);
   for (uint32_t word = 0; word != nbaDirtyWordCount; ++word) {
     if (!directlyCommittedByWord[word])
       continue;
-    Value dirtyAddress = byteGEP(builder, location, dirtyBase,
-                                 uint64_t{word} * sizeof(uint64_t));
-    Value dirty = LLVM::LoadOp::create(builder, location, i64, dirtyAddress, 8);
+    Value dirty =
+        loadNBAIndex(builder, location, schedule::NBAIndex::DirtyRoots, word);
     Value committed = LLVM::LoadOp::create(builder, location, i64,
                                            directlyCommittedByWord[word], 8);
-    LLVM::StoreOp::create(
-        builder, location,
-        arith::AndIOp::create(
-            builder, location, dirty,
-            arith::XOrIOp::create(
-                builder, location, committed,
-                llvmConstant(builder, location, i64, UINT64_MAX))),
-        dirtyAddress, 8);
+    storeNBAIndex(builder, location,
+                  arith::AndIOp::create(
+                      builder, location, dirty,
+                      arith::XOrIOp::create(
+                          builder, location, committed,
+                          llvmConstant(builder, location, i64, UINT64_MAX))),
+                  schedule::NBAIndex::DirtyRoots, word);
   }
   Value directCount =
       LLVM::LoadOp::create(builder, location, i32, committedCount, 4);

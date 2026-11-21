@@ -38,3 +38,29 @@ module {
     llvm.return %i : i64
   }
 }
+
+// -----
+
+// The NBA readiness index is accessed only through typed index operations in
+// functions; native passes before this point see every access to it.
+module {
+  llvm.mlir.global internal @__talos_aot_nba_dirty_roots_v1(dense<0> : tensor<8xi8>) : !llvm.array<8 x i8>
+  llvm.func @raw_index() -> i64 {
+    // expected-error @below {{takes an NBA readiness index's address outside typed index operations}}
+    %d = llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1 : !llvm.ptr
+    %x = llvm.load %d : !llvm.ptr -> i64
+    llvm.return %x : i64
+  }
+}
+
+// -----
+
+module {
+  llvm.mlir.global internal @__talos_aot_nba_dirty_summary_v1(dense<0> : tensor<8xi8>) : !llvm.array<8 x i8>
+  llvm.func @raw_summary() -> i64 {
+    // expected-error @below {{takes an NBA readiness index's address outside typed index operations}}
+    %s = llvm.mlir.addressof @__talos_aot_nba_dirty_summary_v1 : !llvm.ptr
+    %x = llvm.load %s : !llvm.ptr -> i64
+    llvm.return %x : i64
+  }
+}
