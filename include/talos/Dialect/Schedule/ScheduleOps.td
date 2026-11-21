@@ -1426,8 +1426,8 @@ def NativeHandleOffsetOp : ScheduleNativeOp<"handle.offset"> {
     that call it does not fold: producers offset constant operands when they
     create the selection, and constant propagation leaves it opaque.
 
-    Native lowering creates it; it becomes the runtime call once AOT
-    planning has read the selections it is part of.
+    Native lowering creates it; it becomes the runtime call, or the sum when
+    `in_bounds`, once AOT planning has read the selections it is part of.
   }];
   let arguments = (ins I64:$handle, I64:$amount, UnitAttr:$in_bounds);
   let results = (outs I64:$result);

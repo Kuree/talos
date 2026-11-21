@@ -1,10 +1,9 @@
 // RUN: talos-opt %s --test-talos-lower-native-handle-ops | FileCheck %s
 
 // Once AOT planning has read a selection, an offset becomes the runtime's
-// handle offset, and one proved in bounds keeps the proof as a tag that native
-// finalization turns into the plain sum. A guard becomes a select of the
-// invalid handle (IEEE 1800-2023 7.4.5, 11.5.1). The order of the selection is
-// kept.
+// handle offset, and one proved in bounds the plain sum: its offset field
+// neither carries nor borrows. A guard becomes a select of the invalid handle
+// (IEEE 1800-2023 7.4.5, 11.5.1). The order of the selection is kept.
 module {
   llvm.func @talos_rt_v1_native_handle_offset(i64, i64) -> i64
 
@@ -13,7 +12,7 @@ module {
   // CHECK-NEXT: %[[ELEMENT:.*]] = llvm.call @talos_rt_v1_native_handle_offset(%[[ROOT]], %[[INDEX]]) : (i64, i64) -> i64
   // CHECK-NEXT: %[[INVALID:.*]] = arith.constant -1 : i64
   // CHECK-NEXT: %[[GUARDED:.*]] = arith.select %[[VALID]], %[[ELEMENT]], %[[INVALID]] : i64
-  // CHECK-NEXT: %[[FIELD:.*]] = llvm.call @talos_rt_v1_native_handle_offset(%[[GUARDED]], %[[INDEX]]) {native.in_bounds_handle_offset} : (i64, i64) -> i64
+  // CHECK-NEXT: %[[FIELD:.*]] = llvm.add %[[GUARDED]], %[[INDEX]] : i64
   // CHECK-NEXT: llvm.return %[[FIELD]]
   llvm.func @chain(%root: i64, %index: i64, %valid: i1) -> i64 {
     %element = schedule.handle.offset %root, %index

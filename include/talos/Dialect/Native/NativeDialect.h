@@ -78,7 +78,6 @@ using BulkCopySourceAssumeClean =
 using GuardedRefStore = NativeDialect::GuardedRefStoreAttrHelper;
 using PrivateClassField = NativeDialect::PrivateClassFieldAttrHelper;
 using PrivateQueue = NativeDialect::PrivateQueueAttrHelper;
-using InBoundsHandleOffset = NativeDialect::InBoundsHandleOffsetAttrHelper;
 using ManagedRootActivationPrologue =
     NativeDialect::ManagedRootActivationPrologueAttrHelper;
 using TransferredReferences = NativeDialect::TransferredReferencesAttrHelper;

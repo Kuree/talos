@@ -4,7 +4,6 @@
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Conversion/SimulationToLLVMCoroutine.h"
 
-#include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleOps.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Runtime/StableHandle.h"
@@ -433,14 +432,19 @@ void lowerNativeHandleOps(ModuleOp module) {
     Type i64 = builder.getI64Type();
     Value lowered;
     if (auto offset = dyn_cast<schedule::NativeHandleOffsetOp>(op)) {
-      auto call = LLVM::CallOp::create(
-          builder, location, TypeRange{i64},
-          getNativeRuntimeCallee(builder.getContext(),
-                                 NativeRuntimeEntry::NativeHandleOffset),
-          ValueRange{offset.getHandle(), offset.getAmount()});
+      // An offset proved in bounds neither carries nor borrows in the offset
+      // field, so the runtime's result is the plain sum.
       if (offset.getInBounds())
-        native::mark<native::InBoundsHandleOffset>(call);
-      lowered = call.getResult();
+        lowered = LLVM::AddOp::create(builder, location, offset.getHandle(),
+                                      offset.getAmount());
+      else
+        lowered =
+            LLVM::CallOp::create(
+                builder, location, TypeRange{i64},
+                getNativeRuntimeCallee(builder.getContext(),
+                                       NativeRuntimeEntry::NativeHandleOffset),
+                ValueRange{offset.getHandle(), offset.getAmount()})
+                .getResult();
     } else {
       auto guard = cast<schedule::NativeHandleGuardOp>(op);
       // A frame handle's validity compares the handle with an invalid-handle
