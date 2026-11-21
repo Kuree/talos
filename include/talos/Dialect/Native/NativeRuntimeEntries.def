@@ -1,15 +1,17 @@
-//===- NativeRuntimeEntries.def - Native runtime entry effects -*- C++ -*-===//
+//===- NativeRuntimeEntries.def - Native runtime entries -------*- C++ -*-===//
 //
-// The native runtime entries whose effects native passes depend on, one row
-// each: TALOS_NATIVE_RUNTIME(Enum, C symbol, effects). The effects are the
-// facts of native_runtime::Effect (NativeRuntimeEntries.h). An entry a pass
-// admits only for certain arguments has the facts it holds for every call;
-// the pass checks those arguments itself.
+// Every native runtime entry generated code calls, one row each:
+// TALOS_NATIVE_RUNTIME(Enum, C symbol, SIG(result, parameters...), effects).
+// SIG lists the types the entry is declared with to LLVM (NativeRuntimeType:
+// V is void, Ptr any pointer). The effects are the facts of
+// native_runtime::Effect (NativeRuntimeEntries.h). An entry a pass admits
+// only for certain arguments has the facts it holds for every call; the pass
+// checks those arguments itself.
 //
 //===----------------------------------------------------------------------===//
 
 #ifndef TALOS_NATIVE_RUNTIME
-#error "define TALOS_NATIVE_RUNTIME(Enum, symbol, effects)"
+#error "define TALOS_NATIVE_RUNTIME(Enum, symbol, signature, effects)"
 #endif
 
 // Scheduler queries. They only read the scheduler: the priority-handoff latch,
@@ -20,66 +22,75 @@
 // (IEEE 1800-2023 4.5). None mutates or re-enters the scheduler.
 TALOS_NATIVE_RUNTIME(SchedulerPrioritySignalPending,
                      talos_rt_v1_scheduler_priority_signal_pending,
-                     EvalInline | PendingTransparent | CutQuiet)
+                     SIG(I32, Ptr), EvalInline | PendingTransparent | CutQuiet)
 TALOS_NATIVE_RUNTIME(SchedulerPrioritySignalFlag,
-                     talos_rt_v1_scheduler_priority_signal_flag, CutQuiet)
+                     talos_rt_v1_scheduler_priority_signal_flag, SIG(Ptr, Ptr),
+                     CutQuiet)
 TALOS_NATIVE_RUNTIME(SchedulerTerminationRequested,
-                     talos_rt_v1_scheduler_termination_requested,
+                     talos_rt_v1_scheduler_termination_requested, SIG(I32, Ptr),
                      EvalInline | PendingTransparent | ReadinessTransparent)
-TALOS_NATIVE_RUNTIME(SchedulerTime, talos_rt_v1_scheduler_time,
+TALOS_NATIVE_RUNTIME(SchedulerTime, talos_rt_v1_scheduler_time, SIG(I64, Ptr),
                      EvalInline | PendingTransparent | ReadinessTransparent)
 TALOS_NATIVE_RUNTIME(SchedulerRuntimeWorkPending,
                      talos_rt_v1_scheduler_runtime_work_pending,
-                     EvalInline | PendingTransparent)
+                     SIG(I32, Ptr, I32), EvalInline | PendingTransparent)
 TALOS_NATIVE_RUNTIME(SchedulerHandoffPending,
-                     talos_rt_v1_scheduler_handoff_pending, PendingTransparent)
+                     talos_rt_v1_scheduler_handoff_pending, SIG(I32, Ptr),
+                     PendingTransparent)
 
 // Pure Table 28-8 strength combination: value arguments only, no scheduler
 // or context edge, like an outlined arithmetic helper.
 TALOS_NATIVE_RUNTIME(StrengthResolveKind, talos_rt_v1_strength_resolve_kind,
-                     EvalInline | PendingTransparent)
+                     SIG(I16, I16, I16, I32), EvalInline | PendingTransparent)
 // A line hit is a relaxed atomic increment through the context argument. It
 // cannot allocate, lock, re-enter the scheduler or alter design state.
 TALOS_NATIVE_RUNTIME(CoveragePointHit, talos_rt_v1_coverage_point_hit,
+                     SIG(I32, Ptr, I64, I32),
                      EvalInline | PendingTransparent | ReadinessTransparent)
 // eval_display formats its already captured arguments and writes to
 // runtime-owned FILE streams. It reads no pending accumulator and calls
 // neither the scheduler nor VPI; no NBA is committed for display (4.9.4).
 TALOS_NATIVE_RUNTIME(EvalDisplay, talos_rt_v1_eval_display,
+                     SIG(I32, Ptr, I32, I32, I32, Ptr, I64, Ptr),
                      EvalInline | PendingTransparent | ReadinessTransparent)
 // $error only latches the final exit status and lets simulation continue
 // (20.10). It never schedules or executes an actor. In VPI builds it also
 // delivers cbError callbacks (38.36.3), whose VPI accesses are those of a
 // context DPI call.
-TALOS_NATIVE_RUNTIME(SchedulerError, talos_rt_v1_scheduler_error, EvalInline)
+TALOS_NATIVE_RUNTIME(SchedulerError, talos_rt_v1_scheduler_error, SIG(I32, Ptr),
+                     EvalInline)
 // $random and $dist_* (20.14, Annex N) only run the normative algorithm on a
 // context-global or explicit seed. Random stability (18.14) lists neither, so
 // these draws need no process identity and stay in statement order (4.6(a)).
-TALOS_NATIVE_RUNTIME(RandomLegacy, talos_rt_v1_random_legacy, EvalInline)
+TALOS_NATIVE_RUNTIME(RandomLegacy, talos_rt_v1_random_legacy,
+                     SIG(I32, Ptr, Ptr), EvalInline)
 TALOS_NATIVE_RUNTIME(RandomDistribution, talos_rt_v1_random_distribution,
-                     EvalInline)
+                     SIG(I32, Ptr, I32, I32, I32, I32, Ptr, Ptr), EvalInline)
 // Assertion control (20.11) only affects subsequent attempts; an attempt
 // reads the current state from the runtime's table without scheduling,
 // executing or suspending anything.
 TALOS_NATIVE_RUNTIME(AssertionEnabled, talos_rt_v1_assertion_enabled,
-                     EvalInline)
+                     SIG(I32, Ptr, I64), EvalInline)
 TALOS_NATIVE_RUNTIME(AssertionActionState, talos_rt_v1_assertion_action_state,
-                     EvalInline)
+                     SIG(I32, Ptr, I64), EvalInline)
 
 // Growth of the private ordered NBA queue. Generated code reaches it only
 // from a capacity test. It allocates only that queue: it never executes
 // actors, changes design state, consumes generated NBA accumulators or
 // re-enters scheduling (4.9.4, 10.4.2).
 TALOS_NATIVE_RUNTIME(EvalNbaReserve, talos_rt_v1_eval_nba_reserve,
+                     SIG(I32, Ptr, Ptr),
                      EvalInline | PendingTransparent | ReadinessTransparent |
                          CutQuiet | Cold)
 TALOS_NATIVE_RUNTIME(EvalNbaReserveRecords,
                      talos_rt_v1_eval_nba_reserve_records,
+                     SIG(I32, Ptr, Ptr, I32),
                      EvalInline | PendingTransparent | ReadinessTransparent |
                          CutQuiet | Cold)
 // The failure latch records an error status and the caller returns from the
 // activation. It cannot schedule or execute an actor.
 TALOS_NATIVE_RUNTIME(SchedulerFail, talos_rt_v1_scheduler_fail,
+                     SIG(V, Ptr, I32),
                      EvalInline | PendingTransparent | ReadinessTransparent |
                          CutQuiet | QueueStable | QueueCaptureOnly)
 
@@ -91,30 +102,36 @@ TALOS_NATIVE_RUNTIME(SchedulerFail, talos_rt_v1_scheduler_fail,
 // 6.3.1).
 TALOS_NATIVE_RUNTIME(NativePromotionInvalidateRanges,
                      talos_rt_v1_native_promotion_invalidate_ranges,
+                     SIG(V, Ptr, I64, Ptr, Ptr, I64, I64),
                      EvalInline | PendingTransparent | ReadinessTransparent |
                          CutQuiet)
 TALOS_NATIVE_RUNTIME(NativePromotionRecheckRanges,
                      talos_rt_v1_native_promotion_recheck_ranges,
+                     SIG(V, Ptr, I64, Ptr, Ptr, I64, I64),
                      EvalInline | PendingTransparent | ReadinessTransparent |
                          CutQuiet)
 TALOS_NATIVE_RUNTIME(NativePromotionInvalidateBuckets,
                      talos_rt_v1_native_promotion_invalidate_buckets,
+                     SIG(V, Ptr, Ptr, I64, Ptr, Ptr, I64, I64),
                      EvalInline | PendingTransparent | ReadinessTransparent |
                          CutQuiet)
 TALOS_NATIVE_RUNTIME(NativePromotionRecheckBuckets,
                      talos_rt_v1_native_promotion_recheck_buckets,
+                     SIG(V, Ptr, Ptr, I64, Ptr, Ptr, I64, I64),
                      EvalInline | PendingTransparent | ReadinessTransparent |
                          CutQuiet)
 TALOS_NATIVE_RUNTIME(NativePromotionPublishWindow,
                      talos_rt_v1_native_promotion_publish_window,
+                     SIG(V, Ptr, I64, Ptr, Ptr, Ptr, I64, I64, Ptr),
                      EvalInline | PendingTransparent | ReadinessTransparent |
                          CutQuiet)
 TALOS_NATIVE_RUNTIME(NativePromotionSlicesAdjust,
                      talos_rt_v1_native_promotion_slices_adjust,
+                     SIG(V, Ptr, Ptr, Ptr, I64, I64, I32),
                      EvalInline | PendingTransparent | ReadinessTransparent |
                          CutQuiet)
 TALOS_NATIVE_RUNTIME(NativePromotionSlicesRecount,
-                     talos_rt_v1_native_promotion_slices_recount,
+                     talos_rt_v1_native_promotion_slices_recount, SIG(V, Ptr),
                      EvalInline | PendingTransparent | ReadinessTransparent |
                          CutQuiet)
 // The unknown summary's rescan reads the CURRENT unknown planes, which
@@ -122,10 +139,12 @@ TALOS_NATIVE_RUNTIME(NativePromotionSlicesRecount,
 // Neither executes actors, publishes or re-enters scheduling.
 TALOS_NATIVE_RUNTIME(NativeStateRefreshUnknownSummary,
                      talos_rt_v1_native_state_refresh_unknown_summary,
+                     SIG(I32, Ptr, Ptr, I64, Ptr),
                      EvalInline | PendingTransparent | ReadinessTransparent |
                          CutQuiet)
 TALOS_NATIVE_RUNTIME(NativeStateMarkUnknown,
                      talos_rt_v1_native_state_mark_unknown,
+                     SIG(V, Ptr, I64, I64),
                      EvalInline | PendingTransparent | ReadinessTransparent |
                          CutQuiet)
 
@@ -134,55 +153,71 @@ TALOS_NATIVE_RUNTIME(NativeStateMarkUnknown,
 // guard, the only place full VPI emits them.
 TALOS_NATIVE_RUNTIME(StaticSpecializationGuard,
                      talos_rt_v1_static_specialization_guard,
-                     PendingTransparent)
+                     SIG(I32, Ptr, I32, I32, I32), PendingTransparent)
 TALOS_NATIVE_RUNTIME(StaticSpecializationGuardRoots,
                      talos_rt_v1_static_specialization_guard_roots,
-                     PendingTransparent)
+                     SIG(I32, Ptr, Ptr, I64), PendingTransparent)
 
 // An epoch-armed deferred report (12.4.2.1, 12.5.3.1, 16.4.1) only queues its
 // ticket; an eval activation keeps it for a direct generated output.
-TALOS_NATIVE_RUNTIME(DeferredEnqueue, talos_rt_v1_deferred_enqueue, None)
+TALOS_NATIVE_RUNTIME(DeferredEnqueue, talos_rt_v1_deferred_enqueue,
+                     SIG(I64, Ptr, I64), None)
 TALOS_NATIVE_RUNTIME(DeferredEnqueueForAssertion,
-                     talos_rt_v1_deferred_enqueue_for_assertion, None)
+                     talos_rt_v1_deferred_enqueue_for_assertion,
+                     SIG(I64, Ptr, I64, I64), None)
 
 // The generic NBA queue (4.5, 4.6(b), 10.4.2). Its queries read the queue's
 // membership; its captures append the RHS and destination. Neither changes
 // which bitmap describes the queue. An eval activation keeps them under the
 // shared runtime calendar for the argument forms it checks.
 TALOS_NATIVE_RUNTIME(SchedulerGenericNbaPending,
-                     talos_rt_v1_scheduler_generic_nba_pending, QueueStable)
+                     talos_rt_v1_scheduler_generic_nba_pending,
+                     SIG(I32, Ptr, I32), QueueStable)
 TALOS_NATIVE_RUNTIME(SchedulerGenericNbaWords,
-                     talos_rt_v1_scheduler_generic_nba_words, None)
+                     talos_rt_v1_scheduler_generic_nba_words,
+                     SIG(Ptr, Ptr, I32), None)
 TALOS_NATIVE_RUNTIME(SchedulerNba, talos_rt_v1_scheduler_nba,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, I64, I64, I64, Ptr, Ptr),
                      QueueStable | QueueCaptureOnly)
 TALOS_NATIVE_RUNTIME(SchedulerNbaIfChanged,
                      talos_rt_v1_scheduler_nba_if_changed,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, I64, I64, I64, Ptr, Ptr),
                      QueueStable | QueueCaptureOnly)
 TALOS_NATIVE_RUNTIME(SchedulerNbaScalar, talos_rt_v1_scheduler_nba_scalar,
+                     SIG(V, Ptr, Ptr, Ptr, I64, I64, I64, I64, I64),
                      QueueStable | QueueCaptureOnly)
 // Clipping the selected portion and capturing both planes only appends an
 // ordinary NBA (10.4.2, 11.5.1).
 TALOS_NATIVE_RUNTIME(SchedulerPackedSliceNba,
-                     talos_rt_v1_scheduler_packed_slice_nba, None)
+                     talos_rt_v1_scheduler_packed_slice_nba,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, I64, I64, I64, I32, I64, I64,
+                         I64, I64, Ptr, Ptr),
+                     None)
 // Stable-handle arithmetic; it touches no queue.
 TALOS_NATIVE_RUNTIME(NativeHandleOffset, talos_rt_v1_native_handle_offset,
-                     QueueStable | QueueCaptureOnly)
+                     SIG(I64, I64, I64), QueueStable | QueueCaptureOnly)
 
 // The verified publication bridge (4.6(a), 9.4.2) delivers waits without
 // executing actors or advancing time; its actor and root are fixed by the
 // installed generated plan for the argument forms passes check.
 TALOS_NATIVE_RUNTIME(SchedulerWideTransitionOwned,
-                     talos_rt_v1_scheduler_wide_transition_owned, None)
+                     talos_rt_v1_scheduler_wide_transition_owned,
+                     SIG(V, Ptr, I32, I64, I64, Ptr, Ptr, Ptr, Ptr), None)
 TALOS_NATIVE_RUNTIME(SchedulerWideTransitionProjected,
-                     talos_rt_v1_scheduler_wide_transition_projected, None)
+                     talos_rt_v1_scheduler_wide_transition_projected,
+                     SIG(V, Ptr, I32, I64, I64, Ptr, Ptr, Ptr, Ptr), None)
 TALOS_NATIVE_RUNTIME(SchedulerStaticTransitionOwned,
-                     talos_rt_v1_scheduler_static_transition_owned, None)
+                     talos_rt_v1_scheduler_static_transition_owned,
+                     SIG(V, Ptr, I32, I32, I64, I64, I64, I64, I64, I64), None)
 TALOS_NATIVE_RUNTIME(SchedulerStaticTransitionProjected,
-                     talos_rt_v1_scheduler_static_transition_projected, None)
+                     talos_rt_v1_scheduler_static_transition_projected,
+                     SIG(V, Ptr, I32, I32, I64, I64, I64, I64, I64, I64), None)
 TALOS_NATIVE_RUNTIME(SchedulerStaticTransition,
-                     talos_rt_v1_scheduler_static_transition, None)
+                     talos_rt_v1_scheduler_static_transition,
+                     SIG(V, Ptr, I32, I64, I64, I64, I64, I64, I64), None)
 TALOS_NATIVE_RUNTIME(SchedulerActivateStaticNodes,
-                     talos_rt_v1_scheduler_activate_static_nodes, None)
+                     talos_rt_v1_scheduler_activate_static_nodes,
+                     SIG(V, Ptr, Ptr, I32), None)
 
 // The generated NBA barrier's runtime services. Preparation, completion,
 // guards and knownness queries manage the runtime's side of a barrier
@@ -191,45 +226,1081 @@ TALOS_NATIVE_RUNTIME(SchedulerActivateStaticNodes,
 // accumulators stay pending (4.6(b), 10.4.2).
 TALOS_NATIVE_RUNTIME(SchedulerPrepareEvalNbaLocal,
                      talos_rt_v1_scheduler_prepare_eval_nba_local,
-                     PendingTransparent)
+                     SIG(I32, Ptr, I32, Ptr), PendingTransparent)
 TALOS_NATIVE_RUNTIME(SchedulerPrepareEvalNbaLocalWrite,
                      talos_rt_v1_scheduler_prepare_eval_nba_local_write,
-                     PendingTransparent)
+                     SIG(I32, Ptr, I32, Ptr), PendingTransparent)
 TALOS_NATIVE_RUNTIME(SchedulerCompleteEvalNba,
                      talos_rt_v1_scheduler_complete_eval_nba,
-                     PendingTransparent)
+                     SIG(I32, Ptr, I32, I32), PendingTransparent)
 TALOS_NATIVE_RUNTIME(StaticNbaDirectCommitGuard,
-                     talos_rt_v1_static_nba_direct_commit_guard,
+                     talos_rt_v1_static_nba_direct_commit_guard, SIG(I32, Ptr),
                      PendingTransparent)
 TALOS_NATIVE_RUNTIME(StaticNbaAccountGeneratedCommits,
                      talos_rt_v1_static_nba_account_generated_commits,
-                     PendingTransparent)
+                     SIG(V, Ptr, I32), PendingTransparent)
 TALOS_NATIVE_RUNTIME(StaticNbaBatchGuard, talos_rt_v1_static_nba_batch_guard,
-                     PendingTransparent)
+                     SIG(I32, Ptr, Ptr, I32), PendingTransparent)
 TALOS_NATIVE_RUNTIME(StaticNbaPrefixGuard, talos_rt_v1_static_nba_prefix_guard,
-                     PendingTransparent)
+                     SIG(I32, Ptr, Ptr, I32, I32, I32), PendingTransparent)
 TALOS_NATIVE_RUNTIME(StaticNbaBatchKnownness,
                      talos_rt_v1_static_nba_batch_knownness,
-                     PendingTransparent)
+                     SIG(V, Ptr, I64, I64, I64, I64), PendingTransparent)
 TALOS_NATIVE_RUNTIME(StaticNbaBatchFinish, talos_rt_v1_static_nba_batch_finish,
-                     PendingTransparent)
+                     SIG(V, Ptr, I64, I64, I32), PendingTransparent)
 TALOS_NATIVE_RUNTIME(StaticNbaCommitOrdered,
-                     talos_rt_v1_static_nba_commit_ordered, PendingTransparent)
+                     talos_rt_v1_static_nba_commit_ordered,
+                     SIG(I32, Ptr, I32, I64, I64, I64, I64), PendingTransparent)
 TALOS_NATIVE_RUNTIME(StaticNbaCommitWideOrdered,
                      talos_rt_v1_static_nba_commit_wide_ordered,
-                     PendingTransparent)
+                     SIG(I32, Ptr, I32, I64, Ptr, I32), PendingTransparent)
 TALOS_NATIVE_RUNTIME(StaticNbaSpecializationGuard,
                      talos_rt_v1_static_nba_specialization_guard,
-                     PendingTransparent)
+                     SIG(I32, Ptr, I32), PendingTransparent)
 TALOS_NATIVE_RUNTIME(StaticNbaSpecializationGuardWrite,
                      talos_rt_v1_static_nba_specialization_guard_write,
-                     PendingTransparent)
+                     SIG(I32, Ptr, I32), PendingTransparent)
 // Runtime-routed stages validate and stage only their explicit root; passes
 // check that root against the captures they keep private.
-TALOS_NATIVE_RUNTIME(StaticNbaClaim, talos_rt_v1_static_nba_claim, None)
-TALOS_NATIVE_RUNTIME(StaticNbaStageWide, talos_rt_v1_static_nba_stage_wide,
+TALOS_NATIVE_RUNTIME(StaticNbaClaim, talos_rt_v1_static_nba_claim,
+                     SIG(I32, Ptr, I32, Ptr, Ptr, I64, I64, I64, I64, I64),
                      None)
+TALOS_NATIVE_RUNTIME(StaticNbaStageWide, talos_rt_v1_static_nba_stage_wide,
+                     SIG(V, Ptr, I32, I64, I64, I64, I64, I32), None)
 TALOS_NATIVE_RUNTIME(SchedulerStaticNba, talos_rt_v1_scheduler_static_nba,
+                     SIG(I32, Ptr, I64, Ptr, Ptr, I64, I64, I64, Ptr, Ptr),
+                     None)
+
+// Entries native passes assume nothing about: generated code only calls them
+// through their declarations.
+TALOS_NATIVE_RUNTIME(
+    AggregateExportBitstream, talos_rt_v1_aggregate_export_bitstream,
+    SIG(I32, Ptr, Ptr, I64, I64, I32, Ptr, Ptr, I64, I64, I32, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(
+    AggregateImportBitstream, talos_rt_v1_aggregate_import_bitstream,
+    SIG(I32, Ptr, Ptr, I64, I64, I32, Ptr, Ptr, I64, I64, I32, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(ArgumentRefLoad, talos_rt_v1_argument_ref_load,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, Ptr, I64, I32, I64, I64, I32,
+                         I32, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(ArgumentRefStore, talos_rt_v1_argument_ref_store,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, Ptr, I64, I32, I64, I64, I32,
+                         I32, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(AssertionControl, talos_rt_v1_assertion_control,
+                     SIG(I32, Ptr, I32, I64), None)
+TALOS_NATIVE_RUNTIME(AssertionKillEpoch, talos_rt_v1_assertion_kill_epoch,
+                     SIG(I64, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(AssocCreateElementKeyed,
+                     talos_rt_v1_assoc_create_element_keyed,
+                     SIG(I32, Ptr, I64, I32, I32, I64, I64, I64, Ptr, I64, I64,
+                         I32, I32, I64, I64, I64, Ptr, I64, Ptr, I64, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(AssocCreateTyped, talos_rt_v1_assoc_create_typed,
+                     SIG(I32, Ptr, I64, I32, I32, I64, I64, I64, Ptr, I64, I32,
+                         I64, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(AssocDelete, talos_rt_v1_assoc_delete, SIG(I32, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(AssocExists, talos_rt_v1_assoc_exists,
+                     SIG(I32, Ptr, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(AssocFirst, talos_rt_v1_assoc_first,
+                     SIG(I32, Ptr, Ptr, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(AssocLast, talos_rt_v1_assoc_last,
+                     SIG(I32, Ptr, Ptr, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(AssocNext, talos_rt_v1_assoc_next,
+                     SIG(I32, Ptr, Ptr, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(AssocPrev, talos_rt_v1_assoc_prev,
+                     SIG(I32, Ptr, Ptr, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(AssocReadChecked, talos_rt_v1_assoc_read_checked,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(AssocSetDefaultChecked,
+                     talos_rt_v1_assoc_set_default_checked,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(AssocWriteChecked, talos_rt_v1_assoc_write_checked,
+                     SIG(I32, Ptr, Ptr, Ptr, Ptr, I64, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(BoxBindType, talos_rt_v1_box_bind_type,
+                     SIG(I32, Ptr, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(BoxIsType, talos_rt_v1_box_is_type, SIG(I32, Ptr, I64),
+                     None)
+TALOS_NATIVE_RUNTIME(BufferRelease, talos_rt_v1_buffer_release, SIG(V, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(BytecodeExecuteBounded,
+                     talos_rt_v1_bytecode_execute_bounded,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, I32, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(ClassBitstreamBytecodeLinkAnchor,
+                     talos_rt_v1_class_bitstream_bytecode_link_anchor, SIG(V),
+                     None)
+TALOS_NATIVE_RUNTIME(ClassBitstreamFinalize,
+                     talos_rt_v1_class_bitstream_finalize, SIG(I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(ClassBitstreamLinkAnchor,
+                     talos_rt_v1_class_bitstream_link_anchor, SIG(V), None)
+TALOS_NATIVE_RUNTIME(ClassRegister, talos_rt_v1_class_register,
+                     SIG(I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(ClockOccurrenceConsume,
+                     talos_rt_v1_clock_occurrence_consume, SIG(I64, Ptr, I64),
+                     None)
+TALOS_NATIVE_RUNTIME(ClockedSampleRead, talos_rt_v1_clocked_sample_read,
+                     SIG(I32, Ptr, I64, I64, I64, I64, I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(ClockedSampleUpdate, talos_rt_v1_clocked_sample_update,
+                     SIG(I32, Ptr, I64, I64, I64, I32, I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(ClockingOutputCurrent, talos_rt_v1_clocking_output_current,
+                     SIG(I32, Ptr, I64, I64, I32), None)
+TALOS_NATIVE_RUNTIME(ClockingOutputTrack, talos_rt_v1_clocking_output_track,
+                     SIG(I32, Ptr, I64, I64, I32), None)
+TALOS_NATIVE_RUNTIME(ContainerBitstreamLinkAnchor,
+                     talos_rt_v1_container_bitstream_link_anchor, SIG(V), None)
+TALOS_NATIVE_RUNTIME(ContainerClone, talos_rt_v1_container_clone,
+                     SIG(I32, Ptr, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(ContainerCreateLike, talos_rt_v1_container_create_like,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(ContainerCreateTyped, talos_rt_v1_container_create_typed,
+                     SIG(I32, Ptr, I32, I64, I32, I32, I64, I64, I64, Ptr, I64,
+                         I64, I64, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(ContainerCreateTypedPattern,
+                     talos_rt_v1_container_create_typed_pattern,
+                     SIG(I32, Ptr, I32, I64, I32, I32, I64, I64, I64, Ptr, I64,
+                         Ptr, I64, I64, I64, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(ContainerDelete, talos_rt_v1_container_delete,
+                     SIG(I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(ContainerExportBitstream,
+                     talos_rt_v1_container_export_bitstream,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, I64, I32, I64, I64, I64, I32),
+                     None)
+TALOS_NATIVE_RUNTIME(ContainerExportFixed, talos_rt_v1_container_export_fixed,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, I64, I32, I64, I64), None)
+TALOS_NATIVE_RUNTIME(ContainerImportFixed, talos_rt_v1_container_import_fixed,
+                     SIG(I32, Ptr, Ptr, Ptr, Ptr, I64, I64, I32, I64, I64),
+                     None)
+TALOS_NATIVE_RUNTIME(ContainerRead, talos_rt_v1_container_read,
+                     SIG(I32, Ptr, I64, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(ContainerReadChecked, talos_rt_v1_container_read_checked,
+                     SIG(I32, Ptr, I64, Ptr, I64, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(ContainerSize, talos_rt_v1_container_size, SIG(I64, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(ContainerSwap, talos_rt_v1_container_swap,
+                     SIG(I32, Ptr, I64, I64), None)
+TALOS_NATIVE_RUNTIME(ContainerWrite, talos_rt_v1_container_write,
+                     SIG(I32, Ptr, Ptr, I64, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(ContextConfigureArgv, talos_rt_v1_context_configure_argv,
+                     SIG(I32, Ptr, I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(ContextCreate, talos_rt_v1_context_create, SIG(I32, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(ContextCreateForDesign,
+                     talos_rt_v1_context_create_for_design, SIG(I32, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(ContextDestroy, talos_rt_v1_context_destroy, SIG(V, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(ContextRegisterImportSignature,
+                     talos_rt_v1_context_register_import_signature,
+                     SIG(I32, Ptr, I32, I64, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(ControlBoundary, talos_rt_v1_control_boundary,
+                     SIG(I32, Ptr, I64, I32), None)
+TALOS_NATIVE_RUNTIME(ControlDisable, talos_rt_v1_control_disable,
+                     SIG(I32, Ptr, I64, I64, I32), None)
+TALOS_NATIVE_RUNTIME(ControlDisableSelected,
+                     talos_rt_v1_control_disable_selected,
+                     SIG(I32, Ptr, I64, I64, I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(ControlEnter, talos_rt_v1_control_enter,
+                     SIG(I32, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(ControlEscapePending, talos_rt_v1_control_escape_pending,
+                     SIG(I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(ControlLeave, talos_rt_v1_control_leave,
+                     SIG(I32, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(CoverageControlDefinition,
+                     talos_rt_v1_coverage_control_definition,
+                     SIG(I32, Ptr, I32, I32, I32, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(CoverageControlInstance,
+                     talos_rt_v1_coverage_control_instance,
+                     SIG(I32, Ptr, I32, I32, I32, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(CoverageDatabaseMerge, talos_rt_v1_coverage_database_merge,
+                     SIG(I32, Ptr, I32, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(CoverageDatabaseSave, talos_rt_v1_coverage_database_save,
+                     SIG(I32, Ptr, I32, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(CoverageFinalize, talos_rt_v1_coverage_finalize,
+                     SIG(I32, Ptr, I64, I64, Ptr, Ptr, I32), None)
+TALOS_NATIVE_RUNTIME(CoverageFsmBind, talos_rt_v1_coverage_fsm_bind,
+                     SIG(I32, Ptr, I64, I64, I64, I64), None)
+TALOS_NATIVE_RUNTIME(CoverageQueryDefinition,
+                     talos_rt_v1_coverage_query_definition,
+                     SIG(I32, Ptr, I32, I32, I64, I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(CoverageQueryInstance, talos_rt_v1_coverage_query_instance,
+                     SIG(I32, Ptr, I32, I32, I64, I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(CoverageSnapshot, talos_rt_v1_coverage_snapshot,
+                     SIG(I32, Ptr, I32, I64), None)
+TALOS_NATIVE_RUNTIME(CoverageToggleBind, talos_rt_v1_coverage_toggle_bind,
+                     SIG(I32, Ptr, I64, I64, I64), None)
+TALOS_NATIVE_RUNTIME(CoverageToggleSeal, talos_rt_v1_coverage_toggle_seal,
+                     SIG(I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(CovergroupBindWith, talos_rt_v1_covergroup_bind_with,
+                     SIG(I32, Ptr, I64, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(CovergroupBlockEventFire,
+                     talos_rt_v1_covergroup_block_event_fire,
+                     SIG(I32, Ptr, I64, I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(CovergroupBlockEventRegister,
+                     talos_rt_v1_covergroup_block_event_register,
+                     SIG(I32, Ptr, I64, Ptr, I64, Ptr, I32, Ptr, Ptr, I32),
+                     None)
+TALOS_NATIVE_RUNTIME(CovergroupCandidates, talos_rt_v1_covergroup_candidates,
+                     SIG(I32, Ptr, I64, I64, Ptr, I32), None)
+TALOS_NATIVE_RUNTIME(CovergroupClockEventRegister,
+                     talos_rt_v1_covergroup_clock_event_register,
+                     SIG(I32, Ptr, Ptr, I64, I32, I64, Ptr, I32), None)
+TALOS_NATIVE_RUNTIME(CovergroupCreate, talos_rt_v1_covergroup_create,
+                     SIG(I32, Ptr, I64, Ptr, I64, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(CovergroupFormalRead, talos_rt_v1_covergroup_formal_read,
+                     SIG(I32, Ptr, I64, I64, I32, I64, I64, Ptr, Ptr, I64, Ptr,
+                         Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(CovergroupGetIntegerOption,
+                     talos_rt_v1_covergroup_get_integer_option,
+                     SIG(I32, Ptr, I64, I64, I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(CovergroupGetStringOption,
+                     talos_rt_v1_covergroup_get_string_option,
+                     SIG(I32, Ptr, I64, I64, I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(CovergroupInstanceQuery,
+                     talos_rt_v1_covergroup_instance_query,
+                     SIG(I32, Ptr, I64, I64, Ptr, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(CovergroupPrepare, talos_rt_v1_covergroup_prepare,
+                     SIG(I32, Ptr, I64, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(CovergroupReleasePreparation,
+                     talos_rt_v1_covergroup_release_preparation,
+                     SIG(I32, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(CovergroupSample, talos_rt_v1_covergroup_sample,
+                     SIG(I32, Ptr, I64, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(CovergroupSampleEnabled,
+                     talos_rt_v1_covergroup_sample_enabled,
+                     SIG(I32, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(CovergroupSetEnabled, talos_rt_v1_covergroup_set_enabled,
+                     SIG(I32, Ptr, I64, I64, I32), None)
+TALOS_NATIVE_RUNTIME(CovergroupSetIntegerOption,
+                     talos_rt_v1_covergroup_set_integer_option,
+                     SIG(I32, Ptr, I64, I64, I32, I64), None)
+TALOS_NATIVE_RUNTIME(CovergroupSetName, talos_rt_v1_covergroup_set_name,
+                     SIG(I32, Ptr, I64, I64), None)
+TALOS_NATIVE_RUNTIME(CovergroupSetStringOption,
+                     talos_rt_v1_covergroup_set_string_option,
+                     SIG(I32, Ptr, I64, I64, I32, I64), None)
+TALOS_NATIVE_RUNTIME(CovergroupSetTypeIntegerOption,
+                     talos_rt_v1_covergroup_set_type_integer_option,
+                     SIG(I32, Ptr, I64, I64, I32, I64), None)
+TALOS_NATIVE_RUNTIME(CovergroupSetTypeStringOption,
+                     talos_rt_v1_covergroup_set_type_string_option,
+                     SIG(I32, Ptr, I64, I64, I32, I64), None)
+TALOS_NATIVE_RUNTIME(CovergroupTypeQuery, talos_rt_v1_covergroup_type_query,
+                     SIG(I32, Ptr, I64, I64, Ptr, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(DeferredMature, talos_rt_v1_deferred_mature,
+                     SIG(I32, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(DeferredOnce, talos_rt_v1_deferred_once,
+                     SIG(I32, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(Display, talos_rt_v1_display,
+                     SIG(I32, Ptr, I32, I32, I32, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(DpiAggregateExportPack,
+                     talos_rt_v1_dpi_aggregate_export_pack,
+                     SIG(I32, Ptr, Ptr, I64, I64, I32, Ptr, I64, Ptr, I64, I32),
+                     None)
+TALOS_NATIVE_RUNTIME(DpiAggregatePack, talos_rt_v1_dpi_aggregate_pack,
+                     SIG(I32, Ptr, Ptr, I64, I64, I32, Ptr, I64, I64, Ptr, I64),
+                     None)
+TALOS_NATIVE_RUNTIME(DpiAggregateRootsPop, talos_rt_v1_dpi_aggregate_roots_pop,
+                     SIG(I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(DpiAggregateRootsPush,
+                     talos_rt_v1_dpi_aggregate_roots_push,
+                     SIG(I32, Ptr, Ptr, I64, I64, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(DpiAggregateStateAlloc,
+                     talos_rt_v1_dpi_aggregate_state_alloc,
+                     SIG(I32, Ptr, I64, Ptr, Ptr, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(DpiAggregateUnpack, talos_rt_v1_dpi_aggregate_unpack,
+                     SIG(I32, Ptr, Ptr, I64, Ptr, I64, Ptr, Ptr, I64, I64, I32),
+                     None)
+TALOS_NATIVE_RUNTIME(DpiCurrentContext, talos_rt_v1_dpi_current_context,
+                     SIG(Ptr), None)
+TALOS_NATIVE_RUNTIME(DpiExportBytecodeLinkAnchor,
+                     talos_rt_v1_dpi_export_bytecode_link_anchor, SIG(V), None)
+TALOS_NATIVE_RUNTIME(DpiExportPackVector, talos_rt_v1_dpi_export_pack_vector,
+                     SIG(V, Ptr, Ptr, Ptr, I32, I32), None)
+TALOS_NATIVE_RUNTIME(DpiExportStatus, talos_rt_v1_dpi_export_status,
+                     SIG(I32, I32), None)
+TALOS_NATIVE_RUNTIME(DpiExportTaskBytecodeRun,
+                     talos_rt_v1_dpi_export_task_bytecode_run,
+                     SIG(I32, Ptr, I32, Ptr, I32, Ptr, I32, Ptr, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(DpiExportTaskRun, talos_rt_v1_dpi_export_task_run,
+                     SIG(I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(DpiExportUnpackVector,
+                     talos_rt_v1_dpi_export_unpack_vector,
+                     SIG(V, Ptr, Ptr, Ptr, I32, I32), None)
+TALOS_NATIVE_RUNTIME(DpiImportBytecodeLinkAnchor,
+                     talos_rt_v1_dpi_import_bytecode_link_anchor, SIG(V), None)
+TALOS_NATIVE_RUNTIME(DpiOpenArrayAggregatePack,
+                     talos_rt_v1_dpi_open_array_aggregate_pack,
+                     SIG(I32, Ptr, Ptr, I64, I64, I32, I32, I64, I32, Ptr, I32,
+                         Ptr, I64, I64, I64, I64, Ptr, I64),
+                     None)
+TALOS_NATIVE_RUNTIME(DpiOpenArrayAggregateUnpack,
+                     talos_rt_v1_dpi_open_array_aggregate_unpack,
+                     SIG(I32, Ptr, Ptr, I64, I64, Ptr, I64, I64, I32, Ptr, I32,
+                         Ptr, Ptr, I64, I64, I32, I32),
+                     None)
+TALOS_NATIVE_RUNTIME(DpiOpenArrayFinishRecursive,
+                     talos_rt_v1_dpi_open_array_finish_recursive,
+                     SIG(I32, I32, Ptr, Ptr, Ptr, Ptr, I64, I64, I32, I32, I32,
+                         I64, Ptr, I64, Ptr, I32),
+                     None)
+TALOS_NATIVE_RUNTIME(DpiOpenArrayPack, talos_rt_v1_dpi_open_array_pack,
+                     SIG(I32, Ptr, Ptr, I64, I64, I32, I32, I32, I64, I32, Ptr,
+                         I64),
+                     None)
+TALOS_NATIVE_RUNTIME(DpiOpenArrayPrepareRecursive,
+                     talos_rt_v1_dpi_open_array_prepare_recursive,
+                     SIG(I32, Ptr, Ptr, I64, I64, I32, I32, I32, I32, I32, I32,
+                         I32, I64, I32, I64, Ptr, I64, Ptr, I32, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(DpiOpenArrayReleaseRecursive,
+                     talos_rt_v1_dpi_open_array_release_recursive, SIG(V, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(DpiOpenArrayUnpack, talos_rt_v1_dpi_open_array_unpack,
+                     SIG(I32, Ptr, I64, I32, I32, I64, Ptr, Ptr, I64, I64, I32,
+                         I32),
+                     None)
+TALOS_NATIVE_RUNTIME(DpiStringCopy, talos_rt_v1_dpi_string_copy,
+                     SIG(I32, Ptr, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(DumpAll, talos_rt_v1_dump_all, SIG(I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(DumpControl, talos_rt_v1_dump_control, SIG(I32, Ptr, I32),
+                     None)
+TALOS_NATIVE_RUNTIME(DumpFlush, talos_rt_v1_dump_flush, SIG(I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(DumpLimit, talos_rt_v1_dump_limit, SIG(I32, Ptr, I64),
+                     None)
+TALOS_NATIVE_RUNTIME(DumpOpen, talos_rt_v1_dump_open, SIG(I32, Ptr, Ptr, I64),
+                     None)
+TALOS_NATIVE_RUNTIME(DumpOpenString, talos_rt_v1_dump_open_string,
+                     SIG(I32, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(DumpPorts, talos_rt_v1_dump_ports,
+                     SIG(I32, Ptr, I64, I64, I32), None)
+TALOS_NATIVE_RUNTIME(DumpPortsControl, talos_rt_v1_dump_ports_control,
+                     SIG(I32, Ptr, I64, I32, I64), None)
+TALOS_NATIVE_RUNTIME(DumpTimescale, talos_rt_v1_dump_timescale,
+                     SIG(I32, Ptr, I32), None)
+TALOS_NATIVE_RUNTIME(DumpVars, talos_rt_v1_dump_vars,
+                     SIG(I32, Ptr, I64, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(DynamicScanLinkAnchor,
+                     talos_rt_v1_dynamic_scan_link_anchor, SIG(V), None)
+TALOS_NATIVE_RUNTIME(ElementTypeDefineDefault,
+                     talos_rt_v1_element_type_define_default,
+                     SIG(I32, Ptr, I64, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(EventSnapshotFlush, talos_rt_v1_event_snapshot_flush,
+                     SIG(I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(EventSnapshotLinkAnchor,
+                     talos_rt_v1_event_snapshot_link_anchor, SIG(V), None)
+TALOS_NATIVE_RUNTIME(EventSnapshotMask, talos_rt_v1_event_snapshot_mask,
+                     SIG(I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(EventSnapshotRegister, talos_rt_v1_event_snapshot_register,
+                     SIG(I32, Ptr, Ptr, I64, I64, Ptr, I32, Ptr, I32), None)
+TALOS_NATIVE_RUNTIME(ExportCallGuarded, talos_rt_v1_export_call_guarded,
+                     SIG(I32, I32, I32, I64, Ptr, I32, Ptr, I32), None)
+TALOS_NATIVE_RUNTIME(ExportString, talos_rt_v1_export_string, SIG(Ptr, I32),
+                     None)
+TALOS_NATIVE_RUNTIME(FileClose, talos_rt_v1_file_close, SIG(I32, Ptr, I32),
+                     None)
+TALOS_NATIVE_RUNTIME(FileEof, talos_rt_v1_file_eof, SIG(I32, Ptr, I32, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(FileError, talos_rt_v1_file_error,
+                     SIG(I32, Ptr, I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(FileErrorString, talos_rt_v1_file_error_string,
+                     SIG(I32, Ptr, Ptr, I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(FileFlush, talos_rt_v1_file_flush, SIG(I32, Ptr, I32),
+                     None)
+TALOS_NATIVE_RUNTIME(FileGetc, talos_rt_v1_file_getc, SIG(I32, Ptr, I32, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(FileGetline, talos_rt_v1_file_getline,
+                     SIG(I32, Ptr, I32, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(FileGetlineString, talos_rt_v1_file_getline_string,
+                     SIG(I32, Ptr, Ptr, I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(FileOpen, talos_rt_v1_file_open,
+                     SIG(I32, Ptr, Ptr, I64, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(FileOpenMcd, talos_rt_v1_file_open_mcd,
+                     SIG(I32, Ptr, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(FileOpenString, talos_rt_v1_file_open_string,
+                     SIG(I32, Ptr, I64, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(FileOpenStringMcd, talos_rt_v1_file_open_string_mcd,
+                     SIG(I32, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(FileRead, talos_rt_v1_file_read,
+                     SIG(I32, Ptr, I32, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(FileReadmemToken, talos_rt_v1_file_readmem_token,
+                     SIG(I32, Ptr, I32, I32, I64, Ptr, I64, Ptr, I64, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(FileRewind, talos_rt_v1_file_rewind, SIG(I32, Ptr, I32),
+                     None)
+TALOS_NATIVE_RUNTIME(FileScanDynamic, talos_rt_v1_file_scan_dynamic,
+                     SIG(I32, Ptr, Ptr, I32, I64, I32, I32, I32, I64, I64, I64,
+                         Ptr, Ptr, Ptr, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(FileScanField, talos_rt_v1_file_scan_field,
+                     SIG(I32, Ptr, Ptr, I32, I32, Ptr, I64, I32, I64, Ptr, Ptr,
+                         Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(FileScanRaw, talos_rt_v1_file_scan_raw,
+                     SIG(I32, Ptr, I32, I32, Ptr, I64, I64, I64, I32, I64, Ptr,
+                         I64, Ptr, I64, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(FileSeek, talos_rt_v1_file_seek,
+                     SIG(I32, Ptr, I32, I64, I32), None)
+TALOS_NATIVE_RUNTIME(FileTell, talos_rt_v1_file_tell, SIG(I32, Ptr, I32, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(FileUngetc, talos_rt_v1_file_ungetc,
+                     SIG(I32, Ptr, I32, I8), None)
+TALOS_NATIVE_RUNTIME(FileWrite, talos_rt_v1_file_write,
+                     SIG(I32, Ptr, I32, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(Format, talos_rt_v1_format,
+                     SIG(I32, Ptr, Ptr, I64, Ptr, I64, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(FragmentExecute, talos_rt_v1_fragment_execute,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(FunctionalCoverageGet, talos_rt_v1_functional_coverage_get,
+                     SIG(I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(FunctionalCoverageLoadDb,
+                     talos_rt_v1_functional_coverage_load_db,
+                     SIG(I32, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(FunctionalCoverageSetDbName,
+                     talos_rt_v1_functional_coverage_set_db_name,
+                     SIG(I32, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(GcCandidateRoot, talos_rt_v1_gc_candidate_root,
+                     SIG(I64, Ptr, I64, I32), None)
+TALOS_NATIVE_RUNTIME(GcCandidateStaticRootRegister,
+                     talos_rt_v1_gc_candidate_static_root_register,
+                     SIG(I32, Ptr, Ptr, I32), None)
+TALOS_NATIVE_RUNTIME(GcCollectPending, talos_rt_v1_gc_collect_pending,
+                     SIG(I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(GcCurrentLane, talos_rt_v1_gc_current_lane, SIG(Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(GcDesignCandidateRootRegister,
+                     talos_rt_v1_gc_design_candidate_root_register,
+                     SIG(I32, Ptr, I64, I32), None)
+TALOS_NATIVE_RUNTIME(GcDesignRootRegister, talos_rt_v1_gc_design_root_register,
+                     SIG(I32, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(GcDesignate, talos_rt_v1_gc_designate, SIG(I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(GcManagedRootRangePop,
+                     talos_rt_v1_gc_managed_root_range_pop, SIG(I32, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(GcManagedRootRangePush,
+                     talos_rt_v1_gc_managed_root_range_push,
+                     SIG(I32, Ptr, Ptr, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(GcRootPop, talos_rt_v1_gc_root_pop, SIG(I32, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(GcRootPush, talos_rt_v1_gc_root_push,
+                     SIG(I32, Ptr, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(GcRootRangePop, talos_rt_v1_gc_root_range_pop,
+                     SIG(I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(GcRootRangePush, talos_rt_v1_gc_root_range_push,
+                     SIG(I32, Ptr, Ptr, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(GcSafepoint, talos_rt_v1_gc_safepoint, SIG(I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(GcStaticRootRegister, talos_rt_v1_gc_static_root_register,
+                     SIG(I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(ImportCall, talos_rt_v1_import_call,
+                     SIG(I32, Ptr, Ptr, Ptr, I32, Ptr, I32), None)
+TALOS_NATIVE_RUNTIME(ImportCallGuarded, talos_rt_v1_import_call_guarded,
+                     SIG(I32, I32, Ptr, Ptr, Ptr, I32, Ptr, I32), None)
+TALOS_NATIVE_RUNTIME(ImportCallNoncontext, talos_rt_v1_import_call_noncontext,
+                     SIG(I32, Ptr, Ptr, Ptr, I32, Ptr, I32), None)
+TALOS_NATIVE_RUNTIME(ImportCallNoncontextGuarded,
+                     talos_rt_v1_import_call_noncontext_guarded,
+                     SIG(I32, I32, Ptr, Ptr, Ptr, I32, Ptr, I32), None)
+TALOS_NATIVE_RUNTIME(InterfaceMethodInvoke, talos_rt_v1_interface_method_invoke,
+                     SIG(I32, Ptr, Ptr, I64, I64, I64, Ptr, I32, Ptr, I64),
+                     None)
+TALOS_NATIVE_RUNTIME(InterfaceMethodTaskActivate,
+                     talos_rt_v1_interface_method_task_activate,
+                     SIG(I32, Ptr, Ptr, I64, I64, I64, Ptr, I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(LastError, talos_rt_v1_last_error, SIG(I32, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(MailboxCreateTyped, talos_rt_v1_mailbox_create_typed,
+                     SIG(I32, Ptr, I64, I32, I32, I64, I64, I64, Ptr, I64, I64,
+                         Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(MailboxNum, talos_rt_v1_mailbox_num, SIG(I32, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(MailboxTryGet, talos_rt_v1_mailbox_try_get,
+                     SIG(I32, Ptr, Ptr, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(MailboxTryPeek, talos_rt_v1_mailbox_try_peek,
+                     SIG(I32, Ptr, Ptr, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(MailboxTryPut, talos_rt_v1_mailbox_try_put,
+                     SIG(I32, Ptr, Ptr, Ptr, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(ManagedWatch, talos_rt_v1_managed_watch,
+                     SIG(I64, Ptr, I32, I64), None)
+TALOS_NATIVE_RUNTIME(MethodInvoke, talos_rt_v1_method_invoke,
+                     SIG(I32, Ptr, Ptr, I64, I64, Ptr, I32, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(MethodTaskActivate, talos_rt_v1_method_task_activate,
+                     SIG(I32, Ptr, Ptr, I64, I64, Ptr, I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(MonitorControl, talos_rt_v1_monitor_control,
+                     SIG(I32, Ptr, I32), None)
+TALOS_NATIVE_RUNTIME(MonitorCurrent, talos_rt_v1_monitor_current, SIG(I32, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(MonitorRegisterLogical,
+                     talos_rt_v1_monitor_register_logical, SIG(I32, Ptr, I64),
+                     None)
+TALOS_NATIVE_RUNTIME(MosDriveDelayed, talos_rt_v1_mos_drive_delayed,
+                     SIG(I32, Ptr, I32, I32, I32, I64, I64, I64), None)
+TALOS_NATIVE_RUNTIME(NativeDynamicOverride, talos_rt_v1_native_dynamic_override,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, I64, I64, I32, I32, I64, I32,
+                         Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(NativeFrameStore, talos_rt_v1_native_frame_store,
+                     SIG(V, Ptr, Ptr, Ptr, I64, I64, I32, I32, I64, I64), None)
+TALOS_NATIVE_RUNTIME(NativeOverride, talos_rt_v1_native_override,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, I64, I64, I32, I32, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(NativeReleaseOverride, talos_rt_v1_native_release_override,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, I64, I64, I32, I32), None)
+TALOS_NATIVE_RUNTIME(NativeStateAlloc, talos_rt_v1_native_state_alloc,
+                     SIG(I32, Ptr, I64, Ptr, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(NativeStateAllocWithRoots,
+                     talos_rt_v1_native_state_alloc_with_roots,
+                     SIG(I32, Ptr, I64, Ptr, Ptr, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(NativeStateAllocWithTypedRoots,
+                     talos_rt_v1_native_state_alloc_with_typed_roots,
+                     SIG(I32, Ptr, I64, Ptr, Ptr, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(NativeStateBindContinuous,
+                     talos_rt_v1_native_state_bind_continuous,
+                     SIG(I32, Ptr, Ptr, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(NativeStateBindShared,
+                     talos_rt_v1_native_state_bind_shared,
+                     SIG(I32, Ptr, Ptr, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(NativeStateBindSpecialization,
+                     talos_rt_v1_native_state_bind_specialization,
+                     SIG(I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(NativeStateBindUnknownSummary,
+                     talos_rt_v1_native_state_bind_unknown_summary,
+                     SIG(I32, Ptr, Ptr, I64, Ptr, Ptr, I64, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(NativeStateInitialize, talos_rt_v1_native_state_initialize,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(NativeStateLoadPlane, talos_rt_v1_native_state_load_plane,
+                     SIG(I32, Ptr, Ptr, I64, I64, I64, I32, I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(NativeStateRegisterStatic,
+                     talos_rt_v1_native_state_register_static,
+                     SIG(I32, Ptr, I32, I64, I64), None)
+TALOS_NATIVE_RUNTIME(NativeStateRelease, talos_rt_v1_native_state_release,
+                     SIG(I32, Ptr, I64, I32), None)
+TALOS_NATIVE_RUNTIME(NativeStateRetain, talos_rt_v1_native_state_retain,
+                     SIG(I32, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(NativeStateStoreContinuousPlane,
+                     talos_rt_v1_native_state_store_continuous_plane,
+                     SIG(I32, Ptr, Ptr, I64, I64, I64, I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(NativeStateStorePlane,
+                     talos_rt_v1_native_state_store_plane,
+                     SIG(I32, Ptr, Ptr, I64, I64, I64, I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(NativeStateSync, talos_rt_v1_native_state_sync,
+                     SIG(I32, Ptr, Ptr, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(NetCountDrivers, talos_rt_v1_net_count_drivers,
+                     SIG(I32, Ptr, I64, Ptr, Ptr, Ptr, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(NochangeUpdate, talos_rt_v1_nochange_update,
+                     SIG(I64, Ptr, I64, I64, I64, I64), None)
+TALOS_NATIVE_RUNTIME(ObjectAllocate, talos_rt_v1_object_allocate,
+                     SIG(I32, Ptr, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(ObjectBitsInsert, talos_rt_v1_object_bits_insert,
+                     SIG(I32, Ptr, I64, I64, I64, I32, I64, I32), None)
+TALOS_NATIVE_RUNTIME(ObjectCast, talos_rt_v1_object_cast,
+                     SIG(I32, Ptr, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(ObjectFieldLoad, talos_rt_v1_object_field_load,
+                     SIG(I32, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(ObjectFieldStore, talos_rt_v1_object_field_store,
+                     SIG(I32, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(ObjectId, talos_rt_v1_object_id, SIG(I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(ObjectIsInstance, talos_rt_v1_object_is_instance,
+                     SIG(I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(ObjectOverride, talos_rt_v1_object_override,
+                     SIG(I32, Ptr, I64, I64, I32, I32, I32, I64, I32, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(ObjectRead, talos_rt_v1_object_read,
+                     SIG(I32, Ptr, I64, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(ObjectReadPlanes, talos_rt_v1_object_read_planes,
+                     SIG(I32, Ptr, I64, Ptr, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(ObjectReleaseOverride, talos_rt_v1_object_release_override,
+                     SIG(I32, Ptr, I64, I64, I32, I32), None)
+TALOS_NATIVE_RUNTIME(ObjectShallowCopy, talos_rt_v1_object_shallow_copy,
+                     SIG(I32, Ptr, Ptr, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(ObjectWrite, talos_rt_v1_object_write,
+                     SIG(I32, Ptr, I64, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(ObjectWritePlanes, talos_rt_v1_object_write_planes,
+                     SIG(I32, Ptr, I64, Ptr, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(PassSwitchControl, talos_rt_v1_pass_switch_control,
+                     SIG(I32, Ptr, I32, I32, I32), None)
+TALOS_NATIVE_RUNTIME(PassSwitchControlDelayed,
+                     talos_rt_v1_pass_switch_control_delayed,
+                     SIG(I32, Ptr, I32, I32, I32, I64, I64, I64), None)
+TALOS_NATIVE_RUNTIME(PlusargParseLogic, talos_rt_v1_plusarg_parse_logic,
+                     SIG(I32, I64, I32, I64, Ptr, I64, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(PlusargParseReal, talos_rt_v1_plusarg_parse_real,
+                     SIG(I32, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(PlusargScan, talos_rt_v1_plusarg_scan,
+                     SIG(I32, Ptr, Ptr, I64, Ptr, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(PlusargTest, talos_rt_v1_plusarg_test,
+                     SIG(I32, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(PlusargValue, talos_rt_v1_plusarg_value,
+                     SIG(I32, Ptr, Ptr, I64, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(PowerCancelNba, talos_rt_v1_power_cancel_nba,
+                     SIG(I32, Ptr, I64, I64), None)
+TALOS_NATIVE_RUNTIME(PowerNba, talos_rt_v1_power_nba,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, I64, I64, I64, Ptr, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(PowerNbaAfter, talos_rt_v1_power_nba_after,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, I64, I64, I64, I64, Ptr, Ptr,
+                         Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(PowerNbaView, talos_rt_v1_power_nba_view,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, I64, I64, I64, I64, I64, I32,
+                         I64, I64, Ptr, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(ProcessControl, talos_rt_v1_process_control,
+                     SIG(I32, Ptr, I64, I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(ProcessCurrent, talos_rt_v1_process_current, SIG(I64, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(ProcessEventPending, talos_rt_v1_process_event_pending,
+                     SIG(I32, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(ProcessInstanceCreate, talos_rt_v1_process_instance_create,
+                     SIG(I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(ProcessInstanceCreateForContext,
+                     talos_rt_v1_process_instance_create_for_context,
+                     SIG(I32, Ptr, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(ProcessInstanceDestroy,
+                     talos_rt_v1_process_instance_destroy, SIG(I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(ProcessInstanceExecute,
+                     talos_rt_v1_process_instance_execute,
+                     SIG(I32, Ptr, Ptr, I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(ProcessInstanceFrame, talos_rt_v1_process_instance_frame,
+                     SIG(I32, Ptr, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(ProcessRandomGet, talos_rt_v1_process_random_get,
+                     SIG(I32, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(ProcessRandomSet, talos_rt_v1_process_random_set,
+                     SIG(I32, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(ProcessSpawn, talos_rt_v1_process_spawn,
+                     SIG(I64, Ptr, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(ProcessSpawnBatch, talos_rt_v1_process_spawn_batch,
+                     SIG(I32, Ptr, Ptr, Ptr, I32), None)
+TALOS_NATIVE_RUNTIME(ProcessStatus, talos_rt_v1_process_status,
+                     SIG(I32, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(QueueDeleteIndex, talos_rt_v1_queue_delete_index,
+                     SIG(I32, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(QueueInsert, talos_rt_v1_queue_insert,
+                     SIG(I32, Ptr, Ptr, I64, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(QueuePush, talos_rt_v1_queue_push,
+                     SIG(I32, Ptr, Ptr, I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(QueueReadDeleteChecked,
+                     talos_rt_v1_queue_read_delete_checked,
+                     SIG(I32, Ptr, I64, Ptr, I64, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(RandomBounded, talos_rt_v1_random_bounded,
+                     SIG(I32, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(RandomCycleNext, talos_rt_v1_random_cycle_next,
+                     SIG(I32, I64, I64, I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(RandomCycleSample, talos_rt_v1_random_cycle_sample,
+                     SIG(I32, Ptr, Ptr, I64, Ptr, Ptr, I64, I64, I64, I64, I64,
+                         I64, I64, I32, I32, Ptr, I64, Ptr, I64, Ptr, Ptr, Ptr,
+                         Ptr, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(RandomFunctionStage, talos_rt_v1_random_function_stage,
+                     SIG(I32, Ptr, Ptr, I64, Ptr, Ptr, I64, I64, I64, I64, I64,
+                         Ptr, I64, Ptr, I64, Ptr, Ptr, Ptr, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(RandomGetState, talos_rt_v1_random_get_state,
+                     SIG(I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(RandomInitializationEnter,
+                     talos_rt_v1_random_initialization_enter,
+                     SIG(I32, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(RandomInitializationLeave,
+                     talos_rt_v1_random_initialization_leave,
+                     SIG(I32, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(RandomNext, talos_rt_v1_random_next, SIG(I32, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(RandomReal32FromRank, talos_rt_v1_random_real32_from_rank,
+                     SIG(I32, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(RandomReal32ToRank, talos_rt_v1_random_real32_to_rank,
+                     SIG(I32, F32, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(RandomReal64FromRank, talos_rt_v1_random_real64_from_rank,
+                     SIG(I32, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(RandomReal64ToRank, talos_rt_v1_random_real64_to_rank,
+                     SIG(I32, F64, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(RandomSeed, talos_rt_v1_random_seed, SIG(I32, Ptr, I64),
+                     None)
+TALOS_NATIVE_RUNTIME(RandomSetState, talos_rt_v1_random_set_state,
+                     SIG(I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(RandomSolveModesState,
+                     talos_rt_v1_random_solve_modes_state,
+                     SIG(I32, Ptr, Ptr, I64, I64, I64, I64, I64, I64, I64, Ptr,
+                         I64, Ptr, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(RandomSolveWideModesState,
+                     talos_rt_v1_random_solve_wide_modes_state,
+                     SIG(I32, Ptr, Ptr, I64, Ptr, Ptr, I64, I64, I64, I64, I64,
+                         Ptr, I64, Ptr, I64, Ptr, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(RecursiveBitstreamLinkAnchor,
+                     talos_rt_v1_recursive_bitstream_link_anchor, SIG(V), None)
+TALOS_NATIVE_RUNTIME(RecursiveExportBitstream,
+                     talos_rt_v1_recursive_export_bitstream,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, I64, I32, Ptr, Ptr, I64, I64,
+                         I32, Ptr, I64, I32, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(ReferencePathAggregateElementCreate,
+                     talos_rt_v1_reference_path_aggregate_element_create,
+                     SIG(I32, Ptr, Ptr, I64, I32, Ptr, Ptr, I64, I64, I64, I64,
+                         I64, I64, I64, I32, I64, I32, I32, I64, I64, I64, Ptr,
+                         I64, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(ReferencePathAssocCreate,
+                     talos_rt_v1_reference_path_assoc_create,
+                     SIG(I32, Ptr, Ptr, Ptr, Ptr, I64, I32, Ptr, Ptr, I64, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(ReferencePathCovergroupOptionCreate,
+                     talos_rt_v1_reference_path_covergroup_option_create,
+                     SIG(I32, Ptr, I64, I64, I64, I32, I64, I64, I32, Ptr, I64,
+                         I32, Ptr, Ptr, I64, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(ReferencePathIndexCreate,
+                     talos_rt_v1_reference_path_index_create,
+                     SIG(I32, Ptr, Ptr, I64, Ptr, I64, I32, Ptr, Ptr, I64, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(ReferencePathStringCharacterCreate,
+                     talos_rt_v1_reference_path_string_character_create,
+                     SIG(I32, Ptr, I64, I64, Ptr, I64, I32, Ptr, Ptr, I64, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(SaifBind, talos_rt_v1_saif_bind,
+                     SIG(I32, Ptr, I64, Ptr, I64, Ptr, I32, Ptr, I32), None)
+TALOS_NATIVE_RUNTIME(SaifCell, talos_rt_v1_saif_cell,
+                     SIG(I32, Ptr, Ptr, I64, Ptr, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(SaifConfigure, talos_rt_v1_saif_configure,
+                     SIG(I32, Ptr, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(SaifDriver, talos_rt_v1_saif_driver, SIG(V, Ptr, I64, I64),
+                     None)
+TALOS_NATIVE_RUNTIME(SaifFinish, talos_rt_v1_saif_finish, SIG(I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(SaifSeal, talos_rt_v1_saif_seal, SIG(I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(SampledHistory, talos_rt_v1_sampled_history,
+                     SIG(I32, Ptr, I64, I64, I64, I32, I32, Ptr, Ptr, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(SampledPlane, talos_rt_v1_sampled_plane,
+                     SIG(Ptr, Ptr, I32), None)
+TALOS_NATIVE_RUNTIME(SampledRead, talos_rt_v1_sampled_read,
+                     SIG(I32, Ptr, I64, I64, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(SampledWord, talos_rt_v1_sampled_word,
+                     SIG(I64, Ptr, I64, I32), None)
+TALOS_NATIVE_RUNTIME(ScanDynamicValidate, talos_rt_v1_scan_dynamic_validate,
+                     SIG(I32, Ptr, I64, I32, I32, I32, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(SchedulerAddAot, talos_rt_v1_scheduler_add_aot,
+                     SIG(I32, Ptr, Ptr, I32, I32, I32, Ptr, Ptr, I32, Ptr, I32),
+                     None)
+TALOS_NATIVE_RUNTIME(SchedulerAddPlanned, talos_rt_v1_scheduler_add_planned,
+                     SIG(I32, Ptr, Ptr, I32, I32, Ptr, Ptr, I32), None)
+TALOS_NATIVE_RUNTIME(SchedulerClockedNbaRegion,
+                     talos_rt_v1_scheduler_clocked_nba_region, SIG(I32, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(SchedulerClockingDriverNba,
+                     talos_rt_v1_scheduler_clocking_driver_nba,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, I64, I64, I64, Ptr, Ptr, I64),
+                     None)
+TALOS_NATIVE_RUNTIME(SchedulerClockingNba, talos_rt_v1_scheduler_clocking_nba,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, I64, I64, I64, Ptr, Ptr, I64),
+                     None)
+TALOS_NATIVE_RUNTIME(SchedulerCohort, talos_rt_v1_scheduler_cohort,
+                     SIG(I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(SchedulerDirectFragmentEnter,
+                     talos_rt_v1_scheduler_direct_fragment_enter,
+                     SIG(I32, Ptr, I32, I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(SchedulerDirectFragmentLeave,
+                     talos_rt_v1_scheduler_direct_fragment_leave,
+                     SIG(I32, Ptr, I32), None)
+TALOS_NATIVE_RUNTIME(SchedulerDisableChildren,
+                     talos_rt_v1_scheduler_disable_children, SIG(I32, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(SchedulerDrainClockedActive,
+                     talos_rt_v1_scheduler_drain_clocked_active,
+                     SIG(I32, Ptr, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(SchedulerDrainPeriodicAot,
+                     talos_rt_v1_scheduler_drain_periodic_aot,
+                     SIG(I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(SchedulerDriverNba, talos_rt_v1_scheduler_driver_nba,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, I64, I64, I64, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(SchedulerEnterPeriodicAot,
+                     talos_rt_v1_scheduler_enter_periodic_aot,
+                     SIG(I32, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(SchedulerEnterSampledPeriodicAot,
+                     talos_rt_v1_scheduler_enter_sampled_periodic_aot,
+                     SIG(I32, Ptr, I64, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(SchedulerEvent, talos_rt_v1_scheduler_event,
+                     SIG(V, Ptr, I64, I32), None)
+TALOS_NATIVE_RUNTIME(SchedulerEventAfter, talos_rt_v1_scheduler_event_after,
+                     SIG(V, Ptr, I64, I32, I64), None)
+TALOS_NATIVE_RUNTIME(SchedulerEventCreate, talos_rt_v1_scheduler_event_create,
+                     SIG(I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(SchedulerEventReplaceAfter,
+                     talos_rt_v1_scheduler_event_replace_after,
+                     SIG(V, Ptr, I64, I32, I64), None)
+TALOS_NATIVE_RUNTIME(SchedulerEventTriggered,
+                     talos_rt_v1_scheduler_event_triggered, SIG(I32, Ptr, I64),
+                     None)
+TALOS_NATIVE_RUNTIME(SchedulerExecuteAotActor,
+                     talos_rt_v1_scheduler_execute_aot_actor,
+                     SIG(I32, Ptr, I32), None)
+TALOS_NATIVE_RUNTIME(SchedulerFatal, talos_rt_v1_scheduler_fatal,
+                     SIG(I32, Ptr, I32), None)
+TALOS_NATIVE_RUNTIME(SchedulerFinish, talos_rt_v1_scheduler_finish,
+                     SIG(I32, Ptr, I32), None)
+TALOS_NATIVE_RUNTIME(SchedulerHandoffPeriodicAot,
+                     talos_rt_v1_scheduler_handoff_periodic_aot,
+                     SIG(I32, Ptr, Ptr, I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(SchedulerInertialDriver,
+                     talos_rt_v1_scheduler_inertial_driver,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, I64, I64, I64, I32, I32, I64,
+                         I64, I64, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(SchedulerInertialDriverStrengthPair,
+                     talos_rt_v1_scheduler_inertial_driver_strength_pair,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, I64, I64, I64, I64, I32, I64,
+                         I64, I64, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(SchedulerInertialPathDriver,
+                     talos_rt_v1_scheduler_inertial_path_driver,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, I64, I64, I64, I32, I32, I32,
+                         I32, I64, I64, I64, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(SchedulerInertialPathDriverPulse,
+                     talos_rt_v1_scheduler_inertial_path_driver_pulse,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, I64, I64, I64, I32, I32, I32,
+                         I32, I64, I64, I64, I64, I64, Ptr, Ptr, Ptr, Ptr, Ptr,
+                         Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(SchedulerInertialPathStorage,
+                     talos_rt_v1_scheduler_inertial_path_storage,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, I64, I64, I64, I32, I32, I32,
+                         I32, I64, I64, I64, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(SchedulerInertialPathStoragePulse,
+                     talos_rt_v1_scheduler_inertial_path_storage_pulse,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, I64, I64, I64, I32, I32, I32,
+                         I32, I32, I64, I64, I64, I64, I64, Ptr, Ptr, Ptr, Ptr,
+                         Ptr, Ptr, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(SchedulerInertialPathStrengthPair,
+                     talos_rt_v1_scheduler_inertial_path_strength_pair,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, I64, I64, I64, I64, I32, I32,
+                         I32, I64, I64, I64, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr,
+                         Ptr, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(SchedulerInertialPathStrengthPairPulse,
+                     talos_rt_v1_scheduler_inertial_path_strength_pair_pulse,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, I64, I64, I64, I64, I32, I32,
+                         I32, I32, I64, I64, I64, I64, I64, Ptr, Ptr, Ptr, Ptr,
+                         Ptr, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(SchedulerInstallAot, talos_rt_v1_scheduler_install_aot,
+                     SIG(I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(SchedulerManagedNba, talos_rt_v1_scheduler_managed_nba,
+                     SIG(I32, Ptr, Ptr, I64, Ptr, Ptr, I64, I64), None)
+TALOS_NATIVE_RUNTIME(SchedulerManagedNbaMasked,
+                     talos_rt_v1_scheduler_managed_nba_masked,
+                     SIG(I32, Ptr, Ptr, I64, Ptr, Ptr, Ptr, I64, I64), None)
+TALOS_NATIVE_RUNTIME(SchedulerPeriodicRoutedTransition,
+                     talos_rt_v1_scheduler_periodic_routed_transition,
+                     SIG(V, Ptr, I32, I64, I64, I64), None)
+TALOS_NATIVE_RUNTIME(SchedulerPeriodicTransition,
+                     talos_rt_v1_scheduler_periodic_transition,
+                     SIG(V, Ptr, I32, I64, I64, I64), None)
+TALOS_NATIVE_RUNTIME(SchedulerPostponedSlotAot,
+                     talos_rt_v1_scheduler_postponed_slot_aot, SIG(I32, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(SchedulerPrepareEvalNba,
+                     talos_rt_v1_scheduler_prepare_eval_nba, SIG(I32, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(SchedulerPreparePeriodicAot,
+                     talos_rt_v1_scheduler_prepare_periodic_aot,
+                     SIG(I32, Ptr, Ptr, I32, Ptr, I32, Ptr, I32, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(SchedulerPrepareQuietEvalNba,
+                     talos_rt_v1_scheduler_prepare_quiet_eval_nba,
+                     SIG(I32, Ptr, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(SchedulerPrime, talos_rt_v1_scheduler_prime,
+                     SIG(I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(SchedulerProcessToken, talos_rt_v1_scheduler_process_token,
+                     SIG(I64, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(SchedulerProgramExit, talos_rt_v1_scheduler_program_exit,
+                     SIG(I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(SchedulerProgramOwned, talos_rt_v1_scheduler_program_owned,
+                     SIG(I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(SchedulerProgramRegister,
+                     talos_rt_v1_scheduler_program_register,
+                     SIG(I32, Ptr, I64, I64), None)
+TALOS_NATIVE_RUNTIME(SchedulerPublicationBatchBegin,
+                     talos_rt_v1_scheduler_publication_batch_begin,
+                     SIG(I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(SchedulerPublicationBatchEnd,
+                     talos_rt_v1_scheduler_publication_batch_end, SIG(I32, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(SchedulerQueueAotCheckpoint,
+                     talos_rt_v1_scheduler_queue_aot_checkpoint,
+                     SIG(I32, Ptr, I32, I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(SchedulerRealTransition,
+                     talos_rt_v1_scheduler_real_transition,
+                     SIG(V, Ptr, I64, I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(SchedulerReportStatus, talos_rt_v1_scheduler_report_status,
+                     SIG(V, Ptr, I32), None)
+TALOS_NATIVE_RUNTIME(SchedulerResolveDrivers,
+                     talos_rt_v1_scheduler_resolve_drivers,
+                     SIG(I32, Ptr, I64, I64), None)
+TALOS_NATIVE_RUNTIME(SchedulerResolveInitialDrivers,
+                     talos_rt_v1_scheduler_resolve_initial_drivers,
+                     SIG(I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(SchedulerRun, talos_rt_v1_scheduler_run, SIG(I32, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(SchedulerRunAot, talos_rt_v1_scheduler_run_aot,
+                     SIG(I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(SchedulerRunAotNodes, talos_rt_v1_scheduler_run_aot_nodes,
+                     SIG(I32, Ptr, Ptr, I32), None)
+TALOS_NATIVE_RUNTIME(SchedulerSignal, talos_rt_v1_scheduler_signal,
+                     SIG(V, Ptr, I64, I64, I32), None)
+TALOS_NATIVE_RUNTIME(SchedulerSignalTransition,
+                     talos_rt_v1_scheduler_signal_transition,
+                     SIG(V, Ptr, I64, I64, Ptr, Ptr, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(SchedulerSnapshotAot, talos_rt_v1_scheduler_snapshot_aot,
+                     SIG(I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(SchedulerStaticNbaPacked,
+                     talos_rt_v1_scheduler_static_nba_packed,
+                     SIG(I32, Ptr, I32, Ptr, Ptr, I64, I64, I64, I64, I64),
+                     None)
+TALOS_NATIVE_RUNTIME(SchedulerStop, talos_rt_v1_scheduler_stop,
+                     SIG(I32, Ptr, I32), None)
+TALOS_NATIVE_RUNTIME(SchedulerStringNba, talos_rt_v1_scheduler_string_nba,
+                     SIG(I32, Ptr, Ptr, I64, I64, I64, I64), None)
+TALOS_NATIVE_RUNTIME(SchedulerTrackCohorts, talos_rt_v1_scheduler_track_cohorts,
+                     SIG(V, Ptr), None)
+TALOS_NATIVE_RUNTIME(SchedulerWaitOrderFailed,
+                     talos_rt_v1_scheduler_wait_order_failed, SIG(I32, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(SemaphoreCreate, talos_rt_v1_semaphore_create,
+                     SIG(I32, Ptr, I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(SemaphorePut, talos_rt_v1_semaphore_put,
+                     SIG(I32, Ptr, I32), None)
+TALOS_NATIVE_RUNTIME(SemaphoreTryGet, talos_rt_v1_semaphore_try_get,
+                     SIG(I32, Ptr, I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(StaticNbaBarrierFinish,
+                     talos_rt_v1_static_nba_barrier_finish,
+                     SIG(V, Ptr, I64, I64, I32), None)
+TALOS_NATIVE_RUNTIME(StaticNbaBarrierGuard,
+                     talos_rt_v1_static_nba_barrier_guard,
+                     SIG(I32, Ptr, Ptr, I32), None)
+TALOS_NATIVE_RUNTIME(StaticNbaBatchWordGuard,
+                     talos_rt_v1_static_nba_batch_word_guard,
+                     SIG(I32, Ptr, Ptr, I32, I32, I64, I32), None)
+TALOS_NATIVE_RUNTIME(StaticNbaCommitBatch, talos_rt_v1_static_nba_commit_batch,
+                     SIG(I32, Ptr, Ptr, I32, I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(StaticNbaCommitRoot, talos_rt_v1_static_nba_commit_root,
+                     SIG(I32, Ptr, I32, I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(StaticNbaCommitRoots, talos_rt_v1_static_nba_commit_roots,
+                     SIG(I32, Ptr, I32, I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(StaticOnce, talos_rt_v1_static_once, SIG(I32, Ptr, I64),
+                     None)
+TALOS_NATIVE_RUNTIME(StatusString, talos_rt_v1_status_string, SIG(Ptr, I32),
+                     None)
+TALOS_NATIVE_RUNTIME(StochasticQueue, talos_rt_v1_stochastic_queue,
+                     SIG(I32, Ptr, I32, I32, I32, I32, I32, I32, I32, I64, Ptr,
+                         Ptr, Ptr, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(StrengthResolve, talos_rt_v1_strength_resolve,
+                     SIG(I16, I16, I16), None)
+TALOS_NATIVE_RUNTIME(StringCaseConvert, talos_rt_v1_string_case_convert,
+                     SIG(I32, Ptr, I64, I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(StringCompare, talos_rt_v1_string_compare,
+                     SIG(I32, I64, I64), None)
+TALOS_NATIVE_RUNTIME(StringCompareInsensitive,
+                     talos_rt_v1_string_compare_insensitive, SIG(I32, I64, I64),
+                     None)
+TALOS_NATIVE_RUNTIME(StringConcatMany, talos_rt_v1_string_concat_many,
+                     SIG(I32, Ptr, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(StringCreate, talos_rt_v1_string_create,
+                     SIG(I32, Ptr, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(StringFormatInteger, talos_rt_v1_string_format_integer,
+                     SIG(I32, Ptr, I64, I32, I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(StringFormatReal, talos_rt_v1_string_format_real,
+                     SIG(I32, Ptr, F64, Ptr), None)
+TALOS_NATIVE_RUNTIME(StringFromPacked, talos_rt_v1_string_from_packed,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(StringGetc, talos_rt_v1_string_getc, SIG(I32, I64, I64),
+                     None)
+TALOS_NATIVE_RUNTIME(StringLength, talos_rt_v1_string_length, SIG(I64, I64),
+                     None)
+TALOS_NATIVE_RUNTIME(StringOutputFields, talos_rt_v1_string_output_fields,
+                     SIG(I32, Ptr, Ptr, I64, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(StringOutputFormat, talos_rt_v1_string_output_format,
+                     SIG(I32, Ptr, I32, Ptr, I64, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(StringParseInteger, talos_rt_v1_string_parse_integer,
+                     SIG(I32, I64, I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(StringParseLogic, talos_rt_v1_string_parse_logic,
+                     SIG(I32, I64, I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(StringParseReal, talos_rt_v1_string_parse_real,
+                     SIG(I32, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(StringParseRealConstant,
+                     talos_rt_v1_string_parse_real_constant, SIG(I32, I64, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(StringPutc, talos_rt_v1_string_putc,
+                     SIG(I32, Ptr, I64, I64, I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(StringRepeat, talos_rt_v1_string_repeat,
+                     SIG(I32, Ptr, I64, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(StringScanDynamic, talos_rt_v1_string_scan_dynamic,
+                     SIG(I32, Ptr, Ptr, I64, I32, I64, I32, I32, I32, I64, I64,
+                         I64, Ptr, Ptr, Ptr, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(StringScanField, talos_rt_v1_string_scan_field,
+                     SIG(I32, Ptr, I64, I32, Ptr, I64, I32, I64, Ptr, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(StringScanRaw, talos_rt_v1_string_scan_raw,
+                     SIG(I32, I64, I32, Ptr, I64, I64, I64, I32, I64, Ptr, I64,
+                         Ptr, I64, Ptr, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(StringSubstr, talos_rt_v1_string_substr,
+                     SIG(I32, Ptr, I64, I64, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(StringToPacked, talos_rt_v1_string_to_packed,
+                     SIG(I32, I64, Ptr, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(StringView, talos_rt_v1_string_view,
+                     SIG(I32, I64, Ptr, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(System, talos_rt_v1_system, SIG(I32, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(TableProcessExecute, talos_rt_v1_table_process_execute,
+                     SIG(I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(TimeFormat, talos_rt_v1_time_format,
+                     SIG(I32, Ptr, I32, I32, Ptr, I64, I32), None)
+TALOS_NATIVE_RUNTIME(TimeScanScale, talos_rt_v1_time_scan_scale,
+                     SIG(F64, Ptr, F64, I64, I32), None)
+TALOS_NATIVE_RUNTIME(VpiCallFinish, talos_rt_v1_vpi_call_finish,
+                     SIG(I32, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(VpiCallPrepare, talos_rt_v1_vpi_call_prepare,
+                     SIG(I32, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(VpiEndCompile, talos_rt_v1_vpi_end_compile, SIG(I32, Ptr),
+                     None)
+TALOS_NATIVE_RUNTIME(VpiEndSimulation, talos_rt_v1_vpi_end_simulation,
+                     SIG(I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(VpiFrameBind, talos_rt_v1_vpi_frame_bind,
+                     SIG(I32, Ptr, I64, I64), None)
+TALOS_NATIVE_RUNTIME(VpiFrameCheckpoint, talos_rt_v1_vpi_frame_checkpoint,
+                     SIG(I32, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(VpiFrameEnter, talos_rt_v1_vpi_frame_enter,
+                     SIG(I32, Ptr, I64, I32, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(VpiFrameEnterPrepared,
+                     talos_rt_v1_vpi_frame_enter_prepared,
+                     SIG(I32, Ptr, I64, I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(VpiFrameLeave, talos_rt_v1_vpi_frame_leave,
+                     SIG(I32, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(VpiResolutionPrepare, talos_rt_v1_vpi_resolution_prepare,
+                     SIG(I32, Ptr, I64, Ptr), None)
+TALOS_NATIVE_RUNTIME(VpiShutdown, talos_rt_v1_vpi_shutdown, SIG(V, Ptr), None)
+TALOS_NATIVE_RUNTIME(VpiStartSimulation, talos_rt_v1_vpi_start_simulation,
+                     SIG(I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(VpiStartup, talos_rt_v1_vpi_startup,
+                     SIG(I32, Ptr, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(WeakClear, talos_rt_v1_weak_clear, SIG(I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(WeakCreate, talos_rt_v1_weak_create,
+                     SIG(I32, Ptr, Ptr, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(WeakGet, talos_rt_v1_weak_get, SIG(I32, Ptr, Ptr), None)
+TALOS_NATIVE_RUNTIME(V2RecursiveExportBitstream,
+                     talos_rt_v2_recursive_export_bitstream,
+                     SIG(I32, Ptr, I64, Ptr, Ptr, I64, I64, I32, Ptr, Ptr, I64,
+                         I64, I32, I32, Ptr, Ptr),
                      None)
 
 #undef TALOS_NATIVE_RUNTIME

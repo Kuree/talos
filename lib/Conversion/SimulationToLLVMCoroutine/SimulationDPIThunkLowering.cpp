@@ -288,7 +288,7 @@ LogicalResult materializeDPIThunk(ModuleOp module, const DPIThunkSpec &spec) {
     Value size = entryAlloca(builder, location, i64, 1, 8);
     LLVM::CallOp::create(
         builder, location, TypeRange{i32},
-        SymbolRefAttr::get(context, "talos_rt_v1_string_view"),
+        getNativeRuntimeCallee(context, NativeRuntimeEntry::StringView),
         ValueRange{readOpaqueWord(inputIndex), scratch, bytes, size});
     return LLVM::LoadOp::create(builder, location, pointer, bytes, 8);
   };
@@ -442,8 +442,8 @@ LogicalResult materializeDPIThunk(ModuleOp module, const DPIThunkSpec &spec) {
            << "DPI C identifier '" << spec.cIdentifier.getValue()
            << "' collides with an LLVM declaration of incompatible type";
   if (!cFunction)
-    cFunction = getOrDeclareLLVMFunction(module, spec.cIdentifier.getValue(),
-                                         cResultType, cArgumentTypes);
+    cFunction = getOrDeclareGeneratedFunction(
+        module, spec.cIdentifier.getValue(), cResultType, cArgumentTypes);
   Value callbackStatus = llvmConstant(builder, location, i32, TALOS_RT_OK);
   auto mergeStatus = [&](Value next) {
     Value succeeded = arith::CmpIOp::create(
@@ -484,14 +484,14 @@ LogicalResult materializeDPIThunk(ModuleOp module, const DPIThunkSpec &spec) {
     stringRootLane =
         LLVM::CallOp::create(
             builder, location, TypeRange{pointer},
-            SymbolRefAttr::get(context, "talos_rt_v1_gc_current_lane"),
+            getNativeRuntimeCallee(context, NativeRuntimeEntry::GcCurrentLane),
             entry->getArgument(0))
             .getResult();
     Value pushStatus =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context,
-                               "talos_rt_v1_gc_managed_root_range_push"),
+            getNativeRuntimeCallee(context,
+                                   NativeRuntimeEntry::GcManagedRootRangePush),
             ValueRange{stringRootLane, stringRootRecord, slots,
                        llvmConstant(builder, location, i64, stringOutputCount)})
             .getResult();
@@ -511,7 +511,8 @@ LogicalResult materializeDPIThunk(ModuleOp module, const DPIThunkSpec &spec) {
       Value status =
           LLVM::CallOp::create(
               builder, location, TypeRange{i32},
-              SymbolRefAttr::get(context, "talos_rt_v1_dpi_string_copy"),
+              getNativeRuntimeCallee(context,
+                                     NativeRuntimeEntry::DpiStringCopy),
               ValueRange{entry->getArgument(0), result, stringOutputSlots[0]})
               .getResult();
       mergeStatus(status);
@@ -552,13 +553,13 @@ LogicalResult materializeDPIThunk(ModuleOp module, const DPIThunkSpec &spec) {
     if (isDPIString(writeback.abi.category)) {
       Value string =
           LLVM::LoadOp::create(builder, location, pointer, writeback.buffer, 8);
-      Value status =
-          LLVM::CallOp::create(
-              builder, location, TypeRange{i32},
-              SymbolRefAttr::get(context, "talos_rt_v1_dpi_string_copy"),
-              ValueRange{entry->getArgument(0), string,
-                         stringOutputSlots[writeback.outputIndex]})
-              .getResult();
+      Value status = LLVM::CallOp::create(
+                         builder, location, TypeRange{i32},
+                         getNativeRuntimeCallee(
+                             context, NativeRuntimeEntry::DpiStringCopy),
+                         ValueRange{entry->getArgument(0), string,
+                                    stringOutputSlots[writeback.outputIndex]})
+                         .getResult();
       mergeStatus(status);
       continue;
     }
@@ -659,28 +660,24 @@ LogicalResult materializeDPIThunk(ModuleOp module, const DPIThunkSpec &spec) {
       LLVM::StoreOp::create(builder, location, value,
                             planePointer(outputs, index, false), 8);
     }
-    Value popStatus = LLVM::CallOp::create(
-                          builder, location, TypeRange{i32},
-                          SymbolRefAttr::get(
-                              context, "talos_rt_v1_gc_managed_root_range_pop"),
-                          ValueRange{stringRootLane, stringRootRecord})
-                          .getResult();
+    Value popStatus =
+        LLVM::CallOp::create(
+            builder, location, TypeRange{i32},
+            getNativeRuntimeCallee(context,
+                                   NativeRuntimeEntry::GcManagedRootRangePop),
+            ValueRange{stringRootLane, stringRootRecord})
+            .getResult();
     mergeStatus(popStatus);
   }
   LLVM::ReturnOp::create(builder, location, callbackStatus);
   if (llvm::any_of(abi, [](const DPIOperandABI &entry) {
         return isDPIString(entry.category);
       })) {
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_string_view", i32,
-                             {i64, pointer, pointer, pointer});
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_dpi_string_copy", i32,
-                             {pointer, pointer, pointer});
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_gc_current_lane", pointer,
-                             {pointer});
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_gc_managed_root_range_push",
-                             i32, {pointer, pointer, pointer, i64});
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_gc_managed_root_range_pop",
-                             i32, {pointer, pointer});
+    declareNativeRuntime(module, NativeRuntimeEntry::StringView);
+    declareNativeRuntime(module, NativeRuntimeEntry::DpiStringCopy);
+    declareNativeRuntime(module, NativeRuntimeEntry::GcCurrentLane);
+    declareNativeRuntime(module, NativeRuntimeEntry::GcManagedRootRangePush);
+    declareNativeRuntime(module, NativeRuntimeEntry::GcManagedRootRangePop);
   }
   return success();
 }

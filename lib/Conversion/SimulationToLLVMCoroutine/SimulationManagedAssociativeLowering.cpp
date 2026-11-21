@@ -183,7 +183,8 @@ public:
         c64(op.getBitWidth()),
         trace,
         c64(op.getTraceOffsets().size())};
-    StringRef callee = "talos_rt_v1_assoc_create_typed";
+    StringRef callee =
+        getNativeRuntimeSymbol(NativeRuntimeEntry::AssocCreateTyped);
     if (op.getKeyKind() == sim::AssocKeyKind::Element) {
       // The key's element descriptor and equality plan follow; their globals
       // are reserved before conversion.
@@ -205,7 +206,8 @@ public:
                         c64(descriptor->bitWidth), keyTrace,
                         c64(descriptor->traceOffsets.size()), keyPlan,
                         c64(plan->size() * sizeof(uint64_t))});
-      callee = "talos_rt_v1_assoc_create_element_keyed";
+      callee =
+          getNativeRuntimeSymbol(NativeRuntimeEntry::AssocCreateElementKeyed);
     } else {
       arguments.append(
           {c32(static_cast<uint32_t>(op.getKeyKind())), c64(op.getKeyWidth())});
@@ -275,8 +277,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_assoc_read_checked"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::AssocReadChecked),
             ValueRange{managedObjectPointer(rewriter, op.getLoc(),
                                             adaptor.getArray().front()),
                        key, storage.front(), planeSize, unknown, unknownSize,
@@ -358,8 +360,9 @@ public:
   LogicalResult
   matchAndRewrite(sim::SimAssocWriteOp op, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    return lowerAssocValueMutation(op, adaptor, rewriter,
-                                   "talos_rt_v1_assoc_write_checked");
+    return lowerAssocValueMutation(
+        op, adaptor, rewriter,
+        getNativeRuntimeSymbol(NativeRuntimeEntry::AssocWriteChecked));
   }
 };
 
@@ -370,8 +373,9 @@ public:
   LogicalResult
   matchAndRewrite(sim::SimAssocSetDefaultOp op, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    return lowerAssocValueMutation(op, adaptor, rewriter,
-                                   "talos_rt_v1_assoc_set_default_checked");
+    return lowerAssocValueMutation(
+        op, adaptor, rewriter,
+        getNativeRuntimeSymbol(NativeRuntimeEntry::AssocSetDefaultChecked));
   }
 };
 
@@ -392,8 +396,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_assoc_exists"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::AssocExists),
             ValueRange{managedObjectPointer(rewriter, op.getLoc(),
                                             adaptor.getArray().front()),
                        key, output})
@@ -424,8 +428,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_assoc_delete"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::AssocDelete),
             ValueRange{managedObjectPointer(rewriter, op.getLoc(),
                                             adaptor.getArray().front()),
                        key})
@@ -456,11 +460,13 @@ public:
     StringRef callee;
     int32_t direction = static_cast<int32_t>(op.getDirection());
     if (op.getEndpoint())
-      callee =
-          direction > 0 ? "talos_rt_v1_assoc_first" : "talos_rt_v1_assoc_last";
+      callee = direction > 0
+                   ? getNativeRuntimeSymbol(NativeRuntimeEntry::AssocFirst)
+                   : getNativeRuntimeSymbol(NativeRuntimeEntry::AssocLast);
     else
-      callee =
-          direction > 0 ? "talos_rt_v1_assoc_next" : "talos_rt_v1_assoc_prev";
+      callee = direction > 0
+                   ? getNativeRuntimeSymbol(NativeRuntimeEntry::AssocNext)
+                   : getNativeRuntimeSymbol(NativeRuntimeEntry::AssocPrev);
     auto [context, lane] = managedContextAndLane(rewriter, op.getLoc());
     Value status =
         LLVM::CallOp::create(

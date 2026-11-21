@@ -66,8 +66,8 @@ Value staticSpecializationGuard(ConversionPatternRewriter &rewriter,
   Value allowed =
       LLVM::CallOp::create(
           rewriter, location, TypeRange{i32},
-          SymbolRefAttr::get(rewriter.getContext(),
-                             "talos_rt_v1_static_specialization_guard"),
+          getNativeRuntimeCallee(rewriter.getContext(),
+                                 NativeRuntimeEntry::StaticSpecializationGuard),
           ValueRange{context, llvmConstant(rewriter, location, i32, UINT32_MAX),
                      llvmConstant(rewriter, location, i32, staticID),
                      llvmConstant(rewriter, location, i32, flags)})
@@ -108,8 +108,11 @@ Value staticNBASpecializationGuard(ConversionPatternRewriter &rewriter,
   Value context =
       LLVM::LoadOp::create(rewriter, location, pointer, contextAddress, 8);
   StringRef guardName =
-      guardedVisibility ? "talos_rt_v1_static_nba_specialization_guard_write"
-                        : "talos_rt_v1_static_nba_specialization_guard";
+      guardedVisibility
+          ? getNativeRuntimeSymbol(
+                NativeRuntimeEntry::StaticNbaSpecializationGuardWrite)
+          : getNativeRuntimeSymbol(
+                NativeRuntimeEntry::StaticNbaSpecializationGuard);
   Value allowed =
       LLVM::CallOp::create(
           rewriter, location, TypeRange{i32},

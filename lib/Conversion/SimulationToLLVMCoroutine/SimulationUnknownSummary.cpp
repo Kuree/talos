@@ -135,7 +135,8 @@ public:
     return "publish-native-unknown-summary";
   }
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<LLVM::LLVMDialect, schedule::ScheduleDialect>();
+    registry.insert<LLVM::LLVMDialect, schedule::ScheduleDialect,
+                    native::NativeDialect>();
   }
 
   void runOnOperation() override {
@@ -241,9 +242,10 @@ private:
         LLVM::AddressOfOp::create(builder, location, ptr,
                                   "__talos_current_context"),
         8);
-    LLVM::CallOp::create(builder, location, TypeRange{},
-                         "talos_rt_v1_native_state_mark_unknown",
-                         ValueRange{context, bitOffset, bitWidth});
+    LLVM::CallOp::create(
+        builder, location, TypeRange{},
+        getNativeRuntimeSymbol(NativeRuntimeEntry::NativeStateMarkUnknown),
+        ValueRange{context, bitOffset, bitWidth});
   }
 
   /// A byte count as an i64 bit count.

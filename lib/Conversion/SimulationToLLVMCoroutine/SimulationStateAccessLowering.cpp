@@ -55,7 +55,8 @@ void reportRuntimeControlStatus(ConversionPatternRewriter &rewriter,
                                 Value status) {
   LLVM::CallOp::create(
       rewriter, location, TypeRange{},
-      SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_scheduler_fail"),
+      getNativeRuntimeCallee(rewriter.getContext(),
+                             NativeRuntimeEntry::SchedulerFail),
       ValueRange{context, status});
 }
 
@@ -177,8 +178,8 @@ void notifyBulkSignal(ConversionPatternRewriter &rewriter, Location location,
   };
   auto call = LLVM::CallOp::create(
       rewriter, location, TypeRange{},
-      SymbolRefAttr::get(rewriter.getContext(),
-                         "talos_rt_v1_scheduler_signal_transition"),
+      getNativeRuntimeCallee(rewriter.getContext(),
+                             NativeRuntimeEntry::SchedulerSignalTransition),
       ValueRange{loadCurrentRuntimeContext(rewriter, location), handle,
                  llvmConstant(rewriter, location, rewriter.getI64Type(), width),
                  oldValue, pointerOrNull(oldUnknown), newValue,
@@ -431,7 +432,8 @@ void emitKnownRootsTest(ConversionPatternRewriter &rewriter, Location location,
   Value refreshed =
       LLVM::CallOp::create(
           rewriter, location, TypeRange{rewriter.getI32Type()},
-          "talos_rt_v1_native_state_refresh_unknown_summary",
+          getNativeRuntimeSymbol(
+              NativeRuntimeEntry::NativeStateRefreshUnknownSummary),
           ValueRange{loadCurrentRuntimeContext(rewriter, location), pairs,
                      llvmConstant(rewriter, location, i64, words.size()),
                      backoff})
@@ -950,11 +952,11 @@ public:
                                     : Value{};
     if (isa<sim::StringType>(valueType)) {
       Value comparison =
-          LLVM::CallOp::create(rewriter, op.getLoc(),
-                               TypeRange{rewriter.getI32Type()},
-                               SymbolRefAttr::get(rewriter.getContext(),
-                                                  "talos_rt_v1_string_compare"),
-                               ValueRange{oldValue, storedValue})
+          LLVM::CallOp::create(
+              rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
+              getNativeRuntimeCallee(rewriter.getContext(),
+                                     NativeRuntimeEntry::StringCompare),
+              ValueRange{oldValue, storedValue})
               .getResult();
       Value equal = arith::CmpIOp::create(
           rewriter, op.getLoc(), arith::CmpIPredicate::eq, comparison,
@@ -1072,8 +1074,8 @@ public:
                                                   pointer, contextAddress, 8);
       LLVM::CallOp::create(
           rewriter, op.getLoc(), TypeRange{},
-          SymbolRefAttr::get(rewriter.getContext(),
-                             "talos_rt_v1_scheduler_real_transition"),
+          getNativeRuntimeCallee(rewriter.getContext(),
+                                 NativeRuntimeEntry::SchedulerRealTransition),
           ValueRange{runtimeContext, adaptor.getReference().front(),
                      llvmConstant(rewriter, op.getLoc(), rewriter.getI32Type(),
                                   *width),
@@ -1258,8 +1260,8 @@ public:
                                                   pointer, contextAddress, 8);
       LLVM::CallOp::create(
           rewriter, op.getLoc(), TypeRange{},
-          SymbolRefAttr::get(rewriter.getContext(),
-                             "talos_rt_v1_scheduler_real_transition"),
+          getNativeRuntimeCallee(rewriter.getContext(),
+                                 NativeRuntimeEntry::SchedulerRealTransition),
           ValueRange{runtimeContext, handle,
                      llvmConstant(rewriter, op.getLoc(), rewriter.getI32Type(),
                                   *width),
@@ -1305,12 +1307,13 @@ public:
     }
     SmallVector<Value, 7> arguments{context, adaptor.getNet().front()};
     llvm::append_range(arguments, outputs);
-    Value status = LLVM::CallOp::create(
-                       rewriter, location, TypeRange{i32},
-                       SymbolRefAttr::get(rewriter.getContext(),
-                                          "talos_rt_v1_net_count_drivers"),
-                       arguments)
-                       .getResult();
+    Value status =
+        LLVM::CallOp::create(
+            rewriter, location, TypeRange{i32},
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::NetCountDrivers),
+            arguments)
+            .getResult();
     reportRuntimeControlStatus(rewriter, location, context, status);
     SmallVector<Value, 5> replacements;
     for (Value output : outputs)
@@ -1344,8 +1347,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{i32},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_pass_switch_control"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::PassSwitchControl),
             ValueRange{
                 context,
                 llvmConstant(rewriter, location, i32, op.getPassSwitchId()),
@@ -1384,19 +1387,19 @@ public:
     Value unknown = adaptor.getControl().size() == 2
                         ? extend(adaptor.getControl()[1])
                         : llvmConstant(rewriter, location, i32, 0);
-    Value status =
-        LLVM::CallOp::create(
-            rewriter, location, TypeRange{i32},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_pass_switch_control_delayed"),
-            ValueRange{
-                context,
-                llvmConstant(rewriter, location, i32, op.getPassSwitchId()),
-                extend(adaptor.getControl().front()), unknown,
-                adaptor.getTurnOnDelay().front(),
-                adaptor.getTurnOffDelay().front(),
-                adaptor.getUnknownDelay().front()})
-            .getResult();
+    Value status = LLVM::CallOp::create(
+                       rewriter, location, TypeRange{i32},
+                       getNativeRuntimeCallee(
+                           rewriter.getContext(),
+                           NativeRuntimeEntry::PassSwitchControlDelayed),
+                       ValueRange{context,
+                                  llvmConstant(rewriter, location, i32,
+                                               op.getPassSwitchId()),
+                                  extend(adaptor.getControl().front()), unknown,
+                                  adaptor.getTurnOnDelay().front(),
+                                  adaptor.getTurnOffDelay().front(),
+                                  adaptor.getUnknownDelay().front()})
+                       .getResult();
     reportRuntimeControlStatus(rewriter, location, context, status);
     rewriter.eraseOp(op);
     return success();
@@ -1428,8 +1431,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{i32},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_mos_drive_delayed"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::MosDriveDelayed),
             ValueRange{
                 context,
                 llvmConstant(rewriter, location, i32, op.getPassSwitchId()),

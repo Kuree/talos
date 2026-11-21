@@ -280,9 +280,12 @@ LogicalResult makeNativeAOTPlanLegacy(
   Value runStatus =
       LLVM::CallOp::create(
           builder, location, TypeRange{i32},
-          SymbolRefAttr::get(context,
-                             fullyStatic ? "talos_rt_v1_scheduler_run_aot_nodes"
-                                         : "talos_rt_v1_scheduler_run"),
+          SymbolRefAttr::get(
+              context,
+              fullyStatic
+                  ? getNativeRuntimeSymbol(
+                        NativeRuntimeEntry::SchedulerRunAotNodes)
+                  : getNativeRuntimeSymbol(NativeRuntimeEntry::SchedulerRun)),
           fullyStatic ? ValueRange{runEntry->getArgument(1), nodes,
                                    llvmConstant(builder, location, i32,
                                                 executableNodes.size())}
@@ -299,7 +302,8 @@ LogicalResult makeNativeAOTPlanLegacy(
   Value snapshotStatus =
       LLVM::CallOp::create(
           builder, location, TypeRange{i32},
-          SymbolRefAttr::get(context, "talos_rt_v1_scheduler_snapshot_aot"),
+          getNativeRuntimeCallee(context,
+                                 NativeRuntimeEntry::SchedulerSnapshotAot),
           ValueRange{snapshotEntry->getArgument(1),
                      snapshotEntry->getArgument(2)})
           .getResult();
@@ -379,8 +383,8 @@ LogicalResult makeNativeAOTPlanLegacy(
   Value directGuard =
       LLVM::CallOp::create(
           builder, location, TypeRange{i32},
-          SymbolRefAttr::get(context,
-                             "talos_rt_v1_static_nba_direct_commit_guard"),
+          getNativeRuntimeCallee(
+              context, NativeRuntimeEntry::StaticNbaDirectCommitGuard),
           ValueRange{nbaCommitEntry->getArgument(1)})
           .getResult();
   Value directEnabled = arith::CmpIOp::create(
@@ -732,8 +736,8 @@ LogicalResult makeNativeAOTPlanLegacy(
   if (generateGroupedFanout)
     LLVM::CallOp::create(
         builder, location, TypeRange{},
-        SymbolRefAttr::get(context,
-                           "talos_rt_v1_scheduler_activate_static_nodes"),
+        getNativeRuntimeCallee(
+            context, NativeRuntimeEntry::SchedulerActivateStaticNodes),
         ValueRange{nbaCommitEntry->getArgument(1), activatedNodes,
                    llvmConstant(builder, location, i32, activationWordCount)});
   for (uint32_t word = 0; word != nbaDirtyWordCount; ++word) {
@@ -755,13 +759,14 @@ LogicalResult makeNativeAOTPlanLegacy(
       LLVM::LoadOp::create(builder, location, i32, committedCount, 4);
   LLVM::CallOp::create(
       builder, location, TypeRange{},
-      SymbolRefAttr::get(context,
-                         "talos_rt_v1_static_nba_account_generated_commits"),
+      getNativeRuntimeCallee(
+          context, NativeRuntimeEntry::StaticNbaAccountGeneratedCommits),
       ValueRange{nbaCommitEntry->getArgument(1), directCount});
   Value nbaCommitStatus =
       LLVM::CallOp::create(
           builder, location, TypeRange{i32},
-          SymbolRefAttr::get(context, "talos_rt_v1_static_nba_commit_roots"),
+          getNativeRuntimeCallee(context,
+                                 NativeRuntimeEntry::StaticNbaCommitRoots),
           ValueRange{nbaCommitEntry->getArgument(1),
                      llvmConstant(builder, location, i32, nbaRoots.size()),
                      nbaCommitEntry->getArgument(2),
@@ -964,25 +969,16 @@ LogicalResult makeNativeAOTPlanLegacy(
                            NativeSchedulePlanField::Reserved2);
       });
   if (fullyStatic)
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_run_aot_nodes", i32,
-                             {pointer, pointer, i32});
+    declareNativeRuntime(module, NativeRuntimeEntry::SchedulerRunAotNodes);
   else
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_run", i32,
-                             {pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_snapshot_aot", i32,
-                           {pointer, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_commit_root", i32,
-                           {pointer, i32, i32, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_commit_roots", i32,
-                           {pointer, i32, i32, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_direct_commit_guard",
-                           i32, {pointer});
-  getOrDeclareLLVMFunction(module,
-                           "talos_rt_v1_static_nba_account_generated_commits",
-                           LLVM::LLVMVoidType::get(context), {pointer, i32});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_activate_static_nodes",
-      LLVM::LLVMVoidType::get(context), {pointer, pointer, i32});
+    declareNativeRuntime(module, NativeRuntimeEntry::SchedulerRun);
+  declareNativeRuntimes(module,
+                        {NativeRuntimeEntry::SchedulerSnapshotAot,
+                         NativeRuntimeEntry::StaticNbaCommitRoot,
+                         NativeRuntimeEntry::StaticNbaCommitRoots,
+                         NativeRuntimeEntry::StaticNbaDirectCommitGuard,
+                         NativeRuntimeEntry::StaticNbaAccountGeneratedCommits,
+                         NativeRuntimeEntry::SchedulerActivateStaticNodes});
   return success();
 }
 

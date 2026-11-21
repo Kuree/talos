@@ -54,8 +54,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_string_create"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::StringCreate),
             ValueRange{lane, data,
                        llvmConstant(rewriter, op.getLoc(),
                                     rewriter.getI64Type(), bytes.size()),
@@ -97,15 +97,16 @@ public:
         rewriter, op.getLoc(),
         LLVM::ZeroOp::create(rewriter, op.getLoc(), rewriter.getI64Type()),
         output, 8);
-    Value status = LLVM::CallOp::create(
-                       rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-                       SymbolRefAttr::get(rewriter.getContext(),
-                                          "talos_rt_v1_string_from_packed"),
-                       ValueRange{lane, value, unknown,
-                                  llvmConstant(rewriter, op.getLoc(),
-                                               rewriter.getI64Type(), *width),
-                                  output})
-                       .getResult();
+    Value status =
+        LLVM::CallOp::create(
+            rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::StringFromPacked),
+            ValueRange{lane, value, unknown,
+                       llvmConstant(rewriter, op.getLoc(),
+                                    rewriter.getI64Type(), *width),
+                       output})
+            .getResult();
     rewriter.replaceOp(op, finishStringAllocation(rewriter, op.getLoc(),
                                                   context, status, output));
     return success();
@@ -131,8 +132,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_string_to_packed"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::StringToPacked),
             ValueRange{adaptor.getInput().front(), output,
                        LLVM::ZeroOp::create(rewriter, op.getLoc(), pointer),
                        llvmConstant(rewriter, op.getLoc(),
@@ -168,8 +169,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_string_to_packed"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::StringToPacked),
             ValueRange{adaptor.getInput().front(), output,
                        LLVM::ZeroOp::create(rewriter, op.getLoc(), pointer),
                        llvmConstant(rewriter, op.getLoc(),
@@ -181,8 +182,8 @@ public:
     reportManagedStatus(rewriter, op.getLoc(), context, status);
     Value length = LLVM::CallOp::create(
                        rewriter, op.getLoc(), TypeRange{rewriter.getI64Type()},
-                       SymbolRefAttr::get(rewriter.getContext(),
-                                          "talos_rt_v1_string_length"),
+                       getNativeRuntimeCallee(rewriter.getContext(),
+                                              NativeRuntimeEntry::StringLength),
                        adaptor.getInput())
                        .getResult();
     Value expected = llvmConstant(rewriter, op.getLoc(), rewriter.getI64Type(),
@@ -222,15 +223,16 @@ public:
     LLVM::StoreOp::create(rewriter, op.getLoc(),
                           LLVM::ZeroOp::create(rewriter, op.getLoc(), i64),
                           output, 8);
-    Value status = LLVM::CallOp::create(
-                       rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-                       SymbolRefAttr::get(rewriter.getContext(),
-                                          "talos_rt_v1_string_concat_many"),
-                       ValueRange{lane, spans,
-                                  llvmConstant(rewriter, op.getLoc(), i64,
-                                               adaptor.getInputs().size()),
-                                  output})
-                       .getResult();
+    Value status =
+        LLVM::CallOp::create(
+            rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::StringConcatMany),
+            ValueRange{lane, spans,
+                       llvmConstant(rewriter, op.getLoc(), i64,
+                                    adaptor.getInputs().size()),
+                       output})
+            .getResult();
     rewriter.replaceOp(op, finishStringAllocation(rewriter, op.getLoc(),
                                                   context, status, output));
     return success();
@@ -299,13 +301,13 @@ public:
   LogicalResult
   matchAndRewrite(sim::SimStringLengthOp op, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOp(op, LLVM::CallOp::create(
-                               rewriter, op.getLoc(),
-                               TypeRange{rewriter.getI64Type()},
-                               SymbolRefAttr::get(rewriter.getContext(),
-                                                  "talos_rt_v1_string_length"),
-                               adaptor.getInput().front())
-                               .getResult());
+    rewriter.replaceOp(
+        op, LLVM::CallOp::create(
+                rewriter, op.getLoc(), TypeRange{rewriter.getI64Type()},
+                getNativeRuntimeCallee(rewriter.getContext(),
+                                       NativeRuntimeEntry::StringLength),
+                adaptor.getInput().front())
+                .getResult());
     return success();
   }
 };
@@ -320,8 +322,8 @@ public:
     Value result =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_string_getc"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::StringGetc),
             ValueRange{adaptor.getInput().front(), adaptor.getIndex().front()})
             .getResult();
     rewriter.replaceOp(op,
@@ -338,9 +340,11 @@ public:
   LogicalResult
   matchAndRewrite(sim::SimStringCompareOp op, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    StringRef symbol = op.getCaseInsensitive()
-                           ? "talos_rt_v1_string_compare_insensitive"
-                           : "talos_rt_v1_string_compare";
+    StringRef symbol =
+        op.getCaseInsensitive()
+            ? getNativeRuntimeSymbol(
+                  NativeRuntimeEntry::StringCompareInsensitive)
+            : getNativeRuntimeSymbol(NativeRuntimeEntry::StringCompare);
     rewriter.replaceOp(
         op, LLVM::CallOp::create(
                 rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
@@ -368,10 +372,11 @@ public:
         LLVM::ZeroOp::create(rewriter, op.getLoc(), rewriter.getI32Type()),
         output, 4);
     SmallVector<Value> operands{context, adaptor.getPath().front()};
-    StringRef symbol = "talos_rt_v1_file_open_string_mcd";
+    StringRef symbol =
+        getNativeRuntimeSymbol(NativeRuntimeEntry::FileOpenStringMcd);
     if constexpr (std::is_same_v<Op, sim::SimFileOpenStringOp>) {
       operands.push_back(adaptor.getMode().front());
-      symbol = "talos_rt_v1_file_open_string";
+      symbol = getNativeRuntimeSymbol(NativeRuntimeEntry::FileOpenString);
     }
     operands.push_back(output);
     Value status =
@@ -401,12 +406,13 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     auto [context, lane] = managedContextAndLane(rewriter, op.getLoc());
     (void)lane;
-    Value status = LLVM::CallOp::create(
-                       rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-                       SymbolRefAttr::get(rewriter.getContext(),
-                                          "talos_rt_v1_dump_open_string"),
-                       ValueRange{context, adaptor.getPath().front()})
-                       .getResult();
+    Value status =
+        LLVM::CallOp::create(
+            rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::DumpOpenString),
+            ValueRange{context, adaptor.getPath().front()})
+            .getResult();
     reportManagedStatus(rewriter, op.getLoc(), context, status);
     rewriter.eraseOp(op);
     return success();
@@ -422,14 +428,14 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     auto [context, lane] = managedContextAndLane(rewriter, op.getLoc());
     (void)lane;
-    Value status =
-        LLVM::CallOp::create(
-            rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_dump_ports"),
-            ValueRange{context, adaptor.getPath().front(),
-                       adaptor.getScope().front(),
-                       adaptor.getTimescaleExponent().front()})
-            .getResult();
+    Value status = LLVM::CallOp::create(
+                       rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
+                       getNativeRuntimeCallee(rewriter.getContext(),
+                                              NativeRuntimeEntry::DumpPorts),
+                       ValueRange{context, adaptor.getPath().front(),
+                                  adaptor.getScope().front(),
+                                  adaptor.getTimescaleExponent().front()})
+                       .getResult();
     reportManagedStatus(rewriter, op.getLoc(), context, status);
     rewriter.eraseOp(op);
     return success();
@@ -447,13 +453,14 @@ public:
     (void)lane;
     Value action = llvmConstant(rewriter, op.getLoc(), rewriter.getI32Type(),
                                 static_cast<uint32_t>(op.getAction()));
-    Value status = LLVM::CallOp::create(
-                       rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-                       SymbolRefAttr::get(rewriter.getContext(),
-                                          "talos_rt_v1_dump_ports_control"),
-                       ValueRange{context, adaptor.getPath().front(), action,
-                                  adaptor.getValue().front()})
-                       .getResult();
+    Value status =
+        LLVM::CallOp::create(
+            rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::DumpPortsControl),
+            ValueRange{context, adaptor.getPath().front(), action,
+                       adaptor.getValue().front()})
+            .getResult();
     reportManagedStatus(rewriter, op.getLoc(), context, status);
     rewriter.eraseOp(op);
     return success();
@@ -494,8 +501,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{i32},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_string_scan_field"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::StringScanField),
             ValueRange{
                 lane, adaptor.getInput().front(), adaptor.getCursor().front(),
                 prefixData,
@@ -605,9 +612,11 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{i32},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               IsFile ? "talos_rt_v1_file_scan_raw"
-                                      : "talos_rt_v1_string_scan_raw"),
+            SymbolRefAttr::get(
+                rewriter.getContext(),
+                IsFile ? getNativeRuntimeSymbol(NativeRuntimeEntry::FileScanRaw)
+                       : getNativeRuntimeSymbol(
+                             NativeRuntimeEntry::StringScanRaw)),
             arguments)
             .getResult();
     reportManagedStatus(rewriter, op.getLoc(), context, status);
@@ -669,8 +678,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{i32},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_file_scan_field"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::FileScanField),
             ValueRange{
                 context, lane, adaptor.getDescriptor().front(),
                 adaptor.getEnabled().front(), prefixData,
@@ -699,29 +708,28 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     Type i32 = rewriter.getI32Type();
     Type i64 = rewriter.getI64Type();
-    Type pointer = LLVM::LLVMPointerType::get(rewriter.getContext());
-    getOrDeclareLLVMFunction(op->getParentOfType<ModuleOp>(),
-                             "talos_rt_v1_scan_dynamic_validate", i32,
-                             {pointer, i64, i32, i32, i32, i64, pointer});
+    declareNativeRuntime(op->getParentOfType<ModuleOp>(),
+                         NativeRuntimeEntry::ScanDynamicValidate);
     auto [context, lane] = managedContextAndLane(rewriter, op.getLoc());
     (void)lane;
     Value output = entryAlloca(rewriter, op.getLoc(), i32, 1, 4);
     LLVM::StoreOp::create(rewriter, op.getLoc(),
                           adaptor.getPlanCursor().front(), output, 4);
-    Value status = LLVM::CallOp::create(
-                       rewriter, op.getLoc(), TypeRange{i32},
-                       SymbolRefAttr::get(rewriter.getContext(),
-                                          "talos_rt_v1_scan_dynamic_validate"),
-                       ValueRange{context, adaptor.getFormat().front(),
-                                  adaptor.getPlanCursor().front(),
-                                  llvmConstant(rewriter, op.getLoc(), i32,
-                                               op.getFile() ? 1 : 0),
-                                  llvmConstant(rewriter, op.getLoc(), i32,
-                                               op.getFinalize() ? 1 : 0),
-                                  llvmConstant(rewriter, op.getLoc(), i64,
-                                               op.getAllowedSpecifiers()),
-                                  output})
-                       .getResult();
+    Value status =
+        LLVM::CallOp::create(
+            rewriter, op.getLoc(), TypeRange{i32},
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::ScanDynamicValidate),
+            ValueRange{
+                context, adaptor.getFormat().front(),
+                adaptor.getPlanCursor().front(),
+                llvmConstant(rewriter, op.getLoc(), i32, op.getFile() ? 1 : 0),
+                llvmConstant(rewriter, op.getLoc(), i32,
+                             op.getFinalize() ? 1 : 0),
+                llvmConstant(rewriter, op.getLoc(), i64,
+                             op.getAllowedSpecifiers()),
+                output})
+            .getResult();
     reportManagedStatus(rewriter, op.getLoc(), context, status);
     rewriter.replaceOp(
         op, LLVM::LoadOp::create(rewriter, op.getLoc(), i32, output, 4));
@@ -747,10 +755,9 @@ public:
       argumentTypes.append({i64, i32, i64, i32, i32});
     argumentTypes.append(
         {i32, i64, i64, i64, pointer, pointer, pointer, pointer, pointer});
-    getOrDeclareLLVMFunction(op->template getParentOfType<ModuleOp>(),
-                             IsFile ? "talos_rt_v1_file_scan_dynamic"
-                                    : "talos_rt_v1_string_scan_dynamic",
-                             i32, argumentTypes);
+    declareNativeRuntime(op->template getParentOfType<ModuleOp>(),
+                         IsFile ? NativeRuntimeEntry::FileScanDynamic
+                                : NativeRuntimeEntry::StringScanDynamic);
     auto [context, lane] = managedContextAndLane(rewriter, op.getLoc());
     Value fieldOutput = entryAlloca(rewriter, op.getLoc(), i64, 1, 8);
     LLVM::StoreOp::create(rewriter, op.getLoc(),
@@ -789,14 +796,16 @@ public:
                       scalarOutputs[IsFile ? 2 : 3]});
     if constexpr (IsFile)
       arguments.push_back(scalarOutputs[3]);
-    Value status =
-        LLVM::CallOp::create(
-            rewriter, op.getLoc(), TypeRange{i32},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               IsFile ? "talos_rt_v1_file_scan_dynamic"
-                                      : "talos_rt_v1_string_scan_dynamic"),
-            arguments)
-            .getResult();
+    Value status = LLVM::CallOp::create(
+                       rewriter, op.getLoc(), TypeRange{i32},
+                       SymbolRefAttr::get(
+                           rewriter.getContext(),
+                           IsFile ? getNativeRuntimeSymbol(
+                                        NativeRuntimeEntry::FileScanDynamic)
+                                  : getNativeRuntimeSymbol(
+                                        NativeRuntimeEntry::StringScanDynamic)),
+                       arguments)
+                       .getResult();
     reportManagedStatus(rewriter, op.getLoc(), context, status);
     SmallVector<Value> results{
         LLVM::LoadOp::create(rewriter, op.getLoc(), i64, fieldOutput, 8)};
@@ -824,8 +833,8 @@ public:
                           output, 4);
     Value status = LLVM::CallOp::create(
                        rewriter, op.getLoc(), TypeRange{i32},
-                       SymbolRefAttr::get(rewriter.getContext(),
-                                          "talos_rt_v1_plusarg_test"),
+                       getNativeRuntimeCallee(rewriter.getContext(),
+                                              NativeRuntimeEntry::PlusargTest),
                        ValueRange{context, adaptor.getName().front(), output})
                        .getResult();
     Value found = LLVM::LoadOp::create(rewriter, op.getLoc(), i32, output, 4);
@@ -856,7 +865,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{i32},
-            SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_system"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::System),
             ValueRange{context, adaptor.getCommand().front(), output})
             .getResult();
     Value result = LLVM::LoadOp::create(rewriter, op.getLoc(), i32, output, 4);
@@ -890,8 +900,8 @@ public:
                           foundOutput, 4);
     Value status = LLVM::CallOp::create(
                        rewriter, op.getLoc(), TypeRange{i32},
-                       SymbolRefAttr::get(rewriter.getContext(),
-                                          "talos_rt_v1_plusarg_value"),
+                       getNativeRuntimeCallee(rewriter.getContext(),
+                                              NativeRuntimeEntry::PlusargValue),
                        ValueRange{context, lane, adaptor.getPrefix().front(),
                                   tailOutput, foundOutput})
                        .getResult();
@@ -935,8 +945,8 @@ public:
                             output, 4);
     Value status = LLVM::CallOp::create(
                        rewriter, op.getLoc(), TypeRange{i32},
-                       SymbolRefAttr::get(rewriter.getContext(),
-                                          "talos_rt_v1_plusarg_scan"),
+                       getNativeRuntimeCallee(rewriter.getContext(),
+                                              NativeRuntimeEntry::PlusargScan),
                        ValueRange{context, lane, adaptor.getFormat().front(),
                                   tailOutput, conversionOutput, foundOutput})
                        .getResult();
@@ -1085,8 +1095,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_plusarg_parse_logic"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::PlusargParseLogic),
             ValueRange{
                 adaptor.getInput().front(),
                 llvmConstant(rewriter, op.getLoc(), rewriter.getI32Type(),
@@ -1136,8 +1146,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_plusarg_parse_logic"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::PlusargParseLogic),
             ValueRange{
                 adaptor.getInput().front(),
                 llvmConstant(rewriter, op.getLoc(), rewriter.getI32Type(),
@@ -1186,29 +1196,41 @@ void populateManagedStringToLLVMConversionPatterns(RewritePatternSet &patterns,
                StringFileOpenConversion<sim::SimFileOpenStringOp>>(converter,
                                                                    context);
   patterns.add<StringFileQueryConversion<sim::SimFileGetlineStringOp>>(
-      converter, context, "talos_rt_v1_file_getline_string");
+      converter, context,
+      getNativeRuntimeSymbol(NativeRuntimeEntry::FileGetlineString));
   patterns.add<StringFileQueryConversion<sim::SimFileErrorStringOp>>(
-      converter, context, "talos_rt_v1_file_error_string");
+      converter, context,
+      getNativeRuntimeSymbol(NativeRuntimeEntry::FileErrorString));
   patterns.add<StringAllocatingCallConversion<sim::SimStringRepeatOp>>(
-      converter, context, "talos_rt_v1_string_repeat");
+      converter, context,
+      getNativeRuntimeSymbol(NativeRuntimeEntry::StringRepeat));
   patterns.add<StringAllocatingCallConversion<sim::SimStringPutcOp>>(
-      converter, context, "talos_rt_v1_string_putc");
+      converter, context,
+      getNativeRuntimeSymbol(NativeRuntimeEntry::StringPutc));
   patterns.add<StringAllocatingCallConversion<sim::SimStringSubstrOp>>(
-      converter, context, "talos_rt_v1_string_substr");
+      converter, context,
+      getNativeRuntimeSymbol(NativeRuntimeEntry::StringSubstr));
   patterns.add<StringAllocatingCallConversion<sim::SimStringCaseConvertOp>>(
-      converter, context, "talos_rt_v1_string_case_convert");
+      converter, context,
+      getNativeRuntimeSymbol(NativeRuntimeEntry::StringCaseConvert));
   patterns.add<StringAllocatingCallConversion<sim::SimStringFormatIntegerOp>>(
-      converter, context, "talos_rt_v1_string_format_integer");
+      converter, context,
+      getNativeRuntimeSymbol(NativeRuntimeEntry::StringFormatInteger));
   patterns.add<StringAllocatingCallConversion<sim::SimStringFormatRealOp>>(
-      converter, context, "talos_rt_v1_string_format_real");
+      converter, context,
+      getNativeRuntimeSymbol(NativeRuntimeEntry::StringFormatReal));
   patterns.add<StringParseConversion<sim::SimStringParseIntegerOp>>(
-      converter, context, "talos_rt_v1_string_parse_integer");
+      converter, context,
+      getNativeRuntimeSymbol(NativeRuntimeEntry::StringParseInteger));
   patterns.add<StringParseConversion<sim::SimStringParseRealOp>>(
-      converter, context, "talos_rt_v1_string_parse_real");
+      converter, context,
+      getNativeRuntimeSymbol(NativeRuntimeEntry::StringParseReal));
   patterns.add<StringParseConversion<sim::SimStringParseRealConstantOp>>(
-      converter, context, "talos_rt_v1_string_parse_real_constant");
+      converter, context,
+      getNativeRuntimeSymbol(NativeRuntimeEntry::StringParseRealConstant));
   patterns.add<StringParseConversion<sim::SimPlusargParseRealOp>>(
-      converter, context, "talos_rt_v1_plusarg_parse_real");
+      converter, context,
+      getNativeRuntimeSymbol(NativeRuntimeEntry::PlusargParseReal));
 }
 
 } // namespace talos::detail

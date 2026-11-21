@@ -56,12 +56,12 @@ std::pair<Value, Value> managedContextAndLane(OpBuilder &builder,
                                               Location location) {
   Type pointer = LLVM::LLVMPointerType::get(builder.getContext());
   Value context = managedContext(builder, location);
-  Value lane =
-      LLVM::CallOp::create(builder, location, TypeRange{pointer},
-                           SymbolRefAttr::get(builder.getContext(),
-                                              "talos_rt_v1_gc_current_lane"),
-                           context)
-          .getResult();
+  Value lane = LLVM::CallOp::create(
+                   builder, location, TypeRange{pointer},
+                   getNativeRuntimeCallee(builder.getContext(),
+                                          NativeRuntimeEntry::GcCurrentLane),
+                   context)
+                   .getResult();
   return {context, lane};
 }
 
@@ -183,12 +183,13 @@ public:
     LLVM::StoreOp::create(rewriter, op.getLoc(),
                           LLVM::ZeroOp::create(rewriter, op.getLoc(), pointer),
                           output, 8);
-    Value status = LLVM::CallOp::create(
-                       rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-                       SymbolRefAttr::get(rewriter.getContext(),
-                                          "talos_rt_v1_object_allocate"),
-                       ValueRange{lane, descriptor, output})
-                       .getResult();
+    Value status =
+        LLVM::CallOp::create(
+            rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::ObjectAllocate),
+            ValueRange{lane, descriptor, output})
+            .getResult();
     reportManagedStatus(rewriter, op.getLoc(), context, status);
     Value object =
         LLVM::LoadOp::create(rewriter, op.getLoc(), pointer, output, 8);
@@ -218,12 +219,13 @@ public:
                           output, 8);
     Value source = managedObjectPointer(rewriter, op.getLoc(),
                                         adaptor.getSource().front());
-    Value status = LLVM::CallOp::create(
-                       rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-                       SymbolRefAttr::get(rewriter.getContext(),
-                                          "talos_rt_v1_object_shallow_copy"),
-                       ValueRange{lane, descriptor, source, output})
-                       .getResult();
+    Value status =
+        LLVM::CallOp::create(
+            rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::ObjectShallowCopy),
+            ValueRange{lane, descriptor, source, output})
+            .getResult();
     reportManagedStatus(rewriter, op.getLoc(), context, status);
     Value object =
         LLVM::LoadOp::create(rewriter, op.getLoc(), pointer, output, 8);
@@ -261,12 +263,13 @@ public:
     Value descriptor = LLVM::AddressOfOp::create(
         rewriter, op.getLoc(), pointer,
         managedClassDescriptorName(op.getTargetAttr()));
-    Value result = LLVM::CallOp::create(
-                       rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-                       SymbolRefAttr::get(rewriter.getContext(),
-                                          "talos_rt_v1_object_is_instance"),
-                       ValueRange{object, descriptor})
-                       .getResult();
+    Value result =
+        LLVM::CallOp::create(
+            rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::ObjectIsInstance),
+            ValueRange{object, descriptor})
+            .getResult();
     rewriter.replaceOp(op, LLVM::TruncOp::create(rewriter, op.getLoc(),
                                                  rewriter.getI1Type(), result));
     return success();
@@ -284,12 +287,12 @@ public:
     Value object = managedObjectPointer(rewriter, op.getLoc(),
                                         adaptor.getObject().front());
     rewriter.replaceOp(
-        op,
-        LLVM::CallOp::create(
-            rewriter, op.getLoc(), TypeRange{rewriter.getI64Type()},
-            SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_object_id"),
-            object)
-            .getResults());
+        op, LLVM::CallOp::create(
+                rewriter, op.getLoc(), TypeRange{rewriter.getI64Type()},
+                getNativeRuntimeCallee(rewriter.getContext(),
+                                       NativeRuntimeEntry::ObjectId),
+                object)
+                .getResults());
     return success();
   }
 };
@@ -314,8 +317,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_object_cast"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::ObjectCast),
             ValueRange{managedObjectPointer(rewriter, op.getLoc(),
                                             adaptor.getObject().front()),
                        descriptor, output})
@@ -389,8 +392,8 @@ public:
     rewriter.replaceOp(
         op, LLVM::CallOp::create(
                 rewriter, op.getLoc(), TypeRange{rewriter.getI64Type()},
-                SymbolRefAttr::get(rewriter.getContext(),
-                                   "talos_rt_v1_managed_watch"),
+                getNativeRuntimeCallee(rewriter.getContext(),
+                                       NativeRuntimeEntry::ManagedWatch),
                 ValueRange{managedObjectPointer(rewriter, op.getLoc(), object),
                            kind, selector})
                 .getResults());
@@ -438,8 +441,8 @@ public:
       owner =
           LLVM::CallOp::create(
               rewriter, op.getLoc(), TypeRange{rewriter.getI64Type()},
-              SymbolRefAttr::get(rewriter.getContext(),
-                                 "talos_rt_v1_gc_candidate_root"),
+              getNativeRuntimeCallee(rewriter.getContext(),
+                                     NativeRuntimeEntry::GcCandidateRoot),
               ValueRange{context, owner,
                          llvmConstant(rewriter, op.getLoc(),
                                       rewriter.getI32Type(), op.getKindMask())})
@@ -487,10 +490,11 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               std::is_same_v<Op, sim::SimWeakCreateOp>
-                                   ? "talos_rt_v1_weak_create"
-                                   : "talos_rt_v1_weak_get"),
+            SymbolRefAttr::get(
+                rewriter.getContext(),
+                std::is_same_v<Op, sim::SimWeakCreateOp>
+                    ? getNativeRuntimeSymbol(NativeRuntimeEntry::WeakCreate)
+                    : getNativeRuntimeSymbol(NativeRuntimeEntry::WeakGet)),
             arguments)
             .getResult();
     reportManagedStatus(rewriter, op.getLoc(), context, status);
@@ -512,13 +516,13 @@ public:
       return failure();
     auto [context, lane] = managedContextAndLane(rewriter, op.getLoc());
     (void)lane;
-    Value status =
-        LLVM::CallOp::create(
-            rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_weak_clear"),
-            managedObjectPointer(rewriter, op.getLoc(),
-                                 adaptor.getWeak().front()))
-            .getResult();
+    Value status = LLVM::CallOp::create(
+                       rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
+                       getNativeRuntimeCallee(rewriter.getContext(),
+                                              NativeRuntimeEntry::WeakClear),
+                       managedObjectPointer(rewriter, op.getLoc(),
+                                            adaptor.getWeak().front()))
+                       .getResult();
     reportManagedStatus(rewriter, op.getLoc(), context, status);
     rewriter.eraseOp(op);
     return success();
@@ -535,8 +539,8 @@ public:
     auto [context, lane] = managedContextAndLane(rewriter, op.getLoc());
     Value status = LLVM::CallOp::create(
                        rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-                       SymbolRefAttr::get(rewriter.getContext(),
-                                          "talos_rt_v1_gc_safepoint"),
+                       getNativeRuntimeCallee(rewriter.getContext(),
+                                              NativeRuntimeEntry::GcSafepoint),
                        lane)
                        .getResult();
     reportManagedStatus(rewriter, op.getLoc(), context, status);
@@ -651,10 +655,12 @@ public:
     SmallVector<Value> invokeArguments{
         lane, managedObjectPointer(rewriter, op.getLoc(),
                                    adaptor.getReceiver().front())};
-    StringRef invokeName = "talos_rt_v1_method_invoke";
+    StringRef invokeName =
+        getNativeRuntimeSymbol(NativeRuntimeEntry::MethodInvoke);
     const auto &target = dispatch->second;
     if (target.isInterface) {
-      invokeName = "talos_rt_v1_interface_method_invoke";
+      invokeName =
+          getNativeRuntimeSymbol(NativeRuntimeEntry::InterfaceMethodInvoke);
       invokeArguments.push_back(
           llvmConstant(rewriter, op.getLoc(), i64, target.ownerID));
       invokeArguments.push_back(
@@ -1186,9 +1192,10 @@ materializeManagedMethodThunks(ModuleOp module,
     for (unsigned index : referenceArguments) {
       Value handle = callArguments[implicitArguments + index];
       Value status =
-          LLVM::CallOp::create(builder, method.getLoc(), TypeRange{i32},
-                               "talos_rt_v1_native_state_retain",
-                               ValueRange{entry->getArgument(0), handle})
+          LLVM::CallOp::create(
+              builder, method.getLoc(), TypeRange{i32},
+              getNativeRuntimeSymbol(NativeRuntimeEntry::NativeStateRetain),
+              ValueRange{entry->getArgument(0), handle})
               .getResult();
       Block *next = new Block;
       Block *failed = new Block;
@@ -1202,7 +1209,7 @@ materializeManagedMethodThunks(ModuleOp module,
       for (Value previous : acquired)
         LLVM::CallOp::create(
             builder, method.getLoc(), TypeRange{i32},
-            "talos_rt_v1_native_state_release",
+            getNativeRuntimeSymbol(NativeRuntimeEntry::NativeStateRelease),
             ValueRange{entry->getArgument(0), previous,
                        llvmConstant(builder, method.getLoc(), i32, 0)});
       LLVM::ReturnOp::create(builder, method.getLoc(), status);

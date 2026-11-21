@@ -166,11 +166,13 @@ LogicalResult materializeSAIFRegistration(ModuleOp module, OpBuilder &builder,
     Value status =
         LLVM::CallOp::create(builder, location, TypeRange{i32}, name, args)
             .getResult();
-    LLVM::CallOp::create(builder, location, TypeRange{},
-                         "talos_rt_v1_scheduler_fail", ValueRange{ctx, status});
+    LLVM::CallOp::create(
+        builder, location, TypeRange{},
+        getNativeRuntimeSymbol(NativeRuntimeEntry::SchedulerFail),
+        ValueRange{ctx, status});
   };
   checked(
-      "talos_rt_v1_saif_configure", runtimeContext,
+      getNativeRuntimeSymbol(NativeRuntimeEntry::SaifConfigure), runtimeContext,
       ValueRange{runtimeContext,
                  address(llvmConstant(builder, location, i64, outputOffset)),
                  llvmConstant(builder, location, i64, precisionFs)});
@@ -218,7 +220,7 @@ LogicalResult materializeSAIFRegistration(ModuleOp module, OpBuilder &builder,
       Value virtualType = LLVM::SelectOp::create(
           builder, location, hasVirtualType, address(virtualOffset),
           LLVM::ZeroOp::create(builder, location, pointer));
-      checked("talos_rt_v1_saif_bind", ctx,
+      checked(getNativeRuntimeSymbol(NativeRuntimeEntry::SaifBind), ctx,
               ValueRange{
                   ctx, field(0), address(field(1)), field(2), address(field(3)),
                   LLVM::TruncOp::create(builder, location, i32, field(5)),
@@ -234,8 +236,7 @@ LogicalResult materializeSAIFRegistration(ModuleOp module, OpBuilder &builder,
                          runtimeContext);
   }
   if (!cellRows.empty()) {
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_saif_cell", i32,
-                             {pointer, pointer, i64, pointer, pointer, i64});
+    declareNativeRuntime(module, NativeRuntimeEntry::SaifCell);
     LLVM::LLVMFuncOp helper;
     {
       OpBuilder::InsertionGuard guard(builder);
@@ -273,7 +274,7 @@ LogicalResult materializeSAIFRegistration(ModuleOp module, OpBuilder &builder,
           builder, location, pointer, i64,
           LLVM::AddressOfOp::create(builder, location, pointer, cellWordsName),
           ArrayRef<LLVM::GEPArg>{field(3)});
-      checked("talos_rt_v1_saif_cell", ctx,
+      checked(getNativeRuntimeSymbol(NativeRuntimeEntry::SaifCell), ctx,
               ValueRange{ctx, address(field(0)), field(1), address(field(2)),
                          plan, field(4)});
       Value next = LLVM::AddOp::create(builder, location, index,
@@ -285,7 +286,8 @@ LogicalResult materializeSAIFRegistration(ModuleOp module, OpBuilder &builder,
     LLVM::CallOp::create(builder, location, TypeRange{}, helper.getSymName(),
                          runtimeContext);
   }
-  checked("talos_rt_v1_saif_seal", runtimeContext, ValueRange{runtimeContext});
+  checked(getNativeRuntimeSymbol(NativeRuntimeEntry::SaifSeal), runtimeContext,
+          ValueRange{runtimeContext});
   return success();
 }
 } // namespace talos::detail

@@ -274,7 +274,7 @@ LogicalResult materializeNativePromotionRangeIndex(ModuleOp module,
   hook->setAttr("passthrough",
                 builder.getArrayAttr({builder.getStringAttr("cold"),
                                       builder.getStringAttr("noinline")}));
-  auto recheck = getOrDeclareLLVMFunction(
+  auto recheck = getOrDeclareGeneratedFunction(
       module, "__talos_eval_promotion_recheck_range_v1", voidType, {i64, i64});
   if (!recheck.empty())
     return recheck.emitError("range recheck was materialized twice");
@@ -438,7 +438,7 @@ LogicalResult materializeNativePromotionRangeIndex(ModuleOp module,
   // Aggregate entry shortcuts must be recomputed after a dependent proof is
   // disturbed. Per-kernel latches and per-route selectors remain independent;
   // the lookup helper changes only those in its exact overlap result.
-  auto reset = getOrDeclareLLVMFunction(
+  auto reset = getOrDeclareGeneratedFunction(
       module, "__talos_eval_proof_aggregate_invalidate_v1", voidType, {});
   builder.setInsertionPointToStart(reset.addEntryBlock(builder));
   for (StringRef name : {"__talos_eval_promotion_latched_v1"})
@@ -456,7 +456,7 @@ LogicalResult materializeNativePromotionRangeIndex(ModuleOp module,
                                   dirty.getSymName()));
   LLVM::ReturnOp::create(builder, location, ValueRange{});
 
-  auto request = getOrDeclareLLVMFunction(
+  auto request = getOrDeclareGeneratedFunction(
       module, "__talos_eval_proof_aggregate_recheck_v1", voidType, {});
   builder.setInsertionPointToStart(request.addEntryBlock(builder));
   // A gain in knownness cannot invalidate a positive proof. Only cached
@@ -472,7 +472,7 @@ LogicalResult materializeNativePromotionRangeIndex(ModuleOp module,
                         StringRef name) {
     if (tree.empty())
       return;
-    auto lookup = getOrDeclareLLVMFunction(
+    auto lookup = getOrDeclareGeneratedFunction(
         module, name, voidType, {pointer, i64, pointer, pointer, i64, i64});
     LLVM::CallOp::create(
         builder, location, lookup,
@@ -486,11 +486,14 @@ LogicalResult materializeNativePromotionRangeIndex(ModuleOp module,
                    block->getArgument(0), block->getArgument(1)});
   };
   builder.setInsertionPointToStart(recheckEntry);
-  treeLookup(recheckEntry, request,
-             "talos_rt_v1_native_promotion_recheck_ranges");
+  treeLookup(
+      recheckEntry, request,
+      getNativeRuntimeSymbol(NativeRuntimeEntry::NativePromotionRecheckRanges));
   LLVM::ReturnOp::create(builder, location, ValueRange{});
   builder.setInsertionPointToStart(entry);
-  treeLookup(entry, reset, "talos_rt_v1_native_promotion_invalidate_ranges");
+  treeLookup(entry, reset,
+             getNativeRuntimeSymbol(
+                 NativeRuntimeEntry::NativePromotionInvalidateRanges));
   LLVM::ReturnOp::create(builder, location, ValueRange{});
 
   if (bucketed) {
@@ -514,7 +517,7 @@ LogicalResult materializeNativePromotionRangeIndex(ModuleOp module,
     auto specialize = [&](Block *head, LLVM::LLVMFuncOp aggregate,
                           StringRef helperName) {
       builder.setInsertionPointToStart(head);
-      auto helper = getOrDeclareLLVMFunction(
+      auto helper = getOrDeclareGeneratedFunction(
           module, helperName, voidType,
           {pointer, pointer, i64, pointer, pointer, i64, i64});
       LLVM::CallOp::create(
@@ -531,9 +534,12 @@ LogicalResult materializeNativePromotionRangeIndex(ModuleOp module,
                                         aggregate.getSymName()),
               head->getArgument(0), head->getArgument(1)});
     };
-    specialize(entry, reset, "talos_rt_v1_native_promotion_invalidate_buckets");
+    specialize(entry, reset,
+               getNativeRuntimeSymbol(
+                   NativeRuntimeEntry::NativePromotionInvalidateBuckets));
     specialize(recheckEntry, request,
-               "talos_rt_v1_native_promotion_recheck_buckets");
+               getNativeRuntimeSymbol(
+                   NativeRuntimeEntry::NativePromotionRecheckBuckets));
   }
 
   if (!slices.empty()) {
@@ -587,12 +593,10 @@ LogicalResult materializeNativePromotionRangeIndex(ModuleOp module,
               5);
           return record;
         });
-    auto adjust = getOrDeclareLLVMFunction(
-        module, "talos_rt_v1_native_promotion_slices_adjust", voidType,
-        {pointer, pointer, pointer, i64, i64, builder.getI32Type()});
-    auto recount = getOrDeclareLLVMFunction(
-        module, "talos_rt_v1_native_promotion_slices_recount", voidType,
-        {pointer});
+    auto adjust = declareNativeRuntime(
+        module, NativeRuntimeEntry::NativePromotionSlicesAdjust);
+    auto recount = declareNativeRuntime(
+        module, NativeRuntimeEntry::NativePromotionSlicesRecount);
     auto beforeReturns = [&](LLVM::LLVMFuncOp function, auto emit) {
       SmallVector<LLVM::ReturnOp> returns;
       function.walk([&](LLVM::ReturnOp op) { returns.push_back(op); });
@@ -782,7 +786,8 @@ public:
     return "publish-native-function-proofs";
   }
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<LLVM::LLVMDialect, schedule::ScheduleDialect>();
+    registry.insert<LLVM::LLVMDialect, schedule::ScheduleDialect,
+                    native::NativeDialect>();
   }
   void runOnOperation() override {
     if (getOperation().isExternal()) {
@@ -1068,7 +1073,7 @@ LogicalResult materializeNativePromotionWrites(ModuleOp module) {
   Location location = hook.getLoc();
   Type i64 = builder.getI64Type();
   Type voidType = LLVM::LLVMVoidType::get(context);
-  auto maskHook = getOrDeclareLLVMFunction(
+  auto maskHook = getOrDeclareGeneratedFunction(
       module, "__talos_eval_promotion_invalidate_mask_v1", voidType,
       {i64, i64});
   maskHook->setAttr("passthrough",
@@ -1120,7 +1125,7 @@ LogicalResult materializeNativePromotionWrites(ModuleOp module) {
     if (call.getCallee() == hook.getSymName())
       call.setCallee("__talos_eval_promotion_recheck_range_v1");
   });
-  auto publish = getOrDeclareLLVMFunction(
+  auto publish = getOrDeclareGeneratedFunction(
       module, "__talos_eval_promotion_publish_unknown_v1", voidType,
       {i64, i64, i64});
   // All state inputs are explicit old/new unknown-mask deltas. The callees
@@ -1138,7 +1143,7 @@ LogicalResult materializeNativePromotionWrites(ModuleOp module) {
   // Constant-offset publications name their window; they are resolved to a
   // static certificate list once every function has published
   // (materializeNativePromotionWindows).
-  auto publishAt = getOrDeclareLLVMFunction(
+  auto publishAt = getOrDeclareGeneratedFunction(
       module, "__talos_eval_promotion_publish_at_v1", voidType,
       {i64, i64, i64});
   schedule::set(publishAt, schedule::Field::EvalStateMetadataOnly,
@@ -1260,10 +1265,9 @@ LogicalResult materializeNativePromotionWindows(ModuleOp module) {
   Type pointer = LLVM::LLVMPointerType::get(context);
   Type i64 = builder.getI64Type();
   Type voidType = LLVM::LLVMVoidType::get(context);
-  auto runtimeWindow = getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_native_promotion_publish_window", voidType,
-      {pointer, i64, pointer, pointer, pointer, i64, i64, pointer});
-  auto window = getOrDeclareLLVMFunction(
+  auto runtimeWindow = declareNativeRuntime(
+      module, NativeRuntimeEntry::NativePromotionPublishWindow);
+  auto window = getOrDeclareGeneratedFunction(
       module, "__talos_eval_promotion_publish_window_v1", voidType,
       {pointer, i64, i64, i64});
   // Cold, like the range publication it replaces, and preserving the
@@ -1349,10 +1353,9 @@ LogicalResult prepareNativeProofPublicationInputs(ModuleOp module,
   if (inputs.active) {
     OpBuilder builder(module.getContext());
     Type i64 = builder.getI64Type();
-    getOrDeclareLLVMFunction(module,
-                             "__talos_eval_promotion_invalidate_range_v1",
-                             LLVM::LLVMVoidType::get(module.getContext()),
-                             {i64, i64});
+    getOrDeclareGeneratedFunction(
+        module, "__talos_eval_promotion_invalidate_range_v1",
+        LLVM::LLVMVoidType::get(module.getContext()), {i64, i64});
   }
   return materializeNativePromotionWrites(module);
 }

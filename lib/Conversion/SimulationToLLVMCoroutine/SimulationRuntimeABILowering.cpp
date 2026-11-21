@@ -12,807 +12,164 @@ using namespace mlir;
 namespace talos::detail {
 
 void declareNativeRuntimeABI(ModuleOp module) {
+  using Entry = NativeRuntimeEntry;
   MLIRContext *context = module.getContext();
   if (saif::has<saif::Output>(module))
-    getOrDeclareLLVMFunction(
-        module, "talos_rt_v1_saif_driver", LLVM::LLVMVoidType::get(context),
-        {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-         IntegerType::get(context, 64)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_strength_resolve", IntegerType::get(context, 16),
-      {IntegerType::get(context, 16), IntegerType::get(context, 16)});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_strength_resolve_kind",
-                           IntegerType::get(context, 16),
-                           {IntegerType::get(context, 16),
-                            IntegerType::get(context, 16),
-                            IntegerType::get(context, 32)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_signal", LLVM::LLVMVoidType::get(context),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 32)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_signal_transition",
-      LLVM::LLVMVoidType::get(context),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_wide_transition_owned",
-      LLVM::LLVMVoidType::get(context),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_wide_transition_projected",
-      LLVM::LLVMVoidType::get(context),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_static_transition",
-      LLVM::LLVMVoidType::get(context),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_static_transition_owned",
-      LLVM::LLVMVoidType::get(context),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32),
-       IntegerType::get(context, 32), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_static_transition_projected",
-      LLVM::LLVMVoidType::get(context),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32),
-       IntegerType::get(context, 32), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64)});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_handoff_pending",
-                           IntegerType::get(context, 32),
-                           {LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_real_transition",
-      LLVM::LLVMVoidType::get(context),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 32), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_static_specialization_guard",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32),
-       IntegerType::get(context, 32), IntegerType::get(context, 32)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_static_specialization_guard_roots",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       IntegerType::get(context, 64)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_static_nba_specialization_guard",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32)});
+    declareNativeRuntime(module, Entry::SaifDriver);
+  declareNativeRuntimes(
+      module,
+      {Entry::StrengthResolve, Entry::StrengthResolveKind,
+       Entry::SchedulerSignal, Entry::SchedulerSignalTransition,
+       Entry::SchedulerWideTransitionOwned,
+       Entry::SchedulerWideTransitionProjected,
+       Entry::SchedulerStaticTransition, Entry::SchedulerStaticTransitionOwned,
+       Entry::SchedulerStaticTransitionProjected,
+       Entry::SchedulerHandoffPending, Entry::SchedulerRealTransition,
+       Entry::StaticSpecializationGuard, Entry::StaticSpecializationGuardRoots,
+       Entry::StaticNbaSpecializationGuard});
   bool guardedVisibility = false;
   module.walk([&](Operation *op) {
     guardedVisibility |=
         schedule::has<schedule::Field::NbaGuardedPrivateInfluence>(op);
   });
   if (guardedVisibility)
-    getOrDeclareLLVMFunction(
-        module, "talos_rt_v1_static_nba_specialization_guard_write",
-        IntegerType::get(context, 32),
-        {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_event", LLVM::LLVMVoidType::get(context),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 32)});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_event_create",
-                           IntegerType::get(context, 32),
-                           {LLVM::LLVMPointerType::get(context),
-                            LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_event_after",
-      LLVM::LLVMVoidType::get(context),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 32), IntegerType::get(context, 64)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_event_replace_after",
-      LLVM::LLVMVoidType::get(context),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 32), IntegerType::get(context, 64)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_event_triggered",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_clocking_output_track",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 32)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_clocking_output_current",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 32)});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_wait_order_failed",
-                           IntegerType::get(context, 32),
-                           {LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_clock_occurrence_consume",
-      IntegerType::get(context, 64),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_nochange_update", IntegerType::get(context, 64),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_native_handle_offset", IntegerType::get(context, 64),
-      {IntegerType::get(context, 64), IntegerType::get(context, 64)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_net_count_drivers", IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_pass_switch_control", IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32),
-       IntegerType::get(context, 32), IntegerType::get(context, 32)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_pass_switch_control_delayed",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32),
-       IntegerType::get(context, 32), IntegerType::get(context, 32),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_mos_drive_delayed", IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32),
-       IntegerType::get(context, 32), IntegerType::get(context, 32),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_power_cancel_nba", IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 64)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_power_nba", IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_power_nba_after", IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_power_nba_view", IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 32),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_nba", IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_generic_nba_words",
-      LLVM::LLVMPointerType::get(context),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_nba_scalar",
-      LLVM::LLVMVoidType::get(context),
-      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_generic_nba_pending",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_nba_if_changed",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_packed_slice_nba",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 32),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_driver_nba", IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_inertial_driver",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 32),
-       IntegerType::get(context, 32), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_inertial_path_driver",
-                           IntegerType::get(context, 32),
-                           {LLVM::LLVMPointerType::get(context),
-                            LLVM::LLVMPointerType::get(context),
-                            LLVM::LLVMPointerType::get(context),
-                            IntegerType::get(context, 64),
-                            IntegerType::get(context, 64),
-                            IntegerType::get(context, 64),
-                            IntegerType::get(context, 64),
-                            IntegerType::get(context, 32),
-                            IntegerType::get(context, 32),
-                            IntegerType::get(context, 32),
-                            IntegerType::get(context, 32),
-                            IntegerType::get(context, 64),
-                            IntegerType::get(context, 64),
-                            IntegerType::get(context, 64),
-                            LLVM::LLVMPointerType::get(context),
-                            LLVM::LLVMPointerType::get(context),
-                            LLVM::LLVMPointerType::get(context),
-                            LLVM::LLVMPointerType::get(context),
-                            LLVM::LLVMPointerType::get(context),
-                            LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_inertial_path_driver_pulse",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 64),       IntegerType::get(context, 64),
-       IntegerType::get(context, 64),       IntegerType::get(context, 32),
-       IntegerType::get(context, 32),       IntegerType::get(context, 32),
-       IntegerType::get(context, 32),       IntegerType::get(context, 64),
-       IntegerType::get(context, 64),       IntegerType::get(context, 64),
-       IntegerType::get(context, 64),       IntegerType::get(context, 64),
-       LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_inertial_path_storage",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 64),       IntegerType::get(context, 64),
-       IntegerType::get(context, 64),       IntegerType::get(context, 32),
-       IntegerType::get(context, 32),       IntegerType::get(context, 32),
-       IntegerType::get(context, 32),       IntegerType::get(context, 64),
-       IntegerType::get(context, 64),       IntegerType::get(context, 64),
-       LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_inertial_path_storage_pulse",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 64),       IntegerType::get(context, 64),
-       IntegerType::get(context, 64),       IntegerType::get(context, 32),
-       IntegerType::get(context, 32),       IntegerType::get(context, 32),
-       IntegerType::get(context, 32),       IntegerType::get(context, 32),
-       IntegerType::get(context, 64),       IntegerType::get(context, 64),
-       IntegerType::get(context, 64),       IntegerType::get(context, 64),
-       IntegerType::get(context, 64),       LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_inertial_driver_strength_pair",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 32), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_inertial_path_strength_pair",
-      IntegerType::get(context, 32), {LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context),
-                                      IntegerType::get(context, 64),
-                                      IntegerType::get(context, 64),
-                                      IntegerType::get(context, 64),
-                                      IntegerType::get(context, 64),
-                                      IntegerType::get(context, 64),
-                                      IntegerType::get(context, 32),
-                                      IntegerType::get(context, 32),
-                                      IntegerType::get(context, 32),
-                                      IntegerType::get(context, 64),
-                                      IntegerType::get(context, 64),
-                                      IntegerType::get(context, 64),
-                                      LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_inertial_path_strength_pair_pulse",
-      IntegerType::get(context, 32), {LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context),
-                                      IntegerType::get(context, 64),
-                                      IntegerType::get(context, 64),
-                                      IntegerType::get(context, 64),
-                                      IntegerType::get(context, 64),
-                                      IntegerType::get(context, 64),
-                                      IntegerType::get(context, 32),
-                                      IntegerType::get(context, 32),
-                                      IntegerType::get(context, 32),
-                                      IntegerType::get(context, 32),
-                                      IntegerType::get(context, 64),
-                                      IntegerType::get(context, 64),
-                                      IntegerType::get(context, 64),
-                                      IntegerType::get(context, 64),
-                                      IntegerType::get(context, 64),
-                                      LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_resolve_drivers",
-                           IntegerType::get(context, 32),
-                           {LLVM::LLVMPointerType::get(context),
-                            IntegerType::get(context, 64),
-                            IntegerType::get(context, 64)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_clocking_nba",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_clocking_driver_nba",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_static_nba", IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_static_nba_claim", IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32),
-       LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_static_nba_packed",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32),
-       LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_static_nba_stage_wide",
-      LLVM::LLVMVoidType::get(context),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 32)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_string_nba", IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_managed_nba",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       IntegerType::get(context, 64), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 64)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_managed_nba_masked",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       IntegerType::get(context, 64), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       IntegerType::get(context, 64), IntegerType::get(context, 64)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_fail", LLVM::LLVMVoidType::get(context),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_native_state_alloc", IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_native_state_alloc_with_roots",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_native_state_alloc_with_typed_roots",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_native_state_retain", IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_native_state_release", IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 32)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_native_state_load_plane",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 32),
-       IntegerType::get(context, 32), LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_native_state_store_plane",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 32),
-       LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_native_frame_store", LLVM::LLVMVoidType::get(context),
-      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 32),
-       IntegerType::get(context, 32), IntegerType::get(context, 64),
-       IntegerType::get(context, 64)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_native_state_store_continuous_plane",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 32),
-       LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_native_override", IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 32), IntegerType::get(context, 32),
-       LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_native_dynamic_override",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 32), IntegerType::get(context, 32),
-       IntegerType::get(context, 64), IntegerType::get(context, 32),
-       LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_native_release_override",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 64),
-       IntegerType::get(context, 32), IntegerType::get(context, 32)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_argument_ref_load", IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 32), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 32),
-       IntegerType::get(context, 32), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_argument_ref_store", IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
-       IntegerType::get(context, 32), IntegerType::get(context, 64),
-       IntegerType::get(context, 64), IntegerType::get(context, 32),
-       IntegerType::get(context, 32), LLVM::LLVMPointerType::get(context),
-       LLVM::LLVMPointerType::get(context)});
-  Type managedPointer = LLVM::LLVMPointerType::get(context);
-  Type managedI32 = IntegerType::get(context, 32);
-  Type managedI64 = IntegerType::get(context, 64);
-  Type managedF64 = Float64Type::get(context);
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_gc_current_lane",
-                           managedPointer, {managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_gc_root_push", managedI32,
-                           {managedPointer, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_gc_root_pop", managedI32,
-                           {managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_gc_root_range_push", managedI32,
-      {managedPointer, managedPointer, managedPointer, managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_gc_root_range_pop", managedI32,
-                           {managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_gc_managed_root_range_push", managedI32,
-      {managedPointer, managedPointer, managedPointer, managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_gc_managed_root_range_pop",
-                           managedI32, {managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_gc_candidate_root", managedI64,
-                           {managedPointer, managedI64, managedI32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_gc_safepoint", managedI32,
-                           {managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_object_allocate", managedI32,
-                           {managedPointer, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_reference_path_index_create", managedI32,
-      {managedPointer, managedPointer, managedI64, managedPointer, managedI64,
-       managedI32, managedPointer, managedPointer, managedI64, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_reference_path_covergroup_option_create", managedI32,
-      {managedPointer, managedI64, managedI64, managedI64, managedI32,
-       managedI64, managedI64, managedI32, managedPointer, managedI64,
-       managedI32, managedPointer, managedPointer, managedI64, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_reference_path_string_character_create", managedI32,
-      {managedPointer, managedI64, managedI64, managedPointer, managedI64,
-       managedI32, managedPointer, managedPointer, managedI64, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_reference_path_aggregate_element_create", managedI32,
-      {managedPointer, managedPointer, managedI64,    managedI32,
-       managedPointer, managedPointer, managedI64,    managedI64,
-       managedI64,     managedI64,     managedI64,    managedI64,
-       managedI64,     managedI32,     managedI64,    managedI32,
-       managedI32,     managedI64,     managedI64,    managedI64,
-       managedPointer, managedI64,     managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_container_size", managedI64,
-                           {managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_vpi_frame_bind", managedI32,
-                           {managedPointer, managedI64, managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_box_bind_type", managedI32,
-                           {managedPointer, managedPointer, managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_box_is_type", managedI32,
-                           {managedPointer, managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_container_read_checked",
-                           managedI32,
-                           {managedPointer, managedI64, managedPointer,
-                            managedI64, managedPointer, managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_container_create_like",
-                           managedI32,
-                           {managedPointer, managedPointer, managedPointer,
-                            managedI64, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_container_create_typed", managedI32,
-      {managedPointer, managedI32, managedI64, managedI32, managedI32,
-       managedI64, managedI64, managedI64, managedPointer, managedI64,
-       managedI64, managedI64, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_container_create_typed_pattern", managedI32,
-      {managedPointer, managedI32, managedI64, managedI32, managedI32,
-       managedI64, managedI64, managedI64, managedPointer, managedI64,
-       managedPointer, managedI64, managedI64, managedI64, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_mailbox_create_typed",
-                           managedI32,
-                           {managedPointer, managedI64, managedI32, managedI32,
-                            managedI64, managedI64, managedI64, managedPointer,
-                            managedI64, managedI64, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_container_clone", managedI32,
-                           {managedPointer, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_container_swap", managedI32,
-                           {managedPointer, managedI64, managedI64});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_container_import_fixed", managedI32,
-      {managedPointer, managedPointer, managedPointer, managedPointer,
-       managedI64, managedI64, managedI32, managedI64, managedI64});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_container_export_fixed", managedI32,
-      {managedPointer, managedPointer, managedPointer, managedI64, managedI64,
-       managedI32, managedI64, managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_container_delete", managedI32,
-                           {managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_queue_delete_index", managedI32,
-                           {managedPointer, managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_queue_read_delete_checked",
-                           managedI32, {managedPointer, managedI64,
-                                        managedPointer, managedI64,
-                                        managedPointer, managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_queue_insert", managedI32,
-                           {managedPointer, managedPointer, managedI64,
-                            managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_mailbox_try_put", managedI32,
-                           {managedPointer, managedPointer, managedPointer,
-                            managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_mailbox_num", managedI32,
-                           {managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_mailbox_try_peek", managedI32,
-      {managedPointer, managedPointer, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_mailbox_try_get", managedI32,
-      {managedPointer, managedPointer, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_semaphore_create", managedI32,
-                           {managedPointer, managedI32, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_semaphore_put", managedI32,
-                           {managedPointer, managedI32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_semaphore_try_get", managedI32,
-                           {managedPointer, managedI32, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_random_bounded", managedI32,
-                           {managedPointer, managedI64, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_random_distribution",
-                           managedI32,
-                           {managedPointer, managedI32, managedI32, managedI32,
-                            managedI32, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_stochastic_queue", managedI32,
-                           {managedPointer, managedI32, managedI32, managedI32,
-                            managedI32, managedI32, managedI32, managedI32,
-                            managedI64, managedPointer, managedPointer,
-                            managedPointer, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_random_cycle_next", managedI32,
-      {managedI64, managedI64, managedI32, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_random_next", managedI32,
-                           {managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_random_initialization_enter",
-                           managedI32,
-                           {managedPointer, managedI64, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_random_initialization_leave",
-                           managedI32, {managedPointer, managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_random_legacy", managedI32,
-                           {managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_random_get_state", managedI32,
-                           {managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_random_set_state", managedI32,
-                           {managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_random_seed", managedI32,
-                           {managedPointer, managedI64});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_sampled_read", managedI32,
-      {managedPointer, managedI64, managedI64, managedPointer, managedPointer});
-  auto snapshot =
-      getOrDeclareLLVMFunction(module, "talos_rt_v1_sampled_plane",
-                               managedPointer, {managedPointer, managedI32});
+    declareNativeRuntime(module, Entry::StaticNbaSpecializationGuardWrite);
+  declareNativeRuntimes(module, {Entry::SchedulerEvent,
+                                 Entry::SchedulerEventCreate,
+                                 Entry::SchedulerEventAfter,
+                                 Entry::SchedulerEventReplaceAfter,
+                                 Entry::SchedulerEventTriggered,
+                                 Entry::ClockingOutputTrack,
+                                 Entry::ClockingOutputCurrent,
+                                 Entry::SchedulerWaitOrderFailed,
+                                 Entry::ClockOccurrenceConsume,
+                                 Entry::NochangeUpdate,
+                                 Entry::NativeHandleOffset,
+                                 Entry::NetCountDrivers,
+                                 Entry::PassSwitchControl,
+                                 Entry::PassSwitchControlDelayed,
+                                 Entry::MosDriveDelayed,
+                                 Entry::PowerCancelNba,
+                                 Entry::PowerNba,
+                                 Entry::PowerNbaAfter,
+                                 Entry::PowerNbaView,
+                                 Entry::SchedulerNba,
+                                 Entry::SchedulerGenericNbaWords,
+                                 Entry::SchedulerNbaScalar,
+                                 Entry::SchedulerGenericNbaPending,
+                                 Entry::SchedulerNbaIfChanged,
+                                 Entry::SchedulerPackedSliceNba,
+                                 Entry::SchedulerDriverNba,
+                                 Entry::SchedulerInertialDriver,
+                                 Entry::SchedulerInertialPathDriver,
+                                 Entry::SchedulerInertialPathDriverPulse,
+                                 Entry::SchedulerInertialPathStorage,
+                                 Entry::SchedulerInertialPathStoragePulse,
+                                 Entry::SchedulerInertialDriverStrengthPair,
+                                 Entry::SchedulerInertialPathStrengthPair,
+                                 Entry::SchedulerInertialPathStrengthPairPulse,
+                                 Entry::SchedulerResolveDrivers,
+                                 Entry::SchedulerClockingNba,
+                                 Entry::SchedulerClockingDriverNba,
+                                 Entry::SchedulerStaticNba,
+                                 Entry::StaticNbaClaim,
+                                 Entry::SchedulerStaticNbaPacked,
+                                 Entry::StaticNbaStageWide,
+                                 Entry::SchedulerStringNba,
+                                 Entry::SchedulerManagedNba,
+                                 Entry::SchedulerManagedNbaMasked,
+                                 Entry::SchedulerFail,
+                                 Entry::NativeStateAlloc,
+                                 Entry::NativeStateAllocWithRoots,
+                                 Entry::NativeStateAllocWithTypedRoots,
+                                 Entry::NativeStateRetain,
+                                 Entry::NativeStateRelease,
+                                 Entry::NativeStateLoadPlane,
+                                 Entry::NativeStateStorePlane,
+                                 Entry::NativeFrameStore,
+                                 Entry::NativeStateStoreContinuousPlane,
+                                 Entry::NativeOverride,
+                                 Entry::NativeDynamicOverride,
+                                 Entry::NativeReleaseOverride,
+                                 Entry::ArgumentRefLoad,
+                                 Entry::ArgumentRefStore,
+                                 Entry::GcCurrentLane,
+                                 Entry::GcRootPush,
+                                 Entry::GcRootPop,
+                                 Entry::GcRootRangePush,
+                                 Entry::GcRootRangePop,
+                                 Entry::GcManagedRootRangePush,
+                                 Entry::GcManagedRootRangePop,
+                                 Entry::GcCandidateRoot,
+                                 Entry::GcSafepoint,
+                                 Entry::ObjectAllocate,
+                                 Entry::ReferencePathIndexCreate,
+                                 Entry::ReferencePathCovergroupOptionCreate,
+                                 Entry::ReferencePathStringCharacterCreate,
+                                 Entry::ReferencePathAggregateElementCreate,
+                                 Entry::ContainerSize,
+                                 Entry::VpiFrameBind,
+                                 Entry::BoxBindType,
+                                 Entry::BoxIsType,
+                                 Entry::ContainerReadChecked,
+                                 Entry::ContainerCreateLike,
+                                 Entry::ContainerCreateTyped,
+                                 Entry::ContainerCreateTypedPattern,
+                                 Entry::MailboxCreateTyped,
+                                 Entry::ContainerClone,
+                                 Entry::ContainerSwap,
+                                 Entry::ContainerImportFixed,
+                                 Entry::ContainerExportFixed,
+                                 Entry::ContainerDelete,
+                                 Entry::QueueDeleteIndex,
+                                 Entry::QueueReadDeleteChecked,
+                                 Entry::QueueInsert,
+                                 Entry::MailboxTryPut,
+                                 Entry::MailboxNum,
+                                 Entry::MailboxTryPeek,
+                                 Entry::MailboxTryGet,
+                                 Entry::SemaphoreCreate,
+                                 Entry::SemaphorePut,
+                                 Entry::SemaphoreTryGet,
+                                 Entry::RandomBounded,
+                                 Entry::RandomDistribution,
+                                 Entry::StochasticQueue,
+                                 Entry::RandomCycleNext,
+                                 Entry::RandomNext,
+                                 Entry::RandomInitializationEnter,
+                                 Entry::RandomInitializationLeave,
+                                 Entry::RandomLegacy,
+                                 Entry::RandomGetState,
+                                 Entry::RandomSetState,
+                                 Entry::RandomSeed,
+                                 Entry::SampledRead});
+  auto snapshot = declareNativeRuntime(module, Entry::SampledPlane);
   auto none = LLVM::ModRefInfo::NoModRef;
   snapshot.setMemoryEffectsAttr(LLVM::MemoryEffectsAttr::get(
       context, none, LLVM::ModRefInfo::Ref, none, none, none, none));
   snapshot.setNoUnwind(true);
   snapshot.setWillReturn(true);
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_sampled_word", managedI64,
-                           {managedPointer, managedI64, managedI32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_sampled_history", managedI32,
-                           {managedPointer, managedI64, managedI64, managedI64,
-                            managedI32, managedI32, managedPointer,
-                            managedPointer, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_clocked_sample_update", managedI32,
-      {managedPointer, managedI64, managedI64, managedI64, managedI32,
-       managedI32, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_clocked_sample_read", managedI32,
-      {managedPointer, managedI64, managedI64, managedI64, managedI64,
-       managedI32, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_random_solve_modes_state", managedI32,
-      {managedPointer, managedPointer, managedI64, managedI64, managedI64,
-       managedI64, managedI64, managedI64, managedI64, managedPointer,
-       managedI64, managedPointer, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_random_solve_wide_modes_state", managedI32,
-      {managedPointer, managedPointer, managedI64, managedPointer,
-       managedPointer, managedI64, managedI64, managedI64, managedI64,
-       managedI64, managedPointer, managedI64, managedPointer, managedI64,
-       managedPointer, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_random_function_stage", managedI32,
-      {managedPointer, managedPointer, managedI64, managedPointer,
-       managedPointer, managedI64, managedI64, managedI64, managedI64,
-       managedI64, managedPointer, managedI64, managedPointer, managedI64,
-       managedPointer, managedPointer, managedPointer, managedPointer,
-       managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_random_cycle_sample", managedI32,
-      {managedPointer, managedPointer, managedI64,     managedPointer,
-       managedPointer, managedI64,     managedI64,     managedI64,
-       managedI64,     managedI64,     managedI64,     managedI64,
-       managedI32,     managedI32,     managedPointer, managedI64,
-       managedPointer, managedI64,     managedPointer, managedPointer,
-       managedPointer, managedPointer, managedPointer, managedPointer});
+  declareNativeRuntimes(
+      module, {Entry::SampledWord, Entry::SampledHistory,
+               Entry::ClockedSampleUpdate, Entry::ClockedSampleRead,
+               Entry::RandomSolveModesState, Entry::RandomSolveWideModesState,
+               Entry::RandomFunctionStage, Entry::RandomCycleSample});
   for (Type floating : {Type(Float32Type::get(module.getContext())),
                         Type(Float64Type::get(module.getContext()))}) {
-    std::string prefix = floating.isF32() ? "talos_rt_v1_random_real32"
-                                          : "talos_rt_v1_random_real64";
-    getOrDeclareLLVMFunction(module, prefix + "_to_rank", managedI32,
-                             {floating, managedPointer, managedI64});
-    getOrDeclareLLVMFunction(module, prefix + "_from_rank", managedI32,
-                             {managedPointer, managedI64, managedPointer});
+    bool single = floating.isF32();
+    declareNativeRuntime(module, single ? Entry::RandomReal32ToRank
+                                        : Entry::RandomReal64ToRank);
+    declareNativeRuntime(module, single ? Entry::RandomReal32FromRank
+                                        : Entry::RandomReal64FromRank);
   }
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_covergroup_set_enabled", managedI32,
-      {managedPointer, managedI64, managedI64, managedI32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_covergroup_set_name",
-                           managedI32,
-                           {managedPointer, managedI64, managedI64});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_covergroup_set_integer_option", managedI32,
-      {managedPointer, managedI64, managedI64, managedI32, managedI64});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_covergroup_get_integer_option", managedI32,
-      {managedPointer, managedI64, managedI64, managedI32, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_covergroup_set_string_option", managedI32,
-      {managedPointer, managedI64, managedI64, managedI32, managedI64});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_covergroup_get_string_option", managedI32,
-      {managedPointer, managedI64, managedI64, managedI32, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_covergroup_set_type_integer_option", managedI32,
-      {managedPointer, managedI64, managedI64, managedI32, managedI64});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_covergroup_set_type_string_option", managedI32,
-      {managedPointer, managedI64, managedI64, managedI32, managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_covergroup_sample_enabled",
-                           managedI32,
-                           {managedPointer, managedI64, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_covergroup_clock_event_register", managedI32,
-      {managedPointer, managedPointer, managedI64, managedI32, managedI64,
-       managedPointer, managedI32});
+  declareNativeRuntimes(
+      module,
+      {Entry::CovergroupSetEnabled, Entry::CovergroupSetName,
+       Entry::CovergroupSetIntegerOption, Entry::CovergroupGetIntegerOption,
+       Entry::CovergroupSetStringOption, Entry::CovergroupGetStringOption,
+       Entry::CovergroupSetTypeIntegerOption,
+       Entry::CovergroupSetTypeStringOption, Entry::CovergroupSampleEnabled,
+       Entry::CovergroupClockEventRegister});
   bool eventSnapshots = false;
   module.walk([&](Operation *op) {
     eventSnapshots |=
@@ -820,370 +177,120 @@ void declareNativeRuntimeABI(ModuleOp module) {
             sim::SimEventSnapshotFlushOp>(op);
   });
   if (eventSnapshots) {
-    getOrDeclareLLVMFunction(
-        module, "talos_rt_v1_event_snapshot_register", managedI32,
-        {managedPointer, managedPointer, managedI64, managedI64, managedPointer,
-         managedI32, managedPointer, managedI32});
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_event_snapshot_mask",
-                             managedI32, {managedPointer, managedPointer});
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_event_snapshot_flush",
-                             managedI32, {managedPointer});
+    declareNativeRuntime(module, Entry::EventSnapshotRegister);
+    declareNativeRuntime(module, Entry::EventSnapshotMask);
+    declareNativeRuntime(module, Entry::EventSnapshotFlush);
   }
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_covergroup_block_event_register", managedI32,
-      {managedPointer, managedI64, managedPointer, managedI64, managedPointer,
-       managedI32, managedPointer, managedPointer, managedI32});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_covergroup_block_event_fire", managedI32,
-      {managedPointer, managedI64, managedI32, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_covergroup_prepare", managedI32,
-      {managedPointer, managedI64, managedPointer, managedI64, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_covergroup_candidates", managedI32,
-      {managedPointer, managedI64, managedI64, managedPointer, managedI32});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_covergroup_bind_with", managedI32,
-      {managedPointer, managedI64, managedI64, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_covergroup_release_preparation",
-                           managedI32, {managedPointer, managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_covergroup_create", managedI32,
-                           {managedPointer, managedI64, managedPointer,
-                            managedI64, managedPointer, managedI64,
-                            managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_covergroup_formal_read", managedI32,
-      {managedPointer, managedI64, managedI64, managedI32, managedI64,
-       managedI64, managedPointer, managedPointer, managedI64, managedPointer,
-       managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_covergroup_sample", managedI32,
-      {managedPointer, managedI64, managedPointer, managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_covergroup_instance_query",
-                           managedI32,
-                           {managedPointer, managedI64, managedI64,
-                            managedPointer, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_covergroup_type_query",
-                           managedI32,
-                           {managedPointer, managedI64, managedI64,
-                            managedPointer, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_coverage_point_hit", managedI32,
-                           {managedPointer, managedI64, managedI32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_coverage_control_definition",
-                           managedI32,
-                           {managedPointer, managedI32, managedI32, managedI32,
-                            managedI64, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_coverage_control_instance",
-                           managedI32,
-                           {managedPointer, managedI32, managedI32, managedI32,
-                            managedI64, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_coverage_query_definition",
-                           managedI32,
-                           {managedPointer, managedI32, managedI32, managedI64,
-                            managedI32, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_coverage_query_instance",
-                           managedI32,
-                           {managedPointer, managedI32, managedI32, managedI64,
-                            managedI32, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_coverage_database_save", managedI32,
-      {managedPointer, managedI32, managedI64, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_coverage_database_merge", managedI32,
-      {managedPointer, managedI32, managedI64, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_functional_coverage_get",
-                           managedI32, {managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module,
-                           "talos_rt_v1_functional_coverage_set_db_name",
-                           managedI32, {managedPointer, managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_functional_coverage_load_db",
-                           managedI32, {managedPointer, managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_coverage_finalize", managedI32,
-                           {managedPointer, managedI64, managedI64,
-                            managedPointer, managedPointer, managedI32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_coverage_snapshot", managedI32,
-                           {managedPointer, managedI32, managedI64});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_container_read", managedI32,
-      {managedPointer, managedI64, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_queue_push", managedI32,
-                           {managedPointer, managedPointer, managedI32,
-                            managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_container_write", managedI32,
-                           {managedPointer, managedPointer, managedI64,
-                            managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_assoc_create_typed", managedI32,
-                           {managedPointer, managedI64, managedI32, managedI32,
-                            managedI64, managedI64, managedI64, managedPointer,
-                            managedI64, managedI32, managedI64,
-                            managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_assoc_create_element_keyed", managedI32,
-      {managedPointer, managedI64, managedI32,     managedI32, managedI64,
-       managedI64,     managedI64, managedPointer, managedI64, managedI64,
-       managedI32,     managedI32, managedI64,     managedI64, managedI64,
-       managedPointer, managedI64, managedPointer, managedI64, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_assoc_read_checked", managedI32,
-                           {managedPointer, managedPointer, managedPointer,
-                            managedI64, managedPointer, managedI64,
-                            managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_assoc_write_checked", managedI32,
-      {managedPointer, managedPointer, managedPointer, managedPointer,
-       managedI64, managedPointer, managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_assoc_exists", managedI32,
-                           {managedPointer, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_assoc_delete", managedI32,
-                           {managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_assoc_set_default_checked",
-                           managedI32,
-                           {managedPointer, managedPointer, managedPointer,
-                            managedI64, managedPointer, managedI64});
-  for (StringRef name : {"talos_rt_v1_assoc_first", "talos_rt_v1_assoc_last",
-                         "talos_rt_v1_assoc_next", "talos_rt_v1_assoc_prev"})
-    getOrDeclareLLVMFunction(
-        module, name, managedI32,
-        {managedPointer, managedPointer, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_reference_path_assoc_create", managedI32,
-      {managedPointer, managedPointer, managedPointer, managedPointer,
-       managedI64, managedI32, managedPointer, managedPointer, managedI64,
-       managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_object_shallow_copy", managedI32,
-      {managedPointer, managedPointer, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_object_read", managedI32,
-      {managedPointer, managedI64, managedPointer, managedI64});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_object_write", managedI32,
-      {managedPointer, managedI64, managedPointer, managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_object_bits_insert", managedI32,
-                           {managedPointer, managedI64, managedI64, managedI64,
-                            managedI32, managedI64, managedI32});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_object_read_planes", managedI32,
-      {managedPointer, managedI64, managedPointer, managedPointer, managedI64});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_object_write_planes", managedI32,
-      {managedPointer, managedI64, managedPointer, managedPointer, managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_object_field_load", managedI32,
-                           {managedPointer, managedI64, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_object_field_store", managedI32,
-                           {managedPointer, managedI64, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_object_override", managedI32,
-                           {managedPointer, managedI64, managedI64, managedI32,
-                            managedI32, managedI32, managedI64, managedI32,
-                            managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_object_release_override", managedI32,
-      {managedPointer, managedI64, managedI64, managedI32, managedI32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_object_is_instance", managedI32,
-                           {managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_object_id", managedI64,
-                           {managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_managed_watch", managedI64,
-                           {managedPointer, managedI32, managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_object_cast", managedI32,
-                           {managedPointer, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_method_invoke", managedI32,
-                           {managedPointer, managedPointer, managedI64,
-                            managedI64, managedPointer, managedI32,
-                            managedPointer, managedI64});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_interface_method_invoke", managedI32,
-      {managedPointer, managedPointer, managedI64, managedI64, managedI64,
-       managedPointer, managedI32, managedPointer, managedI64});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_method_task_activate", managedI32,
-      {managedPointer, managedPointer, managedI64, managedI64, managedPointer,
-       managedI32, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_interface_method_task_activate", managedI32,
-      {managedPointer, managedPointer, managedI64, managedI64, managedI64,
-       managedPointer, managedI32, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_weak_create", managedI32,
-      {managedPointer, managedPointer, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_weak_get", managedI32,
-                           {managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_weak_clear", managedI32,
-                           {managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_string_create", managedI32,
-      {managedPointer, managedPointer, managedI64, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_string_from_packed", managedI32,
-                           {managedPointer, managedPointer, managedPointer,
-                            managedI64, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_string_to_packed", managedI32,
-      {managedI64, managedPointer, managedPointer, managedI64});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_string_concat_many", managedI32,
-      {managedPointer, managedPointer, managedI64, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_string_repeat", managedI32,
-      {managedPointer, managedI64, managedI64, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_string_length", managedI64,
-                           {managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_string_getc", managedI32,
-                           {managedI64, managedI64});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_string_putc", managedI32,
-      {managedPointer, managedI64, managedI64, managedI32, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_string_substr", managedI32,
-      {managedPointer, managedI64, managedI64, managedI64, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_string_compare", managedI32,
-                           {managedI64, managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_string_compare_insensitive",
-                           managedI32, {managedI64, managedI64});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_string_case_convert", managedI32,
-      {managedPointer, managedI64, managedI32, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_string_parse_integer",
-                           managedI32,
-                           {managedI64, managedI32, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_string_parse_logic", managedI32,
-      {managedI64, managedI32, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_string_parse_real", managedI32,
-                           {managedI64, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_string_parse_real_constant",
-                           managedI32, {managedI64, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_string_format_integer", managedI32,
-      {managedPointer, managedI64, managedI32, managedI32, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_string_format_real", managedI32,
-                           {managedPointer, managedF64, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_file_open_string_mcd",
-                           managedI32,
-                           {managedPointer, managedI64, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_file_open_string", managedI32,
-      {managedPointer, managedI64, managedI64, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_dump_open_string", managedI32,
-                           {managedPointer, managedI64});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_dump_ports", managedI32,
-      {managedPointer, managedI64, managedI64, managedI32});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_dump_ports_control", managedI32,
-      {managedPointer, managedI64, managedI32, managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_file_getline_string",
-                           managedI32,
-                           {managedPointer, managedPointer, managedI32,
-                            managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_file_scan_field", managedI32,
-                           {managedPointer, managedPointer, managedI32,
-                            managedI32, managedPointer, managedI64, managedI32,
-                            managedI64, managedPointer, managedPointer,
-                            managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_file_scan_raw", managedI32,
-      {managedPointer, managedI32, managedI32, managedPointer, managedI64,
-       managedI64, managedI64, managedI32, managedI64, managedPointer,
-       managedI64, managedPointer, managedI64, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_file_error_string", managedI32,
-                           {managedPointer, managedPointer, managedI32,
-                            managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_string_scan_field", managedI32,
-                           {managedPointer, managedI64, managedI32,
-                            managedPointer, managedI64, managedI32, managedI64,
-                            managedPointer, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_string_scan_raw", managedI32,
-                           {managedI64, managedI32, managedPointer, managedI64,
-                            managedI64, managedI64, managedI32, managedI64,
-                            managedPointer, managedI64, managedPointer,
-                            managedI64, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_plusarg_test", managedI32,
-                           {managedPointer, managedI64, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_plusarg_value", managedI32,
-                           {managedPointer, managedPointer, managedI64,
-                            managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_plusarg_scan", managedI32,
-                           {managedPointer, managedPointer, managedI64,
-                            managedPointer, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_plusarg_parse_logic",
-                           managedI32,
-                           {managedI64, managedI32, managedI64, managedPointer,
-                            managedI64, managedPointer, managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_plusarg_parse_real", managedI32,
-                           {managedI64, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_system", managedI32,
-                           {managedPointer, managedI64, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_import_call", managedI32,
-                           {managedPointer, managedPointer, managedPointer,
-                            managedI32, managedPointer, managedI32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_import_call_noncontext",
-                           managedI32,
-                           {managedPointer, managedPointer, managedPointer,
-                            managedI32, managedPointer, managedI32});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_import_call_guarded", managedI32,
-      {managedI32, managedPointer, managedPointer, managedPointer, managedI32,
-       managedPointer, managedI32});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_import_call_noncontext_guarded", managedI32,
-      {managedI32, managedPointer, managedPointer, managedPointer, managedI32,
-       managedPointer, managedI32});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_dpi_open_array_pack", managedI32,
-      {managedPointer, managedPointer, managedI64, managedI64, managedI32,
-       managedI32, managedI32, managedI64, managedI32, managedPointer,
-       managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_dpi_open_array_unpack",
-                           managedI32,
-                           {managedPointer, managedI64, managedI32, managedI32,
-                            managedI64, managedPointer, managedPointer,
-                            managedI64, managedI64, managedI32, managedI32});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_dpi_open_array_aggregate_pack", managedI32,
-      {managedPointer, managedPointer, managedI64, managedI64, managedI32,
-       managedI32, managedI64, managedI32, managedPointer, managedI32,
-       managedPointer, managedI64, managedI64, managedI64, managedI64,
-       managedPointer, managedI64});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_dpi_open_array_aggregate_unpack", managedI32,
-      {managedPointer, managedPointer, managedI64, managedI64, managedPointer,
-       managedI64, managedI64, managedI32, managedPointer, managedI32,
-       managedPointer, managedPointer, managedI64, managedI64, managedI32,
-       managedI32});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_dpi_open_array_prepare_recursive", managedI32,
-      {managedPointer, managedPointer, managedI64, managedI64, managedI32,
-       managedI32, managedI32, managedI32, managedI32, managedI32, managedI32,
-       managedI64, managedI32, managedI64, managedPointer, managedI64,
-       managedPointer, managedI32, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_dpi_open_array_finish_recursive", managedI32,
-      {managedI32, managedPointer, managedPointer, managedPointer,
-       managedPointer, managedI64, managedI64, managedI32, managedI32,
-       managedI32, managedI64, managedPointer, managedI64, managedPointer,
-       managedI32});
-  getOrDeclareLLVMFunction(module,
-                           "talos_rt_v1_dpi_open_array_release_recursive",
-                           LLVM::LLVMVoidType::get(context), {managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_dpi_aggregate_pack", managedI32,
-                           {managedPointer, managedPointer, managedI64,
-                            managedI64, managedI32, managedPointer, managedI64,
-                            managedI64, managedPointer, managedI64});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_dpi_aggregate_unpack", managedI32,
-      {managedPointer, managedPointer, managedI64, managedPointer, managedI64,
-       managedPointer, managedPointer, managedI64, managedI64, managedI32});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_dpi_aggregate_roots_push", managedI32,
-      {managedPointer, managedPointer, managedI64, managedI64, managedPointer,
-       managedI64, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_dpi_aggregate_roots_pop",
-                           managedI32, {managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_dpi_aggregate_export_pack", managedI32,
-      {managedPointer, managedPointer, managedI64, managedI64, managedI32,
-       managedPointer, managedI64, managedPointer, managedI64, managedI32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_dpi_current_context",
-                           managedPointer, {});
+  declareNativeRuntimes(module, {Entry::CovergroupBlockEventRegister,
+                                 Entry::CovergroupBlockEventFire,
+                                 Entry::CovergroupPrepare,
+                                 Entry::CovergroupCandidates,
+                                 Entry::CovergroupBindWith,
+                                 Entry::CovergroupReleasePreparation,
+                                 Entry::CovergroupCreate,
+                                 Entry::CovergroupFormalRead,
+                                 Entry::CovergroupSample,
+                                 Entry::CovergroupInstanceQuery,
+                                 Entry::CovergroupTypeQuery,
+                                 Entry::CoveragePointHit,
+                                 Entry::CoverageControlDefinition,
+                                 Entry::CoverageControlInstance,
+                                 Entry::CoverageQueryDefinition,
+                                 Entry::CoverageQueryInstance,
+                                 Entry::CoverageDatabaseSave,
+                                 Entry::CoverageDatabaseMerge,
+                                 Entry::FunctionalCoverageGet,
+                                 Entry::FunctionalCoverageSetDbName,
+                                 Entry::FunctionalCoverageLoadDb,
+                                 Entry::CoverageFinalize,
+                                 Entry::CoverageSnapshot,
+                                 Entry::ContainerRead,
+                                 Entry::QueuePush,
+                                 Entry::ContainerWrite,
+                                 Entry::AssocCreateTyped,
+                                 Entry::AssocCreateElementKeyed,
+                                 Entry::AssocReadChecked,
+                                 Entry::AssocWriteChecked,
+                                 Entry::AssocExists,
+                                 Entry::AssocDelete,
+                                 Entry::AssocSetDefaultChecked});
+  for (NativeRuntimeEntry entry : {Entry::AssocFirst, Entry::AssocLast,
+                                   Entry::AssocNext, Entry::AssocPrev})
+    declareNativeRuntime(module, entry);
+  declareNativeRuntimes(module, {Entry::ReferencePathAssocCreate,
+                                 Entry::ObjectShallowCopy,
+                                 Entry::ObjectRead,
+                                 Entry::ObjectWrite,
+                                 Entry::ObjectBitsInsert,
+                                 Entry::ObjectReadPlanes,
+                                 Entry::ObjectWritePlanes,
+                                 Entry::ObjectFieldLoad,
+                                 Entry::ObjectFieldStore,
+                                 Entry::ObjectOverride,
+                                 Entry::ObjectReleaseOverride,
+                                 Entry::ObjectIsInstance,
+                                 Entry::ObjectId,
+                                 Entry::ManagedWatch,
+                                 Entry::ObjectCast,
+                                 Entry::MethodInvoke,
+                                 Entry::InterfaceMethodInvoke,
+                                 Entry::MethodTaskActivate,
+                                 Entry::InterfaceMethodTaskActivate,
+                                 Entry::WeakCreate,
+                                 Entry::WeakGet,
+                                 Entry::WeakClear,
+                                 Entry::StringCreate,
+                                 Entry::StringFromPacked,
+                                 Entry::StringToPacked,
+                                 Entry::StringConcatMany,
+                                 Entry::StringRepeat,
+                                 Entry::StringLength,
+                                 Entry::StringGetc,
+                                 Entry::StringPutc,
+                                 Entry::StringSubstr,
+                                 Entry::StringCompare,
+                                 Entry::StringCompareInsensitive,
+                                 Entry::StringCaseConvert,
+                                 Entry::StringParseInteger,
+                                 Entry::StringParseLogic,
+                                 Entry::StringParseReal,
+                                 Entry::StringParseRealConstant,
+                                 Entry::StringFormatInteger,
+                                 Entry::StringFormatReal,
+                                 Entry::FileOpenStringMcd,
+                                 Entry::FileOpenString,
+                                 Entry::DumpOpenString,
+                                 Entry::DumpPorts,
+                                 Entry::DumpPortsControl,
+                                 Entry::FileGetlineString,
+                                 Entry::FileScanField,
+                                 Entry::FileScanRaw,
+                                 Entry::FileErrorString,
+                                 Entry::StringScanField,
+                                 Entry::StringScanRaw,
+                                 Entry::PlusargTest,
+                                 Entry::PlusargValue,
+                                 Entry::PlusargScan,
+                                 Entry::PlusargParseLogic,
+                                 Entry::PlusargParseReal,
+                                 Entry::System,
+                                 Entry::ImportCall,
+                                 Entry::ImportCallNoncontext,
+                                 Entry::ImportCallGuarded,
+                                 Entry::ImportCallNoncontextGuarded,
+                                 Entry::DpiOpenArrayPack,
+                                 Entry::DpiOpenArrayUnpack,
+                                 Entry::DpiOpenArrayAggregatePack,
+                                 Entry::DpiOpenArrayAggregateUnpack,
+                                 Entry::DpiOpenArrayPrepareRecursive,
+                                 Entry::DpiOpenArrayFinishRecursive,
+                                 Entry::DpiOpenArrayReleaseRecursive,
+                                 Entry::DpiAggregatePack,
+                                 Entry::DpiAggregateUnpack,
+                                 Entry::DpiAggregateRootsPush,
+                                 Entry::DpiAggregateRootsPop,
+                                 Entry::DpiAggregateExportPack,
+                                 Entry::DpiCurrentContext});
 }
 
 } // namespace talos::detail

@@ -4,6 +4,7 @@
 #define TALOS_CONVERSION_SIMULATIONTOLLVMCOROUTINE_H
 
 #include "talos/Conversion/Passes.h"
+#include "talos/Dialect/Native/NativeRuntimeEntries.h"
 
 #include "mlir/Transforms/DialectConversion.h"
 
@@ -87,7 +88,7 @@ void lowerNativeHandleOps(mlir::ModuleOp module);
 /// The runtime entry a handle-addressed state access
 /// (schedule.state.load_handle, store_handle, frame_store or load_automatic)
 /// stands for.
-llvm::StringRef getNativeStateHandleAccessCallee(mlir::Operation *access);
+NativeRuntimeEntry getNativeStateHandleAccessEntry(mlir::Operation *access);
 
 /// Replace a handle-addressed state access by the call of the runtime entry
 /// it stands for, on its planes' addresses and the current context (an

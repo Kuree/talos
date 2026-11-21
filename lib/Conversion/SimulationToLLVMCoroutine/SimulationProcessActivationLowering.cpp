@@ -87,8 +87,8 @@ makeProcessActivationHelper(ModuleOp module, SymbolTable &symbols,
   Value status =
       LLVM::CallOp::create(
           builder, location, TypeRange{i32},
-          SymbolRefAttr::get(context,
-                             "talos_rt_v1_process_instance_create_for_context"),
+          getNativeRuntimeCallee(
+              context, NativeRuntimeEntry::ProcessInstanceCreateForContext),
           ValueRange{entry->getArgument(0), descriptor, outInstance})
           .getResult();
   Value succeeded =
@@ -169,14 +169,14 @@ makeProcessActivationHelper(ModuleOp module, SymbolTable &symbols,
       return helper.emitError("has an invalid transferred-reference index");
     LLVM::CallOp::create(
         builder, location, TypeRange{i32},
-        SymbolRefAttr::get(context, "talos_rt_v1_native_state_release"),
+        getNativeRuntimeCallee(context, NativeRuntimeEntry::NativeStateRelease),
         ValueRange{wrapperEntry->getArgument(0),
                    wrapperEntry->getArgument(static_cast<unsigned>(index)),
                    llvmConstant(builder, location, i32, 0)});
   }
   LLVM::CallOp::create(
       builder, location, TypeRange{},
-      SymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"),
+      getNativeRuntimeCallee(context, NativeRuntimeEntry::SchedulerFail),
       ValueRange{wrapperEntry->getArgument(0), wrapperStatus});
   LLVM::ReturnOp::create(builder, location,
                          llvmConstant(builder, location, i64, 0));
@@ -501,108 +501,60 @@ makeProcessSpawnBody(LLVM::LLVMFuncOp helper,
     return helper.emitError("spawn capture layout has excess arguments");
   Value planAddress =
       LLVM::AddressOfOp::create(builder, location, pointer, planName);
-  Value token = LLVM::CallOp::create(
-                    builder, location, TypeRange{i64},
-                    SymbolRefAttr::get(context, "talos_rt_v1_process_spawn"),
-                    ValueRange{entry->getArgument(0), planAddress, captures})
-                    .getResult();
+  Value token =
+      LLVM::CallOp::create(
+          builder, location, TypeRange{i64},
+          getNativeRuntimeCallee(context, NativeRuntimeEntry::ProcessSpawn),
+          ValueRange{entry->getArgument(0), planAddress, captures})
+          .getResult();
   LLVM::ReturnOp::create(builder, location, token);
   return success();
 }
 
 void declareProcessSpawnRuntimeABI(ModuleOp module) {
-  MLIRContext *context = module.getContext();
-  OpBuilder builder(context);
-  Type pointer = LLVM::LLVMPointerType::get(context);
-  Type i32 = builder.getI32Type();
-  Type i64 = builder.getI64Type();
-
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_process_spawn", i64,
-                           {pointer, pointer, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_process_spawn_batch", i32,
-                           {pointer, pointer, pointer, i32});
-  getOrDeclareLLVMFunction(module,
-                           "talos_rt_v1_process_instance_create_for_context",
-                           i32, {pointer, pointer, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_add_planned", i32,
-                           {pointer, pointer, i32, i32, pointer, pointer, i32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_prime", i32,
-                           {pointer, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_program_register",
-                           i32, {pointer, i64, i64});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_add_aot", i32,
-      {pointer, pointer, i32, i32, i32, pointer, pointer, i32, pointer, i32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_process_token", i64,
-                           {pointer, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_process_current", i64,
-                           {pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_process_status", i32,
-                           {pointer, i64, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_process_event_pending", i32,
-                           {pointer, i64, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_process_random_get", i32,
-                           {pointer, i64, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_process_random_set", i32,
-                           {pointer, i64, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_process_control", i32,
-                           {pointer, i64, i32, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_fail",
-                           LLVM::LLVMVoidType::get(context), {pointer, i32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_disable_children",
-                           i32, {pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_vpi_resolution_prepare", i32,
-                           {pointer, i64, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_vpi_call_prepare", i32,
-                           {pointer, i64, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_vpi_frame_enter_prepared", i32,
-                           {pointer, i64, i32, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_vpi_frame_enter", i32,
-                           {pointer, i64, i32, i64, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_vpi_frame_checkpoint", i32,
-                           {pointer, i64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_vpi_frame_leave", i32,
-                           {pointer, i64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_vpi_call_finish", i32,
-                           {pointer, i64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_control_enter", i32,
-                           {pointer, i64, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_control_boundary", i32,
-                           {pointer, i64, i32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_control_leave", i32,
-                           {pointer, i64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_control_disable", i32,
-                           {pointer, i64, i64, i32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_control_disable_selected", i32,
-                           {pointer, i64, i64, i32, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_control_escape_pending", i32,
-                           {pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_static_once", i32,
-                           {pointer, i64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_deferred_once", i32,
-                           {pointer, i64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_deferred_enqueue", i64,
-                           {pointer, i64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_deferred_enqueue_for_assertion",
-                           i64, {pointer, i64, i64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_deferred_mature", i32,
-                           {pointer, i64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_assertion_control", i32,
-                           {pointer, i32, i64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_assertion_enabled", i32,
-                           {pointer, i64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_assertion_action_state", i32,
-                           {pointer, i64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_assertion_kill_epoch", i64,
-                           {pointer, i64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_monitor_register_logical", i32,
-                           {pointer, i64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_monitor_control", i32,
-                           {pointer, i32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_monitor_current", i32,
-                           {pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_process_instance_destroy", i32,
-                           {pointer});
+  declareNativeRuntimes(module,
+                        {NativeRuntimeEntry::ProcessSpawn,
+                         NativeRuntimeEntry::ProcessSpawnBatch,
+                         NativeRuntimeEntry::ProcessInstanceCreateForContext,
+                         NativeRuntimeEntry::SchedulerAddPlanned,
+                         NativeRuntimeEntry::SchedulerPrime,
+                         NativeRuntimeEntry::SchedulerProgramRegister,
+                         NativeRuntimeEntry::SchedulerAddAot,
+                         NativeRuntimeEntry::SchedulerProcessToken,
+                         NativeRuntimeEntry::ProcessCurrent,
+                         NativeRuntimeEntry::ProcessStatus,
+                         NativeRuntimeEntry::ProcessEventPending,
+                         NativeRuntimeEntry::ProcessRandomGet,
+                         NativeRuntimeEntry::ProcessRandomSet,
+                         NativeRuntimeEntry::ProcessControl,
+                         NativeRuntimeEntry::SchedulerFail,
+                         NativeRuntimeEntry::SchedulerDisableChildren,
+                         NativeRuntimeEntry::VpiResolutionPrepare,
+                         NativeRuntimeEntry::VpiCallPrepare,
+                         NativeRuntimeEntry::VpiFrameEnterPrepared,
+                         NativeRuntimeEntry::VpiFrameEnter,
+                         NativeRuntimeEntry::VpiFrameCheckpoint,
+                         NativeRuntimeEntry::VpiFrameLeave,
+                         NativeRuntimeEntry::VpiCallFinish,
+                         NativeRuntimeEntry::ControlEnter,
+                         NativeRuntimeEntry::ControlBoundary,
+                         NativeRuntimeEntry::ControlLeave,
+                         NativeRuntimeEntry::ControlDisable,
+                         NativeRuntimeEntry::ControlDisableSelected,
+                         NativeRuntimeEntry::ControlEscapePending,
+                         NativeRuntimeEntry::StaticOnce,
+                         NativeRuntimeEntry::DeferredOnce,
+                         NativeRuntimeEntry::DeferredEnqueue,
+                         NativeRuntimeEntry::DeferredEnqueueForAssertion,
+                         NativeRuntimeEntry::DeferredMature,
+                         NativeRuntimeEntry::AssertionControl,
+                         NativeRuntimeEntry::AssertionEnabled,
+                         NativeRuntimeEntry::AssertionActionState,
+                         NativeRuntimeEntry::AssertionKillEpoch,
+                         NativeRuntimeEntry::MonitorRegisterLogical,
+                         NativeRuntimeEntry::MonitorControl,
+                         NativeRuntimeEntry::MonitorCurrent,
+                         NativeRuntimeEntry::ProcessInstanceDestroy});
 }
 
 } // namespace talos::detail

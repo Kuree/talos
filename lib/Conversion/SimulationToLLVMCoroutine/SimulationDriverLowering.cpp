@@ -503,7 +503,8 @@ public:
                                     "__talos_current_context"),
           8);
       LLVM::CallOp::create(
-          rewriter, op.getLoc(), TypeRange{}, "talos_rt_v1_saif_driver",
+          rewriter, op.getLoc(), TypeRange{},
+          getNativeRuntimeSymbol(NativeRuntimeEntry::SaifDriver),
           ValueRange{ctx, adaptor.getDriver().front(),
                      llvmConstant(rewriter, op.getLoc(), rewriter.getI64Type(),
                                   *sourceWidth)});
@@ -532,8 +533,9 @@ public:
               rewriter, op.getLoc(), pointer, contextAddress, 8);
           LLVM::CallOp::create(
               rewriter, op.getLoc(), TypeRange{},
-              SymbolRefAttr::get(rewriter.getContext(),
-                                 "talos_rt_v1_scheduler_real_transition"),
+              getNativeRuntimeCallee(
+                  rewriter.getContext(),
+                  NativeRuntimeEntry::SchedulerRealTransition),
               ValueRange{runtimeContext, adaptor.getDriver().front(),
                          llvmConstant(rewriter, op.getLoc(),
                                       rewriter.getI32Type(), *sourceWidth),
@@ -571,16 +573,18 @@ public:
         Value status =
             LLVM::CallOp::create(
                 rewriter, op.getLoc(), TypeRange{i32},
-                SymbolRefAttr::get(rewriter.getContext(),
-                                   "talos_rt_v1_scheduler_resolve_drivers"),
+                getNativeRuntimeCallee(
+                    rewriter.getContext(),
+                    NativeRuntimeEntry::SchedulerResolveDrivers),
                 ValueRange{runtimeContext,
                            llvmConstant(rewriter, op.getLoc(), i64, begin),
                            llvmConstant(rewriter, op.getLoc(), i64, end)})
                 .getResult();
-        LLVM::CallOp::create(rewriter, op.getLoc(), TypeRange{},
-                             SymbolRefAttr::get(rewriter.getContext(),
-                                                "talos_rt_v1_scheduler_fail"),
-                             ValueRange{runtimeContext, status});
+        LLVM::CallOp::create(
+            rewriter, op.getLoc(), TypeRange{},
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::SchedulerFail),
+            ValueRange{runtimeContext, status});
         if constexpr (std::is_same_v<DriveOp, sim::SimDriverDriveChangedOp>)
           rewriter.replaceOp(op, rawChanged);
         else
@@ -606,16 +610,18 @@ public:
       Value status =
           LLVM::CallOp::create(
               rewriter, op.getLoc(), TypeRange{i32},
-              SymbolRefAttr::get(rewriter.getContext(),
-                                 "talos_rt_v1_scheduler_resolve_drivers"),
+              getNativeRuntimeCallee(
+                  rewriter.getContext(),
+                  NativeRuntimeEntry::SchedulerResolveDrivers),
               ValueRange{runtimeContext,
                          llvmConstant(rewriter, op.getLoc(), i64, begin),
                          llvmConstant(rewriter, op.getLoc(), i64, end)})
               .getResult();
-      LLVM::CallOp::create(rewriter, op.getLoc(), TypeRange{},
-                           SymbolRefAttr::get(rewriter.getContext(),
-                                              "talos_rt_v1_scheduler_fail"),
-                           ValueRange{runtimeContext, status});
+      LLVM::CallOp::create(
+          rewriter, op.getLoc(), TypeRange{},
+          getNativeRuntimeCallee(rewriter.getContext(),
+                                 NativeRuntimeEntry::SchedulerFail),
+          ValueRange{runtimeContext, status});
       rewriter.eraseOp(op);
       return success();
     }
@@ -1261,8 +1267,9 @@ public:
             resolvedStrengths =
                 LLVM::CallOp::create(
                     rewriter, op.getLoc(), TypeRange{strengthType},
-                    SymbolRefAttr::get(rewriter.getContext(),
-                                       "talos_rt_v1_strength_resolve_kind"),
+                    getNativeRuntimeCallee(
+                        rewriter.getContext(),
+                        NativeRuntimeEntry::StrengthResolveKind),
                     ValueRange{resolvedStrengths, driverStrengths,
                                resolutionValue})
                     .getResult();
@@ -1369,8 +1376,9 @@ public:
             chargeStrengths =
                 LLVM::CallOp::create(
                     rewriter, op.getLoc(), TypeRange{strengthType},
-                    SymbolRefAttr::get(rewriter.getContext(),
-                                       "talos_rt_v1_strength_resolve_kind"),
+                    getNativeRuntimeCallee(
+                        rewriter.getContext(),
+                        NativeRuntimeEntry::StrengthResolveKind),
                     ValueRange{chargeStrengths, storedStrengths,
                                resolutionValue})
                     .getResult();

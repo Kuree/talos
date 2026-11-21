@@ -248,8 +248,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_coverage_point_hit"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::CoveragePointHit),
             ValueRange{context,
                        llvmConstant(rewriter, op.getLoc(),
                                     rewriter.getI64Type(), op.getPoint()),
@@ -296,10 +296,12 @@ public:
                                  adaptor.getScope().front()};
     StringRef symbol;
     if constexpr (isDefinition) {
-      symbol = "talos_rt_v1_coverage_control_definition";
+      symbol =
+          getNativeRuntimeSymbol(NativeRuntimeEntry::CoverageControlDefinition);
       arguments.push_back(adaptor.getDefinition().front());
     } else {
-      symbol = "talos_rt_v1_coverage_control_instance";
+      symbol =
+          getNativeRuntimeSymbol(NativeRuntimeEntry::CoverageControlInstance);
       arguments.push_back(llvmConstant(rewriter, op.getLoc(),
                                        rewriter.getI64Type(),
                                        op.getCoverageScopeId()));
@@ -340,10 +342,12 @@ public:
                                  adaptor.getScope().front()};
     StringRef symbol;
     if constexpr (isDefinition) {
-      symbol = "talos_rt_v1_coverage_query_definition";
+      symbol =
+          getNativeRuntimeSymbol(NativeRuntimeEntry::CoverageQueryDefinition);
       arguments.push_back(adaptor.getDefinition().front());
     } else {
-      symbol = "talos_rt_v1_coverage_query_instance";
+      symbol =
+          getNativeRuntimeSymbol(NativeRuntimeEntry::CoverageQueryInstance);
       arguments.push_back(llvmConstant(rewriter, op.getLoc(),
                                        rewriter.getI64Type(),
                                        op.getCoverageScopeId()));
@@ -376,9 +380,10 @@ public:
     Type i32 = rewriter.getI32Type();
     Value output = entryAlloca(rewriter, op.getLoc(), i32, 1, 4);
     Value context = managedContext(rewriter, op.getLoc());
-    StringRef symbol = std::is_same_v<Op, sim::SimCoverageSaveOp>
-                           ? "talos_rt_v1_coverage_database_save"
-                           : "talos_rt_v1_coverage_database_merge";
+    StringRef symbol =
+        std::is_same_v<Op, sim::SimCoverageSaveOp>
+            ? getNativeRuntimeSymbol(NativeRuntimeEntry::CoverageDatabaseSave)
+            : getNativeRuntimeSymbol(NativeRuntimeEntry::CoverageDatabaseMerge);
     Value status =
         LLVM::CallOp::create(rewriter, op.getLoc(), TypeRange{i32},
                              SymbolRefAttr::get(rewriter.getContext(), symbol),
@@ -406,8 +411,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_functional_coverage_get"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::FunctionalCoverageGet),
             ValueRange{context, output})
             .getResult();
     reportManagedStatus(rewriter, op.getLoc(), context, status);
@@ -432,9 +437,11 @@ public:
     (void)lane;
     StringRef symbol;
     if constexpr (std::is_same_v<Op, sim::SimFunctionalCoverageSetDbNameOp>)
-      symbol = "talos_rt_v1_functional_coverage_set_db_name";
+      symbol = getNativeRuntimeSymbol(
+          NativeRuntimeEntry::FunctionalCoverageSetDbName);
     else
-      symbol = "talos_rt_v1_functional_coverage_load_db";
+      symbol =
+          getNativeRuntimeSymbol(NativeRuntimeEntry::FunctionalCoverageLoadDb);
     Value status = LLVM::CallOp::create(
                        rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
                        SymbolRefAttr::get(rewriter.getContext(), symbol),
@@ -496,8 +503,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_covergroup_prepare"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::CovergroupPrepare),
             ValueRange{context,
                        llvmConstant(rewriter, op.getLoc(), i64,
                                     declaration.getSchemaType()),
@@ -526,8 +533,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_covergroup_candidates"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::CovergroupCandidates),
             ValueRange{context, adaptor.getToken().front(),
                        llvmConstant(rewriter, op.getLoc(),
                                     rewriter.getI64Type(), op.getSelector()),
@@ -554,8 +561,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_covergroup_bind_with"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::CovergroupBindWith),
             ValueRange{context, adaptor.getToken().front(),
                        llvmConstant(rewriter, op.getLoc(),
                                     rewriter.getI64Type(), op.getSelector()),
@@ -578,13 +585,13 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     auto [context, lane] = managedContextAndLane(rewriter, op.getLoc());
     (void)lane;
-    Value status =
-        LLVM::CallOp::create(
-            rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_covergroup_release_preparation"),
-            ValueRange{context, adaptor.getToken().front()})
-            .getResult();
+    Value status = LLVM::CallOp::create(
+                       rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
+                       getNativeRuntimeCallee(
+                           rewriter.getContext(),
+                           NativeRuntimeEntry::CovergroupReleasePreparation),
+                       ValueRange{context, adaptor.getToken().front()})
+                       .getResult();
     reportManagedStatus(rewriter, op.getLoc(), context, status);
     rewriter.eraseOp(op);
     return success();
@@ -641,8 +648,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_covergroup_create"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::CovergroupCreate),
             ValueRange{
                 context,
                 llvmConstant(rewriter, op.getLoc(), i64,
@@ -677,8 +684,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_covergroup_set_enabled"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::CovergroupSetEnabled),
             ValueRange{context, adaptor.getHandle().front(),
                        llvmConstant(rewriter, op.getLoc(),
                                     rewriter.getI64Type(), op.getItem()),
@@ -707,8 +714,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{i32},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_covergroup_sample_enabled"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::CovergroupSampleEnabled),
             ValueRange{context, adaptor.getHandle().front(), output})
             .getResult();
     reportManagedStatus(rewriter, op.getLoc(), context, status);
@@ -949,8 +956,11 @@ public:
             rewriter, location, TypeRange{i32},
             SymbolRefAttr::get(
                 rewriter.getContext(),
-                snapshot ? "talos_rt_v1_event_snapshot_register"
-                         : "talos_rt_v1_covergroup_clock_event_register"),
+                snapshot
+                    ? getNativeRuntimeSymbol(
+                          NativeRuntimeEntry::EventSnapshotRegister)
+                    : getNativeRuntimeSymbol(
+                          NativeRuntimeEntry::CovergroupClockEventRegister)),
             arguments)
             .getResult();
     reportManagedStatus(rewriter, location, context, status);
@@ -978,12 +988,13 @@ public:
     LLVM::StoreOp::create(rewriter, op.getLoc(),
                           llvmConstant(rewriter, op.getLoc(), i64, 0), output,
                           8);
-    Value status = LLVM::CallOp::create(
-                       rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-                       SymbolRefAttr::get(rewriter.getContext(),
-                                          "talos_rt_v1_event_snapshot_mask"),
-                       ValueRange{adaptor.getContext().front(), output})
-                       .getResult();
+    Value status =
+        LLVM::CallOp::create(
+            rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::EventSnapshotMask),
+            ValueRange{adaptor.getContext().front(), output})
+            .getResult();
     reportManagedStatus(rewriter, op.getLoc(), adaptor.getContext().front(),
                         status);
     rewriter.replaceOpWithNewOp<LLVM::LoadOp>(op, i64, output, 8);
@@ -1000,12 +1011,13 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     if (adaptor.getContext().size() != 1)
       return failure();
-    Value status = LLVM::CallOp::create(
-                       rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-                       SymbolRefAttr::get(rewriter.getContext(),
-                                          "talos_rt_v1_event_snapshot_flush"),
-                       ValueRange{adaptor.getContext().front()})
-                       .getResult();
+    Value status =
+        LLVM::CallOp::create(
+            rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::EventSnapshotFlush),
+            ValueRange{adaptor.getContext().front()})
+            .getResult();
     reportManagedStatus(rewriter, op.getLoc(), adaptor.getContext().front(),
                         status);
     rewriter.eraseOp(op);
@@ -1081,8 +1093,9 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{i32},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_covergroup_block_event_register"),
+            getNativeRuntimeCallee(
+                rewriter.getContext(),
+                NativeRuntimeEntry::CovergroupBlockEventRegister),
             ValueRange{context, adaptor.getHandle().front(), receiver,
                        llvmConstant(rewriter, location, i64,
                                     observerID.getValue().getZExtValue()),
@@ -1123,8 +1136,9 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_covergroup_block_event_fire"),
+            getNativeRuntimeCallee(
+                rewriter.getContext(),
+                NativeRuntimeEntry::CovergroupBlockEventFire),
             ValueRange{context,
                        llvmConstant(rewriter, location, rewriter.getI64Type(),
                                     op.getTargetId()),
@@ -1149,13 +1163,14 @@ public:
       return failure();
     auto [context, lane] = managedContextAndLane(rewriter, op.getLoc());
     (void)lane;
-    Value status = LLVM::CallOp::create(
-                       rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-                       SymbolRefAttr::get(rewriter.getContext(),
-                                          "talos_rt_v1_covergroup_set_name"),
-                       ValueRange{context, adaptor.getHandle().front(),
-                                  adaptor.getName().front()})
-                       .getResult();
+    Value status =
+        LLVM::CallOp::create(
+            rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::CovergroupSetName),
+            ValueRange{context, adaptor.getHandle().front(),
+                       adaptor.getName().front()})
+            .getResult();
     reportManagedStatus(rewriter, op.getLoc(), context, status);
     rewriter.eraseOp(op);
     return success();
@@ -1177,8 +1192,9 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_covergroup_set_integer_option"),
+            getNativeRuntimeCallee(
+                rewriter.getContext(),
+                NativeRuntimeEntry::CovergroupSetIntegerOption),
             ValueRange{context, adaptor.getHandle().front(),
                        llvmConstant(rewriter, op.getLoc(),
                                     rewriter.getI64Type(), op.getItem()),
@@ -1210,8 +1226,9 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_covergroup_get_integer_option"),
+            getNativeRuntimeCallee(
+                rewriter.getContext(),
+                NativeRuntimeEntry::CovergroupGetIntegerOption),
             ValueRange{context, adaptor.getHandle().front(),
                        llvmConstant(rewriter, op.getLoc(),
                                     rewriter.getI64Type(), op.getItem()),
@@ -1244,8 +1261,9 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_covergroup_get_string_option"),
+            getNativeRuntimeCallee(
+                rewriter.getContext(),
+                NativeRuntimeEntry::CovergroupGetStringOption),
             ValueRange{lane, adaptor.getHandle().front(),
                        llvmConstant(rewriter, op.getLoc(),
                                     rewriter.getI64Type(), op.getItem()),
@@ -1277,8 +1295,9 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_covergroup_set_string_option"),
+            getNativeRuntimeCallee(
+                rewriter.getContext(),
+                NativeRuntimeEntry::CovergroupSetStringOption),
             ValueRange{context, adaptor.getHandle().front(),
                        llvmConstant(rewriter, op.getLoc(),
                                     rewriter.getI64Type(), op.getItem()),
@@ -1308,9 +1327,9 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(
+            getNativeRuntimeCallee(
                 rewriter.getContext(),
-                "talos_rt_v1_covergroup_set_type_integer_option"),
+                NativeRuntimeEntry::CovergroupSetTypeIntegerOption),
             ValueRange{context,
                        llvmConstant(rewriter, op.getLoc(),
                                     rewriter.getI64Type(), op.getTypeId()),
@@ -1342,8 +1361,9 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_covergroup_set_type_string_option"),
+            getNativeRuntimeCallee(
+                rewriter.getContext(),
+                NativeRuntimeEntry::CovergroupSetTypeStringOption),
             ValueRange{context,
                        llvmConstant(rewriter, op.getLoc(),
                                     rewriter.getI64Type(), op.getTypeId()),
@@ -1390,8 +1410,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_covergroup_sample"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::CovergroupSample),
             ValueRange{context, adaptor.getHandle().front(), descriptors,
                        llvmConstant(rewriter, op.getLoc(),
                                     rewriter.getI64Type(), count)})
@@ -1474,8 +1494,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_covergroup_formal_read"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::CovergroupFormalRead),
             ValueRange{
                 context, adaptor.getHandle().front(),
                 llvmConstant(rewriter, op.getLoc(), rewriter.getI64Type(),
@@ -1537,13 +1557,14 @@ public:
         return failure();
       key = llvmConstant(rewriter, op.getLoc(), rewriter.getI64Type(),
                          declaration.getSchemaType());
-      symbol = "talos_rt_v1_covergroup_type_query";
+      symbol = getNativeRuntimeSymbol(NativeRuntimeEntry::CovergroupTypeQuery);
       arguments.push_back(key);
     } else {
       if (adaptor.getHandle().size() != 1)
         return failure();
       key = adaptor.getHandle().front();
-      symbol = "talos_rt_v1_covergroup_instance_query";
+      symbol =
+          getNativeRuntimeSymbol(NativeRuntimeEntry::CovergroupInstanceQuery);
       arguments.push_back(key);
     }
     arguments.push_back(llvmConstant(rewriter, op.getLoc(),

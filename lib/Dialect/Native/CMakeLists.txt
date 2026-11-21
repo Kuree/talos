@@ -9,4 +9,5 @@ add_mlir_library(TalosNativeIR
 
   LINK_LIBS PUBLIC
   MLIRIR
+  MLIRLLVMDialect
 )

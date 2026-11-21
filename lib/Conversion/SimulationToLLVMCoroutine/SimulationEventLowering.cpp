@@ -36,12 +36,13 @@ public:
         rewriter, location,
         llvmConstant(rewriter, location, rewriter.getI64Type(), UINT64_MAX),
         output, 8);
-    Value status = LLVM::CallOp::create(
-                       rewriter, location, TypeRange{rewriter.getI32Type()},
-                       SymbolRefAttr::get(rewriter.getContext(),
-                                          "talos_rt_v1_scheduler_event_create"),
-                       ValueRange{context, output})
-                       .getResult();
+    Value status =
+        LLVM::CallOp::create(
+            rewriter, location, TypeRange{rewriter.getI32Type()},
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::SchedulerEventCreate),
+            ValueRange{context, output})
+            .getResult();
     reportManagedStatus(rewriter, location, context, status);
     rewriter.replaceOp(operation,
                        LLVM::LoadOp::create(rewriter, location,
@@ -68,8 +69,9 @@ public:
     if (operation.getReplaceable()) {
       LLVM::CallOp::create(
           rewriter, location, TypeRange{},
-          SymbolRefAttr::get(rewriter.getContext(),
-                             "talos_rt_v1_scheduler_event_replace_after"),
+          getNativeRuntimeCallee(
+              rewriter.getContext(),
+              NativeRuntimeEntry::SchedulerEventReplaceAfter),
           ValueRange{loadCurrentRuntimeContext(rewriter, location),
                      adaptor.getEvent().front(),
                      llvmConstant(rewriter, location, rewriter.getI32Type(),
@@ -80,8 +82,8 @@ public:
     }
     LLVM::CallOp::create(
         rewriter, location, TypeRange{},
-        SymbolRefAttr::get(rewriter.getContext(),
-                           "talos_rt_v1_scheduler_event_after"),
+        getNativeRuntimeCallee(rewriter.getContext(),
+                               NativeRuntimeEntry::SchedulerEventAfter),
         ValueRange{loadCurrentRuntimeContext(rewriter, location),
                    adaptor.getEvent().front(),
                    llvmConstant(rewriter, location, rewriter.getI32Type(),
@@ -106,8 +108,8 @@ public:
     Value triggered =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_scheduler_event_triggered"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::SchedulerEventTriggered),
             ValueRange{loadCurrentRuntimeContext(rewriter, location),
                        adaptor.getEvent().front()})
             .getResult();
@@ -133,8 +135,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_clocking_output_track"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::ClockingOutputTrack),
             ValueRange{
                 context, adaptor.getClock().front(),
                 llvmConstant(rewriter, location, rewriter.getI64Type(),
@@ -163,8 +165,8 @@ public:
     Value current =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_clocking_output_current"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::ClockingOutputCurrent),
             ValueRange{
                 loadCurrentRuntimeContext(rewriter, location),
                 adaptor.getClock().front(),
@@ -191,8 +193,9 @@ public:
     Value failed =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_scheduler_wait_order_failed"),
+            getNativeRuntimeCallee(
+                rewriter.getContext(),
+                NativeRuntimeEntry::SchedulerWaitOrderFailed),
             ValueRange{loadCurrentRuntimeContext(rewriter, location)})
             .getResult();
     rewriter.replaceOpWithNewOp<LLVM::TruncOp>(operation, rewriter.getI1Type(),
@@ -215,8 +218,8 @@ public:
                                  operation.getOccurrenceSiteAttr());
     rewriter.replaceOpWithNewOp<LLVM::CallOp>(
         operation, TypeRange{rewriter.getI64Type()},
-        SymbolRefAttr::get(rewriter.getContext(),
-                           "talos_rt_v1_clock_occurrence_consume"),
+        getNativeRuntimeCallee(rewriter.getContext(),
+                               NativeRuntimeEntry::ClockOccurrenceConsume),
         ValueRange{loadCurrentRuntimeContext(rewriter, location), site});
     return success();
   }
@@ -239,8 +242,8 @@ public:
                                  operation.getOccurrenceSiteAttr());
     rewriter.replaceOpWithNewOp<LLVM::CallOp>(
         operation, TypeRange{rewriter.getI64Type()},
-        SymbolRefAttr::get(rewriter.getContext(),
-                           "talos_rt_v1_nochange_update"),
+        getNativeRuntimeCallee(rewriter.getContext(),
+                               NativeRuntimeEntry::NochangeUpdate),
         ValueRange{loadCurrentRuntimeContext(rewriter, location), site,
                    adaptor.getMask().front(), adaptor.getStartOffset().front(),
                    adaptor.getEndOffset().front()});

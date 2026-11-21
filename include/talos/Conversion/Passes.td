@@ -176,7 +176,8 @@ def TalosSimInstrumentManagedRootsPass
   ];
   let dependentDialects = [
     "talos::sim::TalosSimulationDialect",
-    "talos::schedule::ScheduleDialect", "mlir::LLVM::LLVMDialect"
+    "talos::schedule::ScheduleDialect", "mlir::LLVM::LLVMDialect",
+    "talos::native::NativeDialect"
   ];
 }
 
@@ -225,7 +226,8 @@ def ConvertTalosSimValuesToStandardPass
     "mlir::func::FuncDialect",
     "mlir::math::MathDialect",
     "mlir::LLVM::LLVMDialect",
-    "mlir::scf::SCFDialect"
+    "mlir::scf::SCFDialect",
+    "talos::native::NativeDialect"
   ];
 }
 
@@ -343,7 +345,8 @@ def MaterializeTalosNativeEvalGroupsPass
   let dependentDialects = ["mlir::LLVM::LLVMDialect",
                            "mlir::arith::ArithDialect",
                            "mlir::cf::ControlFlowDialect",
-                           "talos::schedule::ScheduleDialect"];
+                           "talos::schedule::ScheduleDialect",
+                           "talos::native::NativeDialect"];
 }
 
 def FoldNativeScalarValuesPass
@@ -379,7 +382,8 @@ def PrepareNativeLLVMFunctionsPass
     Schedule operations. Caches immutable ABI and symbol inputs for the
     following llvm.func-anchored conversion.
   }];
-  let dependentDialects = ["mlir::LLVM::LLVMDialect"];
+  let dependentDialects = ["mlir::LLVM::LLVMDialect",
+                           "talos::native::NativeDialect"];
 }
 
 def ConvertNativeFunctionBodyPass
@@ -391,7 +395,9 @@ def ConvertNativeFunctionBodyPass
     published ABI and locked symbol index. MLIR schedules functions in
     parallel unless threading is disabled.
   }];
-  let dependentDialects = ["mlir::LLVM::LLVMDialect", "mlir::math::MathDialect"];
+  let dependentDialects = ["mlir::LLVM::LLVMDialect",
+                           "mlir::math::MathDialect",
+                           "talos::native::NativeDialect"];
 }
 
 def MaterializeNativeGroupPromotionReadinessPass
@@ -407,7 +413,8 @@ def MaterializeNativeGroupPromotionReadinessPass
   let dependentDialects = ["mlir::LLVM::LLVMDialect",
                            "mlir::arith::ArithDialect",
                            "mlir::cf::ControlFlowDialect",
-                           "talos::schedule::ScheduleDialect"];
+                           "talos::schedule::ScheduleDialect",
+                           "talos::native::NativeDialect"];
 }
 
 def MaterializeNativePromotionRangeIndexPass
@@ -421,7 +428,8 @@ def MaterializeNativePromotionRangeIndexPass
     coroutine conversion invokes this same materializer before publishing
     unknown-plane writes.
   }];
-  let dependentDialects = ["mlir::LLVM::LLVMDialect"];
+  let dependentDialects = ["mlir::LLVM::LLVMDialect",
+                           "talos::native::NativeDialect"];
   let options = [Option<"bucketMinEntries", "bucket-min-entries", "uint64_t",
                         "4096", "Minimum dependency count for compact buckets">];
 }
@@ -438,7 +446,8 @@ def AddressNativeStateThroughBasesPass
     one block, and coroutines, keep direct addresses. Run just before
     translation.
   }];
-  let dependentDialects = ["mlir::LLVM::LLVMDialect"];
+  let dependentDialects = ["mlir::LLVM::LLVMDialect",
+                           "talos::native::NativeDialect"];
 }
 
 def FinalizeNativeLLVMPass
@@ -454,7 +463,8 @@ def FinalizeNativeLLVMPass
   let dependentDialects = ["mlir::LLVM::LLVMDialect",
                            "mlir::arith::ArithDialect",
                            "mlir::cf::ControlFlowDialect",
-                           "talos::schedule::ScheduleDialect"];
+                           "talos::schedule::ScheduleDialect",
+                           "talos::native::NativeDialect"];
 }
 
 def FinalizeNativeLLVMWrappersPass
@@ -468,7 +478,8 @@ def FinalizeNativeLLVMWrappersPass
     conversion casts are), and reconciles the conversion casts of staged
     runtime types.
   }];
-  let dependentDialects = ["mlir::LLVM::LLVMDialect"];
+  let dependentDialects = ["mlir::LLVM::LLVMDialect",
+                           "talos::native::NativeDialect"];
 }
 
 def MaterializeNativeEvalRoutesPass
@@ -483,7 +494,8 @@ def MaterializeNativeEvalRoutesPass
   let dependentDialects = ["mlir::LLVM::LLVMDialect",
                            "mlir::arith::ArithDialect",
                            "mlir::cf::ControlFlowDialect",
-                           "talos::schedule::ScheduleDialect"];
+                           "talos::schedule::ScheduleDialect",
+                           "talos::native::NativeDialect"];
 }
 
 def PublishNativeProofsPass
@@ -496,7 +508,8 @@ def PublishNativeProofsPass
     materialized.
   }];
   let dependentDialects = ["mlir::LLVM::LLVMDialect",
-                           "talos::schedule::ScheduleDialect"];
+                           "talos::schedule::ScheduleDialect",
+                           "talos::native::NativeDialect"];
 }
 
 def MaterializeNativeEvalGroupBodiesPass
@@ -511,7 +524,8 @@ def MaterializeNativeEvalGroupBodiesPass
   let dependentDialects = ["mlir::LLVM::LLVMDialect",
                            "mlir::arith::ArithDialect",
                            "mlir::cf::ControlFlowDialect",
-                           "talos::schedule::ScheduleDialect"];
+                           "talos::schedule::ScheduleDialect",
+                           "talos::native::NativeDialect"];
 }
 
 def MaterializeNativeEvalTransactionsPass
@@ -522,7 +536,8 @@ def MaterializeNativeEvalTransactionsPass
     removes the unknown plane of a two-state build, and caches pure cones.
   }];
   let dependentDialects = ["mlir::LLVM::LLVMDialect",
-                           "talos::schedule::ScheduleDialect"];
+                           "talos::schedule::ScheduleDialect",
+                           "talos::native::NativeDialect"];
 }
 
 def LowerNativeStateAccessPass
@@ -555,7 +570,8 @@ def LowerNativeStateAccessPass
     Option<"twoState", "two-state", "bool", /*default=*/"false",
            "Lower NBA accumulator records in the two-state layout">
   ];
-  let dependentDialects = ["mlir::LLVM::LLVMDialect"];
+  let dependentDialects = ["mlir::LLVM::LLVMDialect",
+                           "talos::native::NativeDialect"];
 }
 
 def FinalizeNativeFunctionsPass
@@ -567,7 +583,8 @@ def FinalizeNativeFunctionsPass
     CSE in optimized modules, publishes the partition manifest, drops the
     native compilation options from the module and verifies it.
   }];
-  let dependentDialects = ["mlir::LLVM::LLVMDialect"];
+  let dependentDialects = ["mlir::LLVM::LLVMDialect",
+                           "talos::native::NativeDialect"];
 }
 
 def ConvertPreparedSimProcessesToLLVMCoroutinesPass
@@ -588,7 +605,8 @@ def ConvertPreparedSimProcessesToLLVMCoroutinesPass
     "mlir::LLVM::LLVMDialect",
     "mlir::math::MathDialect",
     "mlir::scf::SCFDialect",
-    "talos::schedule::ScheduleDialect"
+    "talos::schedule::ScheduleDialect",
+    "talos::native::NativeDialect"
   ];
 }
 
@@ -685,7 +703,8 @@ def PrepareNativeScheduleInputsPass : Pass<"prepare-native-schedule-inputs", "ml
     "talos::runtime::TalosRuntimeDialect",
     "mlir::arith::ArithDialect", "mlir::cf::ControlFlowDialect",
     "mlir::func::FuncDialect", "mlir::LLVM::LLVMDialect",
-    "mlir::math::MathDialect", "mlir::scf::SCFDialect"
+    "mlir::math::MathDialect", "mlir::scf::SCFDialect",
+    "talos::native::NativeDialect"
   ];
 }
 def PrepareNativeProcessFramesPass : Pass<"prepare-native-process-frames", "mlir::ModuleOp"> {
@@ -701,7 +720,8 @@ def PrepareNativeProcessFramesPass : Pass<"prepare-native-process-frames", "mlir
     "talos::runtime::TalosRuntimeDialect",
     "mlir::arith::ArithDialect", "mlir::cf::ControlFlowDialect",
     "mlir::func::FuncDialect", "mlir::LLVM::LLVMDialect",
-    "mlir::math::MathDialect", "mlir::scf::SCFDialect", "mlir::ub::UBDialect"
+    "mlir::math::MathDialect", "mlir::scf::SCFDialect", "mlir::ub::UBDialect",
+    "talos::native::NativeDialect"
   ];
 }
 def PrepareNativeManagedRootsPass : Pass<"prepare-native-managed-roots", "mlir::ModuleOp"> {
@@ -717,7 +737,8 @@ def PrepareNativeManagedRootsPass : Pass<"prepare-native-managed-roots", "mlir::
     "talos::runtime::TalosRuntimeDialect",
     "mlir::arith::ArithDialect", "mlir::cf::ControlFlowDialect",
     "mlir::func::FuncDialect", "mlir::LLVM::LLVMDialect",
-    "mlir::math::MathDialect", "mlir::scf::SCFDialect"
+    "mlir::math::MathDialect", "mlir::scf::SCFDialect",
+    "talos::native::NativeDialect"
   ];
 }
 def PrepareNativeFragmentsPass : Pass<"prepare-native-fragments", "mlir::ModuleOp"> {
@@ -733,7 +754,8 @@ def PrepareNativeFragmentsPass : Pass<"prepare-native-fragments", "mlir::ModuleO
     "talos::runtime::TalosRuntimeDialect",
     "mlir::arith::ArithDialect", "mlir::cf::ControlFlowDialect",
     "mlir::func::FuncDialect", "mlir::LLVM::LLVMDialect",
-    "mlir::math::MathDialect", "mlir::scf::SCFDialect"
+    "mlir::math::MathDialect", "mlir::scf::SCFDialect",
+    "talos::native::NativeDialect"
   ];
 }
 def PlanNativeExecutableNodesPass : Pass<"schedule-plan-native-executable-nodes", "mlir::ModuleOp"> {
@@ -749,7 +771,8 @@ def PlanNativeExecutableNodesPass : Pass<"schedule-plan-native-executable-nodes"
     "talos::runtime::TalosRuntimeDialect",
     "mlir::arith::ArithDialect", "mlir::cf::ControlFlowDialect",
     "mlir::func::FuncDialect", "mlir::LLVM::LLVMDialect",
-    "mlir::math::MathDialect", "mlir::scf::SCFDialect"
+    "mlir::math::MathDialect", "mlir::scf::SCFDialect",
+    "talos::native::NativeDialect"
   ];
 }
 def MaterializeNativeProcessesPass : Pass<"materialize-native-processes", "mlir::ModuleOp"> {
@@ -765,7 +788,8 @@ def MaterializeNativeProcessesPass : Pass<"materialize-native-processes", "mlir:
     "talos::runtime::TalosRuntimeDialect",
     "mlir::arith::ArithDialect", "mlir::cf::ControlFlowDialect",
     "mlir::func::FuncDialect", "mlir::LLVM::LLVMDialect",
-    "mlir::math::MathDialect", "mlir::scf::SCFDialect"
+    "mlir::math::MathDialect", "mlir::scf::SCFDialect",
+    "talos::native::NativeDialect"
   ];
 }
 
@@ -782,7 +806,8 @@ def PlanNativeStatePass : Pass<"schedule-plan-native-state", "mlir::ModuleOp"> {
     "talos::runtime::TalosRuntimeDialect",
     "mlir::arith::ArithDialect", "mlir::cf::ControlFlowDialect",
     "mlir::func::FuncDialect", "mlir::LLVM::LLVMDialect",
-    "mlir::math::MathDialect", "mlir::scf::SCFDialect"
+    "mlir::math::MathDialect", "mlir::scf::SCFDialect",
+    "talos::native::NativeDialect"
   ];
 }
 def PlanNativeActorsPass : Pass<"schedule-plan-native-actors", "mlir::ModuleOp"> {
@@ -798,7 +823,8 @@ def PlanNativeActorsPass : Pass<"schedule-plan-native-actors", "mlir::ModuleOp">
     "talos::runtime::TalosRuntimeDialect",
     "mlir::arith::ArithDialect", "mlir::cf::ControlFlowDialect",
     "mlir::func::FuncDialect", "mlir::LLVM::LLVMDialect",
-    "mlir::math::MathDialect", "mlir::scf::SCFDialect"
+    "mlir::math::MathDialect", "mlir::scf::SCFDialect",
+    "talos::native::NativeDialect"
   ];
 }
 def PlanNativeSchedulePass : Pass<"convert-simulation-to-native-schedule", "mlir::ModuleOp"> {
@@ -814,7 +840,8 @@ def PlanNativeSchedulePass : Pass<"convert-simulation-to-native-schedule", "mlir
     "talos::runtime::TalosRuntimeDialect",
     "mlir::arith::ArithDialect", "mlir::cf::ControlFlowDialect",
     "mlir::func::FuncDialect", "mlir::LLVM::LLVMDialect",
-    "mlir::math::MathDialect", "mlir::scf::SCFDialect"
+    "mlir::math::MathDialect", "mlir::scf::SCFDialect",
+    "talos::native::NativeDialect"
   ];
 }
 def PlanNativeEvalOwnershipPass : Pass<"schedule-plan-native-eval-ownership", "mlir::ModuleOp"> {
@@ -830,7 +857,8 @@ def PlanNativeEvalOwnershipPass : Pass<"schedule-plan-native-eval-ownership", "m
     "talos::runtime::TalosRuntimeDialect",
     "mlir::arith::ArithDialect", "mlir::cf::ControlFlowDialect",
     "mlir::func::FuncDialect", "mlir::LLVM::LLVMDialect",
-    "mlir::math::MathDialect", "mlir::scf::SCFDialect"
+    "mlir::math::MathDialect", "mlir::scf::SCFDialect",
+    "talos::native::NativeDialect"
   ];
 }
 def ResolveNativeEvalSchedulePass : Pass<"schedule-resolve-native-eval", "mlir::ModuleOp"> {
@@ -846,7 +874,8 @@ def ResolveNativeEvalSchedulePass : Pass<"schedule-resolve-native-eval", "mlir::
     "talos::runtime::TalosRuntimeDialect",
     "mlir::arith::ArithDialect", "mlir::cf::ControlFlowDialect",
     "mlir::func::FuncDialect", "mlir::LLVM::LLVMDialect",
-    "mlir::math::MathDialect", "mlir::scf::SCFDialect"
+    "mlir::math::MathDialect", "mlir::scf::SCFDialect",
+    "talos::native::NativeDialect"
   ];
 }
 def AdmitNativeStartedOwnersPass : Pass<"schedule-admit-native-started-owners", "mlir::ModuleOp"> {
@@ -863,7 +892,8 @@ def AdmitNativeStartedOwnersPass : Pass<"schedule-admit-native-started-owners", 
   }];
   let dependentDialects = [
     "talos::sim::TalosSimulationDialect",
-    "talos::schedule::ScheduleDialect", "mlir::LLVM::LLVMDialect"
+    "talos::schedule::ScheduleDialect", "mlir::LLVM::LLVMDialect",
+    "talos::native::NativeDialect"
   ];
 }
 
@@ -874,7 +904,8 @@ def ConvertNativeScheduleActionsToLLVMPass
   let dependentDialects = ["talos::schedule::ScheduleDialect",
                            "mlir::LLVM::LLVMDialect",
                            "mlir::arith::ArithDialect",
-                           "mlir::cf::ControlFlowDialect"];
+                           "mlir::cf::ControlFlowDialect",
+                           "talos::native::NativeDialect"];
   let options = [Option<
       "coalesce", "coalesce", "bool", "true",
       "Combine unobservable pending-set updates before physical expansion">];

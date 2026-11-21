@@ -1082,9 +1082,10 @@ LogicalResult lowerPackedSimulationOperations(
       existingSymbols.try_emplace(global.name, created.getOperation());
     }
   }
-  auto declareRuntimeABI = [&](Location location, StringRef name, Type result,
-                               ArrayRef<Type> arguments) -> LogicalResult {
-    auto expected = LLVM::LLVMFunctionType::get(result, arguments, false);
+  auto declareRuntimeABI = [&](Location location,
+                               NativeRuntimeEntry entry) -> LogicalResult {
+    StringRef name = getNativeRuntimeSymbol(entry);
+    auto expected = getNativeRuntimeFunctionType(context, entry);
     auto existingIt = existingSymbols.find(name);
     if (existingIt != existingSymbols.end()) {
       auto function = dyn_cast<LLVM::LLVMFuncOp>(existingIt->second);
@@ -1096,42 +1097,29 @@ LogicalResult lowerPackedSimulationOperations(
                                    << " conflicts with a pre-existing symbol";
       return success();
     }
-    LLVM::LLVMFuncOp function =
-        getOrDeclareLLVMFunction(module, name, result, arguments);
+    LLVM::LLVMFuncOp function = declareNativeRuntime(module, entry);
     existingSymbols.try_emplace(name, function.getOperation());
     return success();
   };
-  Type pointer = LLVM::LLVMPointerType::get(context);
-  Type i32 = IntegerType::get(context, 32);
-  Type i64 = IntegerType::get(context, 64);
   if (needsContainerBitstreamABI &&
-      failed(declareRuntimeABI(
-          module.getLoc(), "talos_rt_v1_container_export_bitstream", i32,
-          {pointer, pointer, pointer, i64, i64, i32, i64, i64, i64, i32})))
+      failed(declareRuntimeABI(module.getLoc(),
+                               NativeRuntimeEntry::ContainerExportBitstream)))
     return failure();
   if (needsAggregateBitstreamABI &&
       failed(declareRuntimeABI(module.getLoc(),
-                               "talos_rt_v1_aggregate_export_bitstream", i32,
-                               {pointer, pointer, i64, i64, i32, pointer,
-                                pointer, i64, i64, i32, pointer, i64})))
+                               NativeRuntimeEntry::AggregateExportBitstream)))
     return failure();
   if (needsAggregateBitstreamImportABI &&
       failed(declareRuntimeABI(module.getLoc(),
-                               "talos_rt_v1_aggregate_import_bitstream", i32,
-                               {pointer, pointer, i64, i64, i32, pointer,
-                                pointer, i64, i64, i32, pointer, i64})))
+                               NativeRuntimeEntry::AggregateImportBitstream)))
     return failure();
   if (needsRecursiveBitstreamABI &&
-      failed(declareRuntimeABI(
-          module.getLoc(), "talos_rt_v1_recursive_export_bitstream", i32,
-          {pointer, pointer, pointer, i64, i64, i32, pointer, pointer, i64, i64,
-           i32, pointer, i64, i32, pointer, pointer})))
+      failed(declareRuntimeABI(module.getLoc(),
+                               NativeRuntimeEntry::RecursiveExportBitstream)))
     return failure();
   if (needsClassBitstreamABI &&
-      failed(declareRuntimeABI(
-          module.getLoc(), "talos_rt_v2_recursive_export_bitstream", i32,
-          {pointer, i64, pointer, pointer, i64, i64, i32, pointer, pointer, i64,
-           i64, i32, i32, pointer, pointer})))
+      failed(declareRuntimeABI(module.getLoc(),
+                               NativeRuntimeEntry::V2RecursiveExportBitstream)))
     return failure();
   if (needsClassBitstreamABI) {
     runtime::setFeatures(module, runtime::Features::ClassBitstream,

@@ -532,13 +532,9 @@ void materializeUnknownSummary(ModuleOp module,
          SmallVector<uint64_t>(
              std::max<uint32_t>(layout.unknownSummaryGates, 1), 0),
          false);
-  Type pointer = LLVM::LLVMPointerType::get(module.getContext());
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_native_state_refresh_unknown_summary",
-      builder.getI32Type(), {pointer, pointer, i64, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_native_state_mark_unknown",
-                           LLVM::LLVMVoidType::get(module.getContext()),
-                           {pointer, i64, i64});
+  declareNativeRuntime(module,
+                       NativeRuntimeEntry::NativeStateRefreshUnknownSummary);
+  declareNativeRuntime(module, NativeRuntimeEntry::NativeStateMarkUnknown);
 }
 
 } // namespace talos::detail

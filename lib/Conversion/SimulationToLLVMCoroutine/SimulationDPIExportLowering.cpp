@@ -423,18 +423,19 @@ materializeCWrapper(ModuleOp module, const ExportSpec &spec,
     if (!layout || layout.getStringCount() == 0)
       return;
     if (!activeContext)
-      activeContext =
-          LLVM::CallOp::create(
-              builder, location, TypeRange{pointer},
-              SymbolRefAttr::get(context, "talos_rt_v1_dpi_current_context"),
-              ValueRange{})
-              .getResult();
+      activeContext = LLVM::CallOp::create(
+                          builder, location, TypeRange{pointer},
+                          getNativeRuntimeCallee(
+                              context, NativeRuntimeEntry::DpiCurrentContext),
+                          ValueRange{})
+                          .getResult();
     Value handle = entryAlloca(builder, location, pointer, 1, 8);
     LLVM::StoreOp::create(builder, location, null, handle, 8);
     Value rootStatus =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context, "talos_rt_v1_dpi_aggregate_roots_push"),
+            getNativeRuntimeCallee(context,
+                                   NativeRuntimeEntry::DpiAggregateRootsPush),
             ValueRange{
                 activeContext, planes.first,
                 llvmConstant(builder, location, i64,
@@ -466,13 +467,15 @@ materializeCWrapper(ModuleOp module, const ExportSpec &spec,
         Value activeContext =
             LLVM::CallOp::create(
                 builder, location, TypeRange{pointer},
-                SymbolRefAttr::get(context, "talos_rt_v1_dpi_current_context"),
+                getNativeRuntimeCallee(context,
+                                       NativeRuntimeEntry::DpiCurrentContext),
                 ValueRange{})
                 .getResult();
         Value unpackStatus =
             LLVM::CallOp::create(
                 builder, location, TypeRange{i32},
-                SymbolRefAttr::get(context, "talos_rt_v1_dpi_aggregate_unpack"),
+                getNativeRuntimeCallee(context,
+                                       NativeRuntimeEntry::DpiAggregateUnpack),
                 ValueRange{
                     activeContext, argument,
                     llvmConstant(builder, location, i64, layout.getCSize()),
@@ -504,7 +507,8 @@ materializeCWrapper(ModuleOp module, const ExportSpec &spec,
       } else if (isVector(abi)) {
         LLVM::CallOp::create(
             builder, location, TypeRange{},
-            SymbolRefAttr::get(context, "talos_rt_v1_dpi_export_unpack_vector"),
+            getNativeRuntimeCallee(context,
+                                   NativeRuntimeEntry::DpiExportUnpackVector),
             ValueRange{
                 argument, planes.first, planes.second,
                 llvmConstant(builder, location, i32, abi.width),
@@ -590,7 +594,7 @@ materializeCWrapper(ModuleOp module, const ExportSpec &spec,
 
   auto status = LLVM::CallOp::create(
       builder, location, TypeRange{i32},
-      SymbolRefAttr::get(context, "talos_rt_v1_export_call_guarded"),
+      getNativeRuntimeCallee(context, NativeRuntimeEntry::ExportCallGuarded),
       ValueRange{marshallingStatus,
                  llvmConstant(builder, location, i32, spec.exportID),
                  llvmConstant(builder, location, i64, spec.abiHash), inputs,
@@ -620,13 +624,14 @@ materializeCWrapper(ModuleOp module, const ExportSpec &spec,
           llvmConstant(builder, location, i64, layout.getCSize())};
       StringRef function;
       if (layout.getStringCount() != 0) {
-        function = "talos_rt_v1_dpi_aggregate_export_pack";
+        function =
+            getNativeRuntimeSymbol(NativeRuntimeEntry::DpiAggregateExportPack);
         arguments.append(
             {aggregatePlan(signatureIndex),
              llvmConstant(builder, location, i64, layout.getLeaves().size()),
              llvmConstant(builder, location, i32, outputIndex)});
       } else {
-        function = "talos_rt_v1_dpi_aggregate_pack";
+        function = getNativeRuntimeSymbol(NativeRuntimeEntry::DpiAggregatePack);
         arguments.append(
             {llvmConstant(builder, location, i64, layout.getCSize()),
              aggregatePlan(signatureIndex),
@@ -642,7 +647,8 @@ materializeCWrapper(ModuleOp module, const ExportSpec &spec,
     if (isVector(abi)) {
       LLVM::CallOp::create(
           builder, location, TypeRange{},
-          SymbolRefAttr::get(context, "talos_rt_v1_dpi_export_pack_vector"),
+          getNativeRuntimeCallee(context,
+                                 NativeRuntimeEntry::DpiExportPackVector),
           ValueRange{target, outputPlanes[outputIndex].first,
                      outputPlanes[outputIndex].second,
                      llvmConstant(builder, location, i32, abi.width),
@@ -650,11 +656,12 @@ materializeCWrapper(ModuleOp module, const ExportSpec &spec,
       return;
     }
     if (isString(abi)) {
-      Value text = LLVM::CallOp::create(
-                       builder, location, TypeRange{pointer},
-                       SymbolRefAttr::get(context, "talos_rt_v1_export_string"),
-                       llvmConstant(builder, location, i32, outputIndex))
-                       .getResult();
+      Value text =
+          LLVM::CallOp::create(
+              builder, location, TypeRange{pointer},
+              getNativeRuntimeCallee(context, NativeRuntimeEntry::ExportString),
+              llvmConstant(builder, location, i32, outputIndex))
+              .getResult();
       LLVM::StoreOp::create(builder, location, text, target, 1);
       return;
     }
@@ -718,7 +725,8 @@ materializeCWrapper(ModuleOp module, const ExportSpec &spec,
     Value popStatus =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context, "talos_rt_v1_dpi_aggregate_roots_pop"),
+            getNativeRuntimeCallee(context,
+                                   NativeRuntimeEntry::DpiAggregateRootsPop),
             ValueRange{activeContext, handle})
             .getResult();
     mergeMarshallingStatus(popStatus);
@@ -726,7 +734,7 @@ materializeCWrapper(ModuleOp module, const ExportSpec &spec,
   marshallingStatus =
       LLVM::CallOp::create(
           builder, location, TypeRange{i32},
-          SymbolRefAttr::get(context, "talos_rt_v1_dpi_export_status"),
+          getNativeRuntimeCallee(context, NativeRuntimeEntry::DpiExportStatus),
           ValueRange{marshallingStatus})
           .getResult();
   LLVM::BrOp::create(builder, location, ValueRange{marshallingStatus}, done);
@@ -1043,8 +1051,8 @@ LogicalResult materializeNativeTaskThunk(ModuleOp module,
       allocationStatus =
           LLVM::CallOp::create(
               builder, location, TypeRange{i32},
-              SymbolRefAttr::get(context,
-                                 "talos_rt_v1_dpi_aggregate_state_alloc"),
+              getNativeRuntimeCallee(
+                  context, NativeRuntimeEntry::DpiAggregateStateAlloc),
               ValueRange{entry->getArgument(0),
                          llvmConstant(builder, location, i64, abi.width),
                          plane(inputs, index, false),
@@ -1067,8 +1075,8 @@ LogicalResult materializeNativeTaskThunk(ModuleOp module,
       allocationStatus =
           LLVM::CallOp::create(
               builder, location, TypeRange{i32},
-              SymbolRefAttr::get(
-                  context, "talos_rt_v1_native_state_alloc_with_typed_roots"),
+              getNativeRuntimeCallee(
+                  context, NativeRuntimeEntry::NativeStateAllocWithTypedRoots),
               ValueRange{
                   entry->getArgument(0),
                   llvmConstant(builder, location, i64, abi.width),
@@ -1079,7 +1087,8 @@ LogicalResult materializeNativeTaskThunk(ModuleOp module,
       allocationStatus =
           LLVM::CallOp::create(
               builder, location, TypeRange{i32},
-              SymbolRefAttr::get(context, "talos_rt_v1_native_state_alloc"),
+              getNativeRuntimeCallee(context,
+                                     NativeRuntimeEntry::NativeStateAlloc),
               ValueRange{entry->getArgument(0),
                          llvmConstant(builder, location, i64, abi.width),
                          plane(inputs, index, false),
@@ -1089,12 +1098,12 @@ LogicalResult materializeNativeTaskThunk(ModuleOp module,
     failToCleanup(allocationStatus);
     Value reference =
         LLVM::LoadOp::create(builder, location, i64, handleSlots[handle], 8);
-    Value retain =
-        LLVM::CallOp::create(
-            builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context, "talos_rt_v1_native_state_retain"),
-            ValueRange{entry->getArgument(0), reference})
-            .getResult();
+    Value retain = LLVM::CallOp::create(
+                       builder, location, TypeRange{i32},
+                       getNativeRuntimeCallee(
+                           context, NativeRuntimeEntry::NativeStateRetain),
+                       ValueRange{entry->getArgument(0), reference})
+                       .getResult();
     failToCleanup(retain);
     arguments.push_back(reference);
     ++parameter;
@@ -1122,7 +1131,7 @@ LogicalResult materializeNativeTaskThunk(ModuleOp module,
   Value taskStatus =
       LLVM::CallOp::create(
           builder, location, TypeRange{i32},
-          SymbolRefAttr::get(context, "talos_rt_v1_dpi_export_task_run"),
+          getNativeRuntimeCallee(context, NativeRuntimeEntry::DpiExportTaskRun),
           ValueRange{entry->getArgument(0), instance})
           .getResult();
   LLVM::StoreOp::create(builder, location, taskStatus, statusSlot, 4);
@@ -1178,13 +1187,13 @@ LogicalResult materializeNativeTaskThunk(ModuleOp module,
         llvmConstant(builder, location, i64, UINT64_MAX));
     LLVM::CondBrOp::create(builder, location, valid, release, next);
     builder.setInsertionPointToStart(release);
-    Value released =
-        LLVM::CallOp::create(
-            builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context, "talos_rt_v1_native_state_release"),
-            ValueRange{entry->getArgument(0), reference,
-                       llvmConstant(builder, location, i32, 1)})
-            .getResult();
+    Value released = LLVM::CallOp::create(
+                         builder, location, TypeRange{i32},
+                         getNativeRuntimeCallee(
+                             context, NativeRuntimeEntry::NativeStateRelease),
+                         ValueRange{entry->getArgument(0), reference,
+                                    llvmConstant(builder, location, i32, 1)})
+                         .getResult();
     mergeStatus(released);
     LLVM::BrOp::create(builder, location, next);
     builder.setInsertionPointToStart(next);
@@ -1257,8 +1266,8 @@ LogicalResult materializeBytecodeTaskThunk(LLVM::LLVMFuncOp thunk,
   Value status =
       LLVM::CallOp::create(
           builder, location, TypeRange{i32},
-          SymbolRefAttr::get(context,
-                             "talos_rt_v1_dpi_export_task_bytecode_run"),
+          getNativeRuntimeCallee(context,
+                                 NativeRuntimeEntry::DpiExportTaskBytecodeRun),
           ValueRange{entry->getArgument(0),
                      llvmConstant(builder, location, i32, spec.exportID),
                      entry->getArgument(1), entry->getArgument(2),
@@ -1570,57 +1579,26 @@ LogicalResult materializeDPIExportWrappers(ModuleOp module) {
     if (failed(materializeCWrapper(module, *spec, functions)))
       return failure();
   }
-  MLIRContext *context = module.getContext();
-  OpBuilder builder(context);
-  Type pointer = LLVM::LLVMPointerType::get(context);
-  Type i32 = builder.getI32Type();
-  Type voidType = LLVM::LLVMVoidType::get(context);
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_export_call_guarded", i32,
-      {i32, i32, builder.getI64Type(), pointer, i32, pointer, i32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_dpi_export_status", i32, {i32});
+  declareNativeRuntime(module, NativeRuntimeEntry::ExportCallGuarded);
+  declareNativeRuntime(module, NativeRuntimeEntry::DpiExportStatus);
   if (needsTask)
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_dpi_export_task_run", i32,
-                             {pointer, pointer});
+    declareNativeRuntime(module, NativeRuntimeEntry::DpiExportTaskRun);
   if (needsTask)
-    getOrDeclareLLVMFunction(
-        module, "talos_rt_v1_dpi_export_task_bytecode_run", i32,
-        {pointer, i32, pointer, i32, pointer, i32, pointer, pointer, pointer});
+    declareNativeRuntime(module, NativeRuntimeEntry::DpiExportTaskBytecodeRun);
   if (needsString)
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_export_string", pointer,
-                             {i32});
+    declareNativeRuntime(module, NativeRuntimeEntry::ExportString);
   if (needsVector) {
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_dpi_export_unpack_vector",
-                             voidType, {pointer, pointer, pointer, i32, i32});
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_dpi_export_pack_vector",
-                             voidType, {pointer, pointer, pointer, i32, i32});
+    declareNativeRuntime(module, NativeRuntimeEntry::DpiExportUnpackVector);
+    declareNativeRuntime(module, NativeRuntimeEntry::DpiExportPackVector);
   }
   if (needsAggregate) {
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_dpi_current_context", pointer,
-                             {});
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_dpi_aggregate_pack", i32,
-                             {pointer, pointer, builder.getI64Type(),
-                              builder.getI64Type(), i32, pointer,
-                              builder.getI64Type(), builder.getI64Type(),
-                              pointer, builder.getI64Type()});
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_dpi_aggregate_unpack", i32,
-                             {pointer, pointer, builder.getI64Type(), pointer,
-                              builder.getI64Type(), pointer, pointer,
-                              builder.getI64Type(), builder.getI64Type(), i32});
-    getOrDeclareLLVMFunction(
-        module, "talos_rt_v1_dpi_aggregate_roots_push", i32,
-        {pointer, pointer, builder.getI64Type(), builder.getI64Type(), pointer,
-         builder.getI64Type(), pointer});
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_dpi_aggregate_roots_pop", i32,
-                             {pointer, pointer});
-    getOrDeclareLLVMFunction(
-        module, "talos_rt_v1_dpi_aggregate_export_pack", i32,
-        {pointer, pointer, builder.getI64Type(), builder.getI64Type(), i32,
-         pointer, builder.getI64Type(), pointer, builder.getI64Type(), i32});
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_dpi_aggregate_state_alloc",
-                             i32,
-                             {pointer, builder.getI64Type(), pointer, pointer,
-                              pointer, builder.getI64Type(), pointer});
+    declareNativeRuntime(module, NativeRuntimeEntry::DpiCurrentContext);
+    declareNativeRuntime(module, NativeRuntimeEntry::DpiAggregatePack);
+    declareNativeRuntime(module, NativeRuntimeEntry::DpiAggregateUnpack);
+    declareNativeRuntime(module, NativeRuntimeEntry::DpiAggregateRootsPush);
+    declareNativeRuntime(module, NativeRuntimeEntry::DpiAggregateRootsPop);
+    declareNativeRuntime(module, NativeRuntimeEntry::DpiAggregateExportPack);
+    declareNativeRuntime(module, NativeRuntimeEntry::DpiAggregateStateAlloc);
   }
   return success();
 }

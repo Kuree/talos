@@ -49,6 +49,10 @@ def NativeDialect : Dialect {
     "::mlir::UnitAttr":$startup_resolve_initial_drivers,
     "::mlir::UnitAttr":$startup_vpi,
 
+    // On an external llvm.func: the native runtime entry it declares, whose
+    // symbol and prototype it must have.
+    "::talos::native::RuntimeEntryAttr":$runtime_entry,
+
     // Stable semantic partition of a function or global, independent of the
     // worker count, so object emission and caches share one boundary.
     "::mlir::StringAttr":$partition,

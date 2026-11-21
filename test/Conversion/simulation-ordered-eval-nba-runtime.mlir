@@ -1,7 +1,14 @@
 // RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off})' -o %t.scheduled.mlir
-// RUN: talos-opt %t.scheduled.mlir --convert-talos-sim-processes-to-llvm-coroutines | FileCheck %s --check-prefix=PLAN
+// RUN: talos-opt %t.scheduled.mlir --convert-talos-sim-processes-to-llvm-coroutines -o %t.plan.mlir
+// RUN: FileCheck %s --check-prefix=PLAN < %t.plan.mlir
+// RUN: FileCheck %s --check-prefix=COLD < %t.plan.mlir
 // RUN: talos-opt %t.scheduled.mlir '--test-talos-set-module-attributes=attrs="{schedule.force_generic_nba, native.closed_executable}"' --convert-talos-sim-processes-to-llvm-coroutines --materialize-runtime-byte-globals -o %t.generic.mlir
 // RUN: FileCheck %s --check-prefix=GENERIC --implicit-check-not=__talos_eval_ordered_nba_queue_v1 --implicit-check-not=__talos_aot_nba_accumulator_ < %t.generic.mlir
+
+// Growing the queue is the cold arm of a capacity test, so its runtime
+// entries are declared cold.
+// COLD: llvm.func @talos_rt_v1_eval_nba_reserve_records(!llvm.ptr, !llvm.ptr, i32) -> i32 attributes {native.runtime_entry = #native.runtime_entry<eval_nba_reserve_records>, passthrough = ["cold"]}
+// COLD-NEXT: llvm.func @talos_rt_v1_eval_nba_reserve(!llvm.ptr, !llvm.ptr) -> i32 attributes {native.runtime_entry = #native.runtime_entry<eval_nba_reserve>, passthrough = ["cold"]}
 
 // The writer runs twice before the NBA barrier: src=1 stages one, then a
 // different actor resets src and stages zero at the SAME semantic site.

@@ -30,7 +30,8 @@ bool hasNativeRuntimeEffect(mlir::Operation *op, Effect effect) {
                 schedule::NativeStateStoreHandleOp,
                 schedule::NativeStateFrameStoreOp,
                 schedule::NativeStateLoadAutomaticOp>(op))
-    return hasNativeRuntimeEffect(getNativeStateHandleAccessCallee(op), effect);
+    return (getNativeRuntimeEffects(getNativeStateHandleAccessEntry(op)) &
+            effect) == effect;
   return false;
 }
 

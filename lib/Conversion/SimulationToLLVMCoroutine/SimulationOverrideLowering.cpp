@@ -81,8 +81,8 @@ public:
       Value status =
           LLVM::CallOp::create(
               rewriter, op.getLoc(), TypeRange{i32},
-              SymbolRefAttr::get(rewriter.getContext(),
-                                 "talos_rt_v1_object_override"),
+              getNativeRuntimeCallee(rewriter.getContext(),
+                                     NativeRuntimeEntry::ObjectOverride),
               ValueRange{
                   managedObjectPointer(rewriter, op.getLoc(),
                                        adaptor.getTarget()[0]),
@@ -97,10 +97,11 @@ public:
                   llvmConstant(rewriter, op.getLoc(), i32, 0), managed->value,
                   managed->unknown})
               .getResult();
-      LLVM::CallOp::create(rewriter, op.getLoc(), TypeRange{},
-                           SymbolRefAttr::get(rewriter.getContext(),
-                                              "talos_rt_v1_scheduler_fail"),
-                           ValueRange{context, status});
+      LLVM::CallOp::create(
+          rewriter, op.getLoc(), TypeRange{},
+          getNativeRuntimeCallee(rewriter.getContext(),
+                                 NativeRuntimeEntry::SchedulerFail),
+          ValueRange{context, status});
       rewriter.eraseOp(op);
       return success();
     }
@@ -141,8 +142,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{i32},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_native_override"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::NativeOverride),
             ValueRange{
                 context, globalValue, globalUnknown,
                 llvmConstant(rewriter, location, i64, stateBitCount),
@@ -154,7 +155,8 @@ public:
             .getResult();
     LLVM::CallOp::create(
         rewriter, location, TypeRange{},
-        SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_scheduler_fail"),
+        getNativeRuntimeCallee(rewriter.getContext(),
+                               NativeRuntimeEntry::SchedulerFail),
         ValueRange{context, status});
     rewriter.eraseOp(op);
     return success();
@@ -196,8 +198,8 @@ public:
       Value status =
           LLVM::CallOp::create(
               rewriter, op.getLoc(), TypeRange{i32},
-              SymbolRefAttr::get(rewriter.getContext(),
-                                 "talos_rt_v1_object_override"),
+              getNativeRuntimeCallee(rewriter.getContext(),
+                                     NativeRuntimeEntry::ObjectOverride),
               ValueRange{
                   managedObjectPointer(rewriter, op.getLoc(),
                                        adaptor.getTarget()[0]),
@@ -213,10 +215,11 @@ public:
                                op.getClaim() ? 1 : 0),
                   managed->value, managed->unknown})
               .getResult();
-      LLVM::CallOp::create(rewriter, op.getLoc(), TypeRange{},
-                           SymbolRefAttr::get(rewriter.getContext(),
-                                              "talos_rt_v1_scheduler_fail"),
-                           ValueRange{context, status});
+      LLVM::CallOp::create(
+          rewriter, op.getLoc(), TypeRange{},
+          getNativeRuntimeCallee(rewriter.getContext(),
+                                 NativeRuntimeEntry::SchedulerFail),
+          ValueRange{context, status});
       rewriter.eraseOp(op);
       return success();
     }
@@ -257,8 +260,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{i32},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_native_dynamic_override"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::NativeDynamicOverride),
             ValueRange{
                 context, globalValue, globalUnknown,
                 llvmConstant(rewriter, location, i64, stateBitCount),
@@ -272,7 +275,8 @@ public:
             .getResult();
     LLVM::CallOp::create(
         rewriter, location, TypeRange{},
-        SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_scheduler_fail"),
+        getNativeRuntimeCallee(rewriter.getContext(),
+                               NativeRuntimeEntry::SchedulerFail),
         ValueRange{context, status});
     rewriter.eraseOp(op);
     return success();
@@ -316,8 +320,8 @@ public:
       Value status =
           LLVM::CallOp::create(
               rewriter, op.getLoc(), TypeRange{i32},
-              SymbolRefAttr::get(rewriter.getContext(),
-                                 "talos_rt_v1_object_release_override"),
+              getNativeRuntimeCallee(rewriter.getContext(),
+                                     NativeRuntimeEntry::ObjectReleaseOverride),
               ValueRange{
                   managedObjectPointer(rewriter, op.getLoc(),
                                        adaptor.getTarget()[0]),
@@ -328,10 +332,11 @@ public:
                   llvmConstant(rewriter, op.getLoc(), i32,
                                op.getIsAssign() ? 1 : 0)})
               .getResult();
-      LLVM::CallOp::create(rewriter, op.getLoc(), TypeRange{},
-                           SymbolRefAttr::get(rewriter.getContext(),
-                                              "talos_rt_v1_scheduler_fail"),
-                           ValueRange{context, status});
+      LLVM::CallOp::create(
+          rewriter, op.getLoc(), TypeRange{},
+          getNativeRuntimeCallee(rewriter.getContext(),
+                                 NativeRuntimeEntry::SchedulerFail),
+          ValueRange{context, status});
       rewriter.eraseOp(op);
       return success();
     }
@@ -363,8 +368,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{i32},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_native_release_override"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::NativeReleaseOverride),
             ValueRange{context, globalValue, globalUnknown,
                        llvmConstant(rewriter, location, i64, stateBitCount),
                        adaptor.getTarget().front(),
@@ -375,7 +380,8 @@ public:
             .getResult();
     LLVM::CallOp::create(
         rewriter, location, TypeRange{},
-        SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_scheduler_fail"),
+        getNativeRuntimeCallee(rewriter.getContext(),
+                               NativeRuntimeEntry::SchedulerFail),
         ValueRange{context, status});
     rewriter.eraseOp(op);
     return success();

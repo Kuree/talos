@@ -277,14 +277,7 @@ void materializeReadyBatches(Operation *operation,
 }
 
 void declareStaticTransition(ModuleOp module) {
-  OpBuilder builder(module.getContext());
-  auto ptr = LLVM::LLVMPointerType::get(builder.getContext());
-  detail::getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_static_transition",
-      LLVM::LLVMVoidType::get(builder.getContext()),
-      {ptr, builder.getI32Type(), builder.getI64Type(), builder.getI64Type(),
-       builder.getI64Type(), builder.getI64Type(), builder.getI64Type(),
-       builder.getI64Type()});
+  declareNativeRuntime(module, NativeRuntimeEntry::SchedulerStaticTransition);
 }
 
 /// Lowers NBA batches. An unspecialized batch adds a module global and a
@@ -300,11 +293,8 @@ void lowerNBABatches(Operation *operation, SymbolTableCollection *cache) {
     auto module = batch->getParentOfType<ModuleOp>();
     OpBuilder builder(batch);
     auto loc = batch.getLoc();
-    auto ptr = LLVM::LLVMPointerType::get(builder.getContext());
     auto i32 = builder.getI32Type();
-    detail::getOrDeclareLLVMFunction(module,
-                                     "talos_rt_v1_static_nba_commit_batch", i32,
-                                     {ptr, ptr, i32, i32, ptr});
+    declareNativeRuntime(module, NativeRuntimeEntry::StaticNbaCommitBatch);
     SmallVector<uint32_t> roots;
     for (auto commit : batch.getBody().getOps<schedule::NativeNBACommitOp>())
       roots.push_back(commit.getRoot());
@@ -326,8 +316,8 @@ void lowerNBABatches(Operation *operation, SymbolTableCollection *cache) {
     Value address = LLVM::AddressOfOp::create(builder, loc, table);
     auto call = LLVM::CallOp::create(
         builder, loc, TypeRange{i32},
-        SymbolRefAttr::get(builder.getContext(),
-                           "talos_rt_v1_static_nba_commit_batch"),
+        getNativeRuntimeCallee(builder.getContext(),
+                               NativeRuntimeEntry::StaticNbaCommitBatch),
         ValueRange{batch.getContext(), address,
                    detail::llvmConstant(builder, loc, i32, roots.size()),
                    batch.getBarrier(), batch.getChanged()});
@@ -430,8 +420,8 @@ bool materializeLocalScheduleActions(
     OpBuilder builder(transition);
     auto call = LLVM::CallOp::create(
         builder, transition.getLoc(), TypeRange{},
-        SymbolRefAttr::get(builder.getContext(),
-                           "talos_rt_v1_scheduler_static_transition"),
+        getNativeRuntimeCallee(builder.getContext(),
+                               NativeRuntimeEntry::SchedulerStaticTransition),
         ValueRange{transition.getContext(),
                    detail::llvmConstant(builder, transition.getLoc(),
                                         builder.getI32Type(),

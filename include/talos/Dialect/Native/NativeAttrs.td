@@ -110,4 +110,13 @@ def NativeFrameCheckpointAttr
   let genVerifyDecl = 1;
 }
 
+// The native runtime entry an LLVM declaration declares
+// (NativeRuntimeEntries.def), printed as its symbol without the
+// `talos_rt_v1_` prefix.
+def NativeRuntimeEntryAttr : NativeAttr<"RuntimeEntry", "runtime_entry"> {
+  let summary = "the native runtime entry a declaration declares";
+  let parameters = (ins "::talos::NativeRuntimeEntry":$entry);
+  let hasCustomAssemblyFormat = 1;
+}
+
 #endif // TALOS_DIALECT_NATIVE_NATIVEATTRS_TD

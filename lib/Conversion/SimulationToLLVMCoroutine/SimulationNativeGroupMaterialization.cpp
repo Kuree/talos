@@ -1530,7 +1530,8 @@ public:
   }
   // Promotion acquires and publishes state windows with typed accesses.
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<LLVM::LLVMDialect, schedule::ScheduleDialect>();
+    registry.insert<LLVM::LLVMDialect, schedule::ScheduleDialect,
+                    native::NativeDialect>();
   }
   void runOnOperation() override {
     auto function = getOperation();

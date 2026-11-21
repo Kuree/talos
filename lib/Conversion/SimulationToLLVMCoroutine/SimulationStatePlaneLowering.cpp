@@ -101,8 +101,8 @@ void notifySignal(ConversionPatternRewriter &builder, Location location,
   };
   auto transition = LLVM::CallOp::create(
       builder, location, TypeRange{},
-      SymbolRefAttr::get(builder.getContext(),
-                         "talos_rt_v1_scheduler_signal_transition"),
+      getNativeRuntimeCallee(builder.getContext(),
+                             NativeRuntimeEntry::SchedulerSignalTransition),
       ValueRange{context, handle, llvmConstant(builder, location, i64, width),
                  save(oldValue), save(oldUnknown), save(newValue),
                  save(newUnknown)});
@@ -1377,15 +1377,15 @@ bool emitDirectDynamicPackedStore(
 
 } // namespace detail
 
-StringRef getNativeStateHandleAccessCallee(Operation *access) {
+NativeRuntimeEntry getNativeStateHandleAccessEntry(Operation *access) {
   if (isa<schedule::NativeStateLoadHandleOp,
           schedule::NativeStateLoadAutomaticOp>(access))
-    return "talos_rt_v1_native_state_load_plane";
+    return NativeRuntimeEntry::NativeStateLoadPlane;
   if (isa<schedule::NativeStateFrameStoreOp>(access))
-    return "talos_rt_v1_native_frame_store";
+    return NativeRuntimeEntry::NativeFrameStore;
   return cast<schedule::NativeStateStoreHandleOp>(access).getContinuous()
-             ? "talos_rt_v1_native_state_store_continuous_plane"
-             : "talos_rt_v1_native_state_store_plane";
+             ? NativeRuntimeEntry::NativeStateStoreContinuousPlane
+             : NativeRuntimeEntry::NativeStateStorePlane;
 }
 
 namespace {
@@ -1434,9 +1434,11 @@ LLVM::CallOp lowerFrameStore(OpBuilder &builder,
       detail::llvmConstant(builder, location, i32, flags),
       word(store.getValue()),
       unknown};
-  return LLVM::CallOp::create(builder, location, TypeRange{},
-                              getNativeStateHandleAccessCallee(store),
-                              arguments);
+  return LLVM::CallOp::create(
+      builder, location, TypeRange{},
+      getNativeRuntimeCallee(builder.getContext(),
+                             getNativeStateHandleAccessEntry(store)),
+      arguments);
 }
 
 // A read of an automatic variable passes no design state: its buffer stands
@@ -1457,8 +1459,8 @@ LLVM::CallOp lowerAutomaticLoad(OpBuilder &builder,
       load.getBuffer()};
   auto call = LLVM::CallOp::create(
       builder, location, TypeRange{i32},
-      SymbolRefAttr::get(builder.getContext(),
-                         getNativeStateHandleAccessCallee(load)),
+      getNativeRuntimeCallee(builder.getContext(),
+                             getNativeStateHandleAccessEntry(load)),
       arguments);
   load.getStatus().replaceAllUsesWith(call.getResult());
   return call;
@@ -1504,8 +1506,8 @@ LLVM::CallOp lowerNativeStateHandleAccess(Operation *access) {
     }
     call = LLVM::CallOp::create(
         builder, location, TypeRange{i32},
-        SymbolRefAttr::get(builder.getContext(),
-                           getNativeStateHandleAccessCallee(access)),
+        getNativeRuntimeCallee(builder.getContext(),
+                               getNativeStateHandleAccessEntry(access)),
         arguments);
   }
   access->erase();

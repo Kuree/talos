@@ -86,12 +86,13 @@ LogicalResult lowerCallableProcessControls(func::FuncOp function) {
                                        TALOS_RT_PROCESS_CONTROL_CONTINUE),
                           disposition, 4);
     Value context = managedContextAndLane(rewriter, location).first;
-    Value current = LLVM::CallOp::create(
-                        rewriter, location, TypeRange{rewriter.getI64Type()},
-                        SymbolRefAttr::get(rewriter.getContext(),
-                                           "talos_rt_v1_process_current"),
-                        ValueRange{context})
-                        .getResult();
+    Value current =
+        LLVM::CallOp::create(
+            rewriter, location, TypeRange{rewriter.getI64Type()},
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::ProcessCurrent),
+            ValueRange{context})
+            .getResult();
     Value targetsCurrent =
         arith::CmpIOp::create(rewriter, location, arith::CmpIPredicate::eq,
                               current, controlledProcess);
@@ -104,8 +105,8 @@ LogicalResult lowerCallableProcessControls(func::FuncOp function) {
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{i32},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_process_control"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::ProcessControl),
             ValueRange{context, controlledProcess,
                        llvmConstant(rewriter, location, i32,
                                     static_cast<uint32_t>(controlKind)),

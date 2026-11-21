@@ -235,8 +235,8 @@ LogicalResult lowerNativeDPICall(sim::SimDPICallOp operation,
         Value prepareStatus =
             LLVM::CallOp::create(
                 rewriter, location, TypeRange{i32},
-                SymbolRefAttr::get(
-                    context, "talos_rt_v1_dpi_open_array_prepare_recursive"),
+                getNativeRuntimeCallee(
+                    context, NativeRuntimeEntry::DpiOpenArrayPrepareRecursive),
                 ValueRange{
                     valueStorage, unknownStorage,
                     c64((layout.getTransportWidth() + 7) / 8),
@@ -309,8 +309,8 @@ LogicalResult lowerNativeDPICall(sim::SimDPICallOp operation,
         Value packStatus =
             LLVM::CallOp::create(
                 rewriter, location, TypeRange{i32},
-                SymbolRefAttr::get(context,
-                                   "talos_rt_v1_dpi_open_array_aggregate_pack"),
+                getNativeRuntimeCallee(
+                    context, NativeRuntimeEntry::DpiOpenArrayAggregatePack),
                 ValueRange{
                     valueStorage, unknownStorage,
                     c64((layout.getTransportWidth() + 7) / 8),
@@ -449,7 +449,8 @@ LogicalResult lowerNativeDPICall(sim::SimDPICallOp operation,
         Value packStatus =
             LLVM::CallOp::create(
                 rewriter, location, TypeRange{i32},
-                SymbolRefAttr::get(context, "talos_rt_v1_dpi_aggregate_pack"),
+                getNativeRuntimeCallee(context,
+                                       NativeRuntimeEntry::DpiAggregatePack),
                 ValueRange{valueStorage, unknownStorage,
                            c64((uint64_t{abi[index].width} + 7) / 8),
                            c64(abi[index].width), c32(abi[index].fourState),
@@ -662,9 +663,12 @@ LogicalResult lowerNativeDPICall(sim::SimDPICallOp operation,
       LLVM::CallOp::create(
           rewriter, location, TypeRange{i32},
           SymbolRefAttr::get(
-              context, operation.getIsContext()
-                           ? "talos_rt_v1_import_call_guarded"
-                           : "talos_rt_v1_import_call_noncontext_guarded"),
+              context,
+              operation.getIsContext()
+                  ? getNativeRuntimeSymbol(
+                        NativeRuntimeEntry::ImportCallGuarded)
+                  : getNativeRuntimeSymbol(
+                        NativeRuntimeEntry::ImportCallNoncontextGuarded)),
           ValueRange{
               marshallingStatus, operation.getRuntimeContext(), site, inputs,
               llvmConstant(rewriter, location, i32, logicalInputs), outputs,
@@ -690,8 +694,8 @@ LogicalResult lowerNativeDPICall(sim::SimDPICallOp operation,
         marshallingStatus =
             LLVM::CallOp::create(
                 rewriter, location, TypeRange{i32},
-                SymbolRefAttr::get(
-                    context, "talos_rt_v1_dpi_open_array_finish_recursive"),
+                getNativeRuntimeCallee(
+                    context, NativeRuntimeEntry::DpiOpenArrayFinishRecursive),
                 ValueRange{marshallingStatus, operation.getRuntimeContext(),
                            storage.recursiveStorage, storage.flatValue,
                            storage.flatUnknown,
@@ -738,8 +742,8 @@ LogicalResult lowerNativeDPICall(sim::SimDPICallOp operation,
       Value unpackStatus =
           LLVM::CallOp::create(
               rewriter, location, TypeRange{i32},
-              SymbolRefAttr::get(context,
-                                 "talos_rt_v1_dpi_open_array_aggregate_unpack"),
+              getNativeRuntimeCallee(
+                  context, NativeRuntimeEntry::DpiOpenArrayAggregateUnpack),
               ValueRange{
                   operation.getRuntimeContext(), storage.data,
                   c64(storage.dataSize), c64(storage.layout.getElementCSize()),
@@ -791,7 +795,8 @@ LogicalResult lowerNativeDPICall(sim::SimDPICallOp operation,
       Value unpackStatus =
           LLVM::CallOp::create(
               rewriter, location, TypeRange{i32},
-              SymbolRefAttr::get(context, "talos_rt_v1_dpi_aggregate_unpack"),
+              getNativeRuntimeCallee(context,
+                                     NativeRuntimeEntry::DpiAggregateUnpack),
               ValueRange{operation.getRuntimeContext(), storage.data,
                          c64(storage.layout.getCSize()), storage.plan,
                          c64(storage.layout.getLeaves().size()), valueStorage,
@@ -839,8 +844,8 @@ LogicalResult lowerNativeDPICall(sim::SimDPICallOp operation,
     if (storage && storage->recursiveStorage)
       LLVM::CallOp::create(
           rewriter, location, TypeRange{},
-          SymbolRefAttr::get(context,
-                             "talos_rt_v1_dpi_open_array_release_recursive"),
+          getNativeRuntimeCallee(
+              context, NativeRuntimeEntry::DpiOpenArrayReleaseRecursive),
           storage->recursiveStorage);
   Value status = runtime::RTStatusFromBitsOp::create(
       rewriter, location, runtime::StatusType::get(context), marshallingStatus);

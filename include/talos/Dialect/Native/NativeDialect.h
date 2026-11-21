@@ -4,6 +4,7 @@
 #define TALOS_DIALECT_NATIVE_NATIVEDIALECT_H
 
 #include "talos/Dialect/DiscardableAttributes.h"
+#include "talos/Dialect/Native/NativeRuntimeEntries.h"
 
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -29,6 +30,7 @@ using DebugTiming = NativeDialect::DebugTimingAttrHelper;
 using FallbackReport = NativeDialect::FallbackReportAttrHelper;
 using ProcessesMaterialized = NativeDialect::ProcessesMaterializedAttrHelper;
 using ClosedExecutable = NativeDialect::ClosedExecutableAttrHelper;
+using RuntimeEntry = NativeDialect::RuntimeEntryAttrHelper;
 using StartupStateSync = NativeDialect::StartupStateSyncAttrHelper;
 using StartupResolveInitialDrivers =
     NativeDialect::StartupResolveInitialDriversAttrHelper;

@@ -899,7 +899,9 @@ materializeGenericNBAQueueWindows(ModuleOp module,
     SmallVector<std::pair<LLVM::CallOp, uint32_t>> queries;
     uint32_t maximum = 0;
     function.walk([&](LLVM::CallOp call) {
-      if (call.getCallee() != "talos_rt_v1_scheduler_generic_nba_pending" ||
+      if (call.getCallee() !=
+              getNativeRuntimeSymbol(
+                  NativeRuntimeEntry::SchedulerGenericNbaPending) ||
           call.getArgOperands().size() != 2)
         return;
       auto root = constantU64(call.getArgOperands()[1]);
@@ -944,8 +946,8 @@ materializeGenericNBAQueueWindows(ModuleOp module,
     Value words =
         LLVM::CallOp::create(
             b, at, TypeRange{pointer},
-            SymbolRefAttr::get(context,
-                               "talos_rt_v1_scheduler_generic_nba_words"),
+            getNativeRuntimeCallee(
+                context, NativeRuntimeEntry::SchedulerGenericNbaWords),
             ValueRange{current, llvmConstant(b, at, b.getI32Type(), maximum)})
             .getResult();
     Value valid = LLVM::ICmpOp::create(b, at, LLVM::ICmpPredicate::ne, words,
@@ -1005,7 +1007,9 @@ static void normalizeGeneratedWideTransitions(
        collectGeneratedEvalCallClosure(module, selectedRawBodies))
     function.walk([&](LLVM::CallOp call) {
       if (call.getCallee() &&
-          *call.getCallee() == "talos_rt_v1_scheduler_signal_transition")
+          *call.getCallee() ==
+              getNativeRuntimeSymbol(
+                  NativeRuntimeEntry::SchedulerSignalTransition))
         calls.push_back(call);
     });
   for (LLVM::CallOp call : calls) {
@@ -1634,10 +1638,8 @@ FailureOr<bool> makeNativeEvalPlan(
     };
     makeZero(evalNBAQueueName, LLVM::LLVMStructType::getLiteral(
                                    context, {pointer, i32, i32, i32}));
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_eval_nba_reserve", i32,
-                             {pointer, pointer});
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_eval_nba_reserve_records",
-                             i32, {pointer, pointer, i32});
+    declareNativeRuntime(module, NativeRuntimeEntry::EvalNbaReserve);
+    declareNativeRuntime(module, NativeRuntimeEntry::EvalNbaReserveRecords);
   }
   for (const NativeDirectFragment &direct : directFragments)
     if (direct.tier2Convergence)
@@ -2646,9 +2648,12 @@ FailureOr<bool> makeNativeEvalPlan(
       auto owned = LLVM::CallOp::create(
           publication, call.getLoc(), TypeRange{},
           SymbolRefAttr::get(
-              context, projectedSources.contains(call)
-                           ? "talos_rt_v1_scheduler_static_transition_projected"
-                           : "talos_rt_v1_scheduler_static_transition_owned"),
+              context,
+              projectedSources.contains(call)
+                  ? getNativeRuntimeSymbol(
+                        NativeRuntimeEntry::SchedulerStaticTransitionProjected)
+                  : getNativeRuntimeSymbol(
+                        NativeRuntimeEntry::SchedulerStaticTransitionOwned)),
           arguments);
       if (auto routed = ::talos::schedule::get<
               ::talos::schedule::Field::EvalRuntimeRoutedPublication>(call))
@@ -2669,10 +2674,13 @@ FailureOr<bool> makeNativeEvalPlan(
       LLVM::CallOp::create(
           publication, call.getLoc(), TypeRange{},
           SymbolRefAttr::get(
-              context, wholeChunks.lookup(op) && projectedChunks.lookup(op) ==
-                                                     wholeChunks.lookup(op)
-                           ? "talos_rt_v1_scheduler_wide_transition_projected"
-                           : "talos_rt_v1_scheduler_wide_transition_owned"),
+              context,
+              wholeChunks.lookup(op) &&
+                      projectedChunks.lookup(op) == wholeChunks.lookup(op)
+                  ? getNativeRuntimeSymbol(
+                        NativeRuntimeEntry::SchedulerWideTransitionProjected)
+                  : getNativeRuntimeSymbol(
+                        NativeRuntimeEntry::SchedulerWideTransitionOwned)),
           args);
       call.erase();
     }
@@ -3022,7 +3030,8 @@ FailureOr<bool> makeNativeEvalPlan(
               nbaStage.getRuntimeContext(),
               LLVM::AddressOfOp::create(nbaBuilder, loc, pointer,
                                         evalNBAQueueName)};
-          StringRef growName = "talos_rt_v1_eval_nba_reserve";
+          StringRef growName =
+              getNativeRuntimeSymbol(NativeRuntimeEntry::EvalNbaReserve);
           if (fullRecords > 1) {
             // A sparse capture need not allocate its worst-case size; in
             // particular one live lane can fit at the capacity limit.
@@ -3033,7 +3042,8 @@ FailureOr<bool> makeNativeEvalPlan(
                   nbaBuilder, loc, count,
                   arith::ExtUIOp::create(nbaBuilder, loc, i32, lane));
             growArgs.push_back(count);
-            growName = "talos_rt_v1_eval_nba_reserve_records";
+            growName = getNativeRuntimeSymbol(
+                NativeRuntimeEntry::EvalNbaReserveRecords);
           }
           Value status = LLVM::CallOp::create(nbaBuilder, loc, TypeRange{i32},
                                               growName, growArgs)
@@ -3051,7 +3061,8 @@ FailureOr<bool> makeNativeEvalPlan(
           // appear to complete successfully.
           LLVM::CallOp::create(
               nbaBuilder, loc, TypeRange{},
-              SymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"),
+              getNativeRuntimeCallee(context,
+                                     NativeRuntimeEntry::SchedulerFail),
               ValueRange{nbaStage.getRuntimeContext(), status});
           cf::BranchOp::create(nbaBuilder, loc, continuation);
           nbaBuilder.setInsertionPointToStart(stage);
@@ -4257,14 +4268,14 @@ FailureOr<bool> makeNativeEvalPlan(
         8);
     Value nodes =
         LLVM::AddressOfOp::create(builder, location, pointer, nodesName);
-    Value status =
-        LLVM::CallOp::create(
-            builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context, "talos_rt_v1_scheduler_run_aot_nodes"),
-            ValueRange{
-                runEntry->getArgument(1), nodes,
-                llvmConstant(builder, location, i32, executableNodes.size())})
-            .getResult();
+    Value status = LLVM::CallOp::create(
+                       builder, location, TypeRange{i32},
+                       getNativeRuntimeCallee(
+                           context, NativeRuntimeEntry::SchedulerRunAotNodes),
+                       ValueRange{runEntry->getArgument(1), nodes,
+                                  llvmConstant(builder, location, i32,
+                                               executableNodes.size())})
+                       .getResult();
     Block *checkpoint = new Block;
     Block *finished = new Block;
     run.getBody().push_back(checkpoint);
@@ -4297,8 +4308,8 @@ FailureOr<bool> makeNativeEvalPlan(
     Value queued =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context,
-                               "talos_rt_v1_scheduler_queue_aot_checkpoint"),
+            getNativeRuntimeCallee(
+                context, NativeRuntimeEntry::SchedulerQueueAotCheckpoint),
             ValueRange{runEntry->getArgument(1), actor, continuation, callback})
             .getResult();
     Value ok = arith::CmpIOp::create(
@@ -4472,8 +4483,8 @@ FailureOr<bool> makeNativeEvalPlan(
     Value prepareStatus =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context,
-                               "talos_rt_v1_scheduler_prepare_periodic_aot"),
+            getNativeRuntimeCallee(
+                context, NativeRuntimeEntry::SchedulerPreparePeriodicAot),
             ValueRange{
                 runEntry->getArgument(1), nodes,
                 llvmConstant(builder, location, i32, executableNodes.size()),
@@ -4713,8 +4724,8 @@ FailureOr<bool> makeNativeEvalPlan(
       Value status =
           LLVM::CallOp::create(
               builder, location, TypeRange{i32},
-              SymbolRefAttr::get(context,
-                                 "talos_rt_v1_scheduler_postponed_slot_aot"),
+              getNativeRuntimeCallee(
+                  context, NativeRuntimeEntry::SchedulerPostponedSlotAot),
               ValueRange{runEntry->getArgument(1)})
               .getResult();
       Value ok = arith::CmpIOp::create(
@@ -4754,7 +4765,7 @@ FailureOr<bool> makeNativeEvalPlan(
     // points: those of this loop and the runtime's own slot boundaries.
     LLVM::CallOp::create(
         builder, location, TypeRange{i32},
-        SymbolRefAttr::get(context, "talos_rt_v1_gc_designate"),
+        getNativeRuntimeCallee(context, NativeRuntimeEntry::GcDesignate),
         ValueRange{runEntry->getArgument(1)});
     cf::CondBranchOp::create(builder, location, enterHotLoop, promote,
                              ValueRange{}, handoff,
@@ -4897,9 +4908,11 @@ FailureOr<bool> makeNativeEvalPlan(
       if (mlir::failed(capture))
         return mlir::failure();
       SmallVector<Value> args{runEntry->getArgument(1), step->getArgument(0)};
-      StringRef enter = "talos_rt_v1_scheduler_enter_periodic_aot";
+      StringRef enter =
+          getNativeRuntimeSymbol(NativeRuntimeEntry::SchedulerEnterPeriodicAot);
       if (*capture) {
-        enter = "talos_rt_v1_scheduler_enter_sampled_periodic_aot";
+        enter = getNativeRuntimeSymbol(
+            NativeRuntimeEntry::SchedulerEnterSampledPeriodicAot);
         args.push_back(LLVM::AddressOfOp::create(
             builder, location, pointer, "__talos_execution_descriptor_v1"));
         args.push_back(LLVM::AddressOfOp::create(builder, location, pointer,
@@ -4933,7 +4946,8 @@ FailureOr<bool> makeNativeEvalPlan(
       for (uint64_t point : clock.getCoveragePoints())
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context, "talos_rt_v1_coverage_point_hit"),
+            getNativeRuntimeCallee(context,
+                                   NativeRuntimeEntry::CoveragePointHit),
             ValueRange{runEntry->getArgument(1),
                        llvmConstant(builder, location, i64, point), flag});
     };
@@ -4952,11 +4966,13 @@ FailureOr<bool> makeNativeEvalPlan(
       if (sharedPeriodic && !periodicAliases.empty()) {
         StringRef publication =
             staticFanoutPlan.runtimeRoutedTransitionStates.contains(staticState)
-                ? "talos_rt_v1_scheduler_periodic_routed_transition"
-                : "talos_rt_v1_scheduler_periodic_transition";
-        getOrDeclareLLVMFunction(module, publication,
-                                 LLVM::LLVMVoidType::get(context),
-                                 {pointer, i32, i64, i64, i64});
+                ? getNativeRuntimeSymbol(
+                      NativeRuntimeEntry::SchedulerPeriodicRoutedTransition)
+                : getNativeRuntimeSymbol(
+                      NativeRuntimeEntry::SchedulerPeriodicTransition);
+        getOrDeclareGeneratedFunction(module, publication,
+                                      LLVM::LLVMVoidType::get(context),
+                                      {pointer, i32, i64, i64, i64});
         LLVM::CallOp::create(
             builder, location, TypeRange{},
             SymbolRefAttr::get(context, publication),
@@ -4969,8 +4985,8 @@ FailureOr<bool> makeNativeEvalPlan(
       }
       LLVM::CallOp::create(
           builder, location, TypeRange{},
-          SymbolRefAttr::get(context,
-                             "talos_rt_v1_scheduler_static_transition"),
+          getNativeRuntimeCallee(context,
+                                 NativeRuntimeEntry::SchedulerStaticTransition),
           ValueRange{
               runEntry->getArgument(1),
               llvmConstant(builder, location, i32, staticState),
@@ -5243,8 +5259,8 @@ FailureOr<bool> makeNativeEvalPlan(
       Value prioritySignalPending =
           LLVM::CallOp::create(
               builder, location, TypeRange{i32},
-              SymbolRefAttr::get(
-                  context, "talos_rt_v1_scheduler_priority_signal_pending"),
+              getNativeRuntimeCallee(
+                  context, NativeRuntimeEntry::SchedulerPrioritySignalPending),
               ValueRange{runEntry->getArgument(1)})
               .getResult();
       Value mustHandoff = arith::CmpIOp::create(
@@ -5655,8 +5671,8 @@ FailureOr<bool> makeNativeEvalPlan(
       Value drained =
           LLVM::CallOp::create(
               builder, location, TypeRange{i32},
-              SymbolRefAttr::get(context,
-                                 "talos_rt_v1_scheduler_drain_periodic_aot"),
+              getNativeRuntimeCallee(
+                  context, NativeRuntimeEntry::SchedulerDrainPeriodicAot),
               ValueRange{runEntry->getArgument(1), control})
               .getResult();
       Value drainedOK = arith::CmpIOp::create(
@@ -5682,8 +5698,8 @@ FailureOr<bool> makeNativeEvalPlan(
       Value handoffPending =
           LLVM::CallOp::create(
               builder, location, TypeRange{i32},
-              SymbolRefAttr::get(context,
-                                 "talos_rt_v1_scheduler_handoff_pending"),
+              getNativeRuntimeCallee(
+                  context, NativeRuntimeEntry::SchedulerHandoffPending),
               ValueRange{runEntry->getArgument(1)})
               .getResult();
       Value noRuntimeHandoff = arith::CmpIOp::create(
@@ -5804,8 +5820,8 @@ FailureOr<bool> makeNativeEvalPlan(
     Value handoffStatus =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context,
-                               "talos_rt_v1_scheduler_handoff_periodic_aot"),
+            getNativeRuntimeCallee(
+                context, NativeRuntimeEntry::SchedulerHandoffPeriodicAot),
             ValueRange{
                 runEntry->getArgument(1), clocks,
                 llvmConstant(builder, location, i32, periodicClocks.size()),
@@ -5845,8 +5861,8 @@ FailureOr<bool> makeNativeEvalPlan(
     Value checkpointStatus =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context,
-                               "talos_rt_v1_scheduler_queue_aot_checkpoint"),
+            getNativeRuntimeCallee(
+                context, NativeRuntimeEntry::SchedulerQueueAotCheckpoint),
             ValueRange{runEntry->getArgument(1), checkpointActor,
                        checkpointContinuation, checkpointCallback})
             .getResult();
@@ -5888,7 +5904,8 @@ FailureOr<bool> makeNativeEvalPlan(
     Value fallbackStatus =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context, "talos_rt_v1_scheduler_run_aot_nodes"),
+            getNativeRuntimeCallee(context,
+                                   NativeRuntimeEntry::SchedulerRunAotNodes),
             ValueRange{
                 runEntry->getArgument(1), nodes,
                 llvmConstant(builder, location, i32, executableNodes.size())})
@@ -5920,8 +5937,8 @@ FailureOr<bool> makeNativeEvalPlan(
     Value prepareCheckpointStatus =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context,
-                               "talos_rt_v1_scheduler_queue_aot_checkpoint"),
+            getNativeRuntimeCallee(
+                context, NativeRuntimeEntry::SchedulerQueueAotCheckpoint),
             ValueRange{runEntry->getArgument(1), prepareCheckpointActor,
                        prepareCheckpointContinuation,
                        prepareCheckpointCallback})
@@ -6095,9 +6112,9 @@ FailureOr<bool> makeNativeEvalPlan(
   if (failed(rankedGroups))
     return failure();
   coordinatorPlan.rankedGroupExecutors = *rankedGroups;
-  getOrDeclareLLVMFunction(module, staticNBAPublicationName,
-                           builder.getI1Type(),
-                           {pointer, pointer, i32, pointer});
+  getOrDeclareGeneratedFunction(module, staticNBAPublicationName,
+                                builder.getI1Type(),
+                                {pointer, pointer, i32, pointer});
   if (failed(materializeNativeEvalDispatch(module, coordinatorPlan)))
     return failure();
   releaseNBAHeldWakesBeforeReturns(run);
@@ -6136,7 +6153,8 @@ FailureOr<bool> makeNativeEvalPlan(
   Value snapshotStatus =
       LLVM::CallOp::create(
           builder, location, TypeRange{i32},
-          SymbolRefAttr::get(context, "talos_rt_v1_scheduler_snapshot_aot"),
+          getNativeRuntimeCallee(context,
+                                 NativeRuntimeEntry::SchedulerSnapshotAot),
           ValueRange{snapshotEntry->getArgument(1),
                      snapshotEntry->getArgument(2)})
           .getResult();
@@ -6283,8 +6301,8 @@ FailureOr<bool> makeNativeEvalPlan(
       Value guard =
           LLVM::CallOp::create(
               builder, location, TypeRange{i32},
-              SymbolRefAttr::get(context,
-                                 "talos_rt_v1_static_nba_direct_commit_guard"),
+              getNativeRuntimeCallee(
+                  context, NativeRuntimeEntry::StaticNbaDirectCommitGuard),
               ValueRange{nbaCommitEntry->getArgument(1)})
               .getResult();
       orderedDirectGuard =
@@ -6414,7 +6432,8 @@ FailureOr<bool> makeNativeEvalPlan(
         Value status =
             LLVM::CallOp::create(
                 builder, location, TypeRange{i32},
-                "talos_rt_v1_static_nba_commit_wide_ordered",
+                getNativeRuntimeSymbol(
+                    NativeRuntimeEntry::StaticNbaCommitWideOrdered),
                 ValueRange{nbaCommitEntry->getArgument(1),
                            llvmConstant(builder, location, i32, root),
                            llvmConstant(builder, location, i64, width), record,
@@ -6489,8 +6508,8 @@ FailureOr<bool> makeNativeEvalPlan(
         Value status =
             LLVM::CallOp::create(
                 builder, location, TypeRange{i32},
-                SymbolRefAttr::get(context,
-                                   "talos_rt_v1_static_nba_commit_ordered"),
+                getNativeRuntimeCallee(
+                    context, NativeRuntimeEntry::StaticNbaCommitOrdered),
                 ValueRange{
                     nbaCommitEntry->getArgument(1),
                     llvmConstant(builder, location, i32, entry.rootIndex),
@@ -7539,8 +7558,8 @@ FailureOr<bool> makeNativeEvalPlan(
     builder.setInsertionPointToStart(activate);
     auto call = LLVM::CallOp::create(
         builder, location, TypeRange{},
-        SymbolRefAttr::get(context,
-                           "talos_rt_v1_scheduler_activate_static_nodes"),
+        getNativeRuntimeCallee(
+            context, NativeRuntimeEntry::SchedulerActivateStaticNodes),
         ValueRange{nbaCommitEntry->getArgument(1), activatedNodes,
                    llvmConstant(builder, location, i32, activationWordCount)});
     ::talos::schedule::set<
@@ -7893,7 +7912,8 @@ FailureOr<bool> makeNativeEvalPlan(
   Value runtimeCommitStatus =
       LLVM::CallOp::create(
           builder, location, TypeRange{i32},
-          SymbolRefAttr::get(context, "talos_rt_v1_static_nba_commit_roots"),
+          getNativeRuntimeCallee(context,
+                                 NativeRuntimeEntry::StaticNbaCommitRoots),
           ValueRange{runtimeCommitEntry->getArgument(1),
                      llvmConstant(builder, location, i32, nbaRoots.size()),
                      runtimeCommitEntry->getArgument(2),
@@ -8120,12 +8140,12 @@ FailureOr<bool> makeNativeEvalPlan(
 
   constexpr StringLiteral invalidateRangeName =
       "__talos_eval_promotion_invalidate_range_v1";
-  getOrDeclareLLVMFunction(module, invalidateRangeName,
-                           LLVM::LLVMVoidType::get(context), {i64, i64});
+  getOrDeclareGeneratedFunction(module, invalidateRangeName,
+                                LLVM::LLVMVoidType::get(context), {i64, i64});
   constexpr StringLiteral recheckRangeName =
       "__talos_eval_promotion_recheck_range_v1";
-  getOrDeclareLLVMFunction(module, recheckRangeName,
-                           LLVM::LLVMVoidType::get(context), {i64, i64});
+  getOrDeclareGeneratedFunction(module, recheckRangeName,
+                                LLVM::LLVMVoidType::get(context), {i64, i64});
   if (hasOrderedNBA &&
       ::talos::schedule::has<::talos::schedule::Field::EvalRuntimeCalendar>(
           module)) {
@@ -8475,53 +8495,28 @@ FailureOr<bool> makeNativeEvalPlan(
         return insertValue(initializerBuilder, location, value, yield,
                            NativeSchedulePlanField::RuntimeYield);
       });
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_snapshot_aot", i32,
-                           {pointer, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_run_aot_nodes", i32,
-                           {pointer, pointer, i32});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_prepare_periodic_aot", i32,
-      {pointer, pointer, i32, pointer, i32, pointer, i32, pointer, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_handoff_periodic_aot",
-                           i32, {pointer, pointer, i32, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_gc_designate", i32, {pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_drain_periodic_aot",
-                           i32, {pointer, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_enter_periodic_aot",
-                           i32, {pointer, i64});
-  getOrDeclareLLVMFunction(module,
-                           "talos_rt_v1_scheduler_enter_sampled_periodic_aot",
-                           i32, {pointer, i64, pointer, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_postponed_slot_aot",
-                           i32, {pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_commit_root", i32,
-                           {pointer, i32, i32, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_commit_roots", i32,
-                           {pointer, i32, i32, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_commit_ordered", i32,
-                           {pointer, i32, i64, i64, i64, i64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_commit_wide_ordered",
-                           i32, {pointer, i32, i64, pointer, i32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_direct_commit_guard",
-                           i32, {pointer});
-  getOrDeclareLLVMFunction(module,
-                           "talos_rt_v1_static_nba_account_generated_commits",
-                           LLVM::LLVMVoidType::get(context), {pointer, i32});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_activate_static_nodes",
-      LLVM::LLVMVoidType::get(context), {pointer, pointer, i32});
-  getOrDeclareLLVMFunction(module,
-                           "talos_rt_v1_scheduler_direct_fragment_enter", i32,
-                           {pointer, i32, i32, pointer});
-  getOrDeclareLLVMFunction(module,
-                           "talos_rt_v1_scheduler_direct_fragment_leave", i32,
-                           {pointer, i32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_execute_aot_actor",
-                           i32, {pointer, i32});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_priority_signal_pending", i32, {pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_queue_aot_checkpoint",
-                           i32, {pointer, i32, i32, pointer});
+  declareNativeRuntimes(module,
+                        {NativeRuntimeEntry::SchedulerSnapshotAot,
+                         NativeRuntimeEntry::SchedulerRunAotNodes,
+                         NativeRuntimeEntry::SchedulerPreparePeriodicAot,
+                         NativeRuntimeEntry::SchedulerHandoffPeriodicAot,
+                         NativeRuntimeEntry::GcDesignate,
+                         NativeRuntimeEntry::SchedulerDrainPeriodicAot,
+                         NativeRuntimeEntry::SchedulerEnterPeriodicAot,
+                         NativeRuntimeEntry::SchedulerEnterSampledPeriodicAot,
+                         NativeRuntimeEntry::SchedulerPostponedSlotAot,
+                         NativeRuntimeEntry::StaticNbaCommitRoot,
+                         NativeRuntimeEntry::StaticNbaCommitRoots,
+                         NativeRuntimeEntry::StaticNbaCommitOrdered,
+                         NativeRuntimeEntry::StaticNbaCommitWideOrdered,
+                         NativeRuntimeEntry::StaticNbaDirectCommitGuard,
+                         NativeRuntimeEntry::StaticNbaAccountGeneratedCommits,
+                         NativeRuntimeEntry::SchedulerActivateStaticNodes,
+                         NativeRuntimeEntry::SchedulerDirectFragmentEnter,
+                         NativeRuntimeEntry::SchedulerDirectFragmentLeave,
+                         NativeRuntimeEntry::SchedulerExecuteAotActor,
+                         NativeRuntimeEntry::SchedulerPrioritySignalPending,
+                         NativeRuntimeEntry::SchedulerQueueAotCheckpoint});
   materializeNativeNBAMetadataExport(module, staticNBAPlan, scalarRootsByWord);
   return true;
 }

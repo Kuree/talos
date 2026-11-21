@@ -198,8 +198,8 @@ lowerSuspendTerminator(Operation *operation, Value instance, Value handle,
     Value status =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
-            SymbolRefAttr::get(builder.getContext(),
-                               "talos_rt_v1_process_control"),
+            getNativeRuntimeCallee(builder.getContext(),
+                                   NativeRuntimeEntry::ProcessControl),
             ValueRange{context, control.getProcess(),
                        llvmConstant(builder, location, i32,
                                     static_cast<uint32_t>(control.getKind())),
@@ -262,7 +262,8 @@ lowerSuspendTerminator(Operation *operation, Value instance, Value handle,
     builder.setInsertionPointToStart(failed);
     LLVM::CallOp::create(
         builder, location, TypeRange{},
-        SymbolRefAttr::get(builder.getContext(), "talos_rt_v1_scheduler_fail"),
+        getNativeRuntimeCallee(builder.getContext(),
+                               NativeRuntimeEntry::SchedulerFail),
         ValueRange{context, failed->getArgument(0)});
     if (!blocks.terminate)
       return control.emitOpError("has no coroutine termination block");
@@ -292,15 +293,16 @@ lowerSuspendTerminator(Operation *operation, Value instance, Value handle,
     Value status =
         LLVM::CallOp::create(
             builder, location, TypeRange{builder.getI32Type()},
-            SymbolRefAttr::get(builder.getContext(),
-                               "talos_rt_v1_control_boundary"),
+            getNativeRuntimeCallee(builder.getContext(),
+                                   NativeRuntimeEntry::ControlBoundary),
             ValueRange{context, boundary.getActivation(),
                        llvmConstant(builder, location, builder.getI32Type(),
                                     continuationID)})
             .getResult();
     LLVM::CallOp::create(
         builder, location, TypeRange{},
-        SymbolRefAttr::get(builder.getContext(), "talos_rt_v1_scheduler_fail"),
+        getNativeRuntimeCallee(builder.getContext(),
+                               NativeRuntimeEntry::SchedulerFail),
         ValueRange{context, status});
     cf::BranchOp::create(builder, location, boundary.getBody());
     builder.eraseOp(operation);
@@ -389,23 +391,24 @@ lowerSuspendTerminator(Operation *operation, Value instance, Value handle,
                     byteOffset),
             1);
         if (conditional)
-          root = LLVM::CallOp::create(
-                     builder, location, TypeRange{i64},
-                     SymbolRefAttr::get(builder.getContext(),
-                                        "talos_rt_v1_gc_candidate_root"),
-                     ValueRange{context, root,
-                                llvmConstant(builder, location, i32, kindMask)})
-                     .getResult();
+          root =
+              LLVM::CallOp::create(
+                  builder, location, TypeRange{i64},
+                  getNativeRuntimeCallee(builder.getContext(),
+                                         NativeRuntimeEntry::GcCandidateRoot),
+                  ValueRange{context, root,
+                             llvmConstant(builder, location, i32, kindMask)})
+                  .getResult();
         LLVM::StoreOp::create(
             builder, location, root,
             elementGEP(builder, location, rootSlots, i64, index), 8);
       }
       Value pushStatus =
-          LLVM::CallOp::create(
-              builder, location, TypeRange{i32},
-              SymbolRefAttr::get(builder.getContext(),
-                                 "talos_rt_v1_gc_managed_root_range_push"),
-              ValueRange{lane, rootRecord, rootSlots, count})
+          LLVM::CallOp::create(builder, location, TypeRange{i32},
+                               getNativeRuntimeCallee(
+                                   builder.getContext(),
+                                   NativeRuntimeEntry::GcManagedRootRangePush),
+                               ValueRange{lane, rootRecord, rootSlots, count})
               .getResult();
       Value pushed = arith::CmpIOp::create(
           builder, location, arith::CmpIPredicate::eq, pushStatus,
@@ -419,7 +422,8 @@ lowerSuspendTerminator(Operation *operation, Value instance, Value handle,
     builder.setInsertionPointToStart(dispatch);
     SmallVector<Value> activationArguments{
         lane, managedObjectPointer(builder, location, task.getReceiver())};
-    StringRef activationName = "talos_rt_v1_method_task_activate";
+    StringRef activationName =
+        getNativeRuntimeSymbol(NativeRuntimeEntry::MethodTaskActivate);
     auto method =
         SymbolTable::lookupNearestSymbolFrom<schedule::NativeMethodOp>(
             task, task.getMethodAttr());
@@ -432,7 +436,8 @@ lowerSuspendTerminator(Operation *operation, Value instance, Value handle,
     if (owner.getIsInterface()) {
       if (!method.getInterfaceOrdinalAttr())
         return task.emitOpError("interface task has no dispatch ordinal");
-      activationName = "talos_rt_v1_interface_method_task_activate";
+      activationName = getNativeRuntimeSymbol(
+          NativeRuntimeEntry::InterfaceMethodTaskActivate);
       activationArguments.push_back(
           llvmConstant(builder, location, i64, owner.getId()));
       activationArguments.push_back(
@@ -456,14 +461,15 @@ lowerSuspendTerminator(Operation *operation, Value instance, Value handle,
       Value popStatus =
           LLVM::CallOp::create(
               builder, location, TypeRange{i32},
-              SymbolRefAttr::get(builder.getContext(),
-                                 "talos_rt_v1_gc_managed_root_range_pop"),
+              getNativeRuntimeCallee(builder.getContext(),
+                                     NativeRuntimeEntry::GcManagedRootRangePop),
               ValueRange{lane, rootRecord})
               .getResult();
-      LLVM::CallOp::create(builder, location, TypeRange{},
-                           SymbolRefAttr::get(builder.getContext(),
-                                              "talos_rt_v1_scheduler_fail"),
-                           ValueRange{context, popStatus});
+      LLVM::CallOp::create(
+          builder, location, TypeRange{},
+          getNativeRuntimeCallee(builder.getContext(),
+                                 NativeRuntimeEntry::SchedulerFail),
+          ValueRange{context, popStatus});
     }
     Value succeeded = arith::CmpIOp::create(
         builder, location, arith::CmpIPredicate::eq, status,
@@ -478,19 +484,21 @@ lowerSuspendTerminator(Operation *operation, Value instance, Value handle,
       Value releaseStatus =
           LLVM::CallOp::create(
               builder, location, TypeRange{i32},
-              SymbolRefAttr::get(builder.getContext(),
-                                 "talos_rt_v1_native_state_release"),
+              getNativeRuntimeCallee(builder.getContext(),
+                                     NativeRuntimeEntry::NativeStateRelease),
               ValueRange{context, task.getValues()[index],
                          llvmConstant(builder, location, i32, 0)})
               .getResult();
-      LLVM::CallOp::create(builder, location, TypeRange{},
-                           SymbolRefAttr::get(builder.getContext(),
-                                              "talos_rt_v1_scheduler_fail"),
-                           ValueRange{context, releaseStatus});
+      LLVM::CallOp::create(
+          builder, location, TypeRange{},
+          getNativeRuntimeCallee(builder.getContext(),
+                                 NativeRuntimeEntry::SchedulerFail),
+          ValueRange{context, releaseStatus});
     }
     LLVM::CallOp::create(
         builder, location, TypeRange{},
-        SymbolRefAttr::get(builder.getContext(), "talos_rt_v1_scheduler_fail"),
+        getNativeRuntimeCallee(builder.getContext(),
+                               NativeRuntimeEntry::SchedulerFail),
         ValueRange{context, failed->getArgument(0)});
     if (!blocks.terminate)
       return task.emitOpError("has no coroutine termination block");
@@ -649,7 +657,9 @@ void shareObservedSampledPlanes(
     for (Operation *consumer : context.getResult().getUsers()) {
       auto call = dyn_cast<LLVM::CallOp>(consumer);
       APInt selector;
-      if (call && call.getCallee() == "talos_rt_v1_sampled_plane" &&
+      if (call &&
+          call.getCallee() ==
+              getNativeRuntimeSymbol(NativeRuntimeEntry::SampledPlane) &&
           matchPattern(call.getArgOperands()[1], m_ConstantInt(&selector)) &&
           selector.ule(1))
         reads[selector.getZExtValue()].push_back(call);

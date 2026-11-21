@@ -84,15 +84,17 @@ void emitNativeStateRelease(OpBuilder &builder, Location location, Value handle,
   Value owner = arith::ConstantOp::create(
       builder, location, i32,
       builder.getI32IntegerAttr(ownerReference ? 1 : 0));
-  Value status = LLVM::CallOp::create(
-                     builder, location, TypeRange{i32},
-                     SymbolRefAttr::get(builder.getContext(),
-                                        "talos_rt_v1_native_state_release"),
-                     ValueRange{context, handle, owner})
-                     .getResult();
+  Value status =
+      LLVM::CallOp::create(
+          builder, location, TypeRange{i32},
+          getNativeRuntimeCallee(builder.getContext(),
+                                 NativeRuntimeEntry::NativeStateRelease),
+          ValueRange{context, handle, owner})
+          .getResult();
   LLVM::CallOp::create(
       builder, location, TypeRange{},
-      SymbolRefAttr::get(builder.getContext(), "talos_rt_v1_scheduler_fail"),
+      getNativeRuntimeCallee(builder.getContext(),
+                             NativeRuntimeEntry::SchedulerFail),
       ValueRange{context, status});
 }
 
@@ -144,7 +146,8 @@ public:
       return failure();
     SmallVector<Value> arguments{
         context, llvmConstant(rewriter, location, i64, *width), value, unknown};
-    StringRef allocation = "talos_rt_v1_native_state_alloc";
+    StringRef allocation =
+        getNativeRuntimeSymbol(NativeRuntimeEntry::NativeStateAlloc);
     if (!rootSlots.empty()) {
       Value count = llvmConstant(rewriter, location, i64, rootSlots.size());
       Type slotType = LLVM::LLVMStructType::getLiteral(rewriter.getContext(),
@@ -171,7 +174,8 @@ public:
                     index * sizeof(talos_rt_managed_root_slot_v1)),
             8);
       }
-      allocation = "talos_rt_v1_native_state_alloc_with_typed_roots";
+      allocation = getNativeRuntimeSymbol(
+          NativeRuntimeEntry::NativeStateAllocWithTypedRoots);
       arguments.push_back(slots);
       arguments.push_back(count);
     }

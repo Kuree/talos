@@ -240,8 +240,11 @@ void transfer(OpBuilder &builder, Location loc, Value frame,
         Value allowed =
             LLVM::CallOp::create(
                 builder, loc, TypeRange{builder.getI32Type()},
-                writable ? "talos_rt_v1_static_nba_specialization_guard_write"
-                         : "talos_rt_v1_static_nba_specialization_guard",
+                writable
+                    ? getNativeRuntimeSymbol(
+                          NativeRuntimeEntry::StaticNbaSpecializationGuardWrite)
+                    : getNativeRuntimeSymbol(
+                          NativeRuntimeEntry::StaticNbaSpecializationGuard),
                 ValueRange{runtimeContext,
                            llvmConstant(builder, loc, builder.getI32Type(),
                                         root.root)})
@@ -517,7 +520,8 @@ static void shareGenericQueueView(ModuleOp module) {
   MLIRContext *ctx = module.getContext();
   Type ptr = LLVM::LLVMPointerType::get(ctx);
   SymbolTable symbols(module);
-  constexpr StringLiteral queryName = "talos_rt_v1_scheduler_generic_nba_words";
+  constexpr StringLiteral queryName =
+      getNativeRuntimeSymbol(NativeRuntimeEntry::SchedulerGenericNbaWords);
   struct Body {
     bool closed = false;
     std::optional<uint32_t> maxState;
@@ -686,7 +690,8 @@ static void shareGenericQueueView(ModuleOp module) {
     if (!selected.count(op)) {
       if (call && call.getCallee()) {
         if (*call.getCallee() ==
-            "talos_rt_v1_scheduler_priority_signal_pending")
+            getNativeRuntimeSymbol(
+                NativeRuntimeEntry::SchedulerPrioritySignalPending))
           continue;
         if (auto target = symbols.lookup<LLVM::LLVMFuncOp>(*call.getCallee()))
           if (bodies.lookup(target).closed)
@@ -732,7 +737,8 @@ void reuseQuietNBACuts(ModuleOp module) {
       module.lookupSymbol<LLVM::LLVMFuncOp>("__talos_eval_dispatch_v1");
   if (!dispatch || dispatch.isExternal())
     return;
-  constexpr StringLiteral prepare = "talos_rt_v1_scheduler_prepare_eval_nba";
+  constexpr StringLiteral prepare =
+      getNativeRuntimeSymbol(NativeRuntimeEntry::SchedulerPrepareEvalNba);
   SymbolTable symbols(module);
   DenseMap<Operation *, bool> inspected;
   auto localMemory = [&](Operation *op) {
@@ -872,7 +878,6 @@ void reuseQuietNBACuts(ModuleOp module) {
     return;
   OpBuilder b = OpBuilder::atBlockBegin(&dispatch.getBody().front());
   Location loc = dispatch.getLoc();
-  auto ptr = LLVM::LLVMPointerType::get(module.getContext());
   // Deferred owners can stage more NBAs. Only the barrier read after their
   // ready set is empty needs to select a region. The earlier checks still
   // drain every runtime Active/Inactive event and report termination (4.5).
@@ -923,11 +928,9 @@ void reuseQuietNBACuts(ModuleOp module) {
         break;
       }
   }
-  auto service = getOrDeclareLLVMFunction(
-      module,
-      barrier ? "talos_rt_v1_scheduler_drain_clocked_active"
-              : "talos_rt_v1_scheduler_prepare_quiet_eval_nba",
-      b.getI32Type(), {ptr, ptr, ptr});
+  auto service = declareNativeRuntime(
+      module, barrier ? NativeRuntimeEntry::SchedulerDrainClockedActive
+                      : NativeRuntimeEntry::SchedulerPrepareQuietEvalNba);
   Value stamp =
       entryAlloca(b, loc, b.getI64Type(), TALOS_RT_EVAL_NBA_CUT_WORDS, 8);
   Value invalid = llvmConstant(b, loc, b.getI64Type(), 0);
@@ -1003,9 +1006,8 @@ void reuseQuietNBACuts(ModuleOp module) {
     call.getCalleeOperandsMutable().append(stamp);
   }
   if (barrier) {
-    auto query = getOrDeclareLLVMFunction(
-        module, "talos_rt_v1_scheduler_clocked_nba_region", b.getI32Type(),
-        {ptr});
+    auto query = declareNativeRuntime(
+        module, NativeRuntimeEntry::SchedulerClockedNbaRegion);
     b.setInsertionPoint(barrier);
     auto region = LLVM::CallOp::create(b, barrier.getLoc(), query,
                                        checks.front().getArgOperands()[0]);
@@ -1647,7 +1649,8 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
         call.erase();
       } else if (call.getCallee() &&
                  *call.getCallee() ==
-                     "talos_rt_v1_scheduler_prepare_eval_nba") {
+                     getNativeRuntimeSymbol(
+                         NativeRuntimeEntry::SchedulerPrepareEvalNba)) {
         Value bits = pendingBits(builder, loc, frame, words);
         Value localRegion = LLVM::SelectOp::create(
             builder, loc,
@@ -1657,8 +1660,11 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
                          TALOS_RT_REGION_NBA),
             llvmConstant(builder, loc, builder.getI32Type(), UINT32_MAX));
         StringRef service =
-            writable ? "talos_rt_v1_scheduler_prepare_eval_nba_local_write"
-                     : "talos_rt_v1_scheduler_prepare_eval_nba_local";
+            writable
+                ? getNativeRuntimeSymbol(
+                      NativeRuntimeEntry::SchedulerPrepareEvalNbaLocalWrite)
+                : getNativeRuntimeSymbol(
+                      NativeRuntimeEntry::SchedulerPrepareEvalNbaLocal);
         auto replacement = LLVM::CallOp::create(
             builder, loc, call.getResultTypes(), service,
             ValueRange{call.getArgOperands()[0], localRegion,
@@ -1738,19 +1744,12 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
              masks.lookup(original.getOperation()), true, writable);
     LLVM::ReturnOp::create(builder, loc, call.getResults());
   }
-  getOrDeclareLLVMFunction(
-      module,
-      writable ? "talos_rt_v1_scheduler_prepare_eval_nba_local_write"
-               : "talos_rt_v1_scheduler_prepare_eval_nba_local",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32),
-       LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module,
-      writable ? "talos_rt_v1_static_nba_specialization_guard_write"
-               : "talos_rt_v1_static_nba_specialization_guard",
-      IntegerType::get(context, 32),
-      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32)});
+  declareNativeRuntime(
+      module, writable ? NativeRuntimeEntry::SchedulerPrepareEvalNbaLocalWrite
+                       : NativeRuntimeEntry::SchedulerPrepareEvalNbaLocal);
+  declareNativeRuntime(
+      module, writable ? NativeRuntimeEntry::StaticNbaSpecializationGuardWrite
+                       : NativeRuntimeEntry::StaticNbaSpecializationGuard);
   if (native::has<native::DebugTiming>(module))
     llvm::errs() << "talos eval local pending roots: " << roots.size()
                  << " cores=" << cores.size()

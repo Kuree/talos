@@ -57,8 +57,9 @@ struct RuntimeStatusInputs {
         // channel. Control lowering has already turned the enqueue into its
         // ABI call.
         if (auto call = dyn_cast<LLVM::CallOp>(operation))
-          hasCheck |= call.getCallee() && call.getCallee()->starts_with(
-                                              "talos_rt_v1_deferred_enqueue");
+          hasCheck |= call.getCallee() &&
+                      call.getCallee()->starts_with(getNativeRuntimeSymbol(
+                          NativeRuntimeEntry::DeferredEnqueue));
         // A $strobe display (21.2.2) is started the same way, as a cold
         // runtime exit of the activation. The spawn is a schedule.spawn by
         // now and keeps its marker.

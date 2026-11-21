@@ -13,25 +13,13 @@ using namespace mlir;
 namespace talos::detail {
 /// Declare the runtime entry points a specialized NBA batch calls.
 void declareSpecializedNBABatchRuntime(ModuleOp module) {
-  MLIRContext *context = module.getContext();
-  auto ptr = LLVM::LLVMPointerType::get(context);
-  auto i32 = IntegerType::get(context, 32);
-  auto i64 = IntegerType::get(context, 64);
-  auto voidType = LLVM::LLVMVoidType::get(context);
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_batch_guard", i32,
-                           {ptr, ptr, i32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_barrier_guard", i32,
-                           {ptr, ptr, i32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_batch_word_guard",
-                           i32, {ptr, ptr, i32, i32, i64, i32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_prefix_guard", i32,
-                           {ptr, ptr, i32, i32, i32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_batch_knownness",
-                           voidType, {ptr, i64, i64, i64, i64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_batch_finish",
-                           voidType, {ptr, i64, i64, i32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_barrier_finish",
-                           voidType, {ptr, i64, i64, i32});
+  declareNativeRuntimes(module, {NativeRuntimeEntry::StaticNbaBatchGuard,
+                                 NativeRuntimeEntry::StaticNbaBarrierGuard,
+                                 NativeRuntimeEntry::StaticNbaBatchWordGuard,
+                                 NativeRuntimeEntry::StaticNbaPrefixGuard,
+                                 NativeRuntimeEntry::StaticNbaBatchKnownness,
+                                 NativeRuntimeEntry::StaticNbaBatchFinish,
+                                 NativeRuntimeEntry::StaticNbaBarrierFinish});
 }
 
 namespace {
@@ -53,9 +41,10 @@ public:
     op.getStatus().replaceAllUsesWith(status);
     if (declareRuntime)
       declareSpecializedNBABatchRuntime(module);
-    StringRef guardName = op.getBarrierLocal()
-                              ? "talos_rt_v1_static_nba_barrier_guard"
-                              : "talos_rt_v1_static_nba_batch_guard";
+    StringRef guardName =
+        op.getBarrierLocal()
+            ? getNativeRuntimeSymbol(NativeRuntimeEntry::StaticNbaBarrierGuard)
+            : getNativeRuntimeSymbol(NativeRuntimeEntry::StaticNbaBatchGuard);
     SmallVector<Value> guardArgs{op.getContext(), address(layout.getPlan()),
                                  op.getBarrier()};
     auto roots = op.getBody().getOps<schedule::NativeNBACommitOp>();
@@ -72,12 +61,14 @@ public:
         oneWord &= index / 64 == word;
       }
       if (oneWord) {
-        guardName = "talos_rt_v1_static_nba_batch_word_guard";
+        guardName =
+            getNativeRuntimeSymbol(NativeRuntimeEntry::StaticNbaBatchWordGuard);
         guardArgs.append(
             {llvmConstant(b, loc, i32, word), c(mask),
              llvmConstant(b, loc, i32, op.getBarrierLocal() ? 1 : 0)});
       } else {
-        guardName = "talos_rt_v1_static_nba_prefix_guard";
+        guardName =
+            getNativeRuntimeSymbol(NativeRuntimeEntry::StaticNbaPrefixGuard);
         guardArgs.append(
             {llvmConstant(b, loc, i32, lastRoot),
              llvmConstant(b, loc, i32, op.getBarrierLocal() ? 1 : 0)});
@@ -191,11 +182,13 @@ public:
     Value prior = load32(op.getChanged());
     LLVM::StoreOp::create(b, loc, bor(prior, resize(ne(wasChanged, c(0)), i32)),
                           op.getChanged(), 4);
-    call(op.getBarrierLocal() ? "talos_rt_v1_static_nba_barrier_finish"
-                              : "talos_rt_v1_static_nba_batch_finish",
-         {},
-         {op.getContext(), load(stages), load(commits),
-          resize(ne(pending, c(0)), i32)});
+    call(
+        op.getBarrierLocal()
+            ? getNativeRuntimeSymbol(NativeRuntimeEntry::StaticNbaBarrierFinish)
+            : getNativeRuntimeSymbol(NativeRuntimeEntry::StaticNbaBatchFinish),
+        {},
+        {op.getContext(), load(stages), load(commits),
+         resize(ne(pending, c(0)), i32)});
     cf::BranchOp::create(b, loc, done);
     op.erase();
     // These slots express region-local accounting and pending consumers, never
@@ -405,8 +398,8 @@ private:
     Block *notify = block();
     cf::CondBranchOp::create(b, loc, ne(unknownChange, c(0)), notify, after);
     b.setInsertionPointToStart(notify);
-    call("talos_rt_v1_static_nba_batch_knownness", {},
-         {op.getContext(), offset, width, oldUnknown, newUnknown});
+    call(getNativeRuntimeSymbol(NativeRuntimeEntry::StaticNbaBatchKnownness),
+         {}, {op.getContext(), offset, width, oldUnknown, newUnknown});
     cf::BranchOp::create(b, loc, after);
     b.setInsertionPointToStart(after);
     return observed;

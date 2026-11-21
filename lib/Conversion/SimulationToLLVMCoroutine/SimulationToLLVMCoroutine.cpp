@@ -367,7 +367,8 @@ LogicalResult verifyGeneratedEvalCallClosures(ModuleOp module) {
         // Owner code may sit in a coordinator segment function.
         if (writableEval &&
             schedule::hasEvalRoles(function, schedule::EvalRole::Dispatch) &&
-            *callee == "talos_rt_v1_scheduler_execute_aot_actor" &&
+            *callee == getNativeRuntimeSymbol(
+                           NativeRuntimeEntry::SchedulerExecuteAotActor) &&
             call.getArgOperands().size() == 2 &&
             call.getArgOperands()[1].getDefiningOp<LLVM::ConstantOp>())
           return WalkResult::advance();
@@ -378,9 +379,11 @@ LogicalResult verifyGeneratedEvalCallClosures(ModuleOp module) {
         // contract is distinct from the non-suspending Active call closure.
         if (function.getSymName() == detail::evalDispatchName &&
             runtimeCalendar) {
-          if ((*callee == "talos_rt_v1_scheduler_prepare_eval_nba" &&
+          if ((*callee == getNativeRuntimeSymbol(
+                              NativeRuntimeEntry::SchedulerPrepareEvalNba) &&
                call.getArgOperands().size() == 2) ||
-              (*callee == "talos_rt_v1_scheduler_complete_eval_nba" &&
+              (*callee == getNativeRuntimeSymbol(
+                              NativeRuntimeEntry::SchedulerCompleteEvalNba) &&
                call.getArgOperands().size() == 3))
             return WalkResult::advance();
           if (*callee == "__talos_aot_runtime_nba_commit_v1" &&
@@ -1303,8 +1306,8 @@ LogicalResult declareNativeImports(ModuleOp module) {
       reference = merge.getSetAttr();
     else if (isa<schedule::NativeHandleOffsetOp>(operation))
       // It becomes the runtime's handle offset; see lowerNativeHandleOps.
-      reference = FlatSymbolRefAttr::get(operation->getContext(),
-                                         "talos_rt_v1_native_handle_offset");
+      reference = getNativeRuntimeCallee(
+          operation->getContext(), NativeRuntimeEntry::NativeHandleOffset);
     auto import = [&](FlatSymbolRefAttr reference) {
       if (!reference || symbols.lookupSymbolIn(design, reference))
         return;
@@ -1323,9 +1326,10 @@ LogicalResult declareNativeImports(ModuleOp module) {
       import(plane(schedule::StatePlane::Value));
       if (stage.getUnknown())
         import(plane(schedule::StatePlane::Unknown));
+      import(getNativeRuntimeCallee(context,
+                                    NativeRuntimeEntry::SchedulerStaticNba));
       import(
-          FlatSymbolRefAttr::get(context, "talos_rt_v1_scheduler_static_nba"));
-      import(FlatSymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"));
+          getNativeRuntimeCallee(context, NativeRuntimeEntry::SchedulerFail));
       return;
     }
     FlatSymbolRefAttr handlePlane;
@@ -1340,8 +1344,8 @@ LogicalResult declareNativeImports(ModuleOp module) {
       MLIRContext *context = operation->getContext();
       import(handlePlane);
       import(FlatSymbolRefAttr::get(context, "__talos_current_context"));
-      import(FlatSymbolRefAttr::get(
-          context, getNativeStateHandleAccessCallee(operation)));
+      import(getNativeRuntimeCallee(
+          context, getNativeStateHandleAccessEntry(operation)));
       return;
     }
     if (auto store = dyn_cast<schedule::NativeStateFrameStoreOp>(operation)) {
@@ -1356,8 +1360,8 @@ LogicalResult declareNativeImports(ModuleOp module) {
       if (store.getFourState())
         import(plane(schedule::StatePlane::Unknown));
       import(FlatSymbolRefAttr::get(context, "__talos_current_context"));
-      import(FlatSymbolRefAttr::get(
-          context, getNativeStateHandleAccessCallee(operation)));
+      import(getNativeRuntimeCallee(
+          context, getNativeStateHandleAccessEntry(operation)));
       return;
     }
     import(reference);
@@ -1370,6 +1374,11 @@ LogicalResult declareNativeImports(ModuleOp module) {
                                                   function.getSymName(),
                                                   function.getFunctionType());
       declaration.setCConv(function.getCConv());
+      // The import declares the same runtime entry. Like the other function
+      // attributes, `cold` is not copied.
+      if (native::RuntimeEntryAttr entry =
+              native::get<native::RuntimeEntry>(function))
+        native::set<native::RuntimeEntry>(declaration, entry);
     } else if (auto global = dyn_cast<LLVM::GlobalOp>(definition)) {
       LLVM::GlobalOp::create(builder, global.getLoc(), global.getGlobalType(),
                              global.getConstant(), LLVM::Linkage::External,
@@ -2727,9 +2736,11 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
   run.walk([&](LLVM::CallOp call) {
     if (!call.getCallee())
       return;
-    if (*call.getCallee() == "talos_rt_v1_scheduler_prepare_periodic_aot")
+    if (*call.getCallee() ==
+        getNativeRuntimeSymbol(NativeRuntimeEntry::SchedulerPreparePeriodicAot))
       prepare = call;
-    else if (*call.getCallee() == "talos_rt_v1_scheduler_run_aot_nodes")
+    else if (*call.getCallee() ==
+             getNativeRuntimeSymbol(NativeRuntimeEntry::SchedulerRunAotNodes))
       eventDrivenRun = call;
   });
   if (!prepare && !eventDrivenRun) {
@@ -2881,12 +2892,13 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
   // and clockless runs retain that state across checkpoint re-entry; actual
   // X/Z stores still invalidate it.
   builder.setInsertionPointToStart(module.getBody());
-  auto terminationRequested = inputSymbols.lookup<LLVM::LLVMFuncOp>(
-      "talos_rt_v1_scheduler_termination_requested");
+  auto terminationRequested =
+      inputSymbols.lookup<LLVM::LLVMFuncOp>(getNativeRuntimeSymbol(
+          NativeRuntimeEntry::SchedulerTerminationRequested));
   if (!terminationRequested)
-    terminationRequested = LLVM::LLVMFuncOp::create(
-        builder, module.getLoc(), "talos_rt_v1_scheduler_termination_requested",
-        LLVM::LLVMFunctionType::get(builder.getI32Type(), {pointer}));
+    terminationRequested = createNativeRuntimeDeclaration(
+        builder, module.getLoc(),
+        NativeRuntimeEntry::SchedulerTerminationRequested);
   LLVM::LLVMFuncOp syncCheckpointStateFunction;
   auto fractureCheckpoints = [&](LLVM::LLVMFuncOp function) {
     llvm::MapVector<Block *, Operation *> checkpointBlocks;
@@ -2983,9 +2995,8 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
         route.checkpointFallback =
             declareHelper(route.fourState, route.fourStateFallbackName);
         if (!syncCheckpointStateFunction)
-          syncCheckpointStateFunction = detail::getOrDeclareLLVMFunction(
-              module, "talos_rt_v1_native_state_sync", builder.getI32Type(),
-              {pointer, pointer, pointer, builder.getI64Type()});
+          syncCheckpointStateFunction =
+              declareNativeRuntime(module, NativeRuntimeEntry::NativeStateSync);
       }
       route.dispatcher = declareHelper(route.twoState, route.dispatcherName);
       route.dispatcher->setAttr(
@@ -3206,8 +3217,8 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
           LLVM::CallOp::create(
               builder, route.fourState.getLoc(),
               TypeRange{builder.getI32Type()},
-              SymbolRefAttr::get(context,
-                                 "talos_rt_v1_scheduler_queue_aot_checkpoint"),
+              getNativeRuntimeCallee(
+                  context, NativeRuntimeEntry::SchedulerQueueAotCheckpoint),
               ValueRange{callbackEntry->getArgument(0), nextActor,
                          nextContinuation, nextCallback})
               .getResult();
@@ -3230,7 +3241,8 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
         return LLVM::CallOp::create(
                    builder, route.fourState.getLoc(),
                    TypeRange{builder.getI32Type()},
-                   SymbolRefAttr::get(context, "talos_rt_v1_native_state_sync"),
+                   getNativeRuntimeCallee(context,
+                                          NativeRuntimeEntry::NativeStateSync),
                    ValueRange{callbackEntry->getArgument(0),
                               detail::createStatePlaneAddress(
                                   builder, route.fourState.getLoc(),

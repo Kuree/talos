@@ -246,9 +246,6 @@ void materializeTableProcess(PreparedSuspendableProcess &process) {
 }
 
 void declareTableProcessRuntimeABI(ModuleOp module) {
-  MLIRContext *context = module.getContext();
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_table_process_execute",
-                           IntegerType::get(context, 32),
-                           {LLVM::LLVMPointerType::get(context)});
+  declareNativeRuntime(module, NativeRuntimeEntry::TableProcessExecute);
 }
 } // namespace talos::detail

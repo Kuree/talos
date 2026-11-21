@@ -148,7 +148,8 @@ LogicalResult makeSchedulerMain(ModuleOp module,
         LLVM::AddressOfOp::create(builder, location, pointer, executionName);
     auto create = LLVM::CallOp::create(
         builder, location, TypeRange{i32},
-        SymbolRefAttr::get(context, "talos_rt_v1_context_create_for_design"),
+        getNativeRuntimeCallee(context,
+                               NativeRuntimeEntry::ContextCreateForDesign),
         ValueRange{execution, outContext});
     Value succeeded = arith::CmpIOp::create(
         builder, location, arith::CmpIPredicate::eq, create.getResult(),
@@ -158,7 +159,8 @@ LogicalResult makeSchedulerMain(ModuleOp module,
   } else {
     auto create = LLVM::CallOp::create(
         builder, location, TypeRange{i32},
-        SymbolRefAttr::get(context, "talos_rt_v1_context_create"), outContext);
+        getNativeRuntimeCallee(context, NativeRuntimeEntry::ContextCreate),
+        outContext);
     Value succeeded = arith::CmpIOp::create(
         builder, location, arith::CmpIPredicate::eq, create.getResult(),
         llvmConstant(builder, location, i32, 0));
@@ -181,7 +183,8 @@ LogicalResult makeSchedulerMain(ModuleOp module,
       4;
   auto initialized = LLVM::CallOp::create(
       builder, location, TypeRange{i32},
-      SymbolRefAttr::get(context, "talos_rt_v1_native_state_initialize"),
+      getNativeRuntimeCallee(context,
+                             NativeRuntimeEntry::NativeStateInitialize),
       ValueRange{runtimeContext,
                  detail::createStatePlaneAddress(builder, location,
                                                  schedule::StatePlane::Value),
@@ -203,7 +206,7 @@ LogicalResult makeSchedulerMain(ModuleOp module,
   builder.setInsertionPointToStart(initializeFailed);
   LLVM::CallOp::create(
       builder, location, TypeRange{},
-      SymbolRefAttr::get(context, "talos_rt_v1_context_destroy"),
+      getNativeRuntimeCallee(context, NativeRuntimeEntry::ContextDestroy),
       runtimeContext);
   LLVM::ReturnOp::create(builder, location, initialized.getResult());
   builder.setInsertionPointToStart(initializedReady);
@@ -212,17 +215,17 @@ LogicalResult makeSchedulerMain(ModuleOp module,
                                                   schedule::StatePlane::Value);
     Value unknown = detail::createStatePlaneAddress(
         builder, location, schedule::StatePlane::Unknown);
-    Value status =
-        LLVM::CallOp::create(
-            builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context, "talos_rt_v1_native_state_bind_shared"),
-            ValueRange{
-                runtimeContext, value, unknown,
-                llvmConstant(builder, location, i64, stateLayout.bitCount)})
-            .getResult();
+    Value status = LLVM::CallOp::create(
+                       builder, location, TypeRange{i32},
+                       getNativeRuntimeCallee(
+                           context, NativeRuntimeEntry::NativeStateBindShared),
+                       ValueRange{runtimeContext, value, unknown,
+                                  llvmConstant(builder, location, i64,
+                                               stateLayout.bitCount)})
+                       .getResult();
     LLVM::CallOp::create(
         builder, location, TypeRange{},
-        SymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"),
+        getNativeRuntimeCallee(context, NativeRuntimeEntry::SchedulerFail),
         ValueRange{runtimeContext, status});
   }
   runtime::Features features = runtime::getFeatures(module);
@@ -245,65 +248,70 @@ LogicalResult makeSchedulerMain(ModuleOp module,
   if (requiresEventSnapshotFeature)
     LLVM::CallOp::create(
         builder, location, TypeRange{},
-        SymbolRefAttr::get(context, "talos_rt_v1_event_snapshot_link_anchor"),
+        getNativeRuntimeCallee(context,
+                               NativeRuntimeEntry::EventSnapshotLinkAnchor),
         ValueRange{});
   // Track cohorts from before the first activation. A design without cohort
   // queries leaves the scheduler's hooks disabled.
   if (needs(runtime::Features::SchedulerCohort))
     LLVM::CallOp::create(
         builder, location, TypeRange{},
-        SymbolRefAttr::get(context, "talos_rt_v1_scheduler_track_cohorts"),
+        getNativeRuntimeCallee(context,
+                               NativeRuntimeEntry::SchedulerTrackCohorts),
         ValueRange{runtimeContext});
   if (requiresDynamicScanFeature)
     LLVM::CallOp::create(
         builder, location, TypeRange{},
-        SymbolRefAttr::get(context, "talos_rt_v1_dynamic_scan_link_anchor"),
+        getNativeRuntimeCallee(context,
+                               NativeRuntimeEntry::DynamicScanLinkAnchor),
         ValueRange{});
   if (requiresContainerBitstreamFeature)
     LLVM::CallOp::create(
         builder, location, TypeRange{},
-        SymbolRefAttr::get(context,
-                           "talos_rt_v1_container_bitstream_link_anchor"),
+        getNativeRuntimeCallee(
+            context, NativeRuntimeEntry::ContainerBitstreamLinkAnchor),
         ValueRange{});
   if (requiresRecursiveBitstreamFeature)
     LLVM::CallOp::create(
         builder, location, TypeRange{},
-        SymbolRefAttr::get(context,
-                           "talos_rt_v1_recursive_bitstream_link_anchor"),
+        getNativeRuntimeCallee(
+            context, NativeRuntimeEntry::RecursiveBitstreamLinkAnchor),
         ValueRange{});
   if (requiresClassBitstreamFeature)
     LLVM::CallOp::create(
         builder, location, TypeRange{},
-        SymbolRefAttr::get(context, "talos_rt_v1_class_bitstream_link_anchor"),
+        getNativeRuntimeCallee(context,
+                               NativeRuntimeEntry::ClassBitstreamLinkAnchor),
         ValueRange{});
   if (requiresClassBitstreamBytecodeFeature)
     LLVM::CallOp::create(
         builder, location, TypeRange{},
-        SymbolRefAttr::get(context,
-                           "talos_rt_v1_class_bitstream_bytecode_link_anchor"),
+        getNativeRuntimeCallee(
+            context, NativeRuntimeEntry::ClassBitstreamBytecodeLinkAnchor),
         ValueRange{});
   if (requiresDPIExportBytecodeFeature)
     LLVM::CallOp::create(
         builder, location, TypeRange{},
-        SymbolRefAttr::get(context,
-                           "talos_rt_v1_dpi_export_bytecode_link_anchor"),
+        getNativeRuntimeCallee(context,
+                               NativeRuntimeEntry::DpiExportBytecodeLinkAnchor),
         ValueRange{});
   if (requiresDPIImportBytecodeFeature)
     LLVM::CallOp::create(
         builder, location, TypeRange{},
-        SymbolRefAttr::get(context,
-                           "talos_rt_v1_dpi_import_bytecode_link_anchor"),
+        getNativeRuntimeCallee(context,
+                               NativeRuntimeEntry::DpiImportBytecodeLinkAnchor),
         ValueRange{});
   Value configureStatus =
       LLVM::CallOp::create(
           builder, location, TypeRange{i32},
-          SymbolRefAttr::get(context, "talos_rt_v1_context_configure_argv"),
+          getNativeRuntimeCallee(context,
+                                 NativeRuntimeEntry::ContextConfigureArgv),
           ValueRange{runtimeContext, entry->getArgument(0),
                      entry->getArgument(1)})
           .getResult();
   LLVM::CallOp::create(
       builder, location, TypeRange{},
-      SymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"),
+      getNativeRuntimeCallee(context, NativeRuntimeEntry::SchedulerFail),
       ValueRange{runtimeContext, configureStatus});
   Value currentAddress = LLVM::AddressOfOp::create(builder, location, pointer,
                                                    "__talos_current_context");
@@ -322,12 +330,12 @@ LogicalResult makeSchedulerMain(ModuleOp module,
     Value status =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context, "talos_rt_v1_class_register"),
+            getNativeRuntimeCallee(context, NativeRuntimeEntry::ClassRegister),
             ValueRange{runtimeContext, descriptor})
             .getResult();
     LLVM::CallOp::create(
         builder, location, TypeRange{},
-        SymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"),
+        getNativeRuntimeCallee(context, NativeRuntimeEntry::SchedulerFail),
         ValueRange{runtimeContext, status});
   }
   // Element defaults must precede the first container of their type, which
@@ -351,8 +359,8 @@ LogicalResult makeSchedulerMain(ModuleOp module,
       Value status =
           LLVM::CallOp::create(
               builder, location, TypeRange{i32},
-              SymbolRefAttr::get(context,
-                                 "talos_rt_v1_element_type_define_default"),
+              getNativeRuntimeCallee(
+                  context, NativeRuntimeEntry::ElementTypeDefineDefault),
               ValueRange{
                   runtimeContext,
                   LLVM::ConstantOp::create(
@@ -367,19 +375,19 @@ LogicalResult makeSchedulerMain(ModuleOp module,
               .getResult();
       LLVM::CallOp::create(
           builder, location, TypeRange{},
-          SymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"),
+          getNativeRuntimeCallee(context, NativeRuntimeEntry::SchedulerFail),
           ValueRange{runtimeContext, status});
     }
   if (requiresClassBitstreamFeature) {
-    Value status =
-        LLVM::CallOp::create(
-            builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context, "talos_rt_v1_class_bitstream_finalize"),
-            ValueRange{runtimeContext})
-            .getResult();
+    Value status = LLVM::CallOp::create(
+                       builder, location, TypeRange{i32},
+                       getNativeRuntimeCallee(
+                           context, NativeRuntimeEntry::ClassBitstreamFinalize),
+                       ValueRange{runtimeContext})
+                       .getResult();
     LLVM::CallOp::create(
         builder, location, TypeRange{},
-        SymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"),
+        getNativeRuntimeCallee(context, NativeRuntimeEntry::SchedulerFail),
         ValueRange{runtimeContext, status});
   }
   SmallVector<LLVM::LLVMFuncOp> dpiThunks;
@@ -403,8 +411,8 @@ LogicalResult makeSchedulerMain(ModuleOp module,
     Value status =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context,
-                               "talos_rt_v1_context_register_import_signature"),
+            getNativeRuntimeCallee(
+                context, NativeRuntimeEntry::ContextRegisterImportSignature),
             ValueRange{runtimeContext,
                        llvmConstant(builder, location, i32,
                                     importID.getValue().getZExtValue()),
@@ -414,7 +422,7 @@ LogicalResult makeSchedulerMain(ModuleOp module,
             .getResult();
     LLVM::CallOp::create(
         builder, location, TypeRange{},
-        SymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"),
+        getNativeRuntimeCallee(context, NativeRuntimeEntry::SchedulerFail),
         ValueRange{runtimeContext, status});
   }
   auto emitBoundRegistration =
@@ -422,14 +430,15 @@ LogicalResult makeSchedulerMain(ModuleOp module,
           const NativeStateLayout::Bound &bound) -> LogicalResult {
     auto status = LLVM::CallOp::create(
         builder, location, TypeRange{i32},
-        SymbolRefAttr::get(context, "talos_rt_v1_native_state_register_static"),
+        getNativeRuntimeCallee(context,
+                               NativeRuntimeEntry::NativeStateRegisterStatic),
         ValueRange{runtimeContext,
                    llvmConstant(builder, location, i32, bound.handleID),
                    llvmConstant(builder, location, i64, bound.offset),
                    llvmConstant(builder, location, i64, bound.width)});
     LLVM::CallOp::create(
         builder, location, TypeRange{},
-        SymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"),
+        getNativeRuntimeCallee(context, NativeRuntimeEntry::SchedulerFail),
         ValueRange{runtimeContext, status.getResult()});
     for (const sim::ManagedHandleSlot &root : bound.managedRootSlots) {
       uint64_t rootOffset = root.bitOffset;
@@ -445,13 +454,13 @@ LogicalResult makeSchedulerMain(ModuleOp module,
       Value rootStatus =
           LLVM::CallOp::create(
               builder, location, TypeRange{i32},
-              SymbolRefAttr::get(
-                  context, "talos_rt_v1_gc_candidate_static_root_register"),
+              getNativeRuntimeCallee(
+                  context, NativeRuntimeEntry::GcCandidateStaticRootRegister),
               rootArguments)
               .getResult();
       LLVM::CallOp::create(
           builder, location, TypeRange{},
-          SymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"),
+          getNativeRuntimeCallee(context, NativeRuntimeEntry::SchedulerFail),
           ValueRange{runtimeContext, rootStatus});
       if (hasDesignBytecode && !sharedNativeState) {
         SmallVector<Value> designRootArguments{
@@ -461,13 +470,13 @@ LogicalResult makeSchedulerMain(ModuleOp module,
         Value designRootStatus =
             LLVM::CallOp::create(
                 builder, location, TypeRange{i32},
-                SymbolRefAttr::get(
-                    context, "talos_rt_v1_gc_design_candidate_root_register"),
+                getNativeRuntimeCallee(
+                    context, NativeRuntimeEntry::GcDesignCandidateRootRegister),
                 designRootArguments)
                 .getResult();
         LLVM::CallOp::create(
             builder, location, TypeRange{},
-            SymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"),
+            getNativeRuntimeCallee(context, NativeRuntimeEntry::SchedulerFail),
             ValueRange{runtimeContext, designRootStatus});
       }
     }
@@ -538,7 +547,7 @@ LogicalResult makeSchedulerMain(ModuleOp module,
       auto fail = [&](Value status) {
         LLVM::CallOp::create(
             builder, location, TypeRange{},
-            SymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"),
+            getNativeRuntimeCallee(context, NativeRuntimeEntry::SchedulerFail),
             ValueRange{helperContext, status});
       };
       auto field = [&](StringRef table, Type rowType, Value row, int32_t index,
@@ -566,8 +575,8 @@ LogicalResult makeSchedulerMain(ModuleOp module,
       Value status =
           LLVM::CallOp::create(
               builder, location, TypeRange{i32},
-              SymbolRefAttr::get(context,
-                                 "talos_rt_v1_native_state_register_static"),
+              getNativeRuntimeCallee(
+                  context, NativeRuntimeEntry::NativeStateRegisterStatic),
               ValueRange{helperContext,
                          field(boundsName, boundType, bound, 0, i32),
                          field(boundsName, boundType, bound, 2, i64),
@@ -595,19 +604,20 @@ LogicalResult makeSchedulerMain(ModuleOp module,
           builder, location, schedule::StatePlane::Value, byte, 0);
       fail(LLVM::CallOp::create(
                builder, location, TypeRange{i32},
-               SymbolRefAttr::get(
-                   context, "talos_rt_v1_gc_candidate_static_root_register"),
+               getNativeRuntimeCallee(
+                   context, NativeRuntimeEntry::GcCandidateStaticRootRegister),
                ValueRange{helperContext, slot, kind})
                .getResult());
       if (hasDesignBytecode && !sharedNativeState) {
         Value bit = LLVM::ShlOp::create(
             builder, location, byte, llvmConstant(builder, location, i64, 3));
-        fail(LLVM::CallOp::create(
-                 builder, location, TypeRange{i32},
-                 SymbolRefAttr::get(
-                     context, "talos_rt_v1_gc_design_candidate_root_register"),
-                 ValueRange{helperContext, bit, kind})
-                 .getResult());
+        fail(
+            LLVM::CallOp::create(
+                builder, location, TypeRange{i32},
+                getNativeRuntimeCallee(
+                    context, NativeRuntimeEntry::GcDesignCandidateRootRegister),
+                ValueRange{helperContext, bit, kind})
+                .getResult());
       }
       Value nextRoot = LLVM::AddOp::create(
           builder, location, root, llvmConstant(builder, location, i64, 1));
@@ -626,17 +636,17 @@ LogicalResult makeSchedulerMain(ModuleOp module,
         builder, location, schedule::StatePlane::Value);
     Value stateUnknown = detail::createStatePlaneAddress(
         builder, location, schedule::StatePlane::Unknown);
-    Value status =
-        LLVM::CallOp::create(
-            builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context, "talos_rt_v1_native_state_sync"),
-            ValueRange{
-                runtimeContext, stateValue, stateUnknown,
-                llvmConstant(builder, location, i64, stateLayout.bitCount)})
-            .getResult();
+    Value status = LLVM::CallOp::create(
+                       builder, location, TypeRange{i32},
+                       getNativeRuntimeCallee(
+                           context, NativeRuntimeEntry::NativeStateSync),
+                       ValueRange{runtimeContext, stateValue, stateUnknown,
+                                  llvmConstant(builder, location, i64,
+                                               stateLayout.bitCount)})
+                       .getResult();
     LLVM::CallOp::create(
         builder, location, TypeRange{},
-        SymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"),
+        getNativeRuntimeCallee(context, NativeRuntimeEntry::SchedulerFail),
         ValueRange{runtimeContext, status});
   }
   if (stateLayout.directContinuous) {
@@ -649,13 +659,16 @@ LogicalResult makeSchedulerMain(ModuleOp module,
       arguments.push_back(
           LLVM::AddressOfOp::create(builder, location, pointer,
                                     schedule::getStatePlaneGlobalName(plane)));
-    Value status = LLVM::CallOp::create(
-                       builder, location, TypeRange{i32},
-                       "talos_rt_v1_native_state_bind_continuous", arguments)
-                       .getResult();
-    LLVM::CallOp::create(builder, location, TypeRange{},
-                         "talos_rt_v1_scheduler_fail",
-                         ValueRange{runtimeContext, status});
+    Value status =
+        LLVM::CallOp::create(builder, location, TypeRange{i32},
+                             getNativeRuntimeSymbol(
+                                 NativeRuntimeEntry::NativeStateBindContinuous),
+                             arguments)
+            .getResult();
+    LLVM::CallOp::create(
+        builder, location, TypeRange{},
+        getNativeRuntimeSymbol(NativeRuntimeEntry::SchedulerFail),
+        ValueRange{runtimeContext, status});
   }
   if (!stateLayout.unknownSummaryRoots.empty()) {
     auto address = [&](StringRef name) -> Value {
@@ -664,7 +677,8 @@ LogicalResult makeSchedulerMain(ModuleOp module,
     Value status =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
-            "talos_rt_v1_native_state_bind_unknown_summary",
+            getNativeRuntimeSymbol(
+                NativeRuntimeEntry::NativeStateBindUnknownSummary),
             ValueRange{
                 runtimeContext,
                 detail::createStatePlaneAddress(builder, location,
@@ -677,21 +691,24 @@ LogicalResult makeSchedulerMain(ModuleOp module,
                 llvmConstant(builder, location, i64,
                              stateLayout.getUnknownSummaryPatternCount())})
             .getResult();
-    LLVM::CallOp::create(builder, location, TypeRange{},
-                         "talos_rt_v1_scheduler_fail",
-                         ValueRange{runtimeContext, status});
+    LLVM::CallOp::create(
+        builder, location, TypeRange{},
+        getNativeRuntimeSymbol(NativeRuntimeEntry::SchedulerFail),
+        ValueRange{runtimeContext, status});
   }
   if (bindStateSpecialization) {
     Value fast = LLVM::AddressOfOp::create(
         builder, location, pointer, "__talos_state_specialization_fast_v1");
-    Value status =
-        LLVM::CallOp::create(builder, location, TypeRange{i32},
-                             "talos_rt_v1_native_state_bind_specialization",
-                             ValueRange{runtimeContext, fast})
-            .getResult();
-    LLVM::CallOp::create(builder, location, TypeRange{},
-                         "talos_rt_v1_scheduler_fail",
-                         ValueRange{runtimeContext, status});
+    Value status = LLVM::CallOp::create(
+                       builder, location, TypeRange{i32},
+                       getNativeRuntimeSymbol(
+                           NativeRuntimeEntry::NativeStateBindSpecialization),
+                       ValueRange{runtimeContext, fast})
+                       .getResult();
+    LLVM::CallOp::create(
+        builder, location, TypeRange{},
+        getNativeRuntimeSymbol(NativeRuntimeEntry::SchedulerFail),
+        ValueRange{runtimeContext, status});
   }
   if (hasCoverage) {
     struct ToggleBinding {
@@ -800,7 +817,8 @@ LogicalResult makeSchedulerMain(ModuleOp module,
     Value status =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context, "talos_rt_v1_coverage_finalize"),
+            getNativeRuntimeCallee(context,
+                                   NativeRuntimeEntry::CoverageFinalize),
             ValueRange{
                 runtimeContext,
                 llvmConstant(builder, location, i64, linePointCount),
@@ -810,13 +828,14 @@ LogicalResult makeSchedulerMain(ModuleOp module,
             .getResult();
     LLVM::CallOp::create(
         builder, location, TypeRange{},
-        SymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"),
+        getNativeRuntimeCallee(context, NativeRuntimeEntry::SchedulerFail),
         ValueRange{runtimeContext, status});
     for (const ToggleBinding &binding : toggleBindings) {
       Value bindStatus =
           LLVM::CallOp::create(
               builder, location, TypeRange{i32},
-              SymbolRefAttr::get(context, "talos_rt_v1_coverage_toggle_bind"),
+              getNativeRuntimeCallee(context,
+                                     NativeRuntimeEntry::CoverageToggleBind),
               ValueRange{
                   runtimeContext,
                   llvmConstant(builder, location, i64, binding.firstBit),
@@ -825,14 +844,15 @@ LogicalResult makeSchedulerMain(ModuleOp module,
               .getResult();
       LLVM::CallOp::create(
           builder, location, TypeRange{},
-          SymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"),
+          getNativeRuntimeCallee(context, NativeRuntimeEntry::SchedulerFail),
           ValueRange{runtimeContext, bindStatus});
     }
     for (const FsmBinding &binding : fsmBindings) {
       Value bindStatus =
           LLVM::CallOp::create(
               builder, location, TypeRange{i32},
-              SymbolRefAttr::get(context, "talos_rt_v1_coverage_fsm_bind"),
+              getNativeRuntimeCallee(context,
+                                     NativeRuntimeEntry::CoverageFsmBind),
               ValueRange{
                   runtimeContext,
                   llvmConstant(builder, location, i64, binding.machine),
@@ -842,18 +862,18 @@ LogicalResult makeSchedulerMain(ModuleOp module,
               .getResult();
       LLVM::CallOp::create(
           builder, location, TypeRange{},
-          SymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"),
+          getNativeRuntimeCallee(context, NativeRuntimeEntry::SchedulerFail),
           ValueRange{runtimeContext, bindStatus});
     }
-    Value sealStatus =
-        LLVM::CallOp::create(
-            builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context, "talos_rt_v1_coverage_toggle_seal"),
-            ValueRange{runtimeContext})
-            .getResult();
+    Value sealStatus = LLVM::CallOp::create(
+                           builder, location, TypeRange{i32},
+                           getNativeRuntimeCallee(
+                               context, NativeRuntimeEntry::CoverageToggleSeal),
+                           ValueRange{runtimeContext})
+                           .getResult();
     LLVM::CallOp::create(
         builder, location, TypeRange{},
-        SymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"),
+        getNativeRuntimeCallee(context, NativeRuntimeEntry::SchedulerFail),
         ValueRange{runtimeContext, sealStatus});
   }
   if (hasSAIF &&
@@ -866,12 +886,13 @@ LogicalResult makeSchedulerMain(ModuleOp module,
     Value installStatus =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context, "talos_rt_v1_scheduler_install_aot"),
+            getNativeRuntimeCallee(context,
+                                   NativeRuntimeEntry::SchedulerInstallAot),
             ValueRange{runtimeContext, plan})
             .getResult();
     LLVM::CallOp::create(
         builder, location, TypeRange{},
-        SymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"),
+        getNativeRuntimeCallee(context, NativeRuntimeEntry::SchedulerFail),
         ValueRange{runtimeContext, installStatus});
   }
   // The driver asks for the startup steps; they run before the root process
@@ -893,15 +914,17 @@ LogicalResult makeSchedulerMain(ModuleOp module,
                        runtimeContext);
   auto run = LLVM::CallOp::create(
       builder, location, TypeRange{i32},
-      SymbolRefAttr::get(context, useAOT ? "talos_rt_v1_scheduler_run_aot"
-                                         : "talos_rt_v1_scheduler_run"),
+      SymbolRefAttr::get(
+          context,
+          useAOT ? getNativeRuntimeSymbol(NativeRuntimeEntry::SchedulerRunAot)
+                 : getNativeRuntimeSymbol(NativeRuntimeEntry::SchedulerRun)),
       runtimeContext);
   // Capture the design's own notion of elapsed time while the context that
   // holds it still exists. A host has no other channel: once main returns, the
   // context is gone and the module exposes nothing but its exports.
   auto finalTime = LLVM::CallOp::create(
       builder, location, TypeRange{i64},
-      SymbolRefAttr::get(context, "talos_rt_v1_scheduler_time"),
+      getNativeRuntimeCallee(context, NativeRuntimeEntry::SchedulerTime),
       runtimeContext);
   LLVM::StoreOp::create(
       builder, location, finalTime.getResult(),
@@ -911,7 +934,8 @@ LogicalResult makeSchedulerMain(ModuleOp module,
   // status and each failure is described by the operation that produced it.
   auto lastReport = LLVM::CallOp::create(
       builder, location, TypeRange{},
-      SymbolRefAttr::get(context, "talos_rt_v1_scheduler_report_status"),
+      getNativeRuntimeCallee(context,
+                             NativeRuntimeEntry::SchedulerReportStatus),
       ValueRange{runtimeContext, run.getResult()});
   Value finalStatus = run.getResult();
   Value coverageStatus;
@@ -919,7 +943,8 @@ LogicalResult makeSchedulerMain(ModuleOp module,
     coverageStatus =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context, "talos_rt_v1_coverage_snapshot"),
+            getNativeRuntimeCallee(context,
+                                   NativeRuntimeEntry::CoverageSnapshot),
             ValueRange{runtimeContext, run.getResult(), finalTime.getResult()})
             .getResult();
     Value runSucceeded = LLVM::ICmpOp::create(
@@ -929,22 +954,25 @@ LogicalResult makeSchedulerMain(ModuleOp module,
                                          coverageStatus, run.getResult());
     lastReport = LLVM::CallOp::create(
         builder, location, TypeRange{},
-        SymbolRefAttr::get(context, "talos_rt_v1_scheduler_report_status"),
+        getNativeRuntimeCallee(context,
+                               NativeRuntimeEntry::SchedulerReportStatus),
         ValueRange{runtimeContext, coverageStatus});
   }
   if (hasSAIF) {
-    Value status =
-        LLVM::CallOp::create(builder, location, TypeRange{i32},
-                             "talos_rt_v1_saif_finish", runtimeContext)
-            .getResult();
+    Value status = LLVM::CallOp::create(
+                       builder, location, TypeRange{i32},
+                       getNativeRuntimeSymbol(NativeRuntimeEntry::SaifFinish),
+                       runtimeContext)
+                       .getResult();
     Value succeeded = LLVM::ICmpOp::create(
         builder, location, LLVM::ICmpPredicate::eq, finalStatus,
         llvmConstant(builder, location, i32, TALOS_RT_OK));
     finalStatus = LLVM::SelectOp::create(builder, location, succeeded, status,
                                          finalStatus);
-    lastReport = LLVM::CallOp::create(builder, location, TypeRange{},
-                                      "talos_rt_v1_scheduler_report_status",
-                                      ValueRange{runtimeContext, status});
+    lastReport = LLVM::CallOp::create(
+        builder, location, TypeRange{},
+        getNativeRuntimeSymbol(NativeRuntimeEntry::SchedulerReportStatus),
+        ValueRange{runtimeContext, status});
   }
   if (startupVPI) {
     // cbEndOfSimulation runs before the last status report (IEEE 1800-2023
@@ -962,7 +990,7 @@ LogicalResult makeSchedulerMain(ModuleOp module,
   }
   LLVM::CallOp::create(
       builder, location, TypeRange{},
-      SymbolRefAttr::get(context, "talos_rt_v1_context_destroy"),
+      getNativeRuntimeCallee(context, NativeRuntimeEntry::ContextDestroy),
       runtimeContext);
   LLVM::ReturnOp::create(builder, location, finalStatus);
 
@@ -990,121 +1018,82 @@ LogicalResult makeSchedulerMain(ModuleOp module,
     return LLVM::ConstantOp::create(builder, location, i64,
                                     builder.getI64IntegerAttr(precisionFs));
   });
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_time", i64,
-                           {pointer});
+  declareNativeRuntime(module, NativeRuntimeEntry::SchedulerTime);
 
   if (hasExecution)
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_context_create_for_design",
-                             i32, {pointer, pointer});
+    declareNativeRuntime(module, NativeRuntimeEntry::ContextCreateForDesign);
   else
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_context_create", i32,
-                             {pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_native_state_initialize", i32,
-                           {pointer, pointer, pointer, i64, pointer, i64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_context_destroy", voidType,
-                           {pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_context_configure_argv", i32,
-                           {pointer, i32, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_native_state_register_static",
-                           i32, {pointer, i32, i64, i64});
+    declareNativeRuntime(module, NativeRuntimeEntry::ContextCreate);
+  declareNativeRuntimes(module,
+                        {NativeRuntimeEntry::NativeStateInitialize,
+                         NativeRuntimeEntry::ContextDestroy,
+                         NativeRuntimeEntry::ContextConfigureArgv,
+                         NativeRuntimeEntry::NativeStateRegisterStatic});
   if (requiresNativeStateSync)
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_native_state_sync", i32,
-                             {pointer, pointer, pointer, i64});
+    declareNativeRuntime(module, NativeRuntimeEntry::NativeStateSync);
   if (sharedNativeState)
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_native_state_bind_shared",
-                             i32, {pointer, pointer, pointer, i64});
+    declareNativeRuntime(module, NativeRuntimeEntry::NativeStateBindShared);
   if (bindStateSpecialization)
-    getOrDeclareLLVMFunction(module,
-                             "talos_rt_v1_native_state_bind_specialization",
-                             i32, {pointer, pointer});
+    declareNativeRuntime(module,
+                         NativeRuntimeEntry::NativeStateBindSpecialization);
   if (stateLayout.directContinuous)
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_native_state_bind_continuous",
-                             i32, {pointer, pointer, pointer, pointer});
+    declareNativeRuntime(module, NativeRuntimeEntry::NativeStateBindContinuous);
   if (!stateLayout.unknownSummaryRoots.empty())
-    getOrDeclareLLVMFunction(
-        module, "talos_rt_v1_native_state_bind_unknown_summary", i32,
-        {pointer, pointer, i64, pointer, pointer, i64, pointer, i64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_gc_static_root_register", i32,
-                           {pointer, pointer});
-  getOrDeclareLLVMFunction(module,
-                           "talos_rt_v1_gc_candidate_static_root_register", i32,
-                           {pointer, pointer, i32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_gc_design_root_register", i32,
-                           {pointer, i64});
-  getOrDeclareLLVMFunction(module,
-                           "talos_rt_v1_gc_design_candidate_root_register", i32,
-                           {pointer, i64, i32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_class_register", i32,
-                           {pointer, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_element_type_define_default",
-                           i32, {pointer, i64, pointer, i64});
-  getOrDeclareLLVMFunction(module,
-                           "talos_rt_v1_context_register_import_signature", i32,
-                           {pointer, i32, i64, pointer, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_fail", voidType,
-                           {pointer, i32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_run", i32, {pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_report_status",
-                           voidType, {pointer, i32});
+    declareNativeRuntime(module,
+                         NativeRuntimeEntry::NativeStateBindUnknownSummary);
+  declareNativeRuntimes(module,
+                        {NativeRuntimeEntry::GcStaticRootRegister,
+                         NativeRuntimeEntry::GcCandidateStaticRootRegister,
+                         NativeRuntimeEntry::GcDesignRootRegister,
+                         NativeRuntimeEntry::GcDesignCandidateRootRegister,
+                         NativeRuntimeEntry::ClassRegister,
+                         NativeRuntimeEntry::ElementTypeDefineDefault,
+                         NativeRuntimeEntry::ContextRegisterImportSignature,
+                         NativeRuntimeEntry::SchedulerFail,
+                         NativeRuntimeEntry::SchedulerRun,
+                         NativeRuntimeEntry::SchedulerReportStatus});
   if (hasCoverage) {
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_coverage_finalize", i32,
-                             {pointer, i64, i64, pointer, pointer, i32});
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_coverage_toggle_bind", i32,
-                             {pointer, i64, i64, i64});
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_coverage_fsm_bind", i32,
-                             {pointer, i64, i64, i64, i64});
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_coverage_toggle_seal", i32,
-                             {pointer});
+    declareNativeRuntime(module, NativeRuntimeEntry::CoverageFinalize);
+    declareNativeRuntime(module, NativeRuntimeEntry::CoverageToggleBind);
+    declareNativeRuntime(module, NativeRuntimeEntry::CoverageFsmBind);
+    declareNativeRuntime(module, NativeRuntimeEntry::CoverageToggleSeal);
   }
   if (shouldDumpCoverage)
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_coverage_snapshot", i32,
-                             {pointer, i32, i64});
+    declareNativeRuntime(module, NativeRuntimeEntry::CoverageSnapshot);
   if (hasSAIF) {
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_saif_configure", i32,
-                             {pointer, pointer, i64});
-    getOrDeclareLLVMFunction(
-        module, "talos_rt_v1_saif_bind", i32,
-        {pointer, i64, pointer, i64, pointer, i32, pointer, i32});
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_saif_driver", voidType,
-                             {pointer, i64, i64});
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_saif_seal", i32, {pointer});
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_saif_finish", i32, {pointer});
+    declareNativeRuntime(module, NativeRuntimeEntry::SaifConfigure);
+    declareNativeRuntime(module, NativeRuntimeEntry::SaifBind);
+    declareNativeRuntime(module, NativeRuntimeEntry::SaifDriver);
+    declareNativeRuntime(module, NativeRuntimeEntry::SaifSeal);
+    declareNativeRuntime(module, NativeRuntimeEntry::SaifFinish);
   }
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_install_aot", i32,
-                           {pointer, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_run_aot", i32,
-                           {pointer});
+  declareNativeRuntime(module, NativeRuntimeEntry::SchedulerInstallAot);
+  declareNativeRuntime(module, NativeRuntimeEntry::SchedulerRunAot);
   if (requiresEventSnapshotFeature)
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_event_snapshot_link_anchor",
-                             voidType, {});
+    declareNativeRuntime(module, NativeRuntimeEntry::EventSnapshotLinkAnchor);
   if (needs(runtime::Features::SchedulerCohort))
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_track_cohorts",
-                             voidType, {pointer});
+    declareNativeRuntime(module, NativeRuntimeEntry::SchedulerTrackCohorts);
   if (requiresDynamicScanFeature)
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_dynamic_scan_link_anchor",
-                             voidType, {});
+    declareNativeRuntime(module, NativeRuntimeEntry::DynamicScanLinkAnchor);
   if (requiresContainerBitstreamFeature)
-    getOrDeclareLLVMFunction(
-        module, "talos_rt_v1_container_bitstream_link_anchor", voidType, {});
+    declareNativeRuntime(module,
+                         NativeRuntimeEntry::ContainerBitstreamLinkAnchor);
   if (requiresRecursiveBitstreamFeature)
-    getOrDeclareLLVMFunction(
-        module, "talos_rt_v1_recursive_bitstream_link_anchor", voidType, {});
+    declareNativeRuntime(module,
+                         NativeRuntimeEntry::RecursiveBitstreamLinkAnchor);
   if (requiresClassBitstreamFeature)
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_class_bitstream_link_anchor",
-                             voidType, {});
+    declareNativeRuntime(module, NativeRuntimeEntry::ClassBitstreamLinkAnchor);
   if (requiresClassBitstreamFeature)
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_class_bitstream_finalize",
-                             i32, {pointer});
+    declareNativeRuntime(module, NativeRuntimeEntry::ClassBitstreamFinalize);
   if (requiresClassBitstreamBytecodeFeature)
-    getOrDeclareLLVMFunction(module,
-                             "talos_rt_v1_class_bitstream_bytecode_link_anchor",
-                             voidType, {});
+    declareNativeRuntime(module,
+                         NativeRuntimeEntry::ClassBitstreamBytecodeLinkAnchor);
   if (requiresDPIExportBytecodeFeature)
-    getOrDeclareLLVMFunction(
-        module, "talos_rt_v1_dpi_export_bytecode_link_anchor", voidType, {});
+    declareNativeRuntime(module,
+                         NativeRuntimeEntry::DpiExportBytecodeLinkAnchor);
   if (requiresDPIImportBytecodeFeature)
-    getOrDeclareLLVMFunction(
-        module, "talos_rt_v1_dpi_import_bytecode_link_anchor", voidType, {});
+    declareNativeRuntime(module,
+                         NativeRuntimeEntry::DpiImportBytecodeLinkAnchor);
   return success();
 }
 
@@ -1169,7 +1158,6 @@ lowerNativeStartupLifecycle(ModuleOp module,
   OpBuilder builder(context);
   Type i32 = builder.getI32Type();
   Type i64 = builder.getI64Type();
-  Type voidType = LLVM::LLVMVoidType::get(context);
   // Startup library names and the runtime entries are appended after every
   // other symbol, in this order.
   OpBuilder atEnd = OpBuilder::atBlockEnd(module.getBody());
@@ -1204,16 +1192,13 @@ lowerNativeStartupLifecycle(ModuleOp module,
           ArrayRef<int64_t>{static_cast<int64_t>(index)});
     LLVM::ReturnOp::create(initializer, location, array);
   }
-  auto declare = [&](StringRef name, Type result,
-                     ArrayRef<Type> arguments) -> LLVM::LLVMFuncOp {
-    if (auto existing = module.lookupSymbol<LLVM::LLVMFuncOp>(name))
+  auto declare = [&](NativeRuntimeEntry entry) -> LLVM::LLVMFuncOp {
+    if (auto existing = module.lookupSymbol<LLVM::LLVMFuncOp>(
+            getNativeRuntimeSymbol(entry)))
       return existing;
-    return LLVM::LLVMFuncOp::create(
-        atEnd, location, name,
-        LLVM::LLVMFunctionType::get(result, arguments, false));
+    return createNativeRuntimeDeclaration(atEnd, location, entry);
   };
-  LLVM::LLVMFuncOp fail =
-      declare("talos_rt_v1_scheduler_fail", voidType, {pointer, i32});
+  LLVM::LLVMFuncOp fail = declare(NativeRuntimeEntry::SchedulerFail);
 
   builder.setInsertionPoint(start);
   Value runtimeContext = LLVM::LoadOp::create(
@@ -1224,8 +1209,7 @@ lowerNativeStartupLifecycle(ModuleOp module,
                          ValueRange{runtimeContext, status});
   };
   if (start.getStateSync()) {
-    LLVM::LLVMFuncOp sync = declare("talos_rt_v1_native_state_sync", i32,
-                                    {pointer, pointer, pointer, i64});
+    LLVM::LLVMFuncOp sync = declare(NativeRuntimeEntry::NativeStateSync);
     Value unknown =
         stateUnknown
             ? Value(LLVM::AddressOfOp::create(builder, location, stateUnknown))
@@ -1241,8 +1225,8 @@ lowerNativeStartupLifecycle(ModuleOp module,
             .getResult());
   }
   if (start.getResolveInitialDrivers()) {
-    LLVM::LLVMFuncOp resolve = declare(
-        "talos_rt_v1_scheduler_resolve_initial_drivers", i32, {pointer});
+    LLVM::LLVMFuncOp resolve =
+        declare(NativeRuntimeEntry::SchedulerResolveInitialDrivers);
     check(LLVM::CallOp::create(builder, location, resolve, runtimeContext)
               .getResult());
   }
@@ -1250,8 +1234,7 @@ lowerNativeStartupLifecycle(ModuleOp module,
     // IEEE 1800-2023 36.9.1, 36.10.2: the startup routines register their
     // system tasks and callbacks; cbEndOfCompile and cbStartOfSimulation then
     // run before the first process (38.36.3).
-    LLVM::LLVMFuncOp startup =
-        declare("talos_rt_v1_vpi_startup", i32, {pointer, pointer, i64});
+    LLVM::LLVMFuncOp startup = declare(NativeRuntimeEntry::VpiStartup);
     Value moduleNames =
         nameArray
             ? LLVM::GEPOp::create(
@@ -1266,19 +1249,17 @@ lowerNativeStartupLifecycle(ModuleOp module,
                   runtimeContext, moduleNames,
                   detail::llvmConstant(builder, location, i64, names.size())})
               .getResult());
-    LLVM::LLVMFuncOp endCompile =
-        declare("talos_rt_v1_vpi_end_compile", i32, {pointer});
+    LLVM::LLVMFuncOp endCompile = declare(NativeRuntimeEntry::VpiEndCompile);
     check(LLVM::CallOp::create(builder, location, endCompile, runtimeContext)
               .getResult());
     LLVM::LLVMFuncOp startSimulation =
-        declare("talos_rt_v1_vpi_start_simulation", i32, {pointer});
+        declare(NativeRuntimeEntry::VpiStartSimulation);
     check(
         LLVM::CallOp::create(builder, location, startSimulation, runtimeContext)
             .getResult());
     LLVM::LLVMFuncOp endSimulation =
-        declare("talos_rt_v1_vpi_end_simulation", i32, {pointer});
-    LLVM::LLVMFuncOp shutdown =
-        declare("talos_rt_v1_vpi_shutdown", voidType, {pointer});
+        declare(NativeRuntimeEntry::VpiEndSimulation);
+    LLVM::LLVMFuncOp shutdown = declare(NativeRuntimeEntry::VpiShutdown);
     schedule::NativeLifecycleFinishOp finish = finishes.front();
     builder.setInsertionPoint(finish);
     Value status = finish.getStatus();

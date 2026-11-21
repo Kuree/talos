@@ -501,15 +501,17 @@ void emitNativeStateRetain(OpBuilder &builder, Location location,
                                                    "__talos_current_context");
   Value context =
       LLVM::LoadOp::create(builder, location, pointer, contextAddress, 8);
-  Value status = LLVM::CallOp::create(
-                     builder, location, TypeRange{i32},
-                     SymbolRefAttr::get(builder.getContext(),
-                                        "talos_rt_v1_native_state_retain"),
-                     ValueRange{context, handle})
-                     .getResult();
+  Value status =
+      LLVM::CallOp::create(
+          builder, location, TypeRange{i32},
+          getNativeRuntimeCallee(builder.getContext(),
+                                 NativeRuntimeEntry::NativeStateRetain),
+          ValueRange{context, handle})
+          .getResult();
   LLVM::CallOp::create(
       builder, location, TypeRange{},
-      SymbolRefAttr::get(builder.getContext(), "talos_rt_v1_scheduler_fail"),
+      getNativeRuntimeCallee(builder.getContext(),
+                             NativeRuntimeEntry::SchedulerFail),
       ValueRange{context, status});
 }
 
@@ -591,23 +593,18 @@ DenseElementsAttr integerArrayAttr(IntegerType elementType,
       elements);
 }
 
-LLVM::LLVMFuncOp getOrDeclareLLVMFunction(ModuleOp module, StringRef name,
-                                          Type result,
-                                          ArrayRef<Type> arguments) {
+LLVM::LLVMFuncOp getOrDeclareGeneratedFunction(ModuleOp module, StringRef name,
+                                               Type result,
+                                               ArrayRef<Type> arguments) {
+  assert(!name.starts_with(kRuntimeSymbolPrefix) &&
+         "declare native runtime entries with declareNativeRuntime");
   if (auto existing = module.lookupSymbol<LLVM::LLVMFuncOp>(name))
     return existing;
   OpBuilder builder(module.getContext());
   builder.setInsertionPointToStart(module.getBody());
-  auto function = LLVM::LLVMFuncOp::create(
+  return LLVM::LLVMFuncOp::create(
       builder, module.getLoc(), name,
       LLVM::LLVMFunctionType::get(result, arguments, false));
-  // Generated code reaches queue growth only from a capacity test, so the
-  // optimizer lays that arm out of line. (The failure latch is not cold: it
-  // is called unconditionally with a status and tests it itself.)
-  if (hasNativeRuntimeEffect(name, native_runtime::Cold))
-    function.setPassthroughAttr(
-        builder.getArrayAttr({builder.getStringAttr("cold")}));
-  return function;
 }
 
 void copyNativePartition(Operation *source, Operation *target) {

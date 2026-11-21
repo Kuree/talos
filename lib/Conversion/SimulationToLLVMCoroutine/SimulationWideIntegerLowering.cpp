@@ -280,7 +280,8 @@ static bool scopeNativeOutputTemporaries(LLVM::LLVMFuncOp function) {
           if (containsPointer(load.getType()))
             pending.push_back(load.getResult());
         } else if (auto call = dyn_cast<LLVM::CallOp>(user)) {
-          if (call.getCallee() != "talos_rt_v1_eval_display" ||
+          if (call.getCallee() !=
+                  getNativeRuntimeSymbol(NativeRuntimeEntry::EvalDisplay) ||
               call.getArgOperands().size() != 7) {
             valid = false;
           } else {

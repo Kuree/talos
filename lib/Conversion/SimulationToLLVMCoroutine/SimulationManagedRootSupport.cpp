@@ -72,20 +72,21 @@ void emitGuardedManagedRootRangePop(OpBuilder &builder, Location location,
     runtimeContext =
         LLVM::LoadOp::create(builder, location, pointer, contextAddress, 8);
   }
-  Value lane = LLVM::CallOp::create(
-                   builder, location, TypeRange{pointer},
-                   SymbolRefAttr::get(context, "talos_rt_v1_gc_current_lane"),
-                   runtimeContext)
-                   .getResult();
-  Value status =
+  Value lane =
       LLVM::CallOp::create(
-          builder, location, TypeRange{builder.getI32Type()},
-          SymbolRefAttr::get(context, "talos_rt_v1_gc_managed_root_range_pop"),
-          ValueRange{lane, record})
+          builder, location, TypeRange{pointer},
+          getNativeRuntimeCallee(context, NativeRuntimeEntry::GcCurrentLane),
+          runtimeContext)
           .getResult();
+  Value status = LLVM::CallOp::create(
+                     builder, location, TypeRange{builder.getI32Type()},
+                     getNativeRuntimeCallee(
+                         context, NativeRuntimeEntry::GcManagedRootRangePop),
+                     ValueRange{lane, record})
+                     .getResult();
   LLVM::CallOp::create(
       builder, location, TypeRange{},
-      SymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"),
+      getNativeRuntimeCallee(context, NativeRuntimeEntry::SchedulerFail),
       ValueRange{runtimeContext, status});
   LLVM::BrOp::create(builder, location, rest);
 }
@@ -121,8 +122,9 @@ public:
       auto [context, lane] = managedContextAndLane(rewriter, location);
       return LLVM::CallOp::create(
                  rewriter, location, TypeRange{rewriter.getI32Type()},
-                 SymbolRefAttr::get(rewriter.getContext(),
-                                    "talos_rt_v1_gc_managed_root_range_push"),
+                 getNativeRuntimeCallee(
+                     rewriter.getContext(),
+                     NativeRuntimeEntry::GcManagedRootRangePush),
                  ValueRange{lane, op.getRecord(), op.getSlots(), op.getCount()})
           .getResult();
     };

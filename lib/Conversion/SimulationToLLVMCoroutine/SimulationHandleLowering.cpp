@@ -435,8 +435,8 @@ void lowerNativeHandleOps(ModuleOp module) {
     if (auto offset = dyn_cast<schedule::NativeHandleOffsetOp>(op)) {
       auto call = LLVM::CallOp::create(
           builder, location, TypeRange{i64},
-          SymbolRefAttr::get(builder.getContext(),
-                             "talos_rt_v1_native_handle_offset"),
+          getNativeRuntimeCallee(builder.getContext(),
+                                 NativeRuntimeEntry::NativeHandleOffset),
           ValueRange{offset.getHandle(), offset.getAmount()});
       if (offset.getInBounds())
         native::mark<native::InBoundsHandleOffset>(call);

@@ -396,8 +396,9 @@ FailureOr<LLVM::LLVMFuncOp> makeDirectFragmentWrapper(
       // (analysis::isDirectOutput); its enqueue may already be an ABI call.
       mayTerminate |= sim::isColdRuntimeCheckpoint(operation);
       if (auto call = dyn_cast<LLVM::CallOp>(operation))
-        mayTerminate |= call.getCallee() && call.getCallee()->starts_with(
-                                                "talos_rt_v1_deferred_enqueue");
+        mayTerminate |= call.getCallee() &&
+                        call.getCallee()->starts_with(getNativeRuntimeSymbol(
+                            NativeRuntimeEntry::DeferredEnqueue));
       // So is the start of a $strobe display (21.2.2), a schedule.spawn or
       // its call by now.
       mayTerminate |= sim::has<sim::metadata::PostponedDisplay>(operation);
@@ -501,8 +502,8 @@ makeDirectFragmentBody(LLVM::LLVMFuncOp wrapper, sim::SimFuncOp body,
   Value enterStatus =
       LLVM::CallOp::create(
           builder, location, TypeRange{i32},
-          SymbolRefAttr::get(context,
-                             "talos_rt_v1_scheduler_direct_fragment_enter"),
+          getNativeRuntimeCallee(
+              context, NativeRuntimeEntry::SchedulerDirectFragmentEnter),
           ValueRange{entry->getArgument(0),
                      llvmConstant(builder, location, i32, actorSlot),
                      llvmConstant(builder, location, i32, continuation),
@@ -603,8 +604,8 @@ makeDirectFragmentBody(LLVM::LLVMFuncOp wrapper, sim::SimFuncOp body,
   Value leaveStatus =
       LLVM::CallOp::create(
           builder, location, TypeRange{i32},
-          SymbolRefAttr::get(context,
-                             "talos_rt_v1_scheduler_direct_fragment_leave"),
+          getNativeRuntimeCallee(
+              context, NativeRuntimeEntry::SchedulerDirectFragmentLeave),
           ValueRange{entry->getArgument(0),
                      llvmConstant(builder, location, i32, actorSlot)})
           .getResult();
@@ -632,8 +633,7 @@ LogicalResult makeRuntimeCheckpointWrapper(ModuleOp module,
   // legacy AOT scheduler.  Declare its runtime dependency at the point where
   // the reference is created instead of relying on accepted-Eval plan
   // materialization to do so later.
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_execute_aot_actor",
-                           i32, {pointer, i32});
+  declareNativeRuntime(module, NativeRuntimeEntry::SchedulerExecuteAotActor);
 
   std::string callbackName = (Twine(wrapperName) + ".checkpoint").str();
   auto callback =
@@ -645,8 +645,8 @@ LogicalResult makeRuntimeCheckpointWrapper(ModuleOp module,
   Value callbackStatus =
       LLVM::CallOp::create(
           builder, location, TypeRange{i32},
-          SymbolRefAttr::get(context,
-                             "talos_rt_v1_scheduler_execute_aot_actor"),
+          getNativeRuntimeCallee(context,
+                                 NativeRuntimeEntry::SchedulerExecuteAotActor),
           ValueRange{callbackEntry->getArgument(0),
                      llvmConstant(builder, location, i32, actorSlot)})
           .getResult();

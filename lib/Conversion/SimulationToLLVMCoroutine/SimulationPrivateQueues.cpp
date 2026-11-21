@@ -525,11 +525,13 @@ LLVM::LLVMFuncOp getPrivateQueueAccess(ModuleOp module, Location loc,
   if (sizeOnly) {
     LLVM::ReturnOp::create(b, loc, llvmConstant(b, loc, i64, 0));
   } else {
-    StringRef callee = "talos_rt_v1_container_read_checked";
+    StringRef callee =
+        getNativeRuntimeSymbol(NativeRuntimeEntry::ContainerReadChecked);
     if (append)
-      callee = "talos_rt_v1_queue_push";
+      callee = getNativeRuntimeSymbol(NativeRuntimeEntry::QueuePush);
     else if (pop)
-      callee = "talos_rt_v1_queue_read_delete_checked";
+      callee =
+          getNativeRuntimeSymbol(NativeRuntimeEntry::QueueReadDeleteChecked);
     auto status = LLVM::CallOp::create(b, loc, TypeRange{i32}, callee,
                                        entry->getArguments());
     LLVM::ReturnOp::create(b, loc, status.getResult());

@@ -29,7 +29,8 @@ void reportRuntimeControlStatus(ConversionPatternRewriter &rewriter,
                                 Value status) {
   LLVM::CallOp::create(
       rewriter, location, TypeRange{},
-      SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_scheduler_fail"),
+      getNativeRuntimeCallee(rewriter.getContext(),
+                             NativeRuntimeEntry::SchedulerFail),
       ValueRange{context, status});
 }
 
@@ -160,8 +161,8 @@ public:
     Value context = loadCurrentRuntimeContext(rewriter, operation.getLoc());
     auto call = LLVM::CallOp::create(
         rewriter, operation.getLoc(), TypeRange{rewriter.getI64Type()},
-        SymbolRefAttr::get(rewriter.getContext(),
-                           "talos_rt_v1_process_current"),
+        getNativeRuntimeCallee(rewriter.getContext(),
+                               NativeRuntimeEntry::ProcessCurrent),
         ValueRange{context});
     rewriter.replaceOp(operation, call.getResults());
     return success();
@@ -205,8 +206,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{i32},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_process_status"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::ProcessStatus),
             ValueRange{context, adaptor.getProcess().front(), outState})
             .getResult();
     reportRuntimeControlStatus(rewriter, location, context, status);
@@ -234,8 +235,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{i32},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_process_event_pending"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::ProcessEventPending),
             ValueRange{context, adaptor.getProcess().front(), output})
             .getResult();
     reportRuntimeControlStatus(rewriter, location, context, status);
@@ -274,8 +275,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_process_random_get"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::ProcessRandomGet),
             ValueRange{context, adaptor.getProcess().front(), outState})
             .getResult();
     reportRuntimeControlStatus(rewriter, location, context, status);
@@ -308,12 +309,13 @@ public:
     Value incrementAddress = byteGEP(rewriter, location, state, 8);
     LLVM::StoreOp::create(rewriter, location, adaptor.getIncrement().front(),
                           incrementAddress, 8);
-    Value status = LLVM::CallOp::create(
-                       rewriter, location, TypeRange{rewriter.getI32Type()},
-                       SymbolRefAttr::get(rewriter.getContext(),
-                                          "talos_rt_v1_process_random_set"),
-                       ValueRange{context, adaptor.getProcess().front(), state})
-                       .getResult();
+    Value status =
+        LLVM::CallOp::create(
+            rewriter, location, TypeRange{rewriter.getI32Type()},
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::ProcessRandomSet),
+            ValueRange{context, adaptor.getProcess().front(), state})
+            .getResult();
     reportRuntimeControlStatus(rewriter, location, context, status);
     rewriter.eraseOp(operation);
     return success();
@@ -330,13 +332,13 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     Location location = operation.getLoc();
     Value context = loadCurrentRuntimeContext(rewriter, location);
-    Value status =
-        LLVM::CallOp::create(
-            rewriter, location, TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_scheduler_disable_children"),
-            ValueRange{context})
-            .getResult();
+    Value status = LLVM::CallOp::create(
+                       rewriter, location, TypeRange{rewriter.getI32Type()},
+                       getNativeRuntimeCallee(
+                           rewriter.getContext(),
+                           NativeRuntimeEntry::SchedulerDisableChildren),
+                       ValueRange{context})
+                       .getResult();
     reportRuntimeControlStatus(rewriter, location, context, status);
     rewriter.eraseOp(operation);
     return success();
@@ -379,38 +381,41 @@ public:
       if (!id)
         return rewriter.notifyMatchFailure(operation,
                                            "missing verified VPI call ID");
-      function = "talos_rt_v1_vpi_call_prepare";
+      function = getNativeRuntimeSymbol(NativeRuntimeEntry::VpiCallPrepare);
       arguments.push_back(integer(id.getInt()));
     } else if constexpr (std::is_same_v<Op, sim::SimVPIFrameEnterForeignOp>) {
-      function = "talos_rt_v1_vpi_frame_enter_prepared";
+      function =
+          getNativeRuntimeSymbol(NativeRuntimeEntry::VpiFrameEnterPrepared);
       arguments.push_back(integer(operation.getCodeUnitId()));
       arguments.push_back(integer(0, true));
     } else if constexpr (std::is_same_v<Op, sim::SimVPIResolutionPrepareOp>) {
-      function = "talos_rt_v1_vpi_resolution_prepare";
+      function =
+          getNativeRuntimeSymbol(NativeRuntimeEntry::VpiResolutionPrepare);
       arguments.push_back(integer(operation.getNetId()));
     } else if constexpr (std::is_same_v<Op, sim::SimVPIFrameEnterPreparedOp>) {
-      function = "talos_rt_v1_vpi_frame_enter_prepared";
+      function =
+          getNativeRuntimeSymbol(NativeRuntimeEntry::VpiFrameEnterPrepared);
       arguments.push_back(integer(operation.getCodeUnitId()));
       arguments.push_back(integer(operation.getIsTask(), true));
     } else if constexpr (std::is_same_v<Op, sim::SimVPIFrameEnterOp>) {
-      function = "talos_rt_v1_vpi_frame_enter";
+      function = getNativeRuntimeSymbol(NativeRuntimeEntry::VpiFrameEnter);
       arguments.push_back(integer(operation.getCodeUnitId()));
       arguments.push_back(integer(operation.getStatementId() ? 2 : 0, true));
       arguments.push_back(integer(
           operation.getStatementId().value_or(operation.getCodeUnitId())));
     } else if constexpr (std::is_same_v<Op, sim::SimVPIFrameCheckpointOp>) {
-      function = "talos_rt_v1_vpi_frame_checkpoint";
+      function = getNativeRuntimeSymbol(NativeRuntimeEntry::VpiFrameCheckpoint);
       arguments.push_back(integer(operation.getStatementId()));
     } else if constexpr (std::is_same_v<Op, sim::SimVPIFrameLeaveOp>) {
       if (adaptor.getActivation().size() != 1)
         return failure();
-      function = "talos_rt_v1_vpi_frame_leave";
+      function = getNativeRuntimeSymbol(NativeRuntimeEntry::VpiFrameLeave);
       arguments.push_back(adaptor.getActivation().front());
       // Ownership planning has already consumed the observation endpoints.
     } else if constexpr (std::is_same_v<Op, sim::SimVPICallFinishOp>) {
       if (adaptor.getTicket().size() != 1)
         return failure();
-      function = "talos_rt_v1_vpi_call_finish";
+      function = getNativeRuntimeSymbol(NativeRuntimeEntry::VpiCallFinish);
       arguments.push_back(adaptor.getTicket().front());
     }
     Value output;
@@ -448,15 +453,15 @@ public:
     Value out = entryAlloca(rewriter, location, i64, 1, 8);
     LLVM::StoreOp::create(rewriter, location,
                           llvmConstant(rewriter, location, i64, 0), out, 8);
-    Value status =
-        LLVM::CallOp::create(rewriter, location, TypeRange{i32},
-                             SymbolRefAttr::get(rewriter.getContext(),
-                                                "talos_rt_v1_control_enter"),
-                             ValueRange{context,
-                                        llvmConstant(rewriter, location, i64,
-                                                     operation.getTargetId()),
-                                        out})
-            .getResult();
+    Value status = LLVM::CallOp::create(
+                       rewriter, location, TypeRange{i32},
+                       getNativeRuntimeCallee(rewriter.getContext(),
+                                              NativeRuntimeEntry::ControlEnter),
+                       ValueRange{context,
+                                  llvmConstant(rewriter, location, i64,
+                                               operation.getTargetId()),
+                                  out})
+                       .getResult();
     reportRuntimeControlStatus(rewriter, location, context, status);
     Value activation = LLVM::LoadOp::create(rewriter, location, i64, out, 8);
     rewriter.replaceOp(operation, activation);
@@ -478,8 +483,8 @@ public:
     Value context = loadCurrentRuntimeContext(rewriter, location);
     Value status = LLVM::CallOp::create(
                        rewriter, location, TypeRange{rewriter.getI32Type()},
-                       SymbolRefAttr::get(rewriter.getContext(),
-                                          "talos_rt_v1_control_leave"),
+                       getNativeRuntimeCallee(rewriter.getContext(),
+                                              NativeRuntimeEntry::ControlLeave),
                        ValueRange{context, adaptor.getControl().front()})
                        .getResult();
     reportRuntimeControlStatus(rewriter, location, context, status);
@@ -505,8 +510,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_control_disable"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::ControlDisable),
             ValueRange{context,
                        llvmConstant(rewriter, location, rewriter.getI64Type(),
                                     operation.getTargetId()),
@@ -540,8 +545,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_control_disable_selected"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::ControlDisableSelected),
             ValueRange{
                 context,
                 llvmConstant(rewriter, location, i64, operation.getTargetId()),
@@ -583,8 +588,8 @@ public:
     Value pending =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_control_escape_pending"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::ControlEscapePending),
             ValueRange{context})
             .getResult();
     rewriter.replaceOpWithNewOp<arith::TruncIOp>(operation,
@@ -637,10 +642,12 @@ public:
     SmallVector<Value> arguments{context, llvmConstant(rewriter, location,
                                                        rewriter.getI64Type(),
                                                        operation.getId())};
-    StringRef runtimeFunction = "talos_rt_v1_deferred_enqueue";
+    StringRef runtimeFunction =
+        getNativeRuntimeSymbol(NativeRuntimeEntry::DeferredEnqueue);
     if (auto assertionID =
             sim::get<sim::metadata::AssertionControlTargetId>(operation)) {
-      runtimeFunction = "talos_rt_v1_deferred_enqueue_for_assertion";
+      runtimeFunction = getNativeRuntimeSymbol(
+          NativeRuntimeEntry::DeferredEnqueueForAssertion);
       arguments.push_back(llvmConstant(rewriter, location,
                                        rewriter.getI64Type(),
                                        assertionID.getValue().getZExtValue()));
@@ -669,12 +676,13 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     Location location = operation.getLoc();
     Value context = loadCurrentRuntimeContext(rewriter, location);
-    Value current = LLVM::CallOp::create(
-                        rewriter, location, TypeRange{rewriter.getI32Type()},
-                        SymbolRefAttr::get(rewriter.getContext(),
-                                           "talos_rt_v1_deferred_mature"),
-                        ValueRange{context, operation.getTicket()})
-                        .getResult();
+    Value current =
+        LLVM::CallOp::create(
+            rewriter, location, TypeRange{rewriter.getI32Type()},
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::DeferredMature),
+            ValueRange{context, operation.getTicket()})
+            .getResult();
     rewriter.replaceOpWithNewOp<arith::TruncIOp>(operation,
                                                  rewriter.getI1Type(), current);
     return success();
@@ -694,8 +702,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_assertion_control"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::AssertionControl),
             ValueRange{
                 context,
                 llvmConstant(rewriter, location, rewriter.getI32Type(),
@@ -722,8 +730,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_assertion_control"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::AssertionControl),
             ValueRange{context, operation.getAction(),
                        llvmConstant(rewriter, location, rewriter.getI64Type(),
                                     operation.getAssertionId())})
@@ -747,8 +755,8 @@ public:
     Value enabled =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_assertion_enabled"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::AssertionEnabled),
             ValueRange{context,
                        llvmConstant(rewriter, location, rewriter.getI64Type(),
                                     operation.getAssertionId())})
@@ -772,8 +780,8 @@ public:
     Value state =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_assertion_action_state"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::AssertionActionState),
             ValueRange{context,
                        llvmConstant(rewriter, location, rewriter.getI64Type(),
                                     operation.getAssertionId())})
@@ -796,8 +804,8 @@ public:
     Value epoch =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{rewriter.getI64Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_assertion_kill_epoch"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::AssertionKillEpoch),
             ValueRange{context,
                        llvmConstant(rewriter, location, rewriter.getI64Type(),
                                     operation.getAssertionId())})
@@ -822,8 +830,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_monitor_register_logical"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::MonitorRegisterLogical),
             ValueRange{context, adaptor.getProcess().front()})
             .getResult();
     reportRuntimeControlStatus(rewriter, location, context, status);
@@ -845,8 +853,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_monitor_control"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::MonitorControl),
             ValueRange{context,
                        llvmConstant(rewriter, location, rewriter.getI32Type(),
                                     operation.getEnabled() ? 1 : 0)})
@@ -867,12 +875,13 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     Location location = operation.getLoc();
     Value context = loadCurrentRuntimeContext(rewriter, location);
-    Value current = LLVM::CallOp::create(
-                        rewriter, location, TypeRange{rewriter.getI32Type()},
-                        SymbolRefAttr::get(rewriter.getContext(),
-                                           "talos_rt_v1_monitor_current"),
-                        ValueRange{context})
-                        .getResult();
+    Value current =
+        LLVM::CallOp::create(
+            rewriter, location, TypeRange{rewriter.getI32Type()},
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::MonitorCurrent),
+            ValueRange{context})
+            .getResult();
     rewriter.replaceOpWithNewOp<arith::TruncIOp>(operation,
                                                  rewriter.getI1Type(), current);
     return success();
@@ -906,10 +915,12 @@ void populateControlToLLVMConversionPatterns(RewritePatternSet &patterns,
                ProcessSetRandomStateConversion, MonitorRegisterConversion,
                MonitorControlConversion, MonitorCurrentConversion>(converter,
                                                                    context);
-  patterns.add<OnceConversion<sim::SimStaticOnceOp>>(converter, context,
-                                                     "talos_rt_v1_static_once");
+  patterns.add<OnceConversion<sim::SimStaticOnceOp>>(
+      converter, context,
+      getNativeRuntimeSymbol(NativeRuntimeEntry::StaticOnce));
   patterns.add<OnceConversion<sim::SimDeferredOnceOp>>(
-      converter, context, "talos_rt_v1_deferred_once");
+      converter, context,
+      getNativeRuntimeSymbol(NativeRuntimeEntry::DeferredOnce));
   patterns.add<DeferredEnqueueConversion, DeferredMatureConversion,
                AssertionControlConversion, AssertionControlDynamicConversion,
                AssertionEnabledConversion, AssertionActionStateConversion,

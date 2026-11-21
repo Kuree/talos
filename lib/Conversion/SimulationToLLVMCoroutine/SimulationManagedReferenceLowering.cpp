@@ -91,8 +91,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_vpi_frame_bind"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::VpiFrameBind),
             ValueRange{context,
                        llvmConstant(rewriter, op.getLoc(),
                                     rewriter.getI64Type(), id.getInt()),
@@ -185,8 +185,9 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_reference_path_index_create"),
+            getNativeRuntimeCallee(
+                rewriter.getContext(),
+                NativeRuntimeEntry::ReferencePathIndexCreate),
             ValueRange{lane,
                        managedObjectPointer(rewriter, op.getLoc(),
                                             adaptor.getContainer().front()),
@@ -255,9 +256,9 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(
+            getNativeRuntimeCallee(
                 rewriter.getContext(),
-                "talos_rt_v1_reference_path_covergroup_option_create"),
+                NativeRuntimeEntry::ReferencePathCovergroupOptionCreate),
             ValueRange{lane, handle, type,
                        llvmConstant(rewriter, location, i64, op.getItem()),
                        llvmConstant(rewriter, location, rewriter.getI32Type(),
@@ -310,9 +311,9 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(
+            getNativeRuntimeCallee(
                 rewriter.getContext(),
-                "talos_rt_v1_reference_path_string_character_create"),
+                NativeRuntimeEntry::ReferencePathStringCharacterCreate),
             ValueRange{
                 lane, adaptor.getString().front(), adaptor.getIndex().front(),
                 managedObjectPointer(rewriter, location, ownerReference.owner),
@@ -411,9 +412,9 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{i32},
-            SymbolRefAttr::get(
+            getNativeRuntimeCallee(
                 rewriter.getContext(),
-                "talos_rt_v1_reference_path_aggregate_element_create"),
+                NativeRuntimeEntry::ReferencePathAggregateElementCreate),
             ValueRange{
                 lane,
                 managedObjectPointer(rewriter, location, ownerReference.owner),
@@ -479,8 +480,9 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_reference_path_assoc_create"),
+            getNativeRuntimeCallee(
+                rewriter.getContext(),
+                NativeRuntimeEntry::ReferencePathAssocCreate),
             ValueRange{lane,
                        managedObjectPointer(rewriter, op.getLoc(),
                                             adaptor.getArray().front()),
@@ -582,8 +584,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{i32},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_argument_ref_load"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::ArgumentRefLoad),
             ValueRange{
                 context, valueState, unknownState,
                 llvmConstant(rewriter, location, i64, stateBitCount),
@@ -688,12 +690,13 @@ public:
     SmallVector<Value> storeArguments(commonArguments);
     storeArguments.push_back(valueIn);
     storeArguments.push_back(unknownIn);
-    Value status = LLVM::CallOp::create(
-                       rewriter, location, TypeRange{i32},
-                       SymbolRefAttr::get(rewriter.getContext(),
-                                          "talos_rt_v1_argument_ref_store"),
-                       storeArguments)
-                       .getResult();
+    Value status =
+        LLVM::CallOp::create(
+            rewriter, location, TypeRange{i32},
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::ArgumentRefStore),
+            storeArguments)
+            .getResult();
     reportManagedStatus(rewriter, location, context, status);
     rewriter.eraseOp(op);
     return success();
@@ -780,9 +783,9 @@ public:
     SmallVector<Value> arguments{
         object, baseOffset, outputs.front(),
         llvmConstant(rewriter, op.getLoc(), i64, storage->size)};
-    StringRef callee = "talos_rt_v1_object_read";
+    StringRef callee = getNativeRuntimeSymbol(NativeRuntimeEntry::ObjectRead);
     if (outputs.size() == 2) {
-      callee = "talos_rt_v1_object_read_planes";
+      callee = getNativeRuntimeSymbol(NativeRuntimeEntry::ObjectReadPlanes);
       arguments.insert(arguments.end() - 1, outputs[1]);
     }
     Value status =
@@ -882,8 +885,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{i32},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_object_bits_insert"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::ObjectBitsInsert),
             ValueRange{object, adaptor.getReference()[1],
                        llvmConstant(rewriter, location, i64, *inputWidth),
                        lowI64, validI32, replacementI64,
@@ -946,9 +949,9 @@ public:
     SmallVector<Value> arguments{
         object, baseOffset, inputs.front(),
         llvmConstant(rewriter, op.getLoc(), i64, storage->size)};
-    StringRef callee = "talos_rt_v1_object_write";
+    StringRef callee = getNativeRuntimeSymbol(NativeRuntimeEntry::ObjectWrite);
     if (inputs.size() == 2) {
-      callee = "talos_rt_v1_object_write_planes";
+      callee = getNativeRuntimeSymbol(NativeRuntimeEntry::ObjectWritePlanes);
       arguments.insert(arguments.end() - 1, inputs[1]);
     }
     Value status =
@@ -1024,7 +1027,8 @@ public:
                         : adaptor.getDestination()[1];
     Value size = llvmConstant(rewriter, location, i64, storage->size);
     SmallVector<Value, 8> operands{context, object, offset, value, unknown};
-    StringRef callee = "talos_rt_v1_scheduler_managed_nba";
+    StringRef callee =
+        getNativeRuntimeSymbol(NativeRuntimeEntry::SchedulerManagedNba);
     // A partial update carries the value plane of its mask.
     if constexpr (std::is_same_v<EnqueueOp,
                                  sim::SimManagedNBAEnqueueMaskedOp>) {
@@ -1032,7 +1036,8 @@ public:
         return failure();
       operands.push_back(
           savePlane(adaptor.getMask().front(), storage->alignment));
-      callee = "talos_rt_v1_scheduler_managed_nba_masked";
+      callee =
+          getNativeRuntimeSymbol(NativeRuntimeEntry::SchedulerManagedNbaMasked);
     }
     operands.append({size, delay});
     Value status =
@@ -1099,8 +1104,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_scheduler_managed_nba"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::SchedulerManagedNba),
             ValueRange{context,
                        managedObjectPointer(rewriter, location,
                                             adaptor.getDestination().front()),

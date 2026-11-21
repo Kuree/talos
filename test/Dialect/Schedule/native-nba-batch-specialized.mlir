@@ -1,6 +1,6 @@
 // RUN: talos-opt %s --pass-pipeline='builtin.module(convert-native-schedule-actions-to-llvm,llvm.func(lower-native-state-access))' -o %t.lowered
 // RUN: FileCheck %s --implicit-check-not="llvm.mlir.addressof @constant_offset" --implicit-check-not=llvm.intr.cttz --implicit-check-not=llvm.switch < %t.lowered
-// RUN: %llvm_dist/bin/mlir-opt %t.lowered --convert-arith-to-llvm --convert-cf-to-llvm | talos-translate --mlir-to-llvmir | %llc -filetype=obj -relocation-model=pic -o %t.o
+// RUN: %llvm_dist/bin/mlir-opt %t.lowered --allow-unregistered-dialect --convert-arith-to-llvm --convert-cf-to-llvm | talos-translate --mlir-to-llvmir | %llc -filetype=obj -relocation-model=pic -o %t.o
 // RUN: %llvm_dist/bin/clang -O2 %t.o %S/Inputs/native-nba-batch.c -o %t.exe
 // RUN: %t.exe
 // RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-edit-attributes{op=schedule.nba.batch set={barrier_local}},convert-native-schedule-actions-to-llvm)' -o %t.region && FileCheck %s --check-prefix=BARRIER < %t.region

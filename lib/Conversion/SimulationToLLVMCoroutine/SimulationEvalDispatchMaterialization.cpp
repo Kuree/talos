@@ -37,7 +37,7 @@ constexpr StringLiteral nbaKnownName = "__talos_eval_nba_known_v1";
 constexpr StringLiteral evalFourStateNBAHandoffName =
     "__talos_eval_four_state_nba_handoff_v1";
 constexpr StringLiteral writeRootsGuardName =
-    "talos_rt_v1_static_specialization_guard_roots";
+    getNativeRuntimeSymbol(NativeRuntimeEntry::StaticSpecializationGuardRoots);
 constexpr StringLiteral evalWriteRootsGuardName =
     "__talos_eval_write_guard_roots_v1";
 
@@ -50,10 +50,8 @@ void lowerNativePrioritySignalPolls(ModuleOp module) {
   if (!schedule::has<schedule::Field::EvalRuntimeCalendar>(module) ||
       !schedule::has<schedule::Field::EvalAssertionObservers>(module))
     return;
-  constexpr StringLiteral pending =
-      "talos_rt_v1_scheduler_priority_signal_pending";
-  MLIRContext *ctx = module.getContext();
-  Type ptr = LLVM::LLVMPointerType::get(ctx);
+  constexpr StringLiteral pending = getNativeRuntimeSymbol(
+      NativeRuntimeEntry::SchedulerPrioritySignalPending);
   for (auto fn : module.getOps<LLVM::LLVMFuncOp>()) {
     if (fn.isExternal() ||
         (fn.getSymName() != "__talos_aot_schedule_run_v1" &&
@@ -69,8 +67,8 @@ void lowerNativePrioritySignalPolls(ModuleOp module) {
     for (auto &[context, calls] : groups) {
       if (calls.size() < 2)
         continue;
-      auto address = getOrDeclareLLVMFunction(
-          module, "talos_rt_v1_scheduler_priority_signal_flag", ptr, {ptr});
+      auto address = declareNativeRuntime(
+          module, NativeRuntimeEntry::SchedulerPrioritySignalFlag);
       OpBuilder b = OpBuilder::atBlockBegin(&fn.getBody().front());
       Value flag =
           LLVM::CallOp::create(b, fn.getLoc(), address, ValueRange{context})
@@ -450,8 +448,8 @@ materializeNativeEvalDispatch(ModuleOp module,
           builder.getI32IntegerAttr(TALOS_RT_RUNTIME_YIELD_COMMIT),
           wordAlignment);
     }
-    LLVM::LLVMFuncOp runtimeWorkPending = getOrDeclareLLVMFunction(
-        module, runtimeWorkPendingName, i32, {pointer, i32});
+    LLVM::LLVMFuncOp runtimeWorkPending = declareNativeRuntime(
+        module, NativeRuntimeEntry::SchedulerRuntimeWorkPending);
     Value runtimeContext = fastEntry->getArgument(1);
     Value yieldWord = LLVM::AddressOfOp::create(builder, location, pointer,
                                                 evalRuntimeYieldName);
@@ -585,8 +583,8 @@ materializeNativeEvalDispatch(ModuleOp module,
     Value prioritySignalPending =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context,
-                               "talos_rt_v1_scheduler_priority_signal_pending"),
+            getNativeRuntimeCallee(
+                context, NativeRuntimeEntry::SchedulerPrioritySignalPending),
             ValueRange{fastEntry->getArgument(1)})
             .getResult();
     Value mustHandoff = arith::CmpIOp::create(
@@ -617,13 +615,14 @@ materializeNativeEvalDispatch(ModuleOp module,
   // runtime-calendar coordinator learns it from its NBA cut
   // (TALOS_RT_EVAL_NBA_TERMINATED); the others read the termination latch.
   auto terminationRequested = [&]() -> Value {
-    getOrDeclareLLVMFunction(
-        module, "talos_rt_v1_scheduler_termination_requested", i32, {pointer});
-    Value latch =
-        LLVM::CallOp::create(builder, location, TypeRange{i32},
-                             "talos_rt_v1_scheduler_termination_requested",
-                             ValueRange{fastEntry->getArgument(1)})
-            .getResult();
+    declareNativeRuntime(module,
+                         NativeRuntimeEntry::SchedulerTerminationRequested);
+    Value latch = LLVM::CallOp::create(
+                      builder, location, TypeRange{i32},
+                      getNativeRuntimeSymbol(
+                          NativeRuntimeEntry::SchedulerTerminationRequested),
+                      ValueRange{fastEntry->getArgument(1)})
+                      .getResult();
     return arith::CmpIOp::create(builder, location, arith::CmpIPredicate::ne,
                                  latch,
                                  llvmConstant(builder, location, i32, 0));
@@ -1146,7 +1145,8 @@ materializeNativeEvalDispatch(ModuleOp module,
         Value status =
             LLVM::CallOp::create(
                 builder, location, TypeRange{i32},
-                "talos_rt_v1_scheduler_execute_aot_actor",
+                getNativeRuntimeSymbol(
+                    NativeRuntimeEntry::SchedulerExecuteAotActor),
                 ValueRange{targets.context, llvmConstant(builder, location, i32,
                                                          record.actor_slot)})
                 .getResult();
@@ -1578,9 +1578,10 @@ materializeNativeEvalDispatch(ModuleOp module,
             Value signal =
                 LLVM::CallOp::create(
                     builder, location, TypeRange{i32},
-                    SymbolRefAttr::get(
-                        context,
-                        "talos_rt_v1_scheduler_priority_signal_pending"),
+                    SymbolRefAttr::get(context,
+                                       getNativeRuntimeSymbol(
+                                           NativeRuntimeEntry::
+                                               SchedulerPrioritySignalPending)),
                     ValueRange{wordContext})
                     .getResult();
             cf::CondBranchOp::create(
@@ -1680,15 +1681,14 @@ materializeNativeEvalDispatch(ModuleOp module,
     // 4.5 permits new Active evaluation only after the whole NBA event batch.
     // The captured prefix retains 4.6(b) assignment order and 4.9.4/10.4.2
     // enqueue-time RHS/target values; runtime cuts never reevaluate them.
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_prepare_eval_nba",
-                             i32, {pointer, pointer});
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_complete_eval_nba",
-                             i32, {pointer, i32, i32});
+    declareNativeRuntime(module, NativeRuntimeEntry::SchedulerPrepareEvalNba);
+    declareNativeRuntime(module, NativeRuntimeEntry::SchedulerCompleteEvalNba);
     Value region = entryAlloca(builder, location, i32, 1, 4);
     Value prepareStatus =
-        LLVM::CallOp::create(builder, location, TypeRange{i32},
-                             "talos_rt_v1_scheduler_prepare_eval_nba",
-                             ValueRange{fastEntry->getArgument(1), region})
+        LLVM::CallOp::create(
+            builder, location, TypeRange{i32},
+            getNativeRuntimeSymbol(NativeRuntimeEntry::SchedulerPrepareEvalNba),
+            ValueRange{fastEntry->getArgument(1), region})
             .getResult();
     Block *prepared = new Block, *commitPrefix = new Block;
     fastCoordinator.getBody().push_back(prepared);
@@ -1799,7 +1799,8 @@ materializeNativeEvalDispatch(ModuleOp module,
     builder.setInsertionPointToStart(afterCommit);
     Value status =
         LLVM::CallOp::create(builder, location, TypeRange{i32},
-                             "talos_rt_v1_scheduler_complete_eval_nba",
+                             getNativeRuntimeSymbol(
+                                 NativeRuntimeEntry::SchedulerCompleteEvalNba),
                              ValueRange{fastEntry->getArgument(1), barrier,
                                         LLVM::LoadOp::create(builder, location,
                                                              i32, changed, 4)})
@@ -1925,8 +1926,8 @@ materializeNativeEvalDispatch(ModuleOp module,
     // Each NBA barrier calls the variant of its value domain; the variants
     // are declared here and defined from their source once it is complete.
     auto barrierVariant = [&](StringRef name, Type result) {
-      getOrDeclareLLVMFunction(module, name, result,
-                               {pointer, pointer, i32, pointer});
+      getOrDeclareGeneratedFunction(module, name, result,
+                                    {pointer, pointer, i32, pointer});
       return SymbolRefAttr::get(context, name);
     };
     auto tryStaticPublication = [&](StringRef variant) {

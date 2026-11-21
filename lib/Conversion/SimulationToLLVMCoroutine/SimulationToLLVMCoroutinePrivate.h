@@ -11,6 +11,8 @@
 #include "talos/Dialect/Schedule/ScheduleOps.h"
 
 #include "talos/Analysis/NativeStateLayoutAnalysis.h"
+#include "talos/Dialect/Native/NativeDialect.h"
+#include "talos/Dialect/Native/NativeRuntimeEntries.h"
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
@@ -107,12 +109,9 @@ inline constexpr llvm::StringLiteral evalCheckpointMutableStateName =
     "__talos_eval_checkpoint_mutable_state_v1";
 inline constexpr llvm::StringLiteral evalDispatchName =
     "__talos_eval_dispatch_v1";
-/// The coordinator's yield word (talos_rt_native_schedule_plan.runtime_yield)
-/// and the runtime query it makes at its NBA cut.
+/// The coordinator's yield word (talos_rt_native_schedule_plan.runtime_yield).
 inline constexpr llvm::StringLiteral evalRuntimeYieldName =
     "__talos_eval_runtime_yield_v1";
-inline constexpr llvm::StringLiteral runtimeWorkPendingName =
-    "talos_rt_v1_scheduler_runtime_work_pending";
 // Per-step evidence that an activation staged four-state NBA data: the byte
 // selects the four-state commit, the bit array names the staged roots.
 inline constexpr llvm::StringLiteral evalStepFourStateFallbackName =
@@ -481,10 +480,13 @@ mlir::ArrayAttr integerStructAttr(mlir::LLVM::LLVMStructType type,
 mlir::DenseElementsAttr integerArrayAttr(mlir::IntegerType elementType,
                                          llvm::ArrayRef<uint64_t> values);
 
+/// The function `name` in `module`, or a new declaration of it at the start of
+/// the module: a generated helper or a DPI import. Native runtime entries are
+/// declared with declareNativeRuntime instead.
 mlir::LLVM::LLVMFuncOp
-getOrDeclareLLVMFunction(mlir::ModuleOp module, llvm::StringRef name,
-                         mlir::Type result,
-                         mlir::ArrayRef<mlir::Type> arguments);
+getOrDeclareGeneratedFunction(mlir::ModuleOp module, llvm::StringRef name,
+                              mlir::Type result,
+                              mlir::ArrayRef<mlir::Type> arguments);
 /// Defines the function `name` as a copy of `source`, in place of a
 /// declaration callers already reference, and returns it; a function already
 /// defined is returned as it is. NBA barrier variants are defined this way.

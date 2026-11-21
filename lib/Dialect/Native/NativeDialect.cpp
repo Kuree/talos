@@ -2,6 +2,7 @@
 
 #include "talos/Dialect/Native/NativeDialect.h"
 
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/DialectImplementation.h"
 
@@ -15,6 +16,31 @@ using namespace talos::native;
 
 #define GET_ATTRDEF_CLASSES
 #include "talos/Dialect/Native/NativeAttrs.cpp.inc"
+
+Attribute RuntimeEntryAttr::parse(AsmParser &parser, Type) {
+  StringRef keyword;
+  SMLoc location = parser.getCurrentLocation();
+  if (parser.parseLess() || parser.parseKeyword(&keyword) ||
+      parser.parseGreater())
+    return {};
+  std::optional<talos::NativeRuntimeEntry> entry =
+      talos::getNativeRuntimeEntry(("talos_rt_v1_" + keyword).str());
+  if (!entry)
+    entry = talos::getNativeRuntimeEntry(("talos_rt_" + keyword).str());
+  if (!entry) {
+    parser.emitError(location, "unknown native runtime entry '")
+        << keyword << "'";
+    return {};
+  }
+  return get(parser.getContext(), *entry);
+}
+
+void RuntimeEntryAttr::print(AsmPrinter &printer) const {
+  StringRef symbol = talos::getNativeRuntimeSymbol(getEntry());
+  if (!symbol.consume_front("talos_rt_v1_"))
+    symbol.consume_front("talos_rt_");
+  printer << '<' << symbol << '>';
+}
 
 void NativeDialect::initialize() {
   addAttributes<
@@ -35,14 +61,14 @@ NativeDialect::verifyOperationAttribute(Operation *operation,
              DisableTwoStateSpecialization, TwoState, SampledPlacement,
              DebugTiming, FallbackReport, ProcessesMaterialized,
              ClosedExecutable, StartupStateSync, StartupResolveInitialDrivers,
-             StartupVpi, Partition, PartitionManifest, PartitionManifests,
-             ElementDefaults, PhysicalPartitionManifest, Frame, FrameInputs,
-             FrameCheckpoint, EntryKind, ScratchSize, ObserverWidth,
-             ObserverFourState, SpawnCaptureOffsets, SpawnCaptureSize,
-             VirtualOwner, InitializationScope, MethodArgumentSizes,
-             MethodArgumentRoots, MethodVtablePath, SynchronousTaskBody,
-             SynchronousTaskCall, TableWait, Unmanaged, SharedCallback,
-             RuntimePublicationCertified, RankedSignalWriter,
+             StartupVpi, RuntimeEntry, Partition, PartitionManifest,
+             PartitionManifests, ElementDefaults, PhysicalPartitionManifest,
+             Frame, FrameInputs, FrameCheckpoint, EntryKind, ScratchSize,
+             ObserverWidth, ObserverFourState, SpawnCaptureOffsets,
+             SpawnCaptureSize, VirtualOwner, InitializationScope,
+             MethodArgumentSizes, MethodArgumentRoots, MethodVtablePath,
+             SynchronousTaskBody, SynchronousTaskCall, TableWait, Unmanaged,
+             SharedCallback, RuntimePublicationCertified, RankedSignalWriter,
              OwnerReleaseInstrumented, DriverId, DriverLow, NetId,
              ExactDriverRange, WholeDriver, MirrorContribution,
              GuardedBulkDrive, CleanBulkDrive, BulkCopySourceAssumeClean,
@@ -77,6 +103,22 @@ NativeDialect::verifyOperationAttribute(Operation *operation,
                       name == FrameCheckpoint::getNameStr();
   if (moduleOption && !isa<ModuleOp>(operation))
     return error() << "belongs on a module";
+  if (name == RuntimeEntry::getNameStr()) {
+    talos::NativeRuntimeEntry entry = cast<RuntimeEntryAttr>(value).getEntry();
+    auto function = dyn_cast<LLVM::LLVMFuncOp>(operation);
+    if (!function || !function.isExternal())
+      return error() << "belongs on an external llvm.func";
+    StringRef symbol = talos::getNativeRuntimeSymbol(entry);
+    if (function.getSymName() != symbol)
+      return error() << "names @" << symbol << " but the function is @"
+                     << function.getSymName();
+    LLVM::LLVMFunctionType prototype =
+        talos::getNativeRuntimeFunctionType(operation->getContext(), entry);
+    if (function.getFunctionType() != prototype)
+      return error() << "declares @" << symbol << " with an incompatible type "
+                     << function.getFunctionType() << "; its prototype is "
+                     << prototype;
+  }
   if ((name == PartitionManifest::getNameStr() ||
        name == PhysicalPartitionManifest::getNameStr()) &&
       !allOf<PartitionAttr>(cast<ArrayAttr>(value)))

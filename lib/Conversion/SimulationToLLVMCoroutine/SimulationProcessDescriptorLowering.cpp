@@ -287,7 +287,9 @@ makeProcessDescriptor(ModuleOp module, SymbolTable &embeddedSymbols,
               builder, location, descriptor,
               LLVM::AddressOfOp::create(
                   builder, location, pointer,
-                  tableProcess ? "talos_rt_v1_table_process_execute"
+                  tableProcess ? getNativeRuntimeSymbol(
+                                     NativeRuntimeEntry::TableProcessExecute)
+                                     .str()
                                : (baseName + ".__talos_native_execute").str()),
               7);
           descriptor =

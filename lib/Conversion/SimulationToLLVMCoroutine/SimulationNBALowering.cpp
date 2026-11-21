@@ -160,7 +160,7 @@ static void finishPowerNBAConversion(Operation *op, Value context,
                      .getResult();
   LLVM::CallOp::create(
       r, op->getLoc(), TypeRange{},
-      SymbolRefAttr::get(r.getContext(), "talos_rt_v1_scheduler_fail"),
+      getNativeRuntimeCallee(r.getContext(), NativeRuntimeEntry::SchedulerFail),
       ValueRange{context, status});
   r.eraseOp(op);
 }
@@ -186,11 +186,12 @@ public:
     if (!adaptor.getDelay().empty())
       arguments.push_back(adaptor.getDelay().front());
     arguments.append({prepared->value, prepared->unknown, prepared->guard});
-    finishPowerNBAConversion(op, adaptor.getContext().front(),
-                             adaptor.getDelay().empty()
-                                 ? "talos_rt_v1_power_nba"
-                                 : "talos_rt_v1_power_nba_after",
-                             arguments, r);
+    finishPowerNBAConversion(
+        op, adaptor.getContext().front(),
+        adaptor.getDelay().empty()
+            ? getNativeRuntimeSymbol(NativeRuntimeEntry::PowerNba)
+            : getNativeRuntimeSymbol(NativeRuntimeEntry::PowerNbaAfter),
+        arguments, r);
     return success();
   }
 
@@ -231,8 +232,9 @@ public:
          adaptor.getDelay().empty() ? llvmConstant(r, loc, i64, 0)
                                     : adaptor.getDelay().front(),
          prepared->value, prepared->unknown, prepared->guard});
-    finishPowerNBAConversion(op, adaptor.getContext().front(),
-                             "talos_rt_v1_power_nba_view", arguments, r);
+    finishPowerNBAConversion(
+        op, adaptor.getContext().front(),
+        getNativeRuntimeSymbol(NativeRuntimeEntry::PowerNbaView), arguments, r);
     return success();
   }
 
@@ -253,8 +255,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{i32},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_power_cancel_nba"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::PowerCancelNba),
             ValueRange{adaptor.getContext().front(),
                        adaptor.getTarget().front(),
                        llvmConstant(rewriter, op.getLoc(),
@@ -262,7 +264,8 @@ public:
             .getResult();
     LLVM::CallOp::create(
         rewriter, op.getLoc(), TypeRange{},
-        SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_scheduler_fail"),
+        getNativeRuntimeCallee(rewriter.getContext(),
+                               NativeRuntimeEntry::SchedulerFail),
         ValueRange{adaptor.getContext().front(), status});
     rewriter.eraseOp(op);
     return success();
@@ -323,8 +326,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{i32},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_scheduler_inertial_driver"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::SchedulerInertialDriver),
             ValueRange{
                 runtimeContext,
                 detail::createStatePlaneAddress(rewriter, location,
@@ -341,7 +344,8 @@ public:
             .getResult();
     LLVM::CallOp::create(
         rewriter, location, TypeRange{},
-        SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_scheduler_fail"),
+        getNativeRuntimeCallee(rewriter.getContext(),
+                               NativeRuntimeEntry::SchedulerFail),
         ValueRange{runtimeContext, status});
     rewriter.eraseOp(op);
     return success();
@@ -444,13 +448,16 @@ public:
             SymbolRefAttr::get(
                 rewriter.getContext(),
                 pulseControlled
-                    ? "talos_rt_v1_scheduler_inertial_path_driver_pulse"
-                    : "talos_rt_v1_scheduler_inertial_path_driver"),
+                    ? getNativeRuntimeSymbol(
+                          NativeRuntimeEntry::SchedulerInertialPathDriverPulse)
+                    : getNativeRuntimeSymbol(
+                          NativeRuntimeEntry::SchedulerInertialPathDriver)),
             arguments)
             .getResult();
     LLVM::CallOp::create(
         rewriter, location, TypeRange{},
-        SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_scheduler_fail"),
+        getNativeRuntimeCallee(rewriter.getContext(),
+                               NativeRuntimeEntry::SchedulerFail),
         ValueRange{runtimeContext, status});
     rewriter.eraseOp(op);
     return success();
@@ -554,13 +561,16 @@ public:
             SymbolRefAttr::get(
                 rewriter.getContext(),
                 pulseControlled
-                    ? "talos_rt_v1_scheduler_inertial_path_storage_pulse"
-                    : "talos_rt_v1_scheduler_inertial_path_storage"),
+                    ? getNativeRuntimeSymbol(
+                          NativeRuntimeEntry::SchedulerInertialPathStoragePulse)
+                    : getNativeRuntimeSymbol(
+                          NativeRuntimeEntry::SchedulerInertialPathStorage)),
             arguments)
             .getResult();
     LLVM::CallOp::create(
         rewriter, location, TypeRange{},
-        SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_scheduler_fail"),
+        getNativeRuntimeCallee(rewriter.getContext(),
+                               NativeRuntimeEntry::SchedulerFail),
         ValueRange{runtimeContext, status});
     rewriter.eraseOp(op);
     return success();
@@ -617,9 +627,9 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{i32},
-            SymbolRefAttr::get(
+            getNativeRuntimeCallee(
                 rewriter.getContext(),
-                "talos_rt_v1_scheduler_inertial_driver_strength_pair"),
+                NativeRuntimeEntry::SchedulerInertialDriverStrengthPair),
             ValueRange{
                 runtimeContext,
                 detail::createStatePlaneAddress(rewriter, location,
@@ -637,7 +647,8 @@ public:
             .getResult();
     LLVM::CallOp::create(
         rewriter, location, TypeRange{},
-        SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_scheduler_fail"),
+        getNativeRuntimeCallee(rewriter.getContext(),
+                               NativeRuntimeEntry::SchedulerFail),
         ValueRange{runtimeContext, status});
     rewriter.eraseOp(op);
     return success();
@@ -738,8 +749,10 @@ public:
       arguments.push_back(savePlane(adaptor.getPulseTransitionMasks().front()));
     StringRef function =
         pulseControlled
-            ? "talos_rt_v1_scheduler_inertial_path_strength_pair_pulse"
-            : "talos_rt_v1_scheduler_inertial_path_strength_pair";
+            ? getNativeRuntimeSymbol(
+                  NativeRuntimeEntry::SchedulerInertialPathStrengthPairPulse)
+            : getNativeRuntimeSymbol(
+                  NativeRuntimeEntry::SchedulerInertialPathStrengthPair);
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{i32},
@@ -747,7 +760,8 @@ public:
             .getResult();
     LLVM::CallOp::create(
         rewriter, location, TypeRange{},
-        SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_scheduler_fail"),
+        getNativeRuntimeCallee(rewriter.getContext(),
+                               NativeRuntimeEntry::SchedulerFail),
         ValueRange{runtimeContext, status});
     rewriter.eraseOp(op);
     return success();
@@ -1187,8 +1201,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{i32},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_scheduler_packed_slice_nba"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::SchedulerPackedSliceNba),
             ValueRange{runtimeContext,
                        detail::createStatePlaneAddress(
                            rewriter, location, schedule::StatePlane::Value),
@@ -1201,7 +1215,8 @@ public:
             .getResult();
     LLVM::CallOp::create(
         rewriter, location, TypeRange{},
-        SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_scheduler_fail"),
+        getNativeRuntimeCallee(rewriter.getContext(),
+                               NativeRuntimeEntry::SchedulerFail),
         ValueRange{runtimeContext, status});
     if (guardContinuation) {
       cf::BranchOp::create(rewriter, location, guardContinuation);
@@ -1650,8 +1665,8 @@ public:
         Value status =
             LLVM::CallOp::create(
                 rewriter, location, TypeRange{i32},
-                SymbolRefAttr::get(rewriter.getContext(),
-                                   "talos_rt_v1_static_nba_claim"),
+                getNativeRuntimeCallee(rewriter.getContext(),
+                                       NativeRuntimeEntry::StaticNbaClaim),
                 ValueRange{
                     runtimeContext,
                     llvmConstant(rewriter, location, i32, staticRoot->second),
@@ -1666,10 +1681,11 @@ public:
                 .getResult();
         schedule::set<schedule::Field::EvalPendingStageSpec>(
             status.getDefiningOp(), captureSpec());
-        LLVM::CallOp::create(rewriter, location, TypeRange{},
-                             SymbolRefAttr::get(rewriter.getContext(),
-                                                "talos_rt_v1_scheduler_fail"),
-                             ValueRange{runtimeContext, status});
+        LLVM::CallOp::create(
+            rewriter, location, TypeRange{},
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::SchedulerFail),
+            ValueRange{runtimeContext, status});
         cf::BranchOp::create(rewriter, location, continuation);
 
         rewriter.setInsertionPointToStart(continuation);
@@ -1683,8 +1699,8 @@ public:
       if (!useGuardedClaim) {
         LLVM::CallOp::create(
             rewriter, location, TypeRange{},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_static_nba_stage_wide"),
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::StaticNbaStageWide),
             ValueRange{
                 runtimeContext,
                 llvmConstant(rewriter, location, i32, staticRoot->second),
@@ -1699,8 +1715,8 @@ public:
       Value status =
           LLVM::CallOp::create(
               rewriter, location, TypeRange{i32},
-              SymbolRefAttr::get(rewriter.getContext(),
-                                 "talos_rt_v1_static_nba_claim"),
+              getNativeRuntimeCallee(rewriter.getContext(),
+                                     NativeRuntimeEntry::StaticNbaClaim),
               ValueRange{
                   runtimeContext,
                   llvmConstant(rewriter, location, i32, staticRoot->second),
@@ -1717,10 +1733,11 @@ public:
                   llvmConstant(rewriter, location, i64, *width), value,
                   unknown})
               .getResult();
-      LLVM::CallOp::create(rewriter, location, TypeRange{},
-                           SymbolRefAttr::get(rewriter.getContext(),
-                                              "talos_rt_v1_scheduler_fail"),
-                           ValueRange{runtimeContext, status});
+      LLVM::CallOp::create(
+          rewriter, location, TypeRange{},
+          getNativeRuntimeCallee(rewriter.getContext(),
+                                 NativeRuntimeEntry::SchedulerFail),
+          ValueRange{runtimeContext, status});
       rewriter.eraseOp(op);
       return success();
     }
@@ -1751,17 +1768,18 @@ public:
       Value status =
           LLVM::CallOp::create(
               rewriter, location, TypeRange{i32},
-              SymbolRefAttr::get(rewriter.getContext(),
-                                 "talos_rt_v1_scheduler_string_nba"),
+              getNativeRuntimeCallee(rewriter.getContext(),
+                                     NativeRuntimeEntry::SchedulerStringNba),
               ValueRange{runtimeContext, valuePlane,
                          llvmConstant(rewriter, location, i64, stateBitCount),
                          adaptor.getDestination().front(), delay,
                          adaptor.getValue().front()})
               .getResult();
-      LLVM::CallOp::create(rewriter, location, TypeRange{},
-                           SymbolRefAttr::get(rewriter.getContext(),
-                                              "talos_rt_v1_scheduler_fail"),
-                           ValueRange{runtimeContext, status});
+      LLVM::CallOp::create(
+          rewriter, location, TypeRange{},
+          getNativeRuntimeCallee(rewriter.getContext(),
+                                 NativeRuntimeEntry::SchedulerFail),
+          ValueRange{runtimeContext, status});
     } else {
       bool mappedSite =
           site && staticPlan && staticPlan->siteRoots.contains(site.getId());
@@ -1869,8 +1887,9 @@ public:
         Value pending =
             LLVM::CallOp::create(
                 rewriter, location, TypeRange{i32},
-                SymbolRefAttr::get(rewriter.getContext(),
-                                   "talos_rt_v1_scheduler_generic_nba_pending"),
+                getNativeRuntimeCallee(
+                    rewriter.getContext(),
+                    NativeRuntimeEntry::SchedulerGenericNbaPending),
                 ValueRange{runtimeContext, llvmConstant(rewriter, location, i32,
                                                         destination.id)})
                 .getResult();
@@ -1899,7 +1918,8 @@ public:
                       ? word(adaptor.getValue()[1])
                       : llvmConstant(rewriter, location, i64, 0);
         LLVM::CallOp::create(
-            rewriter, location, TypeRange{}, "talos_rt_v1_scheduler_nba_scalar",
+            rewriter, location, TypeRange{},
+            getNativeRuntimeSymbol(NativeRuntimeEntry::SchedulerNbaScalar),
             ValueRange{runtimeContext, valuePlane, unknownPlane, arguments[3],
                        adaptor.getDestination().front(), arguments[5],
                        word(adaptor.getValue().front()), x});
@@ -1919,20 +1939,29 @@ public:
                     rewriter.getContext(),
                     op.getClockingOutputAttr()
                         ? driverDestination
-                              ? "talos_rt_v1_scheduler_clocking_driver_nba"
-                              : "talos_rt_v1_scheduler_clocking_nba"
-                    : driverDestination ? "talos_rt_v1_scheduler_driver_nba"
-                    : genericHold       ? "talos_rt_v1_scheduler_nba_if_changed"
-                                        : "talos_rt_v1_scheduler_nba"),
+                              ? getNativeRuntimeSymbol(
+                                    NativeRuntimeEntry::
+                                        SchedulerClockingDriverNba)
+                              : getNativeRuntimeSymbol(
+                                    NativeRuntimeEntry::SchedulerClockingNba)
+                    : driverDestination
+                        ? getNativeRuntimeSymbol(
+                              NativeRuntimeEntry::SchedulerDriverNba)
+                    : genericHold
+                        ? getNativeRuntimeSymbol(
+                              NativeRuntimeEntry::SchedulerNbaIfChanged)
+                        : getNativeRuntimeSymbol(
+                              NativeRuntimeEntry::SchedulerNba)),
                 arguments)
                 .getResult();
         if (mappedSite)
           schedule::set<schedule::Field::EvalPendingRuntimeRoot>(
               status.getDefiningOp(), rewriter.getI32IntegerAttr(rootIndex));
-        LLVM::CallOp::create(rewriter, location, TypeRange{},
-                             SymbolRefAttr::get(rewriter.getContext(),
-                                                "talos_rt_v1_scheduler_fail"),
-                             ValueRange{runtimeContext, status});
+        LLVM::CallOp::create(
+            rewriter, location, TypeRange{},
+            getNativeRuntimeCallee(rewriter.getContext(),
+                                   NativeRuntimeEntry::SchedulerFail),
+            ValueRange{runtimeContext, status});
       }
       if (continuation) {
         cf::BranchOp::create(rewriter, location, continuation);
@@ -2034,8 +2063,8 @@ void lowerNativeNBAStages(ModuleOp module) {
       unknown = LLVM::ZeroOp::create(builder, location, pointer);
     auto status = LLVM::CallOp::create(
         builder, location, TypeRange{i32},
-        SymbolRefAttr::get(builder.getContext(),
-                           "talos_rt_v1_scheduler_static_nba"),
+        getNativeRuntimeCallee(builder.getContext(),
+                               NativeRuntimeEntry::SchedulerStaticNba),
         ValueRange{stage.getRuntimeContext(),
                    llvmConstant(builder, location, i64, stage.getSite()),
                    detail::createStatePlaneAddress(builder, location,
@@ -2049,7 +2078,8 @@ void lowerNativeNBAStages(ModuleOp module) {
         status, builder.getI32IntegerAttr(stage.getRoot()));
     LLVM::CallOp::create(
         builder, location, TypeRange{},
-        SymbolRefAttr::get(builder.getContext(), "talos_rt_v1_scheduler_fail"),
+        getNativeRuntimeCallee(builder.getContext(),
+                               NativeRuntimeEntry::SchedulerFail),
         ValueRange{stage.getRuntimeContext(), status.getResult()});
     stage.erase();
   }

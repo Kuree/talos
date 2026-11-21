@@ -210,7 +210,8 @@ void materializeNativeSpawnBatches(Operation *root,
     Value status =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context, "talos_rt_v1_process_spawn_batch"),
+            getNativeRuntimeCallee(context,
+                                   NativeRuntimeEntry::ProcessSpawnBatch),
             ValueRange{spawnContext, address, captures,
                        llvmConstant(builder, location, i32, batch.size())})
             .getResult();

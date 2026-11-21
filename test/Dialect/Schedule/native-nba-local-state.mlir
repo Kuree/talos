@@ -1,6 +1,6 @@
 // RUN: talos-opt %s --pass-pipeline='builtin.module(convert-native-schedule-actions-to-llvm,llvm.func(lower-native-state-access))' -o %t.lowered
 // RUN: FileCheck %s --implicit-check-not=llvm.alloca < %t.lowered
-// RUN: %llvm_dist/bin/mlir-opt %t.lowered --convert-arith-to-llvm --convert-cf-to-llvm | talos-translate --mlir-to-llvmir > %t.ll
+// RUN: %llvm_dist/bin/mlir-opt %t.lowered --allow-unregistered-dialect --convert-arith-to-llvm --convert-cf-to-llvm | talos-translate --mlir-to-llvmir > %t.ll
 // RUN: %llvm_dist/bin/clang -O0 %t.ll -o %t.o0
 // RUN: %t.o0
 // RUN: %llvm_dist/bin/clang -O3 %t.ll -o %t.o3

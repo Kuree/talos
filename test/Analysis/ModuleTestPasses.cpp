@@ -204,6 +204,8 @@ public:
         module.emitError() << "cannot wrap LLVM declaration @" << name;
         return signalPassFailure();
       }
+      // The wrapper is not the runtime entry it intercepts.
+      talos::native::remove<talos::native::RuntimeEntry>(function);
     }
     if (main.empty())
       return;
