@@ -1081,75 +1081,21 @@ static void normalizeGeneratedWideTransitions(
 }
 
 namespace {
-/// A runtime read of the state a stable handle names, in a generated eval
-/// body: schedule.state.load_handle, or the call of
-/// talos_rt_v1_native_state_load_plane it stands for.
-struct DynamicPlaneLoad {
-  Operation *access;
-  Value handle;
-  /// The buffer the read writes.
-  Value buffer;
-  /// The plane's address the call passes; the typed access names its plane.
-  Value base;
-  schedule::StatePlane plane;
-  uint64_t stateBits;
-  uint64_t width;
-  /// The value of a bit the handle does not name.
-  bool fallback;
-
-  static FailureOr<DynamicPlaneLoad> get(Operation *access) {
-    if (auto load = dyn_cast<schedule::NativeStateLoadHandleOp>(access))
-      return DynamicPlaneLoad{
-          access,           load.getHandle(),
-          load.getBuffer(), Value(),
-          load.getPlane(),  load.getStateBits(),
-          load.getWidth(),  load.getPlane() == schedule::StatePlane::Unknown};
-    auto call = cast<LLVM::CallOp>(access);
-    ValueRange arguments = call.getArgOperands();
-    if (arguments.size() != 8)
-      return call.emitError("malformed native state load ABI"), failure();
-    std::optional<uint64_t> stateBits = constantU64(arguments[2]);
-    std::optional<uint64_t> width = constantU64(arguments[4]);
-    std::optional<uint64_t> unknownPlane = constantU64(arguments[5]);
-    std::optional<uint64_t> fallback = constantU64(arguments[6]);
-    if (!stateBits || !width || *width == 0 || !unknownPlane ||
-        *unknownPlane > 1 || !fallback || *fallback > 1)
-      return call.emitError(
-                 "runtime-free eval cannot lower dynamic state load"),
-             failure();
-    return DynamicPlaneLoad{access,
-                            arguments[3],
-                            arguments[7],
-                            arguments[1],
-                            *unknownPlane ? schedule::StatePlane::Unknown
-                                          : schedule::StatePlane::Value,
-                            *stateBits,
-                            *width,
-                            *fallback != 0};
-  }
-
-  /// Replace the read by `value`, which `builder` stores to its buffer. The
-  /// read is erased.
-  LogicalResult replace(OpBuilder &builder, Value value) {
-    auto call = dyn_cast<LLVM::CallOp>(access);
-    Type i32 = builder.getI32Type();
-    if (call &&
-        (call.getNumResults() != 1 || call.getResult().getType() != i32))
-      return call.emitError("unsupported native state load status ABI"),
-             failure();
-    LLVM::StoreOp::create(builder, access->getLoc(), value, buffer, 1);
-    // TEMPORARY (F4 step 3b removes it): the body keeps the call's ABI
-    // values, now dead, until native function cleanup, and op-count budgets
-    // on the way count them (ranked groups' bodyCost). Leave the same ones.
-    if (!call)
-      call = lowerNativeStateHandleAccess(access);
-    OpBuilder status(call);
-    call.getResult().replaceAllUsesWith(
-        llvmConstant(status, call.getLoc(), i32, TALOS_RT_OK));
-    call.erase();
-    return success();
-  }
-};
+/// Replace the handle-addressed read `load` of a generated eval body by
+/// `value`, which `builder` stores to the read's buffer.
+void replaceDynamicPlaneLoad(OpBuilder &builder,
+                             schedule::NativeStateLoadHandleOp load,
+                             Value value) {
+  LLVM::StoreOp::create(builder, load.getLoc(), value, load.getBuffer(), 1);
+  // TEMPORARY (F4 step 3b removes it): when the read was the runtime call,
+  // its ABI values and the OK status that replaced its result stayed in the
+  // body, dead, until native function cleanup, and op-count budgets on the
+  // way count them (ranked groups' bodyCost). Leave the same values.
+  LLVM::CallOp call = lowerNativeStateHandleAccess(load);
+  OpBuilder status(call);
+  llvmConstant(status, call.getLoc(), status.getI32Type(), TALOS_RT_OK);
+  call.erase();
+}
 } // namespace
 
 FailureOr<bool> makeNativeEvalPlan(
@@ -3505,45 +3451,44 @@ FailureOr<bool> makeNativeEvalPlan(
     // root. Keep the dynamic subscript, its source-language validity guard,
     // and the root bounds check, but do not re-enter the runtime for each
     // register-file read.
-    SmallVector<std::pair<Operation *, bool>> dynamicPlaneLoads;
+    SmallVector<std::pair<schedule::NativeStateLoadHandleOp, bool>>
+        dynamicPlaneLoads;
     ::talos::detail::walkNativeFunctions<sim::SimFuncOp>(
         module, [&](sim::SimFuncOp function) {
           if (!isGeneratedEvalBody(function, selectedRawBodies))
             return;
           bool twoState = ::talos::schedule::has<
               ::talos::schedule::Field::EvalSelectedTwoState>(function);
-          function.walk([&](Operation *op) {
-            auto call = dyn_cast<LLVM::CallOp>(op);
-            if (isa<schedule::NativeStateLoadHandleOp>(op) ||
-                (call && call.getCallee() &&
-                 *call.getCallee() == "talos_rt_v1_native_state_load_plane"))
-              dynamicPlaneLoads.push_back({op, twoState});
+          function.walk([&](schedule::NativeStateLoadHandleOp load) {
+            dynamicPlaneLoads.push_back({load, twoState});
           });
         });
-    for (auto [access, twoState] : dynamicPlaneLoads) {
-      FailureOr<DynamicPlaneLoad> load = DynamicPlaneLoad::get(access);
-      if (failed(load))
-        return failure();
+    for (const auto &entry : dynamicPlaneLoads) {
+      schedule::NativeStateLoadHandleOp load = entry.first;
+      const bool twoState = entry.second;
+      Operation *access = load;
       // The selection below is integer arithmetic of the field's own width, so
       // a field wider than a machine word lowers the same way.
-      if (load->stateBits != stateLayout.bitCount)
+      if (load.getStateBits() != stateLayout.bitCount)
         return access->emitError(
                    "runtime-free eval cannot lower dynamic state load"),
                failure();
-      const uint64_t width = load->width;
-      const bool unknownPlane = load->plane == schedule::StatePlane::Unknown;
+      const uint64_t width = load.getWidth();
+      const schedule::StatePlane plane = load.getPlane();
+      // A bit the handle does not name reads as X: 0 in the value plane and 1
+      // in the unknown plane (IEEE 1800-2023 7.4.5, 11.5.1).
+      const bool unknownPlane = plane == schedule::StatePlane::Unknown;
 
-      Value handle = load->handle;
+      Value handle = load.getHandle();
       // Incoming handles in a CFG join may only become constants after the
       // state-access conversion has completed. Retry the same finite-handle
       // proof here, under the generated evaluator's clean-state handover.
       OpBuilder selectedBuilder(access);
       if (Value selected = tryLoadSelectedStaticStatePlane(
               selectedBuilder, access->getLoc(), handle,
-              selectedBuilder.getIntegerType(width), load->plane, &stateLayout,
-              true, twoState && unknownPlane)) {
-        if (failed(load->replace(selectedBuilder, selected)))
-          return failure();
+              selectedBuilder.getIntegerType(width), plane, &stateLayout, true,
+              twoState && unknownPlane)) {
+        replaceDynamicPlaneLoad(selectedBuilder, load, selected);
         continue;
       }
       Value sourceValid;
@@ -3611,7 +3556,7 @@ FailureOr<bool> makeNativeEvalPlan(
           hasOffset ? handleOffset->amount
                     : llvmConstant(chainBuilder, access->getLoc(), i64, 0);
       bool chainedOffsets = false;
-      auto requireValid = [&, &access = access](Value guard) {
+      auto requireValid = [&](Value guard) {
         sourceValid =
             sourceValid ? arith::AndIOp::create(chainBuilder, access->getLoc(),
                                                 sourceValid, guard)
@@ -3639,10 +3584,9 @@ FailureOr<bool> makeNativeEvalPlan(
           *projectedOffset <= uint64_t{INT32_MAX}) {
         if (Value selected = tryLoadSelectedStaticStatePlane(
                 chainBuilder, access->getLoc(), chainBase,
-                chainBuilder.getIntegerType(width), load->plane, &stateLayout,
-                true, twoState && unknownPlane, {}, *projectedOffset)) {
-          if (failed(load->replace(chainBuilder, selected)))
-            return failure();
+                chainBuilder.getIntegerType(width), plane, &stateLayout, true,
+                twoState && unknownPlane, {}, *projectedOffset)) {
+          replaceDynamicPlaneLoad(chainBuilder, load, selected);
           if (handleOffset->op->use_empty())
             handleOffset->op->erase();
           continue;
@@ -3749,15 +3693,8 @@ FailureOr<bool> makeNativeEvalPlan(
                                   llvmConstant(loadBuilder, loc, i64, 7));
         unsigned spanWidth = static_cast<unsigned>(((width + 14) / 8) * 8);
         IntegerType spanType = IntegerType::get(context, spanWidth);
-        // The call's plane argument is the plane's typed base; the typed
-        // access names its plane.
-        Value span =
-            load->base
-                ? detail::createLoadAt(loadBuilder, loc, spanType, load->base,
-                                       byteOffset, 0, 1)
-                : schedule::NativeStateLoadOp::create(
-                      loadBuilder, loc, spanType, load->plane, byteOffset, 0, 1)
-                      .getResult();
+        Value span = schedule::NativeStateLoadOp::create(
+            loadBuilder, loc, spanType, plane, byteOffset, 0, 1);
         Value shift =
             spanWidth < 64
                 ? LLVM::TruncOp::create(loadBuilder, loc, spanType, bitOffset)
@@ -3773,7 +3710,7 @@ FailureOr<bool> makeNativeEvalPlan(
                                           .getResult();
       }
       APInt fallbackBits =
-          load->fallback ? APInt::getAllOnes(width) : APInt::getZero(width);
+          unknownPlane ? APInt::getAllOnes(width) : APInt::getZero(width);
       Value lowClip = arith::SelectOp::create(
           loadBuilder, loc, below,
           arith::SubIOp::create(loadBuilder, loc, zero64, requestedStart),
@@ -3816,8 +3753,7 @@ FailureOr<bool> makeNativeEvalPlan(
           arith::AndIOp::create(
               loadBuilder, loc, fallbackValue,
               arith::XOrIOp::create(loadBuilder, loc, overlapMask, widthMask)));
-      if (failed(load->replace(loadBuilder, selected)))
-        return failure();
+      replaceDynamicPlaneLoad(loadBuilder, load, selected);
       if (handleSelect && handleSelect->use_empty())
         handleSelect->erase();
     }

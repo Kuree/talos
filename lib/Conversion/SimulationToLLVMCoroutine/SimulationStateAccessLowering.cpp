@@ -82,11 +82,9 @@ Value allocateBulkPlane(ConversionPatternRewriter &rewriter, Location location,
 
 Value loadBulkStatePlane(ConversionPatternRewriter &rewriter, Location location,
                          Value handle, uint64_t width,
-                         schedule::StatePlane plane, bool unknownFallback,
-                         uint64_t stateBitCount,
+                         schedule::StatePlane plane, uint64_t stateBitCount,
                          const NativeStateLayout *directLayout,
                          bool assumeClean) {
-  Type i32 = rewriter.getI32Type();
   Type i64 = rewriter.getI64Type();
   Value output = allocateBulkPlane(rewriter, location, width);
   std::optional<DirectStaticStateRange> range =
@@ -99,19 +97,8 @@ Value loadBulkStatePlane(ConversionPatternRewriter &rewriter, Location location,
         llvmConstant(rewriter, location, i64, (width + 7) / 8), false);
     return output;
   }
-  Value base = detail::createStatePlaneAddress(rewriter, location, plane);
-  Value context = loadCurrentRuntimeContext(rewriter, location);
-  LLVM::CallOp::create(
-      rewriter, location, TypeRange{i32},
-      SymbolRefAttr::get(rewriter.getContext(),
-                         "talos_rt_v1_native_state_load_plane"),
-      ValueRange{context, base,
-                 llvmConstant(rewriter, location, i64, stateBitCount), handle,
-                 llvmConstant(rewriter, location, i64, width),
-                 llvmConstant(rewriter, location, i32,
-                              plane == schedule::StatePlane::Unknown ? 1 : 0),
-                 llvmConstant(rewriter, location, i32, unknownFallback ? 1 : 0),
-                 output});
+  schedule::NativeStateLoadHandleOp::create(rewriter, location, plane, handle,
+                                            output, stateBitCount, width);
   return output;
 }
 
@@ -119,22 +106,9 @@ void storeBulkStatePlane(ConversionPatternRewriter &rewriter, Location location,
                          Value handle, Value input, uint64_t width,
                          schedule::StatePlane plane, uint64_t stateBitCount,
                          Value changed, bool continuous) {
-  Type i32 = rewriter.getI32Type();
-  Type i64 = rewriter.getI64Type();
-  Value base = detail::createStatePlaneAddress(rewriter, location, plane);
-  Value context = loadCurrentRuntimeContext(rewriter, location);
-  LLVM::CallOp::create(
-      rewriter, location, TypeRange{i32},
-      SymbolRefAttr::get(rewriter.getContext(),
-                         continuous
-                             ? "talos_rt_v1_native_state_store_continuous_plane"
-                             : "talos_rt_v1_native_state_store_plane"),
-      ValueRange{context, base,
-                 llvmConstant(rewriter, location, i64, stateBitCount), handle,
-                 llvmConstant(rewriter, location, i64, width),
-                 llvmConstant(rewriter, location, i32,
-                              plane == schedule::StatePlane::Unknown ? 1 : 0),
-                 input, changed});
+  schedule::NativeStateStoreHandleOp::create(rewriter, location, input, plane,
+                                             handle, changed, stateBitCount,
+                                             width, continuous);
 }
 
 // Copy a canonical byte buffer directly into a certified state plane. Only
@@ -259,20 +233,20 @@ public:
     bool sourceAssumeClean = native::has<native::BulkCopySourceAssumeClean>(op);
 
     Value sourceValue = loadBulkStatePlane(
-        rewriter, location, source, *width, schedule::StatePlane::Value, false,
+        rewriter, location, source, *width, schedule::StatePlane::Value,
         stateBitCount, directLayout, sourceAssumeClean);
     Value sourceUnknown;
     if (fourState)
       sourceUnknown = loadBulkStatePlane(
           rewriter, location, source, *width, schedule::StatePlane::Unknown,
-          true, stateBitCount, directLayout, sourceAssumeClean);
+          stateBitCount, directLayout, sourceAssumeClean);
     Value oldValue = loadBulkStatePlane(rewriter, location, destination, *width,
-                                        schedule::StatePlane::Value, false,
+                                        schedule::StatePlane::Value,
                                         stateBitCount, directLayout, false);
     Value oldUnknown;
     if (fourState)
       oldUnknown = loadBulkStatePlane(rewriter, location, destination, *width,
-                                      schedule::StatePlane::Unknown, true,
+                                      schedule::StatePlane::Unknown,
                                       stateBitCount, directLayout, false);
 
     Value changed = entryAlloca(rewriter, location, rewriter.getI8Type(), 1, 1);
@@ -288,12 +262,12 @@ public:
     // assign. Reload the visible destination planes before publication, just
     // like the scalar lowering required by IEEE 1800-2017 10.6.1-10.6.2.
     Value newValue = loadBulkStatePlane(rewriter, location, destination, *width,
-                                        schedule::StatePlane::Value, false,
+                                        schedule::StatePlane::Value,
                                         stateBitCount, directLayout, false);
     Value newUnknown;
     if (fourState)
       newUnknown = loadBulkStatePlane(rewriter, location, destination, *width,
-                                      schedule::StatePlane::Unknown, true,
+                                      schedule::StatePlane::Unknown,
                                       stateBitCount, directLayout, false);
     notifyBulkSignal(
         rewriter, location, destination, *width, oldValue, oldUnknown,
@@ -647,7 +621,6 @@ public:
               rewriter, op.getLoc(), plane, Value(), range->offset / 8);
         return loadBulkStatePlane(rewriter, op.getLoc(),
                                   adaptor.getReference().front(), *width, plane,
-                                  plane == schedule::StatePlane::Unknown,
                                   stateBitCount, directLayout, assumeClean);
       };
       SmallVector<Value> buffers{read(schedule::StatePlane::Value)};
@@ -850,16 +823,15 @@ public:
       Location location = op.getLoc();
       Value handle = adaptor.getReference().front();
       bool fourState = containsLogic(valueType) && !twoState;
-      auto snapshot = [&](schedule::StatePlane plane, bool unknown) {
+      auto snapshot = [&](schedule::StatePlane plane) {
         return loadBulkStatePlane(rewriter, location, handle, *width, plane,
-                                  unknown, stateBitCount, directLayout,
-                                  assumeClean);
+                                  stateBitCount, directLayout, assumeClean);
       };
       Value oldValue, oldUnknown;
       if (needsNotification) {
-        oldValue = snapshot(schedule::StatePlane::Value, false);
+        oldValue = snapshot(schedule::StatePlane::Value);
         if (fourState)
-          oldUnknown = snapshot(schedule::StatePlane::Unknown, true);
+          oldUnknown = snapshot(schedule::StatePlane::Unknown);
       }
       auto store = [&](Value input, schedule::StatePlane plane) {
         if (tryStoreBulkDirect(rewriter, location, handle, input, *width, plane,
@@ -882,9 +854,9 @@ public:
         // Runtime stores may be partially suppressed by an override. Publish
         // the actual visible value, with the same semantics as scalar stores.
         if (!direct) {
-          newValue = snapshot(schedule::StatePlane::Value, false);
+          newValue = snapshot(schedule::StatePlane::Value);
           if (fourState)
-            newUnknown = snapshot(schedule::StatePlane::Unknown, true);
+            newUnknown = snapshot(schedule::StatePlane::Unknown);
         }
         notifyBulkSignal(
             rewriter, location, handle, *width, oldValue, oldUnknown, newValue,

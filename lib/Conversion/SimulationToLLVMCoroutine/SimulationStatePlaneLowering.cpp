@@ -871,28 +871,13 @@ Value loadStatePlane(ConversionPatternRewriter &rewriter, Location location,
                                         unknownFallback, accessUnit);
 
   auto emitGeneric = [&]() -> Value {
-    Type pointer = LLVM::LLVMPointerType::get(rewriter.getContext());
-    IntegerType i32 = rewriter.getI32Type();
-    IntegerType i64 = rewriter.getI64Type();
-    Value base =
-        detail::createStatePlaneAddress(rewriter, location, statePlane);
+    // The runtime reads through the handle into a temporary. A bit the handle
+    // does not name reads as X (IEEE 1800-2023 7.4.5, 11.5.1), which is the
+    // `unknownFallback` every caller passes for the direct paths above.
     Value out = beginTemporary(rewriter, location, resultType, 1);
-    Value contextAddress = LLVM::AddressOfOp::create(
-        rewriter, location, pointer, "__talos_current_context");
-    Value context =
-        LLVM::LoadOp::create(rewriter, location, pointer, contextAddress, 8);
-    LLVM::CallOp::create(
-        rewriter, location, TypeRange{i32},
-        SymbolRefAttr::get(rewriter.getContext(),
-                           "talos_rt_v1_native_state_load_plane"),
-        ValueRange{
-            context, base, llvmConstant(rewriter, location, i64, stateBitCount),
-            handle,
-            llvmConstant(rewriter, location, i64, resultType.getWidth()),
-            llvmConstant(rewriter, location, i32,
-                         statePlane == schedule::StatePlane::Unknown ? 1 : 0),
-            llvmConstant(rewriter, location, i32, unknownFallback ? 1 : 0),
-            out});
+    schedule::NativeStateLoadHandleOp::create(rewriter, location, statePlane,
+                                              handle, out, stateBitCount,
+                                              resultType.getWidth());
     Value loaded = LLVM::LoadOp::create(rewriter, location, resultType, out, 1);
     endTemporary(rewriter, location, out);
     return loaded;
@@ -987,33 +972,15 @@ Value storeStatePlane(ConversionPatternRewriter &rewriter, Location location,
                                   range->containerWidth, range->accessUnit);
 
   auto emitGeneric = [&]() -> Value {
-    Type pointer = LLVM::LLVMPointerType::get(rewriter.getContext());
     IntegerType i8 = rewriter.getI8Type();
-    IntegerType i32 = rewriter.getI32Type();
-    IntegerType i64 = rewriter.getI64Type();
-    Value base =
-        detail::createStatePlaneAddress(rewriter, location, statePlane);
     Value in = beginTemporary(rewriter, location, inputType, 1);
     LLVM::StoreOp::create(rewriter, location, input, in, 1);
     Value changed = beginTemporary(rewriter, location, i8, 1);
     LLVM::StoreOp::create(rewriter, location,
                           llvmConstant(rewriter, location, i8, 0), changed, 1);
-    Value contextAddress = LLVM::AddressOfOp::create(
-        rewriter, location, pointer, "__talos_current_context");
-    Value context =
-        LLVM::LoadOp::create(rewriter, location, pointer, contextAddress, 8);
-    LLVM::CallOp::create(
-        rewriter, location, TypeRange{i32},
-        SymbolRefAttr::get(
-            rewriter.getContext(),
-            continuous ? "talos_rt_v1_native_state_store_continuous_plane"
-                       : "talos_rt_v1_native_state_store_plane"),
-        ValueRange{
-            context, base, llvmConstant(rewriter, location, i64, stateBitCount),
-            handle, llvmConstant(rewriter, location, i64, inputType.getWidth()),
-            llvmConstant(rewriter, location, i32,
-                         statePlane == schedule::StatePlane::Unknown ? 1 : 0),
-            in, changed});
+    schedule::NativeStateStoreHandleOp::create(
+        rewriter, location, in, statePlane, handle, changed, stateBitCount,
+        inputType.getWidth(), continuous);
     Value changedByte =
         LLVM::LoadOp::create(rewriter, location, i8, changed, 1);
     endTemporary(rewriter, location, in);
