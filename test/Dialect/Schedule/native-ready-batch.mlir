@@ -1,4 +1,4 @@
-// RUN: talos-opt %s --convert-native-schedule-actions-to-llvm -o %t.lowered
+// RUN: talos-opt %s --pass-pipeline='builtin.module(convert-native-schedule-actions-to-llvm,llvm.func(lower-native-ready-words))' -o %t.lowered
 // RUN: FileCheck %s < %t.lowered
 // RUN: %llvm_dist/bin/mlir-opt %t.lowered --convert-arith-to-llvm --convert-cf-to-llvm | talos-translate --mlir-to-llvmir > %t.ll
 // RUN: %llvm_dist/bin/clang -O0 %t.ll %S/Inputs/native-ready-batch.c -o %t.o0
@@ -21,9 +21,8 @@
 // CHECK: llvm.return
 module {
   llvm.mlir.global external @__talos_aot_model_ingress_v1() : !llvm.array<4161 x i64>
-  llvm.func @observe(!llvm.ptr)
+  llvm.func @observe()
   llvm.func @exercise(%a: i64, %b: i64) {
-    %base = llvm.mlir.addressof @__talos_aot_model_ingress_v1 : !llvm.ptr
     %zero = arith.constant 0 : i64
     %all = arith.constant -1 : i64
     schedule.ready.update @__talos_aot_model_ingress_v1[0], %a {capacity = 262144 : i64, consume = false}
@@ -31,7 +30,7 @@ module {
     schedule.ready.update @__talos_aot_model_ingress_v1[64], %a {capacity = 262144 : i64, consume = true}
     schedule.ready.update @__talos_aot_model_ingress_v1[4095], %all {capacity = 262144 : i64, consume = true}
     schedule.ready.commit @__talos_aot_model_ingress_v1[0], %a, %b {capacity = 262144 : i64}
-    llvm.call @observe(%base) : (!llvm.ptr) -> ()
+    llvm.call @observe() : () -> ()
     schedule.ready.update @__talos_aot_model_ingress_v1[63], %all {capacity = 262144 : i64, consume = true}
     schedule.ready.update @__talos_aot_model_ingress_v1[64], %zero {capacity = 262144 : i64, consume = false}
     schedule.ready.update @__talos_aot_model_ingress_v1[4095], %a {capacity = 262144 : i64, consume = false}

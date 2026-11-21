@@ -1,8 +1,8 @@
-// RUN: talos-opt %s --convert-native-schedule-actions-to-llvm -o %t
+// RUN: talos-opt %s --pass-pipeline='builtin.module(convert-native-schedule-actions-to-llvm,llvm.func(lower-native-ready-words))' -o %t
 // RUN: FileCheck %s < %t
-// RUN: talos-opt %s --mlir-disable-threading --convert-native-schedule-actions-to-llvm | diff %t -
+// RUN: talos-opt %s --mlir-disable-threading --pass-pipeline='builtin.module(convert-native-schedule-actions-to-llvm,llvm.func(lower-native-ready-words))' | diff %t -
 // RUN: talos-opt %t --convert-native-schedule-actions-to-llvm | diff %t -
-// RUN: talos-opt %s --schedule-coalesce-native-ready --convert-native-schedule-actions-to-llvm | FileCheck %s --check-prefix=OBS
+// RUN: talos-opt %s --pass-pipeline='builtin.module(schedule-coalesce-native-ready,convert-native-schedule-actions-to-llvm,llvm.func(lower-native-ready-words))' | FileCheck %s --check-prefix=OBS
 
 // Bulk publication has a bounded CFG, no callback/runtime helper, and no
 // per-leaf SSA expansion. Empty eight-word groups of a large source are
@@ -169,7 +169,7 @@ module {
     schedule.ready.merge @__talos_aot_model_ingress_v1, %source {capacity = 262145 : i64}
     llvm.return
   }
-  llvm.func @ready_merge_observe(!llvm.ptr)
+  llvm.func @ready_merge_observe()
   // A merge observes pending scalar updates, and its effects are visible to
   // callbacks and subsequent reads. It is a boundary for ready.region too.
   // OBS-LABEL: llvm.func @merge_observed(
@@ -182,12 +182,11 @@ module {
   // OBS-NOT: schedule.ready
   // OBS: llvm.return
   llvm.func @merge_observed(%source: !llvm.ptr) -> i64 {
-    %base = llvm.mlir.addressof @__talos_aot_model_ingress_v1 : !llvm.ptr
     %one = arith.constant 1 : i64
     %eight = arith.constant 8 : i64
     schedule.ready.update @__talos_aot_model_ingress_v1[0], %one {capacity = 128 : i64, consume = false}
     schedule.ready.merge @__talos_aot_model_ingress_v1, %source {capacity = 128 : i64}
-    llvm.call @ready_merge_observe(%base) : (!llvm.ptr) -> ()
+    llvm.call @ready_merge_observe() : () -> ()
     schedule.ready.update @__talos_aot_model_ingress_v1[1], %eight {capacity = 128 : i64, consume = false}
     %result = schedule.ready.read @__talos_aot_model_ingress_v1[1] {capacity = 128 : i64}
     llvm.return %result : i64

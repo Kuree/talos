@@ -548,12 +548,15 @@ def LowerNativeReadyWordsPass
   let description = [{
     Replaces schedule.ready.word.load/store with a whole-word, 8-byte aligned
     LLVM load or store of the ready set's global: its address once per
-    function, at the start of the entry block, then an i64 GEP by a dynamic
-    word and a byte GEP to a nonzero static word. An access's owner becomes
-    the group-owner tag of the LLVM access; its other properties served the
-    native passes before this point and are dropped. Runs in the native
-    finalization pipeline right after materialize-native-eval-groups, the
-    last pass that reads the typed words.
+    function, at the start of the entry block in the order of first use, then
+    an i64 GEP by a dynamic word and a byte GEP to a nonzero static word. An
+    access's owner and a load's activation entry become the LLVM access's
+    tags, as the LLVM form of a group carries them. Fails when the function
+    takes a ready set's address with llvm.mlir.addressof: native passes
+    before this point see a set's accesses only as ready actions and typed
+    words. Runs in the native finalization pipeline right after
+    materialize-native-eval-group-bodies, the last pass that reads the typed
+    words.
   }];
   let dependentDialects = ["mlir::LLVM::LLVMDialect"];
 }

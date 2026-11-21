@@ -1,4 +1,4 @@
-// RUN: talos-opt %s --talos-materialize-native-eval-groups --convert-native-schedule-actions-to-llvm | FileCheck %s
+// RUN: talos-opt %s --pass-pipeline='builtin.module(talos-materialize-native-eval-groups,convert-native-schedule-actions-to-llvm,llvm.func(lower-native-ready-words))' | FileCheck %s
 
 // A clocked kernel's certificate query updates only proof metadata and its own
 // retry count. It activates no process and selects only a value domain (IEEE

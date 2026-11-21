@@ -110,8 +110,7 @@ bool isBoundary(Operation *op, const std::map<Key, unsigned> &keys,
 } // namespace
 
 void lowerNativeReadyRegion(schedule::NativeReadyRegionOp region,
-                            const schedule::NativeGlobalLookup &globals,
-                            ReadySetAddresses &addresses) {
+                            const schedule::NativeGlobalLookup &globals) {
   std::map<Key, unsigned> keys;
   SmallVector<Operation *> operations;
   llvm::StringMap<uint64_t> capacities;
@@ -238,12 +237,10 @@ void lowerNativeReadyRegion(schedule::NativeReadyRegionOp region,
     if (key && pending.count(*key)) {
       auto &value = pending.at(*key);
       if (auto read = dyn_cast<schedule::NativeReadyReadOp>(op)) {
-        Value previous = loadOwnerWord(
-            b, loc, addresses.get(read, read.getSetAttr()), key->word);
+        Value previous = loadReadyWord(b, loc, read.getReadySet(), key->word);
         if (auto owner =
                 schedule::get<schedule::Field::EvalActivationEntry>(read))
-          schedule::set<schedule::Field::EvalActivationEntry>(
-              previous.getDefiningOp(), owner);
+          setNativeActivationEntry(previous.getDefiningOp(), owner);
         Value keep =
             b.createOrFold<arith::XOrIOp>(loc, load(value.remove), ones);
         Value current = b.createOrFold<arith::OrIOp>(

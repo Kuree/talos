@@ -1,4 +1,4 @@
-// RUN: talos-opt %s --pass-pipeline='builtin.module(convert-native-schedule-actions-to-llvm,llvm.func(lower-native-state-access))' -o %t.lowered
+// RUN: talos-opt %s --pass-pipeline='builtin.module(convert-native-schedule-actions-to-llvm,llvm.func(lower-native-ready-words,lower-native-state-access))' -o %t.lowered
 // RUN: FileCheck %s --implicit-check-not=llvm.alloca < %t.lowered
 // RUN: %llvm_dist/bin/mlir-opt %t.lowered --allow-unregistered-dialect --convert-arith-to-llvm --convert-cf-to-llvm | talos-translate --mlir-to-llvmir > %t.ll
 // RUN: %llvm_dist/bin/clang -O0 %t.ll -o %t.o0
@@ -14,7 +14,7 @@
 // CHECK-NOT: llvm.alloca
 // CHECK-DAG: llvm.call @talos_rt_v1_static_nba_batch_knownness
 // CHECK-DAG: llvm.call @talos_rt_v1_static_nba_batch_finish
-#batch = #schedule.nba_batch_layout<plan = @plan, value = @value, unknown = @unknown, dirty = @dirty, summary = @summary, ingress = @ingress, bitCount = 16, rootCount = 4, capacity = 4>
+#batch = #schedule.nba_batch_layout<plan = @plan, value = @value, unknown = @unknown, dirty = @dirty, summary = @summary, ingress = @__talos_aot_model_ingress_v1, bitCount = 16, rootCount = 4, capacity = 4>
 #slot0 = #schedule.nba_slot_layout<offset = @offset, value = @s0, unknown = @u0, valid = @valid0, width = 3, constantOffset = 0 : i64>
 #slot1 = #schedule.nba_slot_layout<offset = @offset, value = @zero, unknown = @zero, valid = @valid1, width = 3, constantOffset = 0 : i64>
 #slot3 = #schedule.nba_slot_layout<offset = @offset, value = @zero, unknown = @zero, valid = @valid3, width = 4, constantOffset = 0 : i64>
@@ -31,7 +31,7 @@ module {
   llvm.mlir.global internal @unknown(0 : i16) : i16
   llvm.mlir.global internal @dirty(7 : i64) : i64
   llvm.mlir.global internal @summary(1 : i64) : i64
-  llvm.mlir.global internal @ingress(0 : i64) : i64
+  llvm.mlir.global internal @__talos_aot_model_ingress_v1(dense<0> : tensor<1xi64>) : !llvm.array<1 x i64>
   llvm.mlir.global internal @offset(0 : i64) : i64
   llvm.mlir.global internal @s0(5 : i64) : i64
   llvm.mlir.global internal @u0(3 : i64) : i64
@@ -160,8 +160,7 @@ module {
     %c9 = llvm.mlir.constant(1 : i64) : i64
     %ok9 = llvm.icmp "eq" %v9, %c9 : i64
     llvm.call @require(%ok9) : (i1) -> ()
-    %p10 = llvm.mlir.addressof @ingress : !llvm.ptr
-    %v10 = llvm.load %p10 : !llvm.ptr -> i64
+    %v10 = schedule.ready.word.load @__talos_aot_model_ingress_v1[0]
     %c10 = llvm.mlir.constant(3 : i64) : i64
     %ok10 = llvm.icmp "eq" %v10, %c10 : i64
     llvm.call @require(%ok10) : (i1) -> ()
@@ -221,8 +220,7 @@ module {
     %c21 = llvm.mlir.constant(0 : i64) : i64
     %ok21 = llvm.icmp "eq" %v21, %c21 : i64
     llvm.call @require(%ok21) : (i1) -> ()
-    %p22 = llvm.mlir.addressof @ingress : !llvm.ptr
-    %v22 = llvm.load %p22 : !llvm.ptr -> i64
+    %v22 = schedule.ready.word.load @__talos_aot_model_ingress_v1[0]
     %c22 = llvm.mlir.constant(7 : i64) : i64
     %ok22 = llvm.icmp "eq" %v22, %c22 : i64
     llvm.call @require(%ok22) : (i1) -> ()

@@ -132,6 +132,24 @@ inline mlir::Value updateOwnerWord(mlir::OpBuilder &builder, mlir::Location loc,
   return next;
 }
 
+// Add `mask` to word `word` of a ready set, or remove it with `clear`.
+inline mlir::Value updateReadyWord(mlir::OpBuilder &builder, mlir::Location loc,
+                                   schedule::ReadySet set, unsigned word,
+                                   mlir::Value mask, bool clear = false) {
+  mlir::Value previous = loadReadyWord(builder, loc, set, word);
+  mlir::Value next;
+  if (clear) {
+    mlir::Value inverse = mlir::arith::XOrIOp::create(
+        builder, loc, mask,
+        llvmConstant(builder, loc, builder.getI64Type(), UINT64_MAX));
+    next = mlir::arith::AndIOp::create(builder, loc, previous, inverse);
+  } else {
+    next = mlir::arith::OrIOp::create(builder, loc, previous, mask);
+  }
+  storeReadyWord(builder, loc, next, set, word);
+  return next;
+}
+
 // Whether an add mask may publish: folded to a constant when it is one.
 inline mlir::Value evalReadyAddNonzero(mlir::OpBuilder &builder,
                                        mlir::Location loc, mlir::Value added) {
@@ -148,7 +166,8 @@ inline mlir::Value evalReadyAddNonzero(mlir::OpBuilder &builder,
 // order are unchanged; the index carries no event history (IEEE 1800-2023 4.3,
 // 4.5--4.7).
 inline void materializeEvalReadyIndexes(mlir::OpBuilder &builder,
-                                        mlir::Location loc, mlir::Value base,
+                                        mlir::Location loc,
+                                        schedule::ReadySet set,
                                         const EvalReadySetLayout &layout,
                                         unsigned word, mlir::Value added) {
   using namespace mlir;
@@ -166,21 +185,20 @@ inline void materializeEvalReadyIndexes(mlir::OpBuilder &builder,
         llvmConstant(builder, loc, i64, uint64_t{1} << (child % 64)),
         llvmConstant(builder, loc, i64, 0));
     Value next = builder.createOrFold<arith::OrIOp>(
-        loc, loadOwnerWord(builder, loc, base, parent), bit);
-    LLVM::StoreOp::create(builder, loc, next,
-                          ownerWordAddress(builder, loc, base, parent), 8);
+        loc, loadReadyWord(builder, loc, set, parent), bit);
+    storeReadyWord(builder, loc, next, set, parent);
     child /= 64;
   }
 }
 
 inline void materializeEvalReadyWord(mlir::OpBuilder &builder,
-                                     mlir::Location loc, mlir::Value base,
+                                     mlir::Location loc, schedule::ReadySet set,
                                      const EvalReadySetLayout &layout,
                                      unsigned word, mlir::Value mask,
                                      bool clear = false) {
-  updateOwnerWord(builder, loc, base, word, mask, clear);
+  updateReadyWord(builder, loc, set, word, mask, clear);
   if (!clear)
-    materializeEvalReadyIndexes(builder, loc, base, layout, word, mask);
+    materializeEvalReadyIndexes(builder, loc, set, layout, word, mask);
 }
 
 struct EvalReadyWordChange {
@@ -193,7 +211,8 @@ struct EvalReadyWordChange {
 // The caller must stop at reads, aliases, callbacks and selection boundaries.
 inline void
 materializeEvalReadyWords(mlir::OpBuilder &builder, mlir::Location loc,
-                          mlir::Value base, const EvalReadySetLayout &layout,
+                          schedule::ReadySet set,
+                          const EvalReadySetLayout &layout,
                           llvm::ArrayRef<EvalReadyWordChange> changes) {
   using namespace mlir;
   auto i64 = builder.getI64Type();
@@ -204,7 +223,7 @@ materializeEvalReadyWords(mlir::OpBuilder &builder, mlir::Location loc,
   for (const auto &change : changes) {
     Value previous = leaves.count(change.word)
                          ? leaves.at(change.word)
-                         : loadOwnerWord(builder, loc, base, change.word);
+                         : loadReadyWord(builder, loc, set, change.word);
     Value inverse =
         builder.createOrFold<arith::XOrIOp>(loc, change.remove, ones);
     Value retained =
@@ -218,15 +237,14 @@ materializeEvalReadyWords(mlir::OpBuilder &builder, mlir::Location loc,
     any = any ? builder.createOrFold<arith::OrIOp>(loc, any, nonzero) : nonzero;
   }
   for (auto [word, next] : leaves)
-    LLVM::StoreOp::create(builder, loc, next,
-                          ownerWordAddress(builder, loc, base, word), 8);
+    storeReadyWord(builder, loc, next, set, word);
   for (unsigned level = 1; level != layout.levels && !added.empty(); ++level) {
     std::map<unsigned, Value> parents, parentAdded;
     for (auto [child, nonzero] : added) {
       unsigned parent = child / 64;
       Value previous = parents.count(parent)
                            ? parents.at(parent)
-                           : loadOwnerWord(builder, loc, base,
+                           : loadReadyWord(builder, loc, set,
                                            layout.offsets[level] + parent);
       Value bit = builder.createOrFold<arith::SelectOp>(
           loc, nonzero,
@@ -238,10 +256,7 @@ materializeEvalReadyWords(mlir::OpBuilder &builder, mlir::Location loc,
           any ? builder.createOrFold<arith::OrIOp>(loc, any, nonzero) : nonzero;
     }
     for (auto [parent, next] : parents)
-      LLVM::StoreOp::create(
-          builder, loc, next,
-          ownerWordAddress(builder, loc, base, layout.offsets[level] + parent),
-          8);
+      storeReadyWord(builder, loc, next, set, layout.offsets[level] + parent);
     added = std::move(parentAdded);
   }
 }
@@ -254,26 +269,8 @@ inline void updateEvalReadyWord(mlir::OpBuilder &builder, mlir::Location loc,
                                         layout.capacity, word, clear);
 }
 
-// Add the words of `mask`, selected by `condition` when given, to the owner
-// words at `base`, or remove them with `clear`.
-inline void updateOwnerMask(mlir::OpBuilder &builder, mlir::Location loc,
-                            mlir::Value base, const llvm::APInt &mask,
-                            bool clear = false, mlir::Value condition = {}) {
-  auto i64 = builder.getI64Type();
-  for (unsigned word = 0; word != mask.getNumWords(); ++word) {
-    uint64_t bits = ownerMaskWord(mask, word);
-    if (!bits)
-      continue;
-    mlir::Value selected = llvmConstant(builder, loc, i64, bits);
-    if (condition)
-      selected =
-          mlir::arith::SelectOp::create(builder, loc, condition, selected,
-                                        llvmConstant(builder, loc, i64, 0));
-    updateOwnerWord(builder, loc, base, word, selected, clear);
-  }
-}
-
-// The same for the words of a generated eval ready set, as ready updates.
+// Add the words of `mask`, selected by `condition` when given, to a ready set
+// as ready updates, or remove them with `clear`.
 inline void updateReadyMask(mlir::OpBuilder &builder, mlir::Location loc,
                             schedule::ReadySet set,
                             const EvalReadySetLayout &layout,
@@ -292,45 +289,6 @@ inline void updateReadyMask(mlir::OpBuilder &builder, mlir::Location loc,
     updateEvalReadyWord(builder, loc, set, layout, word, selected, clear);
   }
 }
-
-/// The addresses of the ready sets that lowered ready accesses use, as
-/// canonicalization leaves them: one per set and function, at the start of
-/// its entry block in the order of first use. An address the function
-/// already has there is reused.
-class ReadySetAddresses {
-public:
-  mlir::Value get(mlir::Operation *user, mlir::FlatSymbolRefAttr set) {
-    mlir::Region *body =
-        &user->getParentWithTrait<mlir::OpTrait::IsIsolatedFromAbove>()
-             ->getRegion(0);
-    auto [found, inserted] = addresses.try_emplace({body, set.getAttr()});
-    if (!inserted)
-      return found->second;
-    mlir::Block &entry = body->front();
-    for (mlir::Operation &operation : entry) {
-      if (!operation.hasTrait<mlir::OpTrait::ConstantLike>())
-        break;
-      auto address = mlir::dyn_cast<mlir::LLVM::AddressOfOp>(operation);
-      if (address && address.getGlobalNameAttr() == set)
-        return found->second = address;
-    }
-    mlir::Operation *&previous = last[body];
-    auto builder = mlir::OpBuilder::atBlockBegin(&entry);
-    if (previous)
-      builder.setInsertionPointAfter(previous);
-    auto address = mlir::LLVM::AddressOfOp::create(
-        builder, user->getLoc(),
-        mlir::LLVM::LLVMPointerType::get(user->getContext()), set.getValue());
-    previous = address;
-    return found->second = address;
-  }
-
-private:
-  llvm::DenseMap<std::pair<mlir::Region *, mlir::StringAttr>, mlir::Value>
-      addresses;
-  // The last address created at the start of each function body.
-  llvm::DenseMap<mlir::Region *, mlir::Operation *> last;
-};
 
 } // namespace talos::detail
 #endif

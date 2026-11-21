@@ -60,7 +60,7 @@ bool materializeNativeGroupDataflow(LLVM::LLVMFuncOp function,
     return false;
 
   DenseMap<Block *, unsigned> indegree;
-  uint64_t originalOperations = 0;
+  uint64_t originalOperations = nativeReadySetAddressCost(function);
   for (Block &block : function.getBody()) {
     indegree.try_emplace(&block, 0);
     if (&block != &function.getBody().front())

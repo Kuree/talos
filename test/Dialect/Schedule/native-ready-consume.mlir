@@ -1,4 +1,4 @@
-// RUN: talos-opt %s --convert-native-schedule-actions-to-llvm='coalesce=true' -o %t.lowered
+// RUN: talos-opt %s --pass-pipeline='builtin.module(convert-native-schedule-actions-to-llvm{coalesce=true},llvm.func(lower-native-ready-words))' -o %t.lowered
 // RUN: FileCheck %s < %t.lowered
 // RUN: %llvm_dist/bin/mlir-opt %t.lowered --convert-scf-to-cf --convert-arith-to-llvm --convert-cf-to-llvm | talos-translate --mlir-to-llvmir > %t.ll
 // RUN: %llvm_dist/bin/clang -O0 %t.ll %S/Inputs/native-ready-consume.c -o %t.o0
@@ -14,7 +14,7 @@
 // CHECK: %[[SET:.*]] = llvm.mlir.addressof @__talos_aot_model_ingress_v1
 // CHECK: %[[NEXT:.*]] = arith.andi
 // CHECK-NEXT: llvm.store %[[NEXT]], %[[SET]]
-// CHECK-NEXT: llvm.call @observe(%[[SET]])
+// CHECK-NEXT: llvm.call @observe()
 // CHECK-NEXT: llvm.return
 // A structured single-block region keeps the same straight-line consume.
 // CHECK-LABEL: llvm.func @consume_structured(
@@ -28,36 +28,33 @@
 // CHECK: %[[BASE:.*]] = llvm.mlir.addressof @__talos_aot_model_ingress_v1
 // CHECK: llvm.getelementptr %[[BASE]][32760]
 // CHECK-NOT: cf.cond_br
-// CHECK: llvm.call @observe(%[[BASE]])
+// CHECK: llvm.call @observe()
 // CHECK: llvm.getelementptr %[[BASE]][32760]
 // CHECK-NOT: cf.cond_br
-// CHECK: llvm.call @observe(%[[BASE]])
+// CHECK: llvm.call @observe()
 // CHECK: llvm.return
 module {
   llvm.mlir.global external @__talos_aot_model_ingress_v1() : !llvm.array<4161 x i64>
-  llvm.func @observe(!llvm.ptr)
+  llvm.func @observe()
   llvm.func @consume(%mask: i64) {
-    %base = llvm.mlir.addressof @__talos_aot_model_ingress_v1 : !llvm.ptr
     schedule.ready.update @__talos_aot_model_ingress_v1[0], %mask {capacity = 262144 : i64, consume = true}
-    llvm.call @observe(%base) : (!llvm.ptr) -> ()
+    llvm.call @observe() : () -> ()
     llvm.return
   }
   llvm.func @consume_structured(%mask: i64, %guard: i64) {
-    %base = llvm.mlir.addressof @__talos_aot_model_ingress_v1 : !llvm.ptr
     %zero = arith.constant 0 : i64
     %active = arith.cmpi ne, %guard, %zero : i64
     scf.if %active {
       schedule.ready.update @__talos_aot_model_ingress_v1[0], %mask {capacity = 262144 : i64, consume = true}
     }
-    llvm.call @observe(%base) : (!llvm.ptr) -> ()
+    llvm.call @observe() : () -> ()
     llvm.return
   }
   llvm.func @consume_global(%mask: i64) {
-    %base = llvm.mlir.addressof @__talos_aot_model_ingress_v1 : !llvm.ptr
     schedule.ready.update @__talos_aot_model_ingress_v1[4095], %mask {capacity = 262144 : i64, consume = true}
-    llvm.call @observe(%base) : (!llvm.ptr) -> ()
+    llvm.call @observe() : () -> ()
     schedule.ready.update @__talos_aot_model_ingress_v1[4095], %mask {capacity = 262144 : i64, consume = true}
-    llvm.call @observe(%base) : (!llvm.ptr) -> ()
+    llvm.call @observe() : () -> ()
     llvm.return
   }
 }

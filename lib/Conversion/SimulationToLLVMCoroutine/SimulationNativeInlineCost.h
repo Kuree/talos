@@ -8,18 +8,55 @@
 
 namespace talos::detail {
 
+/// The ready set a ready action or ready word access names.
+inline mlir::FlatSymbolRefAttr getNativeReadySet(mlir::Operation *operation) {
+  if (auto update = mlir::dyn_cast<schedule::NativeReadyUpdateOp>(operation))
+    return update.getSetAttr();
+  if (auto commit = mlir::dyn_cast<schedule::NativeReadyCommitOp>(operation))
+    return commit.getSetAttr();
+  if (auto read = mlir::dyn_cast<schedule::NativeReadyReadOp>(operation))
+    return read.getSetAttr();
+  if (auto merge = mlir::dyn_cast<schedule::NativeReadyMergeOp>(operation))
+    return merge.getSetAttr();
+  if (auto load = mlir::dyn_cast<schedule::NativeReadyWordLoadOp>(operation))
+    return load.getSetAttr();
+  if (auto store = mlir::dyn_cast<schedule::NativeReadyWordStoreOp>(operation))
+    return store.getSetAttr();
+  return {};
+}
+
 /// The operations `operation` stands for in LLVM IR, as op-count budgets
-/// count them: an NBA accumulator field, readiness index or ready set word
-/// access is its address computation and the access.
+/// count them: an NBA accumulator field or readiness index access is its
+/// address computation and the access; a ready set word access is the access
+/// and the GEPs to its word, an i64 GEP by a dynamic word and a byte GEP to a
+/// nonzero static word, of the set's address (nativeReadySetAddressCost).
 inline uint64_t nativeLoweredSize(mlir::Operation *operation) {
-  return mlir::isa<
-             schedule::NativeNBAAccumulatorLoadOp,
-             schedule::NativeNBAAccumulatorStoreOp,
-             schedule::NativeNBAIndexLoadOp, schedule::NativeNBAIndexStoreOp,
-             schedule::NativeReadyWordLoadOp, schedule::NativeReadyWordStoreOp>(
-             operation)
+  auto wordSize = [](mlir::Value dynamicWord, uint64_t staticWord) {
+    return uint64_t{1} + bool(dynamicWord) + (staticWord != 0);
+  };
+  if (auto load = mlir::dyn_cast<schedule::NativeReadyWordLoadOp>(operation))
+    return wordSize(load.getDynamicWord(), load.getStaticWord());
+  if (auto store = mlir::dyn_cast<schedule::NativeReadyWordStoreOp>(operation))
+    return wordSize(store.getDynamicWord(), store.getStaticWord());
+  return mlir::isa<schedule::NativeNBAAccumulatorLoadOp,
+                   schedule::NativeNBAAccumulatorStoreOp,
+                   schedule::NativeNBAIndexLoadOp,
+                   schedule::NativeNBAIndexStoreOp>(operation)
              ? 2
              : 1;
+}
+
+/// The addresses of ready sets the LLVM form of `root`'s ready actions and
+/// word accesses takes: one per set each function names (as
+/// lower-native-ready-words and action lowering take them).
+inline uint64_t nativeReadySetAddressCost(mlir::Operation *root) {
+  llvm::SmallVector<mlir::Attribute, 2> sets;
+  root->walk([&](mlir::Operation *operation) {
+    mlir::FlatSymbolRefAttr set = getNativeReadySet(operation);
+    if (set && !llvm::is_contained(sets, set))
+      sets.push_back(set);
+  });
+  return sets.size();
 }
 
 inline uint64_t nativeOperationCost(mlir::Operation *operation) {
@@ -56,44 +93,15 @@ inline uint64_t nativeOperationCost(mlir::Operation *operation) {
              : nativeLoweredSize(operation);
 }
 
-/// The operations nested in `root` cost. Ready actions and word accesses
-/// name their set; in LLVM IR a function shares one address of each set
-/// (ReadySetAddresses), so a set that `root` addresses only through them is
-/// charged that address once.
+/// The operations nested in `root` cost, with the ready set addresses
+/// their LLVM form shares.
 inline uint64_t nativeInlineCost(mlir::Operation *root) {
   uint64_t cost = 0;
-  llvm::SmallVector<mlir::StringAttr, 2> readySets, addressed;
   root->walk([&](mlir::Operation *operation) {
-    if (operation == root)
-      return;
-    cost += nativeOperationCost(operation);
-    mlir::FlatSymbolRefAttr set;
-    if (auto update = mlir::dyn_cast<schedule::NativeReadyUpdateOp>(operation))
-      set = update.getSetAttr();
-    else if (auto commit =
-                 mlir::dyn_cast<schedule::NativeReadyCommitOp>(operation))
-      set = commit.getSetAttr();
-    else if (auto read = mlir::dyn_cast<schedule::NativeReadyReadOp>(operation))
-      set = read.getSetAttr();
-    else if (auto merge =
-                 mlir::dyn_cast<schedule::NativeReadyMergeOp>(operation))
-      set = merge.getSetAttr();
-    else if (auto load =
-                 mlir::dyn_cast<schedule::NativeReadyWordLoadOp>(operation))
-      set = load.getSetAttr();
-    else if (auto store =
-                 mlir::dyn_cast<schedule::NativeReadyWordStoreOp>(operation))
-      set = store.getSetAttr();
-    auto address = mlir::dyn_cast<mlir::LLVM::AddressOfOp>(operation);
-    if (address && schedule::getReadySetOfGlobal(address.getGlobalName()) &&
-        !llvm::is_contained(addressed, address.getGlobalNameAttr().getAttr()))
-      addressed.push_back(address.getGlobalNameAttr().getAttr());
-    if (set && !llvm::is_contained(readySets, set.getAttr()))
-      readySets.push_back(set.getAttr());
+    if (operation != root)
+      cost += nativeOperationCost(operation);
   });
-  for (mlir::StringAttr set : readySets)
-    cost += !llvm::is_contained(addressed, set);
-  return cost;
+  return cost + nativeReadySetAddressCost(root);
 }
 
 } // namespace talos::detail

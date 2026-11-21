@@ -17,7 +17,8 @@ static void check(uint64_t *actual) {
   for (unsigned i = 0; i < WORDS; ++i)
     assert(actual[i] == expected[i]);
 }
-void observe(uint64_t *actual) {
+void observe(void) {
+  uint64_t *actual = __talos_aot_model_ingress_v1;
   check(actual);
   actual[64] |= UINT64_C(1) << 60;
   mark(actual, 64);

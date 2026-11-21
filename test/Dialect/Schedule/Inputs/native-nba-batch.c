@@ -3,7 +3,7 @@
 #include <string.h>
 
 uint8_t plan, value[40], unknown[40];
-uint64_t dirty[2], summary, ingress[8];
+uint64_t dirty[2], summary, __talos_aot_model_ingress_v1[8];
 struct {
   uint64_t value[4], unknown[4], mask[4];
   uint32_t valid, region;
@@ -43,7 +43,7 @@ static void reset(void) {
   memset(&accumulator, 0, sizeof(accumulator));
   memset(&aux2, 0, sizeof(aux2));
   memset(&aux63, 0, sizeof(aux63));
-  memset(ingress, 0, sizeof(ingress));
+  memset(__talos_aot_model_ingress_v1, 0, sizeof(__talos_aot_model_ingress_v1));
   dirty[0] = (1ull << 1) | (1ull << 9);
   dirty[1] = 1ull << 1;
   summary = 3;
@@ -79,7 +79,7 @@ int main(void) {
   assert(!memcmp(unknown, expected_unknown, sizeof(unknown)));
   assert(accumulator.valid == 0 && accumulator.mask[0] == 0 &&
          accumulator.mask[2] == 0);
-  assert(accumulator.transient[1] == 0 && ingress[2] == 2 && pending);
+  assert(accumulator.transient[1] == 0 && __talos_aot_model_ingress_v1[2] == 2 && pending);
   assert(dirty[0] == (1ull << 9) && dirty[1] == 0 && summary == 1);
   assert(changed == 9 && commits == 1 && stages == 3 && notifications == 1);
 
@@ -121,7 +121,7 @@ int main(void) {
     assert(dirty[0] == ((1ull << 1) | (1ull << 9)) && !dirty[1] &&
            summary == 1);
     assert(commits == writes && stages == writes && pending == observed);
-    assert(ingress[1] == observed && ingress[2] == 0);
+    assert(__talos_aot_model_ingress_v1[1] == observed && __talos_aot_model_ingress_v1[2] == 0);
   }
   // Several roots share a word, including its highest bit. Dirty predicates
   // must skip stale valid payloads, including when another root in the same

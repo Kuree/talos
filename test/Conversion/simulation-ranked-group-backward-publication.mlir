@@ -16,7 +16,7 @@
 // CHECK: %[[BACKWARD:.*]] = llvm.select %[[CHANGED]]
 // CHECK: %[[PUBLISHED:.*]] = llvm.or %{{.*}}, %[[BACKWARD]]
 // CHECK: %[[READY:.*]] = llvm.or %{{.*}}, %[[PUBLISHED]]
-// CHECK-NEXT: llvm.store %[[READY]]
+// CHECK-NEXT: schedule.ready.word.store %[[READY]], @__talos_aot_model_ingress_v1[0]
 // CHECK-LABEL: llvm.func @feedback.fallback()
 
 module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", native.debug_timing} {
@@ -56,7 +56,6 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
   // The caller must see pending work after the first sweep, then the second
   // sweep must settle the output and clear that work without another event.
   llvm.func @main() -> i32 {
-    %ready = llvm.mlir.addressof @__talos_aot_model_ingress_v1 : !llvm.ptr
     %slow = llvm.mlir.addressof @slow : !llvm.ptr
     %zero = llvm.mlir.constant(0 : i64) : i64
     %first = llvm.mlir.constant(1 : i64) : i64
@@ -64,10 +63,10 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %zero32 = llvm.mlir.constant(0 : i32) : i32
     %failure = llvm.mlir.constant(1 : i32) : i32
     llvm.call @feedback() : () -> ()
-    %pending = llvm.load %ready : !llvm.ptr -> i64
+    %pending = schedule.ready.word.load @__talos_aot_model_ingress_v1[0]
     %again = llvm.icmp "eq" %pending, %first : i64
     llvm.call @feedback() : () -> ()
-    %done = llvm.load %ready : !llvm.ptr -> i64
+    %done = schedule.ready.word.load @__talos_aot_model_ingress_v1[0]
     %quiet = llvm.icmp "eq" %done, %zero : i64
     %result = schedule.state.load @__talos_state_value[1] {alignment = 1 : i64} : i8
     %correct = llvm.icmp "eq" %result, %value : i8

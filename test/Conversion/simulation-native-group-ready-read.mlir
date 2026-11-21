@@ -1,4 +1,4 @@
-// RUN: talos-opt %s --talos-materialize-native-eval-groups --convert-native-schedule-actions-to-llvm -o %t.mlir
+// RUN: talos-opt %s --pass-pipeline='builtin.module(talos-materialize-native-eval-groups,convert-native-schedule-actions-to-llvm,llvm.func(lower-native-ready-words))' -o %t.mlir
 // RUN: FileCheck %s < %t.mlir
 // RUN: %llvm_dist/bin/mlir-opt %t.mlir --convert-arith-to-llvm --convert-cf-to-llvm | talos-translate --mlir-to-llvmir > %t.ll
 // RUN: %llvm_dist/bin/clang -O0 %t.ll -o %t.o0
@@ -56,9 +56,8 @@ module {
   // CHECK-LABEL: llvm.func @main()
   llvm.func @main() -> i32 {
     llvm.call @group() : () -> ()
-    %base = llvm.mlir.addressof @__talos_aot_model_ingress_v1 : !llvm.ptr
     %out = llvm.mlir.addressof @observed : !llvm.ptr
-    %ready = llvm.load %base : !llvm.ptr -> i64
+    %ready = schedule.ready.word.load @__talos_aot_model_ingress_v1[0]
     %seen = llvm.load %out : !llvm.ptr -> i32
     %zero = llvm.mlir.constant(0 : i64) : i64
     %one = llvm.mlir.constant(1 : i32) : i32

@@ -269,9 +269,11 @@ SmallVector<LLVM::LLVMFuncOp> splitNativeEvalGroup(LLVM::LLVMFuncOp original,
   if (!executionBoundary)
     return {};
   uint64_t cost = 0;
-  for (auto function : {original, candidate})
+  for (auto function : {original, candidate}) {
     function.walk(
         [&](Operation *operation) { cost += nativeLoweredSize(operation); });
+    cost += nativeReadySetAddressCost(function);
+  }
   if (cost > budget)
     return {};
   auto slowEntries = entries(original, members);
@@ -305,9 +307,11 @@ SmallVector<LLVM::LLVMFuncOp> splitNativeEvalGroup(LLVM::LLVMFuncOp original,
   }
 
   cost = 0;
-  for (auto child : children)
+  for (auto child : children) {
     child.walk(
         [&](Operation *operation) { cost += nativeLoweredSize(operation); });
+    cost += nativeReadySetAddressCost(child);
+  }
   if (cost > budget) {
     for (auto child : children)
       symbols.erase(child);

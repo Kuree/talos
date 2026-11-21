@@ -1,4 +1,4 @@
-// RUN: talos-opt %s --convert-native-schedule-actions-to-llvm | FileCheck %s
+// RUN: talos-opt %s --pass-pipeline='builtin.module(convert-native-schedule-actions-to-llvm,llvm.func(lower-native-ready-words))' | FileCheck %s
 
 // State accesses never touch a ready set: a typed access names its plane, and
 // an LLVM access through a plane's base addresses that plane. Neither ends a

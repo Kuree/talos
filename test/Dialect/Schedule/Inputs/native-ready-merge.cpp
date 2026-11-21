@@ -27,7 +27,8 @@ MERGE(262145)
 enum { FRAME = 8400 };
 uint64_t __talos_aot_model_ingress_v1[FRAME];
 uint64_t merge_observed(uint64_t *);
-void ready_merge_observe(uint64_t *base) {
+void ready_merge_observe() {
+  uint64_t *base = __talos_aot_model_ingress_v1;
   // Both leaves received work, so both dirty bits are set.
   if (base[0] != 3 || base[1] != 4 || base[2] != 3)
     std::abort();

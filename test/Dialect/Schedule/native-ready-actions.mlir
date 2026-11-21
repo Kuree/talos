@@ -1,9 +1,9 @@
 // RUN: talos-opt %s --schedule-coalesce-native-ready -o %t
 // RUN: talos-opt %t --cse | FileCheck %s
-// RUN: talos-opt %t --convert-native-schedule-actions-to-llvm | FileCheck %s --check-prefix=LOWER
+// RUN: talos-opt %t --pass-pipeline='builtin.module(convert-native-schedule-actions-to-llvm,llvm.func(lower-native-ready-words))' | FileCheck %s --check-prefix=LOWER
 // Pending-mask union must respect consume, alias, observation and publication.
 module {
-  llvm.mlir.global external @__talos_aot_model_ingress_v1() : !llvm.array<2 x i64>
+  llvm.mlir.global external @__talos_aot_model_ingress_v1() : !llvm.array<3 x i64>
   llvm.func @updates(%alias: !llvm.ptr, %ctx: !llvm.ptr) -> i64 {
     %one = arith.constant 1 : i64
     %two = arith.constant 2 : i64

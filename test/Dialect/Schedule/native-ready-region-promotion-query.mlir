@@ -1,4 +1,4 @@
-// RUN: talos-opt %s --convert-native-schedule-actions-to-llvm | FileCheck %s
+// RUN: talos-opt %s --pass-pipeline='builtin.module(convert-native-schedule-actions-to-llvm,llvm.func(lower-native-ready-words))' | FileCheck %s
 // A generated promotion query reads canonical X/Z state and proof caches and
 // activates nothing (IEEE 1800-2023 4.5, 6.3.1), so pending ready words stay
 // local across it: the consume and the publication commit once, after it. An

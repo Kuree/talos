@@ -7,12 +7,11 @@ module {
   llvm.mlir.global internal @__talos_aot_model_ingress_v1(dense<0> : tensor<1xi64>) : !llvm.array<1 x i64>
   llvm.mlir.global internal @__talos_eval_nba_held_wakes_v1(dense<0> : tensor<1xi64>) : !llvm.array<1 x i64>
   // CHECK-LABEL: llvm.func @own_word(
-  // CHECK: llvm.store
-  // CHECK-NOT: llvm.store
-  // CHECK: schedule.ready.word.load @__talos_aot_model_ingress_v1[0]
-  // CHECK: llvm.store
-  // CHECK-NOT: llvm.store
-  // CHECK: llvm.return
+  // CHECK: schedule.ready.word.store %{{.*}}, @__talos_aot_model_ingress_v1[0]
+  // CHECK-NEXT: %[[SEEN:.*]] = schedule.ready.word.load @__talos_aot_model_ingress_v1[0]
+  // CHECK-NOT: schedule.ready.word.store
+  // CHECK: schedule.ready.word.store %{{.*}}, @__talos_aot_model_ingress_v1[0]
+  // CHECK-NEXT: llvm.return %[[SEEN]]
   llvm.func @own_word() -> i64 {
     %one = arith.constant 1 : i64
     %two = arith.constant 2 : i64
@@ -26,12 +25,11 @@ module {
     llvm.return %seen : i64
   }
   // CHECK-LABEL: llvm.func @other_word(
-  // CHECK-NOT: llvm.store
+  // CHECK-NOT: @__talos_aot_model_ingress_v1
   // CHECK: schedule.ready.word.store %{{.*}}, @__talos_eval_nba_held_wakes_v1[0]
-  // CHECK-NOT: llvm.store
-  // CHECK: llvm.store
-  // CHECK-NOT: llvm.store
-  // CHECK: llvm.return
+  // CHECK: schedule.ready.word.load @__talos_aot_model_ingress_v1[0]
+  // CHECK: schedule.ready.word.store %{{.*}}, @__talos_aot_model_ingress_v1[0]
+  // CHECK-NEXT: llvm.return
   llvm.func @other_word(%bits: i64) {
     %one = arith.constant 1 : i64
     %two = arith.constant 2 : i64

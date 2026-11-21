@@ -25,8 +25,7 @@
 // CHECK: %[[DIRTY_INDEX:.*]] = llvm.add %[[PARENT]],
 // CHECK: %[[DIRTY_ADDRESS:.*]] = llvm.getelementptr %[[INGRESS]][%[[DIRTY_INDEX]]]
 // CHECK: llvm.load %[[DIRTY_ADDRESS]]
-// CHECK: %[[DIRTY_STORE:.*]] = llvm.getelementptr %[[INGRESS]][%[[DIRTY_INDEX]]]
-// CHECK: llvm.store %{{.*}}, %[[DIRTY_STORE]]
+// CHECK: llvm.store %{{.*}}, %[[DIRTY_ADDRESS]]
 // CHECK-NEXT: llvm.br ^[[DISPATCH]]
 // CHECK: ^[[GATE:bb[0-9]+]](%[[WORD:.*]]: i64):
 // CHECK: %[[LEAF_ADDRESS:.*]] = llvm.getelementptr %{{.*}}[%[[WORD]]]

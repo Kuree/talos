@@ -416,15 +416,11 @@ LogicalResult promoteGroupReadyWords(LLVM::LLVMFuncOp function,
   if (!array || !array.getElementType().isInteger(64))
     return success();
 
+  // The ingress words this function accesses, through typed words only.
   std::map<uint64_t, SmallVector<Operation *>> accesses;
-  SmallVector<Operation *> boundaries;
-  SmallVector<Value> pointers;
-  llvm::DenseSet<Value> visited;
+  SmallVector<Operation *> boundaries, dynamicAccesses;
   bool supported = true;
   function.walk([&](Operation *operation) {
-    if (auto address = dyn_cast<LLVM::AddressOfOp>(operation);
-        address && address.getGlobalName() == reference.getValue())
-      pointers.push_back(address.getResult());
     auto call = dyn_cast<LLVM::CallOp>(operation);
     if (isa<LLVM::ReturnOp>(operation) ||
         (call && !(call.getCallee() &&
@@ -432,43 +428,33 @@ LogicalResult promoteGroupReadyWords(LLVM::LLVMFuncOp function,
       boundaries.push_back(operation);
     if (isa<LLVM::InvokeOp, LLVM::InlineAsmOp>(operation))
       supported = false;
-  });
-  while (!pointers.empty() && supported) {
-    Value pointer = pointers.pop_back_val();
-    if (!visited.insert(pointer).second)
-      continue;
-    for (OpOperand &use : pointer.getUses()) {
-      Operation *operation = use.getOwner();
-      if (auto gep = dyn_cast<LLVM::GEPOp>(operation)) {
-        pointers.push_back(gep.getResult());
-        continue;
-      }
-      auto load = dyn_cast<LLVM::LoadOp>(operation);
-      auto store = dyn_cast<LLVM::StoreOp>(operation);
-      bool plainLoad = load && load.getType().isInteger(64) &&
-                       !load.getVolatile_() &&
-                       load.getOrdering() == LLVM::AtomicOrdering::not_atomic;
-      bool plainStore = store && store.getAddr() == pointer &&
-                        store.getValue().getType().isInteger(64) &&
-                        !store.getVolatile_() &&
-                        store.getOrdering() == LLVM::AtomicOrdering::not_atomic;
-      if (!plainLoad && !plainStore) {
-        supported = false;
-        break;
-      }
-      auto bytes = getConstantByteOffset(pointer);
-      if (!bytes || *bytes % 8) {
-        // Hierarchical ready lookup can select a word dynamically. Keep that
-        // exact access on authoritative storage and treat it as a boundary.
-        boundaries.push_back(operation);
-      } else if (*bytes / 8 >= array.getNumElements()) {
-        supported = false;
-        break;
-      } else {
-        accesses[*bytes / 8].push_back(operation);
-      }
+    // The set's words are accessed whole; any other access to it (an LLVM
+    // address, or a ready action left unlowered) keeps the words in memory.
+    if (auto address = dyn_cast<LLVM::AddressOfOp>(operation);
+        address && address.getGlobalName() == reference.getValue())
+      supported = false;
+    if (isa<schedule::NativeReadyUpdateOp, schedule::NativeReadyCommitOp,
+            schedule::NativeReadyReadOp, schedule::NativeReadyMergeOp>(
+            operation))
+      supported = false;
+    auto load = dyn_cast<schedule::NativeReadyWordLoadOp>(operation);
+    auto store = dyn_cast<schedule::NativeReadyWordStoreOp>(operation);
+    if (!(load && load.getSet() == reference.getValue()) &&
+        !(store && store.getSet() == reference.getValue()))
+      return;
+    if (load ? load.getDynamicWord() : store.getDynamicWord()) {
+      // Hierarchical ready lookup can select a word dynamically. Keep that
+      // exact access on authoritative storage and treat it as a boundary.
+      dynamicAccesses.push_back(operation);
+      return;
     }
-  }
+    uint64_t word = load ? load.getStaticWord() : store.getStaticWord();
+    if (word >= array.getNumElements())
+      supported = false;
+    else
+      accesses[word].push_back(operation);
+  });
+  llvm::append_range(boundaries, dynamicAccesses);
   if (!supported || accesses.empty())
     return success();
   // Flush/acquire code is also charged to the existing group growth budget.
@@ -483,45 +469,69 @@ LogicalResult promoteGroupReadyWords(LLVM::LLVMFuncOp function,
   builder.setInsertionPointToStart(&function.getBody().front());
   Location location = function.getLoc();
   Type i64 = builder.getI64Type();
-  Value base = LLVM::AddressOfOp::create(
-      builder, location, LLVM::LLVMPointerType::get(function.getContext()),
-      reference.getValue());
+  // A word's typed access, of the authoritative storage or of its slot.
+  auto load = [&](Location at, uint64_t word) -> Value {
+    return schedule::NativeReadyWordLoadOp::create(
+        builder, at, i64, reference, /*dynamic_word=*/Value{},
+        builder.getI64IntegerAttr(word), /*activation_entry=*/IntegerAttr{},
+        /*owner=*/IntegerAttr{});
+  };
+  auto store = [&](Location at, Value value, uint64_t word) {
+    schedule::NativeReadyWordStoreOp::create(
+        builder, at, value, reference, /*dynamic_word=*/Value{},
+        builder.getI64IntegerAttr(word), /*owner=*/IntegerAttr{});
+  };
   struct Word {
-    Value address;
+    uint64_t index;
     Value slot;
   };
   SmallVector<Word> words;
   SmallVector<PromotableAllocationOpInterface> allocations;
   for (auto &[index, operations] : accesses) {
-    Value address = byteGEP(builder, location, base, index * 8);
     Value slot = entryAlloca(builder, location, i64, 1, 8);
     allocations.push_back(
         cast<PromotableAllocationOpInterface>(slot.getDefiningOp()));
-    Value initial = LLVM::LoadOp::create(builder, location, i64, address, 8);
+    Value initial = load(location, index);
     LLVM::StoreOp::create(builder, location, initial, slot, 8);
-    words.push_back({address, slot});
+    words.push_back({index, slot});
+    // Each access becomes the same access of the slot; its entry and owner
+    // become the LLVM access's tags.
     for (Operation *operation : operations) {
-      if (auto load = dyn_cast<LLVM::LoadOp>(operation))
-        load.getAddrMutable().assign(slot);
-      else
-        cast<LLVM::StoreOp>(operation).getAddrMutable().assign(slot);
+      OpBuilder rewriter(operation);
+      Operation *access;
+      if (auto typed = dyn_cast<schedule::NativeReadyWordLoadOp>(operation)) {
+        access =
+            LLVM::LoadOp::create(rewriter, operation->getLoc(), i64, slot, 8);
+        typed.getResult().replaceAllUsesWith(access->getResult(0));
+        if (IntegerAttr entry = typed.getActivationEntryAttr())
+          setNativeActivationEntry(access, entry);
+        if (IntegerAttr owner = typed.getOwnerAttr())
+          setNativeMemoryOwner(access, owner);
+      } else {
+        auto typedStore = cast<schedule::NativeReadyWordStoreOp>(operation);
+        access = LLVM::StoreOp::create(rewriter, operation->getLoc(),
+                                       typedStore.getValue(), slot, 8);
+        if (IntegerAttr owner = typedStore.getOwnerAttr())
+          setNativeMemoryOwner(access, owner);
+      }
+      for (NamedAttribute attribute : operation->getDiscardableAttrs())
+        access->setAttr(attribute.getName(), attribute.getValue());
+      operation->erase();
     }
   }
   for (Operation *boundary : boundaries) {
     builder.setInsertionPoint(boundary);
     for (const Word &word : words)
-      LLVM::StoreOp::create(
-          builder, boundary->getLoc(),
+      store(
+          boundary->getLoc(),
           LLVM::LoadOp::create(builder, boundary->getLoc(), i64, word.slot, 8),
-          word.address, 8);
+          word.index);
     if (isa<LLVM::ReturnOp>(boundary))
       continue;
     builder.setInsertionPointAfter(boundary);
     for (const Word &word : words)
       LLVM::StoreOp::create(builder, boundary->getLoc(),
-                            LLVM::LoadOp::create(builder, boundary->getLoc(),
-                                                 i64, word.address, 8),
-                            word.slot, 8);
+                            load(boundary->getLoc(), word.index), word.slot, 8);
   }
   DominanceInfo dominance(function);
   if (failed(promoteScalarSlots(allocations, builder,

@@ -390,36 +390,80 @@ private:
 };
 
 // Lowers ready set word accesses to whole-word LLVM accesses of the set's
-// global, as the eval schedule's LLVM form addresses them: the set's address
-// once per function (ReadySetAddresses), then a word's address per access.
+// global: the set's address once per function, at the start of its entry
+// block in the order of first use, then a static word's address per access
+// and a dynamic word's once per block, as the eval schedule's LLVM form takes
+// them.
 class LowerNativeReadyWordsPass final
     : public impl::LowerNativeReadyWordsPassBase<LowerNativeReadyWordsPass> {
 public:
   void runOnOperation() override {
     LLVM::LLVMFuncOp function = getOperation();
     SmallVector<Operation *> words;
+    bool valid = true;
     function.walk([&](Operation *operation) {
       if (isa<schedule::NativeReadyWordLoadOp,
               schedule::NativeReadyWordStoreOp>(operation))
         words.push_back(operation);
+      // Before this point a function accesses a ready set only through ready
+      // actions and typed words, which the passes before it inspect (the
+      // ready-region boundaries and group promotion among them).
+      if (auto address = dyn_cast<LLVM::AddressOfOp>(operation);
+          address && schedule::getReadySetOfGlobal(address.getGlobalName())) {
+        address.emitError("takes a ready set's address outside typed ready "
+                          "operations");
+        valid = false;
+      }
     });
+    if (!valid)
+      return signalPassFailure();
     if (words.empty())
       return markAllAnalysesPreserved();
-    detail::ReadySetAddresses addresses;
+    llvm::SmallDenseMap<Attribute, Value, 2> bases;
+    Operation *lastBase = nullptr;
+    DenseMap<std::tuple<Block *, Attribute, Value, uint64_t>, Value>
+        dynamicAddresses;
+    DenseMap<Value, Operation *> lastAfterIndex;
     for (Operation *operation : words) {
       OpBuilder builder(operation);
       Location location = operation->getLoc();
       auto address = [&](FlatSymbolRefAttr set, Value dynamicWord,
                          uint64_t staticWord) -> Value {
-        Value base = addresses.get(operation, set);
+        Value &base = bases[set];
+        if (!base) {
+          OpBuilder entry =
+              OpBuilder::atBlockBegin(&function.getBody().front());
+          if (lastBase)
+            entry.setInsertionPointAfter(lastBase);
+          base = LLVM::AddressOfOp::create(
+              entry, location, LLVM::LLVMPointerType::get(&getContext()),
+              set.getValue());
+          lastBase = base.getDefiningOp();
+        }
         if (!dynamicWord)
           return detail::ownerWordAddress(builder, location, base, staticWord);
-        Value word = LLVM::GEPOp::create(builder, location, base.getType(),
-                                         builder.getI64Type(), base,
-                                         ValueRange{dynamicWord});
-        return staticWord ? detail::byteGEP(builder, location, word,
-                                            staticWord * sizeof(uint64_t))
-                          : word;
+        // A dynamic word's address is computed once per block, where its
+        // index is: right after the index's definition in the access's
+        // block, else before the block's first access.
+        Value &shared = dynamicAddresses[{operation->getBlock(), set,
+                                          dynamicWord, staticWord}];
+        if (shared)
+          return shared;
+        OpBuilder at(operation);
+        Operation *definition = dynamicWord.getDefiningOp();
+        if (definition && definition->getBlock() == operation->getBlock()) {
+          Operation *&after = lastAfterIndex[dynamicWord];
+          at.setInsertionPointAfter(after ? after : definition);
+        }
+        Value word =
+            LLVM::GEPOp::create(at, location, base.getType(), at.getI64Type(),
+                                base, ValueRange{dynamicWord});
+        if (staticWord)
+          word = detail::byteGEP(at, location, word,
+                                 staticWord * sizeof(uint64_t));
+        if (definition && definition->getBlock() == operation->getBlock())
+          lastAfterIndex[dynamicWord] = word.getDefiningOp();
+        return shared = word;
       };
       Operation *lowered;
       IntegerAttr owner;
@@ -431,6 +475,8 @@ public:
                                        sizeof(uint64_t));
         load.getResult().replaceAllUsesWith(lowered->getResult(0));
         owner = load.getOwnerAttr();
+        if (IntegerAttr entry = load.getActivationEntryAttr())
+          detail::setNativeActivationEntry(lowered, entry);
       } else {
         auto store = cast<schedule::NativeReadyWordStoreOp>(operation);
         lowered = LLVM::StoreOp::create(builder, location, store.getValue(),

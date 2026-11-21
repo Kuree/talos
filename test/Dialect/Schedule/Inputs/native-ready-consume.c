@@ -19,8 +19,8 @@ static void index_words(uint64_t *words, unsigned stale) {
       words[TOP] |= UINT64_C(1) << (i / 64);
     }
 }
-void observe(uint64_t *actual) {
-  assert(memcmp(actual, expected, sizeof(expected)) == 0);
+void observe(void) {
+  assert(memcmp(__talos_aot_model_ingress_v1, expected, sizeof(expected)) == 0);
 }
 int main(void) {
   uint64_t *actual = __talos_aot_model_ingress_v1, *ready = actual;

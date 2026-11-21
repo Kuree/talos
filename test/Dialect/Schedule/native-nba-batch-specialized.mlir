@@ -1,4 +1,4 @@
-// RUN: talos-opt %s --pass-pipeline='builtin.module(convert-native-schedule-actions-to-llvm,llvm.func(lower-native-state-access))' -o %t.lowered
+// RUN: talos-opt %s --pass-pipeline='builtin.module(convert-native-schedule-actions-to-llvm,llvm.func(lower-native-ready-words,lower-native-state-access))' -o %t.lowered
 // RUN: FileCheck %s --implicit-check-not="llvm.mlir.addressof @constant_offset" --implicit-check-not=llvm.intr.cttz --implicit-check-not=llvm.switch < %t.lowered
 // RUN: %llvm_dist/bin/mlir-opt %t.lowered --allow-unregistered-dialect --convert-arith-to-llvm --convert-cf-to-llvm | talos-translate --mlir-to-llvmir | %llc -filetype=obj -relocation-model=pic -o %t.o
 // RUN: %llvm_dist/bin/clang -O2 %t.o %S/Inputs/native-nba-batch.c -o %t.exe
@@ -23,7 +23,7 @@
 // PREFIX-LABEL: llvm.func @specialized
 // PREFIX: %[[LAST:.*]] = llvm.mlir.constant(65 : i32)
 // PREFIX: llvm.call @talos_rt_v1_static_nba_prefix_guard({{.*}}, %[[LAST]], %
-#batch = #schedule.nba_batch_layout<plan = @plan, value = @value, unknown = @unknown, dirty = @dirty, summary = @summary, ingress = @ingress, bitCount = 256, rootCount = 66, capacity = 130>
+#batch = #schedule.nba_batch_layout<plan = @plan, value = @value, unknown = @unknown, dirty = @dirty, summary = @summary, ingress = @__talos_aot_model_ingress_v1, bitCount = 256, rootCount = 66, capacity = 130>
 #consumer = #schedule.nba_consumer<low = 64, width = 65, bit = 129>
 #slot_consumer = #schedule.nba_consumer<low = 75, width = 5, bit = 64>
 #slot = #schedule.nba_slot_layout<offset = @offset, value = @staged_value, unknown = @staged_unknown, valid = @valid, width = 64>
@@ -39,7 +39,7 @@ module {
   llvm.mlir.global external @unknown() : !llvm.array<40 x i8>
   llvm.mlir.global external @dirty() : !llvm.array<2 x i64>
   llvm.mlir.global external @summary() : i64
-  llvm.mlir.global external @ingress() : !llvm.array<8 x i64>
+  llvm.mlir.global external @__talos_aot_model_ingress_v1() : !llvm.array<8 x i64>
   llvm.mlir.global external @accumulator() : !llvm.array<136 x i8>
   llvm.mlir.global external @aux2() : !llvm.array<136 x i8>
   llvm.mlir.global external @aux63() : !llvm.array<136 x i8>

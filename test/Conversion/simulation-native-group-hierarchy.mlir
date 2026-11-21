@@ -28,17 +28,17 @@
 // consume and update only on its own taken arm.
 // CFG-LABEL: llvm.func @group.child0.dataflow()
 // CFG-SAME: schedule.eval.ranked_members = array<i32: 0, 3>
-// CFG: llvm.load {{.*}}schedule.eval.activation_entry = 0
+// CFG: schedule.ready.word.load @__talos_aot_model_ingress_v1[0] {activation_entry = 0 : i32}
 // CFG: llvm.cond_br %{{.*}}, ^[[RUN0:bb[0-9]+]], ^[[CHECK3:bb[0-9]+]]
 // CFG: ^[[RUN0]]:
-// CFG: llvm.store
+// CFG: schedule.ready.word.store %{{.*}}, @__talos_aot_model_ingress_v1[0]
 // CFG: schedule.state.store %{{.*}}, @__talos_state_value[0]
 // CFG: llvm.br ^[[CHECK3]]
 // CFG: ^[[CHECK3]]:
-// CFG-NEXT: llvm.load {{.*}}schedule.eval.activation_entry = 3
+// CFG-NEXT: schedule.ready.word.load @__talos_aot_model_ingress_v1[0] {activation_entry = 3 : i32}
 // CFG: llvm.cond_br %{{.*}}, ^[[RUN3:bb[0-9]+]], ^[[DONE:bb[0-9]+]]
 // CFG: ^[[RUN3]]:
-// CFG: llvm.store
+// CFG: schedule.ready.word.store %{{.*}}, @__talos_aot_model_ingress_v1[0]
 // CFG: schedule.state.store %{{.*}}, @__talos_state_value[1]
 // CFG: llvm.br ^[[DONE]]
 // CFG: ^[[DONE]]:
@@ -83,11 +83,10 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %one = llvm.mlir.constant(1 : i32) : i32
     %count = llvm.add %old, %one : i32
     llvm.store %count, %counter : i32, !llvm.ptr
-    %ready = llvm.mlir.addressof @__talos_aot_model_ingress_v1 : !llvm.ptr
-    %pending = llvm.load %ready : !llvm.ptr -> i64
+    %pending = schedule.ready.word.load @__talos_aot_model_ingress_v1[0]
     %bit0 = llvm.mlir.constant(1 : i64) : i64
     %again = llvm.or %pending, %bit0 : i64
-    llvm.store %again, %ready : i64, !llvm.ptr
+    schedule.ready.word.store %again, @__talos_aot_model_ingress_v1[0]
     %flag = llvm.mlir.addressof @disturb : !llvm.ptr
     %enabled = llvm.load %flag : !llvm.ptr -> i1
     llvm.cond_br %enabled, ^mutate, ^done
@@ -96,15 +95,14 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %bit2 = llvm.mlir.constant(4 : i64) : i64
     llvm.store %bit2, %proof : i64, !llvm.ptr
     %forward = llvm.or %again, %bit2 : i64
-    llvm.store %forward, %ready : i64, !llvm.ptr
+    schedule.ready.word.store %forward, @__talos_aot_model_ingress_v1[0]
     llvm.br ^done
   ^done:
     llvm.return
   }
   llvm.func @group() attributes {schedule.eval.ranked_members = array<i32: 0, 3, 1, 2>, schedule.eval.group_ingress = @__talos_aot_model_ingress_v1} {
-    %ready = llvm.mlir.addressof @__talos_aot_model_ingress_v1 : !llvm.ptr
     %zero = llvm.mlir.constant(0 : i64) : i64
-    %pending0 = llvm.load %ready {schedule.eval.activation_entry = 0 : i32} : !llvm.ptr -> i64
+    %pending0 = schedule.ready.word.load @__talos_aot_model_ingress_v1[0] {activation_entry = 0 : i32}
     %bit0 = llvm.mlir.constant(1 : i64) : i64
     %clear0 = llvm.mlir.constant(-2 : i64) : i64
     %selected0 = llvm.and %pending0, %bit0 : i64
@@ -112,11 +110,11 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     llvm.cond_br %active0, ^execute0, ^check3
   ^execute0:
     %remaining0 = llvm.and %pending0, %clear0 : i64
-    llvm.store %remaining0, %ready : i64, !llvm.ptr
+    schedule.ready.word.store %remaining0, @__talos_aot_model_ingress_v1[0]
     llvm.call @leaf0() : () -> ()
     llvm.br ^check3
   ^check3:
-    %pending3 = llvm.load %ready {schedule.eval.activation_entry = 3 : i32} : !llvm.ptr -> i64
+    %pending3 = schedule.ready.word.load @__talos_aot_model_ingress_v1[0] {activation_entry = 3 : i32}
     %bit3 = llvm.mlir.constant(8 : i64) : i64
     %clear3 = llvm.mlir.constant(-9 : i64) : i64
     %selected3 = llvm.and %pending3, %bit3 : i64
@@ -124,14 +122,14 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     llvm.cond_br %active3, ^execute3, ^check1
   ^execute3:
     %remaining3 = llvm.and %pending3, %clear3 : i64
-    llvm.store %remaining3, %ready : i64, !llvm.ptr
+    schedule.ready.word.store %remaining3, @__talos_aot_model_ingress_v1[0]
     %old3 = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
     %one3 = llvm.mlir.constant(1 : i8) : i8
     %value3 = llvm.add %old3, %one3 : i8
     schedule.state.store %value3, @__talos_state_value[1] {alignment = 1 : i64} : i8
     llvm.br ^check1
   ^check1:
-    %pending1 = llvm.load %ready {schedule.eval.activation_entry = 1 : i32} : !llvm.ptr -> i64
+    %pending1 = schedule.ready.word.load @__talos_aot_model_ingress_v1[0] {activation_entry = 1 : i32}
     %bit1 = llvm.mlir.constant(2 : i64) : i64
     %clear1 = llvm.mlir.constant(-3 : i64) : i64
     %selected1 = llvm.and %pending1, %bit1 : i64
@@ -139,12 +137,13 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     llvm.cond_br %active1, ^execute1, ^check2
   ^execute1:
     %remaining1 = llvm.and %pending1, %clear1 : i64
-    llvm.store %remaining1, %ready : i64, !llvm.ptr
-    %ordered1 = llvm.load volatile %ready : !llvm.ptr -> i64
+    schedule.ready.word.store %remaining1, @__talos_aot_model_ingress_v1[0]
+    %order1 = llvm.mlir.addressof @observed : !llvm.ptr
+    %ordered1 = llvm.load volatile %order1 : !llvm.ptr -> i32
     llvm.call @boundary() : () -> ()
     llvm.br ^check2
   ^check2:
-    %pending2 = llvm.load %ready {schedule.eval.activation_entry = 2 : i32} : !llvm.ptr -> i64
+    %pending2 = schedule.ready.word.load @__talos_aot_model_ingress_v1[0] {activation_entry = 2 : i32}
     %bit2 = llvm.mlir.constant(4 : i64) : i64
     %clear2 = llvm.mlir.constant(-5 : i64) : i64
     %selected2 = llvm.and %pending2, %bit2 : i64
@@ -152,16 +151,15 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     llvm.cond_br %active2, ^execute2, ^done
   ^execute2:
     %remaining2 = llvm.and %pending2, %clear2 : i64
-    llvm.store %remaining2, %ready : i64, !llvm.ptr
+    schedule.ready.word.store %remaining2, @__talos_aot_model_ingress_v1[0]
     llvm.call @leaf2() : () -> ()
     llvm.br ^done
   ^done:
     llvm.return
   }
   llvm.func @candidate() attributes {schedule.eval.ranked_members = array<i32: 0, 3, 1, 2>, schedule.eval.group_ingress = @__talos_aot_model_ingress_v1, schedule.eval.dataflow_candidate = @group} {
-    %ready = llvm.mlir.addressof @__talos_aot_model_ingress_v1 : !llvm.ptr
     %zero = llvm.mlir.constant(0 : i64) : i64
-    %pending0 = llvm.load %ready {schedule.eval.activation_entry = 0 : i32} : !llvm.ptr -> i64
+    %pending0 = schedule.ready.word.load @__talos_aot_model_ingress_v1[0] {activation_entry = 0 : i32}
     %bit0 = llvm.mlir.constant(1 : i64) : i64
     %clear0 = llvm.mlir.constant(-2 : i64) : i64
     %selected0 = llvm.and %pending0, %bit0 : i64
@@ -169,14 +167,14 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     llvm.cond_br %active0, ^execute0, ^check3
   ^execute0:
     %remaining0 = llvm.and %pending0, %clear0 : i64
-    llvm.store %remaining0, %ready : i64, !llvm.ptr
+    schedule.ready.word.store %remaining0, @__talos_aot_model_ingress_v1[0]
     %old0 = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
     %one0 = llvm.mlir.constant(1 : i8) : i8
     %value0 = llvm.add %old0, %one0 : i8
     schedule.state.store %value0, @__talos_state_value[0] {alignment = 1 : i64} : i8
     llvm.br ^check3
   ^check3:
-    %pending3 = llvm.load %ready {schedule.eval.activation_entry = 3 : i32} : !llvm.ptr -> i64
+    %pending3 = schedule.ready.word.load @__talos_aot_model_ingress_v1[0] {activation_entry = 3 : i32}
     %bit3 = llvm.mlir.constant(8 : i64) : i64
     %clear3 = llvm.mlir.constant(-9 : i64) : i64
     %selected3 = llvm.and %pending3, %bit3 : i64
@@ -184,14 +182,14 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     llvm.cond_br %active3, ^execute3, ^check1
   ^execute3:
     %remaining3 = llvm.and %pending3, %clear3 : i64
-    llvm.store %remaining3, %ready : i64, !llvm.ptr
+    schedule.ready.word.store %remaining3, @__talos_aot_model_ingress_v1[0]
     %old3 = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
     %one3 = llvm.mlir.constant(1 : i8) : i8
     %value3 = llvm.add %old3, %one3 : i8
     schedule.state.store %value3, @__talos_state_value[1] {alignment = 1 : i64} : i8
     llvm.br ^check1
   ^check1:
-    %pending1 = llvm.load %ready {schedule.eval.activation_entry = 1 : i32} : !llvm.ptr -> i64
+    %pending1 = schedule.ready.word.load @__talos_aot_model_ingress_v1[0] {activation_entry = 1 : i32}
     %bit1 = llvm.mlir.constant(2 : i64) : i64
     %clear1 = llvm.mlir.constant(-3 : i64) : i64
     %selected1 = llvm.and %pending1, %bit1 : i64
@@ -199,12 +197,13 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     llvm.cond_br %active1, ^execute1, ^check2
   ^execute1:
     %remaining1 = llvm.and %pending1, %clear1 : i64
-    llvm.store %remaining1, %ready : i64, !llvm.ptr
-    %ordered1 = llvm.load volatile %ready : !llvm.ptr -> i64
+    schedule.ready.word.store %remaining1, @__talos_aot_model_ingress_v1[0]
+    %order1 = llvm.mlir.addressof @observed : !llvm.ptr
+    %ordered1 = llvm.load volatile %order1 : !llvm.ptr -> i32
     llvm.call @boundary() : () -> ()
     llvm.br ^check2
   ^check2:
-    %pending2 = llvm.load %ready {schedule.eval.activation_entry = 2 : i32} : !llvm.ptr -> i64
+    %pending2 = schedule.ready.word.load @__talos_aot_model_ingress_v1[0] {activation_entry = 2 : i32}
     %bit2 = llvm.mlir.constant(4 : i64) : i64
     %clear2 = llvm.mlir.constant(-5 : i64) : i64
     %selected2 = llvm.and %pending2, %bit2 : i64
@@ -212,7 +211,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     llvm.cond_br %active2, ^execute2, ^done
   ^execute2:
     %remaining2 = llvm.and %pending2, %clear2 : i64
-    llvm.store %remaining2, %ready : i64, !llvm.ptr
+    schedule.ready.word.store %remaining2, @__talos_aot_model_ingress_v1[0]
     %old2 = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i8
     %one2 = llvm.mlir.constant(1 : i8) : i8
     %value2 = llvm.add %old2, %one2 : i8
@@ -222,7 +221,6 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     llvm.return
   }
   llvm.func @main() -> i32 {
-    %ready = llvm.mlir.addressof @__talos_aot_model_ingress_v1 : !llvm.ptr
     %proof = llvm.mlir.addressof @__talos_eval_promotion_pending_mask_v1 : !llvm.ptr
     %slow0 = llvm.mlir.addressof @slow0 : !llvm.ptr
     %slow2 = llvm.mlir.addressof @slow2 : !llvm.ptr
@@ -243,7 +241,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %four8 = llvm.mlir.constant(4 : i8) : i8
     llvm.call @group() : () -> ()
     %result = schedule.state.load @__talos_state_value[2] {alignment = 1 : i64} : i8
-    %backward = llvm.load %ready : !llvm.ptr -> i64
+    %backward = schedule.ready.word.load @__talos_aot_model_ingress_v1[0]
     %c0 = llvm.load %slow0 : !llvm.ptr -> i32
     %c2 = llvm.load %slow2 : !llvm.ptr -> i32
     %bc = llvm.load %observed : !llvm.ptr -> i32
@@ -261,14 +259,14 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %first = llvm.and %executed, %forwarded : i1
     llvm.call @group() : () -> ()
     %held = schedule.state.load @__talos_state_value[2] {alignment = 1 : i64} : i8
-    %drained = llvm.load %ready : !llvm.ptr -> i64
+    %drained = schedule.ready.word.load @__talos_aot_model_ingress_v1[0]
     %h = llvm.icmp "eq" %held, %two8 : i8
     %r = llvm.icmp "eq" %drained, %zero64 : i64
     %second = llvm.and %h, %r : i1
     // Only the boundary actor is initially pending. Its callback publishes
     // the consumer and invalidates its proof before that consumer executes.
     llvm.store %yes, %disturb : i1, !llvm.ptr
-    llvm.store %two64, %ready : i64, !llvm.ptr
+    schedule.ready.word.store %two64, @__talos_aot_model_ingress_v1[0]
     llvm.call @group() : () -> ()
     %fallback = llvm.load %slow2 : !llvm.ptr -> i32
     %updated = schedule.state.load @__talos_state_value[2] {alignment = 1 : i64} : i8
@@ -279,7 +277,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     // Drain the backward publication before starting another activation.
     llvm.call @group() : () -> ()
     llvm.store %outside, %proof : i64, !llvm.ptr
-    llvm.store %four64, %ready : i64, !llvm.ptr
+    schedule.ready.word.store %four64, @__talos_aot_model_ingress_v1[0]
     llvm.call @group() : () -> ()
     %resumed = llvm.load %slow2 : !llvm.ptr -> i32
     %no_replay = llvm.load %observed : !llvm.ptr -> i32

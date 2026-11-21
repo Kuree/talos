@@ -1,4 +1,4 @@
-// RUN: talos-opt %s --convert-native-schedule-actions-to-llvm -o %t.lowered
+// RUN: talos-opt %s --pass-pipeline='builtin.module(convert-native-schedule-actions-to-llvm,llvm.func(lower-native-ready-words))' -o %t.lowered
 // RUN: FileCheck %s < %t.lowered
 // RUN: %llvm_dist/bin/mlir-opt %t.lowered --convert-arith-to-llvm --convert-cf-to-llvm | talos-translate --mlir-to-llvmir > %t.ll
 // RUN: %llvm_dist/bin/clang -O0 %t.ll -o %t.o0
@@ -17,24 +17,21 @@ module {
   llvm.mlir.global internal @__talos_aot_model_ingress_v1(dense<0> : tensor<65xi64>) : !llvm.array<65 x i64>
   llvm.mlir.global internal @error(0 : i32) : i32
   llvm.func @observe() -> i1 attributes {passthrough = ["noinline"]} {
-    %base = llvm.mlir.addressof @__talos_aot_model_ingress_v1 : !llvm.ptr
-    %last = llvm.getelementptr %base[63] : (!llvm.ptr) -> !llvm.ptr, i64
-    %summary = llvm.getelementptr %base[64] : (!llvm.ptr) -> !llvm.ptr, i64
     %zero = llvm.mlir.constant(0 : i64) : i64
     %one = llvm.mlir.constant(1 : i64) : i64
     %eight = llvm.mlir.constant(8 : i64) : i64
     %high = llvm.mlir.constant(-9223372036854775808 : i64) : i64
-    %first = llvm.load %base : !llvm.ptr -> i64
-    %end = llvm.load %last : !llvm.ptr -> i64
-    %bits = llvm.load %summary : !llvm.ptr -> i64
+    %first = schedule.ready.word.load @__talos_aot_model_ingress_v1[0]
+    %end = schedule.ready.word.load @__talos_aot_model_ingress_v1[63]
+    %bits = schedule.ready.word.load @__talos_aot_model_ingress_v1[64]
     %a = llvm.icmp "eq" %first, %zero : i64
     %b = llvm.icmp "eq" %end, %high : i64
     %c = llvm.icmp "eq" %bits, %high : i64
     %ab = llvm.and %a, %b : i1
     %ok = llvm.and %ab, %c : i1
-    llvm.store %eight, %base : i64, !llvm.ptr
-    llvm.store %zero, %last : i64, !llvm.ptr
-    llvm.store %one, %summary : i64, !llvm.ptr
+    schedule.ready.word.store %eight, @__talos_aot_model_ingress_v1[0]
+    schedule.ready.word.store %zero, @__talos_aot_model_ingress_v1[63]
+    schedule.ready.word.store %one, @__talos_aot_model_ingress_v1[64]
     llvm.return %ok : i1
   }
   llvm.func @exercise() {
@@ -76,10 +73,9 @@ module {
   }
   llvm.func @main() -> i32 {
     llvm.call @exercise() : () -> ()
-    %base = llvm.mlir.addressof @__talos_aot_model_ingress_v1 : !llvm.ptr
     %error = llvm.mlir.addressof @error : !llvm.ptr
     %ten = llvm.mlir.constant(10 : i64) : i64
-    %value = llvm.load %base : !llvm.ptr -> i64
+    %value = schedule.ready.word.load @__talos_aot_model_ingress_v1[0]
     %code = llvm.load %error : !llvm.ptr -> i32
     %ok = llvm.icmp "eq" %value, %ten : i64
     %fail = llvm.mlir.constant(1 : i32) : i32
