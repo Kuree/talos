@@ -249,12 +249,6 @@ def EvalStateAccessBytes : ScheduleField<"EvalStateAccessBytes", "schedule.eval.
 // descriptor/root identity, exact canonical range, captured mask and region.
 def EvalTransactionRoots : ScheduleField<"EvalTransactionRoots", "schedule.eval.transaction_roots",
     "::mlir::ArrayAttr">;
-// Literal target a runtime claim call captures: root, state, width, mask,
-// region, semantic site. Every source site must have the same certified form.
-// (Generated stages certify theirs on the dirty-root mark; see
-// schedule.nba.index.store.)
-def EvalPendingStageSpec : ScheduleField<"EvalPendingStageSpec", "schedule.eval.pending_stage_spec",
-    "::mlir::DenseI64ArrayAttr">;
 def EvalPendingRuntimeRoot : ScheduleField<"EvalPendingRuntimeRoot", "schedule.eval.pending_runtime_root",
     "::mlir::IntegerAttr">;
 def EvalUnsupportedCheckpointOwner : ScheduleField<"EvalUnsupportedCheckpointOwner", "schedule.eval.unsupported_checkpoint_owner",

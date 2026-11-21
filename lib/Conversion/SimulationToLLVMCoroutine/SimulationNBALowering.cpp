@@ -1679,8 +1679,6 @@ public:
                     llvmConstant(rewriter, location, i64, *width), value,
                     unknown})
                 .getResult();
-        schedule::set<schedule::Field::EvalPendingStageSpec>(
-            status.getDefiningOp(), captureSpec());
         LLVM::CallOp::create(
             rewriter, location, TypeRange{},
             getNativeRuntimeCallee(rewriter.getContext(),

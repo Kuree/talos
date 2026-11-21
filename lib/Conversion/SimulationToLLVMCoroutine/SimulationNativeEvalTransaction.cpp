@@ -439,16 +439,6 @@ bool pendingRuntimeTransparent(LLVM::CallOp call,
     // waiting actor or consume pending captures. CURRENT publication still
     // occurs at this call (LRM 4.6(a), 9.4.2).
     return arguments.size() == 9 && constant(1) && constant(2);
-  case NativeRuntimeEntry::StaticNbaClaim:
-  case NativeRuntimeEntry::StaticNbaStageWide: {
-    // These ABIs validate and stage only the explicit root. Staging an
-    // unrelated root does not expose this transaction's private captures.
-    APInt index;
-    return arguments.size() >= 2 &&
-           matchPattern(arguments[1], m_ConstantInt(&index)) &&
-           index.getActiveBits() <= 32 &&
-           !byRoot.contains(index.getZExtValue());
-  }
   case NativeRuntimeEntry::SchedulerStaticNba:
     if (auto root =
             schedule::get<schedule::Field::EvalPendingRuntimeRoot>(call))
@@ -1083,11 +1073,9 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
       // A runtime-held capture keeps its root canonical.
       if (index && index->canonicalCapture)
         captures[*index->root].exact = false;
-      DenseI64ArrayAttr spec =
-          index ? index->capture
-                : schedule::get<schedule::Field::EvalPendingStageSpec>(nested);
-      if (spec) {
-        auto data = spec.asArrayRef();
+      // A generated stage certifies its capture on its dirty-root mark.
+      if (index && index->capture) {
+        auto data = index->capture.asArrayRef();
         if (data.size() != 6 || data[0] < 0 || data[0] > UINT32_MAX)
           return;
         auto &capture = captures[data[0]];

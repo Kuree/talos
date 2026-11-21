@@ -302,3 +302,49 @@ module attributes {
     llvm.return
   }
 }
+
+// -----
+
+// Runtime-routed static NBA stages stay out of every generated eval call
+// closure. The eval transaction pass relies on it: it sees such a stage only
+// as an opaque cut.
+module attributes {
+  llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128",
+  llvm.target_triple = "x86_64-unknown-linux-gnu",
+  schedule.eval.generated
+} {
+  llvm.func @talos_rt_v1_scheduler_static_nba(!llvm.ptr, i64, !llvm.ptr,
+      !llvm.ptr, i64, i64, i64, !llvm.ptr, !llvm.ptr) -> i32
+  llvm.func @talos_rt_v1_static_nba_claim(!llvm.ptr, i32, !llvm.ptr,
+      !llvm.ptr, i64, i64, i64, i64, i64) -> i32
+  llvm.func @talos_rt_v1_static_nba_stage_wide(!llvm.ptr, i32, i64, i64, i64,
+      i64, i32)
+  llvm.func @__talos_eval_static_stage(%ctx: !llvm.ptr, %data: !llvm.ptr,
+      %word: i64) attributes {schedule.eval.call_closure_root} {
+    // expected-error @+1 {{generated eval hot closure calls runtime symbol talos_rt_v1_scheduler_static_nba in __talos_eval_static_stage}}
+    %status = llvm.call @talos_rt_v1_scheduler_static_nba(%ctx, %word, %data,
+        %data, %word, %word, %word, %data, %data)
+        : (!llvm.ptr, i64, !llvm.ptr, !llvm.ptr, i64, i64, i64, !llvm.ptr,
+           !llvm.ptr) -> i32
+    llvm.return
+  }
+  llvm.func @__talos_eval_static_claim(%ctx: !llvm.ptr, %data: !llvm.ptr,
+      %word: i64) attributes {schedule.eval.call_closure_root} {
+    %root = llvm.mlir.constant(0 : i32) : i32
+    // expected-error @+1 {{generated eval hot closure calls runtime symbol talos_rt_v1_static_nba_claim in __talos_eval_static_claim}}
+    %status = llvm.call @talos_rt_v1_static_nba_claim(%ctx, %root, %data,
+        %data, %word, %word, %word, %word, %word)
+        : (!llvm.ptr, i32, !llvm.ptr, !llvm.ptr, i64, i64, i64, i64, i64)
+        -> i32
+    llvm.return
+  }
+  llvm.func @__talos_eval_static_wide(%ctx: !llvm.ptr, %word: i64)
+      attributes {schedule.eval.call_closure_root} {
+    %root = llvm.mlir.constant(0 : i32) : i32
+    // expected-error @+1 {{generated eval hot closure calls runtime symbol talos_rt_v1_static_nba_stage_wide in __talos_eval_static_wide}}
+    llvm.call @talos_rt_v1_static_nba_stage_wide(%ctx, %root, %word, %word,
+        %word, %word, %root)
+        : (!llvm.ptr, i32, i64, i64, i64, i64, i32) -> ()
+    llvm.return
+  }
+}
