@@ -22,6 +22,7 @@
 #include "NativeGlobalInitializers.h"
 #include "NativeModulePruning.h"
 #include "NativePartitionCost.h"
+#include "NativeSplitClusters.h"
 #include "PassIRDump.h"
 #include "WasmBackend.h"
 
@@ -344,9 +345,12 @@ planNativeModuleSplit(llvm::Module &module, const NativePartitionPlan &plan) {
   // constants.  Treating every owner as an indivisible physical shard leaves
   // most ThinLTO workers idle behind a few outliers.  Form stable owner-local
   // definition units and use deterministic longest-processing-time packing.
-  // ThinLTO's global index remains responsible for cross-unit importing and
-  // whole-program optimization.
+  // A unit is a definition together with the callees that exist only for it
+  // (nativeSplitClusterRoots), so packing never moves such a callee away from
+  // its caller. ThinLTO's global index remains responsible for cross-unit
+  // importing and whole-program optimization.
   llvm::DenseMap<const llvm::GlobalValue *, StringRef> ownerByValue;
+  llvm::StringSet<> exported;
   for (const NativePartition &partition : plan.partitions) {
     for (StringRef member : partition.members) {
       llvm::GlobalValue *value = module.getNamedValue(member);
@@ -361,11 +365,13 @@ planNativeModuleSplit(llvm::Module &module, const NativePartitionPlan &plan) {
             "physical partition member has multiple owners: %s",
             member.str().c_str());
     }
-    for (StringRef symbol : partition.exports)
+    for (StringRef symbol : partition.exports) {
       if (!module.getNamedValue(symbol))
         return createStringError(inconvertibleErrorCode(),
                                  "physical partition export is missing: %s",
                                  symbol.str().c_str());
+      exported.insert(symbol);
+    }
   }
 
   // LLVM's coroutine split creates resume/destroy/cleanup functions after the
@@ -387,34 +393,63 @@ planNativeModuleSplit(llvm::Module &module, const NativePartitionPlan &plan) {
     }
   }
 
+  auto ownerOf = [&](const llvm::GlobalValue *value) {
+    StringRef owner = ownerByValue.lookup(value);
+    return owner.empty() ? StringRef("primary") : owner;
+  };
+  // Keep large bodies out of ThinLTO while allowing smaller generated
+  // functions to import helpers. Such an outlier is a unit by itself: joining
+  // its caller would pull the caller out of ThinLTO too, and its private
+  // callees reach it only as the helpers placed below.
+  auto outlier = [](const llvm::Function &function) {
+    return function.getInstructionCount() > 20000;
+  };
+  llvm::DenseMap<const llvm::Function *, const llvm::Function *> clusterRoots =
+      detail::nativeSplitClusterRoots(module, ownerOf, exported, outlier);
+
   struct SplitUnit {
     std::string key;
-    const llvm::GlobalValue *value = nullptr;
+    /// The unit's root definition first, then the private callees that
+    /// share it.
+    SmallVector<const llvm::GlobalValue *, 1> values;
     uint64_t weight = 1;
     bool nativeObject = false;
   };
   SmallVector<SplitUnit> units;
+  llvm::DenseMap<const llvm::GlobalValue *, unsigned> unitOfRoot;
   uint64_t instructionCount = 0;
   for (llvm::GlobalValue &value : module.global_values()) {
     if (value.isDeclaration())
       continue;
-    StringRef owner = ownerByValue.lookup(&value);
-    if (owner.empty())
-      owner = "primary";
+    auto *function = dyn_cast<llvm::Function>(&value);
+    if (function && clusterRoots.lookup(function) != function)
+      continue;
+    unitOfRoot[&value] = units.size();
     SplitUnit &unit = units.emplace_back();
-    unit.key = owner.str();
+    unit.key = ownerOf(&value).str();
     unit.key.push_back('\0');
     unit.key.append(value.getName());
-    unit.value = &value;
-    if (auto *function = dyn_cast<llvm::Function>(&value)) {
+    unit.values.push_back(&value);
+    if (function) {
       uint64_t instructions = function->getInstructionCount();
       instructionCount += instructions;
       unit.weight = std::max<uint64_t>(1, instructions);
-      // Keep large bodies out of ThinLTO while allowing smaller generated
-      // functions to import helpers.
-      unit.nativeObject = instructions > 20000;
+      unit.nativeObject = outlier(*function);
     } else if (auto *global = dyn_cast<llvm::GlobalVariable>(&value))
       unit.weight = detail::estimateNativeGlobalWeight(*global);
+  }
+  // Private callees join their root's unit, in module order.
+  for (llvm::Function &function : module) {
+    if (function.isDeclaration())
+      continue;
+    const llvm::Function *root = clusterRoots.lookup(&function);
+    if (root == &function)
+      continue;
+    SplitUnit &unit = units[unitOfRoot.lookup(root)];
+    unit.values.push_back(&function);
+    uint64_t instructions = function.getInstructionCount();
+    instructionCount += instructions;
+    unit.weight += std::max<uint64_t>(1, instructions);
   }
   llvm::sort(units, [](const SplitUnit &lhs, const SplitUnit &rhs) {
     if (lhs.nativeObject != rhs.nativeObject)
@@ -454,7 +489,8 @@ planNativeModuleSplit(llvm::Module &module, const NativePartitionPlan &plan) {
            ++candidate)
         if (groupWeights[candidate] < groupWeights[group])
           group = candidate;
-      assignments[units[index].value] = group;
+      for (const llvm::GlobalValue *value : units[index].values)
+        assignments[value] = group;
       groupWeights[group] += units[index].weight;
     }
   };
@@ -471,7 +507,7 @@ planNativeModuleSplit(llvm::Module &module, const NativePartitionPlan &plan) {
     llvm::MapVector<const llvm::GlobalValue *, std::pair<unsigned, uint64_t>>
         affinity;
     for (unsigned index = 0; index != nativeUnitCount; ++index) {
-      const auto *caller = dyn_cast<llvm::Function>(units[index].value);
+      const auto *caller = dyn_cast<llvm::Function>(units[index].values[0]);
       if (!caller)
         continue;
       unsigned group = assignments.lookup(caller);
@@ -490,6 +526,9 @@ planNativeModuleSplit(llvm::Module &module, const NativePartitionPlan &plan) {
           entry->second = {group, count};
       }
     }
+    // Only the helper moves: its own private callees stay with the rest of
+    // its unit, so the outlier's group holds just the outlier and its small
+    // helpers.
     for (const auto &[callee, choice] : affinity) {
       auto found = assignments.find(callee);
       if (found != assignments.end() &&

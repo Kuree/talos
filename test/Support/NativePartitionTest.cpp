@@ -3,6 +3,7 @@
 #include "NativeExecutionCounts.h"
 #include "NativeModulePruning.h"
 #include "NativePartitionCost.h"
+#include "NativeSplitClusters.h"
 
 #include "mlir/Parser/Parser.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
@@ -307,6 +308,73 @@ TEST(NativePartitionCost, InlineAggregateConstantsStillContribute) {
       type, {ConstantDataArray::get(context, values),
              ConstantInt::get(Type::getInt64Ty(context), 1)}));
   EXPECT_GT(estimateNativeGlobalWeight(*global), zeroWeight);
+}
+
+// A physical split unit keeps a function with the callees that exist only for
+// it, transitively.
+TEST(NativeSplitClusters, PrivateCalleesJoinTheirSoleCaller) {
+  LLVMContext context;
+  Module module("clusters", context);
+  IRBuilder<> builder(context);
+  auto *type = FunctionType::get(builder.getVoidTy(), false);
+  StringMap<Function *> functions;
+  for (StringRef name :
+       {"execute", "body", "leaf", "shared", "other", "escaped", "entry",
+        "foreign", "big", "big_leaf", "ring_b", "ring_a", "recursive"}) {
+    auto *function =
+        Function::Create(type, GlobalValue::ExternalLinkage, name, module);
+    builder.SetInsertPoint(BasicBlock::Create(context, "entry", function));
+    builder.CreateRetVoid();
+    functions[name] = function;
+  }
+  auto call = [&](StringRef caller, StringRef callee) {
+    builder.SetInsertPoint(functions[caller]->getEntryBlock().getTerminator());
+    builder.CreateCall(functions[callee]);
+  };
+  call("execute", "body"); // execute -> body -> leaf: one cluster.
+  call("body", "leaf");
+  call("body", "shared"); // Two callers: its own unit.
+  call("other", "shared");
+  call("execute", "escaped"); // Also stored below: its own unit.
+  new GlobalVariable(module, builder.getPtrTy(), true,
+                     GlobalValue::InternalLinkage, functions["escaped"],
+                     "table");
+  call("execute", "entry");   // Exported: its own unit.
+  call("execute", "foreign"); // Another owner: its own unit.
+  call("execute", "big");     // An outlier is a cluster by itself.
+  call("big", "big_leaf");
+  call("ring_a", "ring_b"); // Sole callers of each other: one cluster.
+  call("ring_b", "ring_a");
+  call("body", "recursive"); // Its own recursion is no other caller.
+  call("recursive", "recursive");
+
+  StringSet<> exported;
+  exported.insert("entry");
+  auto roots = talos::driver::detail::nativeSplitClusterRoots(
+      module,
+      [](const GlobalValue *value) {
+        return value->getName() == "foreign" ? StringRef("unit:2")
+                                             : StringRef("unit:1");
+      },
+      exported,
+      [](const Function &function) { return function.getName() == "big"; });
+  auto rootOf = [&](StringRef name) {
+    return roots.lookup(functions[name])->getName().str();
+  };
+  EXPECT_EQ(rootOf("execute"), "execute");
+  EXPECT_EQ(rootOf("body"), "execute");
+  EXPECT_EQ(rootOf("leaf"), "execute");
+  EXPECT_EQ(rootOf("recursive"), "execute");
+  EXPECT_EQ(rootOf("shared"), "shared");
+  EXPECT_EQ(rootOf("other"), "other");
+  EXPECT_EQ(rootOf("escaped"), "escaped");
+  EXPECT_EQ(rootOf("entry"), "entry");
+  EXPECT_EQ(rootOf("foreign"), "foreign");
+  EXPECT_EQ(rootOf("big"), "big");
+  EXPECT_EQ(rootOf("big_leaf"), "big_leaf");
+  EXPECT_EQ(rootOf("ring_a"), "ring_a");
+  EXPECT_EQ(rootOf("ring_b"), "ring_a");
+  EXPECT_EQ(roots.size(), functions.size());
 }
 
 } // namespace
