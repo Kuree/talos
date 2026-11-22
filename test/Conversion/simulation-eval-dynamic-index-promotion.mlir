@@ -2,7 +2,7 @@
 // RUN: FileCheck %s --implicit-check-not=__talos_eval_selected_variant_v1_ < %t.mlir
 
 // A write through an invalid index performs no operation (IEEE 1800-2023
-// 7.4.6), so a dynamic store needs no bounds proof to preserve known state:
+// 7.4.5), so a dynamic store needs no bounds proof to preserve known state:
 // its guard is the hull of the array. The read uses a two-bit index into four
 // elements, which is valid whenever the index is known. Both keep the lane's
 // two-state variant.

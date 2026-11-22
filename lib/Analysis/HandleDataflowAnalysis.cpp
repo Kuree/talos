@@ -257,7 +257,7 @@ public:
         // A four-state selector without that unconditional proof can still
         // address storage for every value it takes once known. Its
         // selections are then invalid only through X/Z bits (IEEE 1800-2023
-        // 7.4.6, 11.5.1), which consumers must exclude separately.
+        // 7.4.5, 11.5.1), which consumers must exclude separately.
         bool validIfKnown = selectorValid;
         if (!selectorValid && logicBits && selectorWidth &&
             isa<sim::LogicType>(selector.getType())) {

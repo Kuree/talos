@@ -3678,7 +3678,7 @@ FailureOr<bool> makeNativeEvalPlan(
 
       OpBuilder loadBuilder(access);
       Location loc = access->getLoc();
-      // IEEE 1800-2017 11.5.1 preserves every in-range bit of a partially
+      // IEEE 1800-2023 11.5.1 preserves every in-range bit of a partially
       // overhanging packed select and supplies the ordinary invalid-index
       // value only for the remainder.  Accept any overlap here, clamp the
       // physical load into the root, then align and mask it back into the

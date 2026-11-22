@@ -1,7 +1,7 @@
 // RUN: talos-opt %s -o /dev/null --pass-pipeline='builtin.module(test-talos-sim-state-domain)' 2>&1 | FileCheck %s
 
 // An X/Z index makes an array selection invalid, and an invalid read yields
-// the element default (IEEE 1800-2023 7.4.6). A four-bit index addresses all
+// the element default (IEEE 1800-2023 7.4.5). A four-bit index addresses all
 // sixteen elements for every known value, so it reads a known element once
 // its own root is known: the copy target stays inductively two-state. A
 // five-bit index can address past the declared range even when known, so its

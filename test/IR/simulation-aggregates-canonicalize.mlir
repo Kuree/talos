@@ -118,7 +118,7 @@ func.func @constant_dynamic_insert(%array: !array, %value: i8) -> !array {
   return %updated : !array
 }
 
-// IEEE 1800-2017 7.4.6: "Writing to an array with an invalid index shall
+// IEEE 1800-2023 7.4.5: "Writing to an array with an invalid index shall
 // perform no operation", so an out-of-range index leaves the array as it was.
 // CHECK-LABEL: func.func @invalid_dynamic_insert
 // CHECK-NEXT: return %arg0 : !simulation.unpacked_array<3 : 1 x i8>

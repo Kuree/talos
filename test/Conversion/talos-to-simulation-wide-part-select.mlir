@@ -1,6 +1,6 @@
 // RUN: talos-opt %s '--lower-talos-to-sim=opt-level=0' | FileCheck %s
 
-// IEEE 1800-2017 11.5.1: a part-select that is partially out of range returns
+// IEEE 1800-2023 11.5.1: a part-select that is partially out of range returns
 // x for the bits that are out of range when read, and affects only the bits
 // that are in range when written. A select wider than the value it addresses
 // is always partially out of range, so both directions place the value in a

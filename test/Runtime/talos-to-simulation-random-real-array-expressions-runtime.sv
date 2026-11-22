@@ -5,7 +5,7 @@
 // IEEE 1800-2023 18.4/18.5, 11.4.5: fixed real arrays compare element by
 // element as IEEE numbers (-0.0 == 0.0, NaN != NaN). Pinned: whole-array
 // ==/!= against state arrays, state-selected elements a[idx] with an invalid
-// index (7.4.6), conditional operands that are whole arrays, array-returning
+// index (7.4.5), conditional operands that are whole arrays, array-returning
 // functions, and failed requests leaving all fields unchanged.
 // CHECK: whole comparisons PASS
 // CHECK-NEXT: selected PASS

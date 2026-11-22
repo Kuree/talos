@@ -8667,7 +8667,7 @@ buildSlangArguments(ArrayRef<std::string> inputs,
   }
   appendValues(result, "--top", options.topModules);
   appendValues(result, "-G", options.paramOverrides);
-  // IEEE 1800-2017 11.5.1 and 7.4.6 define what an out-of-range select reads
+  // IEEE 1800-2023 11.5.1 and 7.4.5 define what an out-of-range select reads
   // and writes, so simulating one is conforming rather than an error. Slang
   // raises these to errors by default; put the downgrade ahead of the user's
   // own options so `-Werror=range-oob` still wins.

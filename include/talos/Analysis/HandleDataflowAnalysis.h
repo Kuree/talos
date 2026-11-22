@@ -57,7 +57,7 @@ struct HandleCertificate {
   /// Every selection is valid once each of `knownSelectors` has no X/Z bits:
   /// all values those selectors can take when known lie in range. `inBounds`
   /// implies this with no selectors. An X/Z selector makes the selection
-  /// invalid (IEEE 1800-2023 7.4.6, 11.5.1), so only consumers that also
+  /// invalid (IEEE 1800-2023 7.4.5, 11.5.1), so only consumers that also
   /// prove the selectors known may treat the access as valid.
   bool inBoundsIfKnown = false;
   llvm::SmallVector<mlir::Value, 2> knownSelectors{};

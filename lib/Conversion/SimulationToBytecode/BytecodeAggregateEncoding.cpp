@@ -383,7 +383,7 @@ LogicalResult Encoder::encodeArrayInsert(FunctionPlan &plan,
     return op.emitOpError("array element has no bytecode word representation");
   // encodeArrayOffset resolves an invalid index to the array's own width, and
   // INSERT drops every bit that falls at or past that width. That is exactly
-  // what IEEE 1800-2017 7.4.6 asks of a write through an invalid index: no
+  // what IEEE 1800-2023 7.4.5 asks of a write through an invalid index: no
   // operation.
   emit({Insert, flags, reg(plan, op.getResult()), reg(plan, op.getInput()),
         replacement, *offset});

@@ -275,7 +275,7 @@ transferMayUnknown(Operation *op, unsigned width,
         return spread ? *base | *spread : all;
       })
       // Any element, or for an X/Z or invalid index the element's default
-      // (7.4.6, 11.5.1).
+      // (7.4.5, 11.5.1).
       .Case<sim::SimArrayDynExtractOp>([&](auto extract)
                                            -> std::optional<APInt> {
         std::optional<APInt> bits = input(0), index = input(1);
@@ -1132,7 +1132,7 @@ private:
           inputs.steady.contains(op))
         return all;
       // A dynamic selection reads its gated hull only while it is valid:
-      // whenever its selectors are known (IEEE 1800-2023 7.4.6, 11.5.1).
+      // whenever its selectors are known (IEEE 1800-2023 7.4.5, 11.5.1).
       if (auto selectors = inputs.selectors.find(op);
           selectors != inputs.selectors.end())
         for (Value selector : selectors->second) {

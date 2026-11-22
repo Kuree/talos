@@ -315,7 +315,7 @@ public:
 
 // The bit position one element of a fixed array occupies in its flat storage
 // planes, together with whether the index named an element at all. IEEE
-// 1800-2017 7.4.6 makes an out-of-range or unknown index invalid: a read of one
+// 1800-2023 7.4.5 makes an out-of-range or unknown index invalid: a read of one
 // yields the element default and a write through one does nothing, which both
 // dynamic patterns below spell as a select on `valid`.
 struct DynamicArrayAddress {
@@ -573,7 +573,7 @@ public:
           arith::AndIOp::create(rewriter, location, plane, keepMask);
       Value written =
           arith::OrIOp::create(rewriter, location, preserved, placed);
-      // IEEE 1800-2017 7.4.6: a write through an invalid index performs no
+      // IEEE 1800-2023 7.4.5: a write through an invalid index performs no
       // operation, so the plane keeps the value it already held.
       results.push_back(arith::SelectOp::create(
           rewriter, location, address->valid, written, plane));

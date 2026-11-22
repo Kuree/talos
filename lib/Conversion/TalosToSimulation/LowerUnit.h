@@ -147,7 +147,7 @@ private:
       ::mlir::Operation *op, ::mlir::Type sourceValueType,
       ::mlir::Type resultType, bool constantOnly = false);
   /// Surround `scalar` with `padding` out-of-range bits on either side. Reads
-  /// of the padding see x, matching what IEEE 1800-2017 11.5.1 requires of a
+  /// of the padding see x, matching what IEEE 1800-2023 11.5.1 requires of a
   /// select position outside the value.
   ::mlir::FailureOr<::mlir::Value>
   padSelectionWindow(::mlir::Value scalar, uint64_t padding,
@@ -866,8 +866,8 @@ private:
   /// Widen a fixed-array index to the form the dynamic array operations take:
   /// one bit wider than both the source index and the i64 the declared bounds
   /// are compared in, so a source-range index can neither wrap nor lose its
-  /// sign. Four-state indices keep their unknown plane, which IEEE 1800-2017
-  /// 7.4.6 makes an invalid index.
+  /// sign. Four-state indices keep their unknown plane, which IEEE 1800-2023
+  /// 7.4.5 makes an invalid index.
   ::mlir::FailureOr<::mlir::Value> toArrayIndex(::mlir::Value value,
                                                 bool sourceSigned,
                                                 ::mlir::Location location);

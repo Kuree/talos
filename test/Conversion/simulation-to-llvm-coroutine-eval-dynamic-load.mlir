@@ -7,7 +7,7 @@
 
 // Feed preplanned Simulation IR to one conversion pass.  The emitted eval
 // body must keep a dynamic packed load runtime-free while implementing the
-// IEEE 1800-2017 11.5.1 partial-overlap rule with signed bounds, a clamped
+// IEEE 1800-2023 11.5.1 partial-overlap rule with signed bounds, a clamped
 // physical address, and result masks.  This locks the actual hot-path
 // transformation independently of the planning passes above.
 module attributes {

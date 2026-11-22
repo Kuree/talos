@@ -4953,7 +4953,7 @@ struct PartialConstantDynamicInsert final
   }
 };
 
-/// IEEE 1800-2023 7.4.6: writing back the element just read changes nothing.
+/// IEEE 1800-2023 7.4.5: writing back the element just read changes nothing.
 /// An invalid index reads the default and makes the write a no-op, so this
 /// holds for every index.
 struct RemoveArrayWriteBack final : OpRewritePattern<SimArrayDynInsertOp> {

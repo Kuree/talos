@@ -103,7 +103,7 @@ module {
     }
 
     // A full-width ref.extract that retypes its element -- `int` viewed as the
-    // `bit [31:0]` an IEEE 1800-2017 11.5.1 part-select of it produces -- is
+    // `bit [31:0]` an IEEE 1800-2023 11.5.1 part-select of it produces -- is
     // not the identity, so it survives. Folding it away would leave the store
     // below writing a packed array through a reference to `i32`.
     // CHECK-LABEL: simulation.func @retyping_ref_extract

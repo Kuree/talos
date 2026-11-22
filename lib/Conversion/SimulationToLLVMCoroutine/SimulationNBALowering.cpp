@@ -832,7 +832,7 @@ public:
     // Dynamic-reference lowering may have consumed an unknown index plane
     // while building a guarded stable handle.  Preserve that exact validity
     // predicate, but not the selected handle result: direct staging needs the
-    // former to make an X/Z write a no-op (IEEE 1800-2017 11.5.1), while
+    // former to make an X/Z write a no-op (IEEE 1800-2023 11.5.1), while
     // retaining the latter would keep native_handle_offset on the hot path.
     Value directValid = valid;
     bool exactDestinationValidity = true;

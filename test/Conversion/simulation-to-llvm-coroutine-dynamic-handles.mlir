@@ -46,6 +46,6 @@ module attributes {
 // CHECK: llvm.call @talos_rt_v1_native_state_load_plane
 // CHECK: llvm.call @talos_rt_v1_native_state_store_plane
 // The scheduler receives the exact four-bit view bound separately from the
-// two-bit payload. This preserves IEEE 1800-2017 11.5.1 clipping without
+// two-bit payload. This preserves IEEE 1800-2023 11.5.1 clipping without
 // allowing an overhanging write to spill into an adjacent aggregate element.
 // CHECK: llvm.call @talos_rt_v1_scheduler_packed_slice_nba

@@ -5257,7 +5257,7 @@ def SimArrayDynInsertOp : SimOp<"array.insert_dynamic", [Pure]> {
   let summary = "replace an element of a fixed array using a declared-range index";
   let description = [{
     The index is interpreted in the array's preserved source range. IEEE
-    1800 7.4.6 makes an unknown or out-of-range index invalid, and
+    1800-2023 7.4.5 makes an unknown or out-of-range index invalid, and
     "writing to an array with an invalid index shall perform no operation", so
     such an index yields the input array unchanged.
   }];

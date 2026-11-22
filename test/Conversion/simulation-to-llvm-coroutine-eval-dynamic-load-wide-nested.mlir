@@ -12,7 +12,7 @@
 //    the selection is integer arithmetic of the field's own width.
 //  - nested: a fixed field of a dynamically indexed unpacked element is an
 //    offset of the element's offset. The chain folds to its constant root,
-//    and the element's invalid-index guard (7.4.6) still selects the
+//    and the element's invalid-index guard (7.4.5) still selects the
 //    out-of-range value.
 
 module attributes {

@@ -42,7 +42,7 @@ module top;
     unaligned_bits = {10{unaligned_pattern}};
     assert (unaligned_bits === {10{7'b1010011}});
 
-    // IEEE 1800-2017 11.5.1: an indexed part-select has a run-time base and a
+    // IEEE 1800-2023 11.5.1: an indexed part-select has a run-time base and a
     // constant width, including a window that is partially out of range.
     selected_source = 16'hc39a;
     base = 5;

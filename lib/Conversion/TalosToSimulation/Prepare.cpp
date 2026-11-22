@@ -248,7 +248,7 @@ static Operation *getFirstChild(Operation *operation) {
 
 /// Whether the grammar makes this expression operand a constant_expression
 /// that lowering reads as a constant: a simple part-select bound (IEEE
-/// 1800-2017 11.5.1), a replication count (11.4.12.1), or the count of a
+/// 1800-2023 11.5.1), a replication count (11.4.12.1), or the count of a
 /// replicated assignment pattern or an array pattern key (A.6.7.1).
 static bool isConstantOperand(Operation *operand) {
   Operation *parent = operand->getParentOp();

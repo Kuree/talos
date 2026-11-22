@@ -6,7 +6,7 @@
 // real array can be a const-ref function actual or an array-valued function
 // target. The whole selected row is ordered before/after the call, its
 // partially frozen elements decide the result, other rows are irrelevant,
-// frozen NaN/Inf/-0.0 payloads are kept, and invalid rows are errors (7.4.6).
+// frozen NaN/Inf/-0.0 payloads are kept, and invalid rows are errors (7.4.5).
 // CHECK: row actual PASS
 // CHECK-NEXT: frozen rows PASS
 // CHECK-NEXT: row target PASS

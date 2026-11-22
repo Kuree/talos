@@ -6,7 +6,7 @@
 // solved before the call result. With a real array actual a[idx] and a state
 // index, only the selected leaf is ordered ahead of the function, so the
 // result constraint rejects about half of the draws; a frozen selected leaf
-// decides the outcome, and an invalid index (7.4.6) is an error.
+// decides the outcome, and an invalid index (7.4.5) is an error.
 // CHECK: ordered leaf PASS
 // CHECK-NEXT: frozen leaves PASS
 // CHECK-NEXT: invalid index PASS

@@ -1,6 +1,6 @@
 // RUN: talos-opt %s '--lower-talos-to-sim=opt-level=0' | FileCheck %s
 
-// IEEE 1800-2017 11.5.1: a part-select that is partially out of range affects
+// IEEE 1800-2023 11.5.1: a part-select that is partially out of range affects
 // only the bits that are in range when written. Which bits of the assigned
 // value survive depends on which end is clipped: `x[0:-1]` drops the value's
 // bit 0 below the vector and writes its bit 1 to x[0], while `x[4:3]` drops

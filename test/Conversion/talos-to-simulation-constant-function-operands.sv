@@ -1,6 +1,6 @@
 // RUN: talos -emit-slang %s | talos-opt --convert-slang-to-talos '--lower-talos-to-sim=opt-level=0' | FileCheck %s
 
-// IEEE 1800-2017 11.5.1, 11.4.12.1 and A.6.7.1 make part-select bounds,
+// IEEE 1800-2023 11.5.1, 11.4.12.1 and A.6.7.1 make part-select bounds,
 // replication counts and array pattern keys constant expressions, and 13.4.3 evaluates a constant
 // function call in one at elaboration. Withdrawing executable folds around a
 // user call must keep these operands constant, while an executable use of the

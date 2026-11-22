@@ -40,7 +40,7 @@ module {
 // CHECK: arith.cmpi sle
 // CHECK: simulation.ref.dyn_extract
 
-// IEEE 1800-2017 11.5.1: only the bits in range are written. A slice hanging
+// IEEE 1800-2023 11.5.1: only the bits in range are written. A slice hanging
 // off the low end loses the replacement's low bits, so the surviving bits come
 // from further up the replacement the further the slice hangs off.
 // CHECK: simulation.logic.extract {{%.*}} from 1 : !simulation.logic<4> -> !simulation.logic<3>

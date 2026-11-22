@@ -205,7 +205,7 @@ StateDomainFact transferOperation(
                : found->second;
   };
   // A dynamic load reads its root only through a valid selection; otherwise
-  // it yields the element default (IEEE 1800-2023 7.4.6, 11.5.1). Selections
+  // it yields the element default (IEEE 1800-2023 7.4.5, 11.5.1). Selections
   // that are valid for every known value of their selectors are valid
   // whenever this solve proves those selectors two-state.
   StateDomain selection = StateDomain::TwoState;
@@ -400,7 +400,7 @@ transferStateDomain(Operation *op,
   }
 
   // An invalid selection yields X bits for a packed slice and the element
-  // default for an array (IEEE 1800-2023 7.4.6, 11.5.1); a known selection
+  // default for an array (IEEE 1800-2023 7.4.5, 11.5.1); a known selection
   // only moves bits. An invalid insertion performs no write, so the index
   // never affects an insertion's domain.
   if (isa<sim::SimLogicDynExtractOp, sim::SimArrayDynExtractOp>(op)) {

@@ -577,7 +577,7 @@ UnitLowering::captureLValue(Operation *destination, Location location) {
         if (failed(base))
           return failure();
         // A select wider than the storage it names reaches outside it, so no
-        // subreference describes it. IEEE 1800-2017 11.5.1 keeps only the bits
+        // subreference describes it. IEEE 1800-2023 11.5.1 keeps only the bits
         // that are in range, which the read-modify-write path below does by
         // discarding the padding it wrote through.
         bool reachesOutsideStorage = *sim::getPackedWidth(*destinationType) >

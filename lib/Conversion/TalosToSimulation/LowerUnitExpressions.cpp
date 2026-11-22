@@ -5324,7 +5324,7 @@ UnitLowering::lowerPackedSelectionAddress(Operation *op, Type sourceValueType,
       address.dynamicLow = subtract(address.dynamicLow, adjustment);
     }
   }
-  // IEEE 1800-2017 11.5.1: a select wider than the value it addresses is
+  // IEEE 1800-2023 11.5.1: a select wider than the value it addresses is
   // always partially out of range. Padding the value with that many
   // out-of-range bits on either side gives every position the select can name
   // a window inside the padded value, so the caller reads x out of the padding

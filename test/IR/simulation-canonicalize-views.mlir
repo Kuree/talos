@@ -85,7 +85,7 @@ func.func @nets(%net: !simulation.net<!simulation.logic<8>>, %array: !simulation
   return %b, %c, %f : !simulation.net<!simulation.logic<2>>, !simulation.net<!simulation.logic<8>>, !simulation.net<!simulation.logic<1>>
 }
 
-// 7.4.6: writing back the element just read is a no-op, even for an invalid
+// 7.4.5: writing back the element just read is a no-op, even for an invalid
 // index, which reads the default and ignores the write.
 // CHECK-LABEL: func.func @write_back(
 // CHECK-NEXT: return %arg0

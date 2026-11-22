@@ -4,7 +4,7 @@
 // RUN: talos-opt %s '--lower-talos-to-sim=opt-level=0' \
 // RUN:   --convert-talos-sim-processes-to-llvm-coroutines -o /dev/null
 
-// IEEE 1800-2017 10.4.2 and 11.5.1: capture the selected unpacked
+// IEEE 1800-2023 10.4.2 and 11.5.1: capture the selected unpacked
 // aggregate element and the dynamic packed index when the NBA is encountered,
 // then clip the write to that four-bit element. The six-bit view must not be
 // formed against the flattened eight-bit array storage, where an overhang

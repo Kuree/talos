@@ -1,7 +1,7 @@
 // RUN: talos-opt %s -o /dev/null --pass-pipeline='builtin.module(test-talos-sim-state-domain)' 2>&1 | FileCheck %s
 
 // A dynamic selection with a valid index only moves known bits; an invalid
-// index selects X bits or the X element default (IEEE 1800-2023 7.4.6,
+// index selects X bits or the X element default (IEEE 1800-2023 7.4.5,
 // 11.5.1). An insertion with an invalid index performs no write, so the index
 // never affects its domain.
 
