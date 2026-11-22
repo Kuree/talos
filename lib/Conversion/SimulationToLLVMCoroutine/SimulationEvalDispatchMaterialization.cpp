@@ -396,15 +396,15 @@ materializeNativeEvalDispatch(ModuleOp module,
   Value changed = entryAlloca(builder, location, i32, 1, 4);
   Value fourStateFallback =
       entryAlloca(builder, location, builder.getI1Type(), 1, 1);
+  Value stepFallbackFlag = LLVM::LoadOp::create(
+      builder, location, builder.getI8Type(),
+      LLVM::AddressOfOp::create(builder, location, pointer,
+                                evalStepFourStateFallbackName),
+      1);
   LLVM::StoreOp::create(
       builder, location,
       arith::CmpIOp::create(
-          builder, location, arith::CmpIPredicate::ne,
-          LLVM::LoadOp::create(
-              builder, location, builder.getI8Type(),
-              LLVM::AddressOfOp::create(builder, location, pointer,
-                                        evalStepFourStateFallbackName),
-              1),
+          builder, location, arith::CmpIPredicate::ne, stepFallbackFlag,
           llvmConstant(builder, location, builder.getI8Type(), 0))
           .getResult(),
       fourStateFallback, 1);
@@ -477,12 +477,12 @@ materializeNativeEvalDispatch(ModuleOp module,
     // keep what this call's owners staged (it selects the commit path).
     Value stepFallback = LLVM::AddressOfOp::create(
         builder, location, pointer, evalStepFourStateFallbackName);
+    Value stepped = LLVM::LoadOp::create(builder, location, builder.getI8Type(),
+                                         stepFallback, 1);
     LLVM::StoreOp::create(
         builder, location,
         arith::OrIOp::create(
-            builder, location,
-            LLVM::LoadOp::create(builder, location, builder.getI8Type(),
-                                 stepFallback, 1),
+            builder, location, stepped,
             arith::ExtUIOp::create(builder, location, builder.getI8Type(),
                                    LLVM::LoadOp::create(builder, location,
                                                         builder.getI1Type(),
@@ -793,12 +793,13 @@ materializeNativeEvalDispatch(ModuleOp module,
       Value parent =
           arith::ShRUIOp::create(builder, location, child, constant(6));
       Value index = ingressWord(parent, readyLayout.offsets[level]);
+      Value one = constant(1);
       Value bit = arith::ShLIOp::create(
-          builder, location, constant(1),
+          builder, location, one,
           arith::AndIOp::create(builder, location, child, constant(63)));
+      Value readyWord = loadReadyWordAt(builder, location, ingressSet, index);
       Value next = arith::AndIOp::create(
-          builder, location,
-          loadReadyWordAt(builder, location, ingressSet, index),
+          builder, location, readyWord,
           arith::XOrIOp::create(builder, location, bit, constant(UINT64_MAX)));
       storeReadyWordAt(builder, location, next, ingressSet, index);
       if (level == top) {
@@ -834,12 +835,12 @@ materializeNativeEvalDispatch(ModuleOp module,
                                                      bits, constant(0)),
                                found, ValueRange{}, next, ValueRange{});
       builder.setInsertionPointToStart(found);
-      cf::BranchOp::create(builder, location, descend,
-                           ValueRange{arith::AddIOp::create(
-                               builder, location,
-                               LLVM::CountTrailingZerosOp::create(
-                                   builder, location, i64, bits, true),
-                               constant(word * 64))});
+      Value lowest = LLVM::CountTrailingZerosOp::create(builder, location, i64,
+                                                        bits, true);
+      cf::BranchOp::create(
+          builder, location, descend,
+          ValueRange{arith::AddIOp::create(builder, location, lowest,
+                                           constant(word * 64))});
       builder.setInsertionPointToStart(next);
     }
     builder.setInsertionPointToStart(descend);
@@ -928,12 +929,13 @@ materializeNativeEvalDispatch(ModuleOp module,
                              LLVM::ZeroOp::create(builder, location, pointer)),
         recheck, ValueRange{}, stopping, ValueRange{});
     builder.setInsertionPointToStart(stopping);
+    Value terminationState =
+        LLVM::LoadOp::create(builder, location, i32, termination, 4);
     cf::CondBranchOp::create(
         builder, location,
-        arith::CmpIOp::create(
-            builder, location, arith::CmpIPredicate::ne,
-            LLVM::LoadOp::create(builder, location, i32, termination, 4),
-            llvmConstant(builder, location, i32, 0)),
+        arith::CmpIOp::create(builder, location, arith::CmpIPredicate::ne,
+                              terminationState,
+                              llvmConstant(builder, location, i32, 0)),
         stopped, ValueRange{}, recheck, ValueRange{});
     builder.setInsertionPointToStart(recheck);
     Value word = afterWord->getArgument(0);
@@ -1323,9 +1325,9 @@ materializeNativeEvalDispatch(ModuleOp module,
     cf::CondBranchOp::create(builder, location, absent, targets.dispatch,
                              ValueRange{}, poll, ValueRange{});
     builder.setInsertionPointToStart(poll);
+    Value stopState = LLVM::LoadOp::create(builder, location, i32, address, 4);
     Value stopping = arith::CmpIOp::create(
-        builder, location, arith::CmpIPredicate::ne,
-        LLVM::LoadOp::create(builder, location, i32, address, 4),
+        builder, location, arith::CmpIPredicate::ne, stopState,
         llvmConstant(builder, location, i32, 0));
     cf::CondBranchOp::create(builder, location, stopping, targets.stopped,
                              ValueRange{}, targets.dispatch, ValueRange{});
@@ -1505,9 +1507,9 @@ materializeNativeEvalDispatch(ModuleOp module,
         Block *execute = new Block, *next = new Block;
         function.getBody().push_back(execute);
         function.getBody().push_back(next);
+        Value ready = loadReadyWord(builder, location, ingressSet, word);
         Value pending = arith::AndIOp::create(
-            builder, location,
-            loadReadyWord(builder, location, ingressSet, word),
+            builder, location, ready,
             llvmConstant(builder, location, i64, item.mask));
         cf::CondBranchOp::create(
             builder, location,
@@ -1672,9 +1674,9 @@ materializeNativeEvalDispatch(ModuleOp module,
     builder.setInsertionPointToStart(prepared);
     // The cut ran a $finish and the final procedures (IEEE 1800-2023 9.2.3):
     // dispatch no further owner and commit nothing of this slot.
+    Value cutRegion = LLVM::LoadOp::create(builder, location, i32, region, 4);
     Value terminatedAtCut = arith::CmpIOp::create(
-        builder, location, arith::CmpIPredicate::eq,
-        LLVM::LoadOp::create(builder, location, i32, region, 4),
+        builder, location, arith::CmpIPredicate::eq, cutRegion,
         llvmConstant(builder, location, i32, TALOS_RT_EVAL_NBA_TERMINATED));
     Block *running = new Block;
     fastCoordinator.getBody().push_back(running);
@@ -1857,13 +1859,13 @@ materializeNativeEvalDispatch(ModuleOp module,
     // A path dispatcher can reject after coordinator entry.  Observe that
     // rejection at the barrier so its four-state staging is never committed
     // by the compact value-plane-only path.
+    Value dispatcherFallbackFlag = LLVM::LoadOp::create(
+        builder, location, builder.getI8Type(),
+        LLVM::AddressOfOp::create(builder, location, pointer,
+                                  evalStepFourStateFallbackName),
+        1);
     Value dispatcherFallback = arith::CmpIOp::create(
-        builder, location, arith::CmpIPredicate::ne,
-        LLVM::LoadOp::create(
-            builder, location, builder.getI8Type(),
-            LLVM::AddressOfOp::create(builder, location, pointer,
-                                      evalStepFourStateFallbackName),
-            1),
+        builder, location, arith::CmpIPredicate::ne, dispatcherFallbackFlag,
         llvmConstant(builder, location, builder.getI8Type(), 0));
     Value priorFallback = LLVM::LoadOp::create(
         builder, location, builder.getI1Type(), fourStateFallback, 1);

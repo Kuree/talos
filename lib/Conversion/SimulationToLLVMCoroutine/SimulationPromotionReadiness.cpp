@@ -126,9 +126,10 @@ LogicalResult materializeNativeRoutePromotionScan(
   };
   builder.setInsertionPointToStart(entry);
   Value ownerBase = address(ownerName), rangeBase = address(rangeName);
-  if (!dirtyName.empty())
-    LLVM::StoreOp::create(builder, loc, llvmConstant(builder, loc, i8, 0),
-                          address(dirtyName), 1);
+  if (!dirtyName.empty()) {
+    Value clean = llvmConstant(builder, loc, i8, 0);
+    LLVM::StoreOp::create(builder, loc, clean, address(dirtyName), 1);
+  }
   branch(nextWord, ValueRange{constant(0)});
   builder.setInsertionPointToStart(nextWord);
   Value word = nextWord->getArgument(0);
@@ -180,9 +181,8 @@ LogicalResult materializeNativeRoutePromotionScan(
   condBranch(allKnown, known, ValueRange{}, readRange, ValueRange{});
   builder.setInsertionPointToStart(readRange);
   auto field = [&](uint64_t n) -> Value {
-    Value index = LLVM::AddOp::create(
-        builder, loc, LLVM::MulOp::create(builder, loc, range, constant(4)),
-        constant(n));
+    Value scaled = LLVM::MulOp::create(builder, loc, range, constant(4));
+    Value index = LLVM::AddOp::create(builder, loc, scaled, constant(n));
     return LLVM::LoadOp::create(builder, loc, i64, gep(rangeBase, i64, index),
                                 8);
   };
@@ -198,15 +198,16 @@ LogicalResult materializeNativeRoutePromotionScan(
   Value isLast = LLVM::ICmpOp::create(builder, loc, LLVM::ICmpPredicate::eq,
                                       following, endByte);
   Value full = llvmConstant(builder, loc, i8, 255);
+  Value lowMask =
+      LLVM::SelectOp::create(builder, loc, isFirst, firstMask, full);
   Value mask = LLVM::AndOp::create(
-      builder, loc,
-      LLVM::SelectOp::create(builder, loc, isFirst, firstMask, full),
+      builder, loc, lowMask,
       LLVM::SelectOp::create(builder, loc, isLast, lastMask, full));
   Value bits = schedule::NativeStateLoadOp::create(
       builder, loc, i8, schedule::StatePlane::Unknown, byte, 0, 1);
+  Value masked = LLVM::AndOp::create(builder, loc, bits, mask);
   Value hasUnknown =
-      LLVM::ICmpOp::create(builder, loc, LLVM::ICmpPredicate::ne,
-                           LLVM::AndOp::create(builder, loc, bits, mask),
+      LLVM::ICmpOp::create(builder, loc, LLVM::ICmpPredicate::ne, masked,
                            llvmConstant(builder, loc, i8, 0));
   condBranch(hasUnknown, unknown, ValueRange{}, advanceByte, ValueRange{});
   builder.setInsertionPointToStart(advanceByte);
@@ -353,10 +354,10 @@ materializePromotionReadiness(ModuleOp module, ArrayRef<uint64_t> owners,
   };
   auto field = [&](Value base, Value record, uint64_t index,
                    uint64_t width = 4) -> Value {
-    Value offset = arith::AddIOp::create(
-        builder, loc,
-        arith::MulIOp::create(builder, loc, record, constant(width)),
-        constant(index));
+    Value scaled =
+        arith::MulIOp::create(builder, loc, record, constant(width));
+    Value offset =
+        arith::AddIOp::create(builder, loc, scaled, constant(index));
     return LLVM::LoadOp::create(builder, loc, i64, gep(base, i64, offset), 8);
   };
   StringRef latchName = group ? groupPromotionLatchName
@@ -411,9 +412,9 @@ materializePromotionReadiness(ModuleOp module, ArrayRef<uint64_t> owners,
   };
   auto hintLoad = loadWord(hintWord);
   Value hintBits = hintLoad;
+  Value hintUnknown = arith::AndIOp::create(builder, loc, hintBits, hintMask);
   Value stillUnknown = arith::CmpIOp::create(
-      builder, loc, arith::CmpIPredicate::ne,
-      arith::AndIOp::create(builder, loc, hintBits, hintMask), constant(0));
+      builder, loc, arith::CmpIPredicate::ne, hintUnknown, constant(0));
   cf::CondBranchOp::create(builder, loc, stillUnknown, unknown, ValueRange{},
                            fullScan, ValueRange{});
   builder.setInsertionPointToStart(fullScan);
@@ -439,9 +440,9 @@ materializePromotionReadiness(ModuleOp module, ArrayRef<uint64_t> owners,
   Value index = arith::AndIOp::create(builder, loc, beginWord,
                                       constant(~singleWordScanTag));
   auto singleLoad = loadWord(index);
+  Value singleBits = arith::AndIOp::create(builder, loc, singleLoad, maskOrEnd);
   Value singleUnknown = arith::CmpIOp::create(
-      builder, loc, arith::CmpIPredicate::ne,
-      arith::AndIOp::create(builder, loc, singleLoad, maskOrEnd), constant(0));
+      builder, loc, arith::CmpIPredicate::ne, singleBits, constant(0));
   cf::CondBranchOp::create(builder, loc, singleUnknown, rememberUnknown,
                            ValueRange{index, maskOrEnd}, advanceRange,
                            ValueRange{});
@@ -477,15 +478,16 @@ materializePromotionReadiness(ModuleOp module, ArrayRef<uint64_t> owners,
   cf::BranchOp::create(builder, loc, unknown);
 
   builder.setInsertionPointToStart(known);
-  LLVM::StoreOp::create(builder, loc,
-                        llvmConstant(builder, loc, i8, kPromotionLatchKnown),
+  Value latchKnown = llvmConstant(builder, loc, i8, kPromotionLatchKnown);
+  LLVM::StoreOp::create(builder, loc, latchKnown,
                         gep(address(latchName), i8, owner), 1);
   if (!group) {
     Value pendingWord = field(ownerBase, owner, 2);
     Value pending = loadMaskWordAt(
         builder, loc, schedule::EvalMask::PromotionPending, pendingWord);
-    Value keep = arith::XOrIOp::create(builder, loc, field(ownerBase, owner, 3),
-                                       constant(UINT64_MAX));
+    Value ownerBits = field(ownerBase, owner, 3);
+    Value keep =
+        arith::XOrIOp::create(builder, loc, ownerBits, constant(UINT64_MAX));
     storeMaskWordAt(builder, loc,
                     arith::AndIOp::create(builder, loc, pending, keep),
                     schedule::EvalMask::PromotionPending, pendingWord);
@@ -496,8 +498,8 @@ materializePromotionReadiness(ModuleOp module, ArrayRef<uint64_t> owners,
   // resets it to UNKNOWN. A missed publication can only keep the four-state
   // body, which is correct on any state (IEEE 1800-2023 6.3.1).
   builder.setInsertionPointToStart(unknown);
-  LLVM::StoreOp::create(builder, loc,
-                        llvmConstant(builder, loc, i8, kPromotionLatchFailed),
+  Value latchFailed = llvmConstant(builder, loc, i8, kPromotionLatchFailed);
+  LLVM::StoreOp::create(builder, loc, latchFailed,
                         gep(address(latchName), i8, owner), 1);
   LLVM::ReturnOp::create(builder, loc, llvmConstant(builder, loc, i1, 0));
 

@@ -476,9 +476,10 @@ makeProcessSpawnBody(LLVM::LLVMFuncOp helper,
         builder, location, pointer, i8,
         llvmConstant(builder, location, i64, captureSize),
         analysis.getFrameAlignment());
-    LLVM::MemsetOp::create(
-        builder, location, captures, llvmConstant(builder, location, i8, 0),
-        llvmConstant(builder, location, i64, captureSize), false);
+    Value zero = llvmConstant(builder, location, i8, 0);
+    LLVM::MemsetOp::create(builder, location, captures, zero,
+                           llvmConstant(builder, location, i64, captureSize),
+                           false);
   }
   size_t physicalArgument = 0;
   for (const ProcessFrameValue &slot : analysis.getEntryCaptureLayout()) {

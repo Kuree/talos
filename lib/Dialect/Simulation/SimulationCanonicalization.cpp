@@ -3800,12 +3800,15 @@ struct SimplifyTruthCondition final : OpRewritePattern<SimLogicIsTrueOp> {
       // A bit of a | b is a known one when either operand bit is (Table
       // 11-12); a one-bit a & b is a known one only when both are.
       bool single = binary.getType().getWidth() == 1;
-      if (binary.getKind() == BinaryKind::Or)
-        replacement = arith::OrIOp::create(
-            rewriter, location, truth(binary.getLhs()), truth(binary.getRhs()));
-      else if (binary.getKind() == BinaryKind::And && single)
-        replacement = arith::AndIOp::create(
-            rewriter, location, truth(binary.getLhs()), truth(binary.getRhs()));
+      if (binary.getKind() == BinaryKind::Or) {
+        Value lhs = truth(binary.getLhs());
+        replacement = arith::OrIOp::create(rewriter, location, lhs,
+                                           truth(binary.getRhs()));
+      } else if (binary.getKind() == BinaryKind::And && single) {
+        Value lhs = truth(binary.getLhs());
+        replacement = arith::AndIOp::create(rewriter, location, lhs,
+                                            truth(binary.getRhs()));
+      }
     } else if (auto unary = dyn_cast<SimLogicUnaryOp>(producer)) {
       // !x is one exactly when every bit of x is a known zero.
       if (isTruthNegation(unary)) {

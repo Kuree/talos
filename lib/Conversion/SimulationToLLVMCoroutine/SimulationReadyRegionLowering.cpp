@@ -244,9 +244,9 @@ void lowerNativeReadyRegion(schedule::NativeReadyRegionOp region,
           setNativeActivationEntry(previous.getDefiningOp(), owner);
         Value keep =
             b.createOrFold<arith::XOrIOp>(loc, load(value.remove), ones);
-        Value current = b.createOrFold<arith::OrIOp>(
-            loc, b.createOrFold<arith::AndIOp>(loc, previous, keep),
-            load(value.add));
+        Value kept = b.createOrFold<arith::AndIOp>(loc, previous, keep);
+        Value current =
+            b.createOrFold<arith::OrIOp>(loc, kept, load(value.add));
         read.replaceAllUsesWith(current);
         read.erase();
         continue;

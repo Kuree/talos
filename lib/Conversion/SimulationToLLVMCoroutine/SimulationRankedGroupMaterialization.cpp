@@ -552,8 +552,9 @@ materializeNativeRankedGroups(ModuleOp module,
           call, builder.getUnitAttr());
     };
     auto markCanonicalNBA = [&](uint32_t owner) {
+      Value fallback = llvmConstant(builder, loc, builder.getI8Type(), 1);
       LLVM::StoreOp::create(
-          builder, loc, llvmConstant(builder, loc, builder.getI8Type(), 1),
+          builder, loc, fallback,
           LLVM::AddressOfOp::create(builder, loc, pointer,
                                     "__talos_eval_step_four_state_fallback_v1"),
           1);

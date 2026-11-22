@@ -91,10 +91,10 @@ Value loadBulkStatePlane(ConversionPatternRewriter &rewriter, Location location,
   std::optional<DirectStaticStateRange> range =
       resolveDirectStaticStateRange(handle, width, directLayout);
   if (range && (!range->guarded || assumeClean) && range->offset % 8 == 0) {
+    Value window = schedule::NativeStateWindowAddressOp::create(
+        rewriter, location, plane, Value(), range->offset / 8);
     LLVM::MemcpyOp::create(
-        rewriter, location, output,
-        schedule::NativeStateWindowAddressOp::create(
-            rewriter, location, plane, Value(), range->offset / 8),
+        rewriter, location, output, window,
         llvmConstant(rewriter, location, i64, (width + 7) / 8), false);
     return output;
   }

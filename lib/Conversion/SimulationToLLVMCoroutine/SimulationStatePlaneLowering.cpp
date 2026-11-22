@@ -53,10 +53,10 @@ void notifySignal(ConversionPatternRewriter &builder, Location location,
     Value oldUnknownScalar = scalar(oldUnknown);
     Value newValueScalar = scalar(newValue);
     Value newUnknownScalar = scalar(newUnknown);
+    Value valueChanged = arith::XOrIOp::create(builder, location,
+                                               oldValueScalar, newValueScalar);
     Value changed = arith::OrIOp::create(
-        builder, location,
-        arith::XOrIOp::create(builder, location, oldValueScalar,
-                              newValueScalar),
+        builder, location, valueChanged,
         arith::XOrIOp::create(builder, location, oldUnknownScalar,
                               newUnknownScalar));
     Value unchanged = arith::CmpIOp::create(

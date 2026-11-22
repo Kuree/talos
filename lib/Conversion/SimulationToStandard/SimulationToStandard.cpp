@@ -1049,10 +1049,11 @@ public:
       Value unknown = isNonZero(rewriter, loc, input.unknown);
       Value negated = arith::SubIOp::create(
           rewriter, loc, zero(rewriter, loc, type), input.value);
-      result = {
-          select(rewriter, loc, unknown, zero(rewriter, loc, type), negated),
-          select(rewriter, loc, unknown, ones(rewriter, loc, type),
-                 zero(rewriter, loc, type))};
+      Value resultValue =
+          select(rewriter, loc, unknown, zero(rewriter, loc, type), negated);
+      Value allOnes = ones(rewriter, loc, type);
+      result = {resultValue, select(rewriter, loc, unknown, allOnes,
+                                    zero(rewriter, loc, type))};
       break;
     }
     case sim::UnaryKind::BitNot: {
@@ -1064,9 +1065,9 @@ public:
     }
     case sim::UnaryKind::LogicalNot: {
       TruthValue truth = getTruth(rewriter, loc, input);
-      Value resultValue =
-          boolAnd(rewriter, loc, boolNot(rewriter, loc, truth.value),
-                  boolNot(rewriter, loc, truth.unknown));
+      Value notTrue = boolNot(rewriter, loc, truth.value);
+      Value resultValue = boolAnd(rewriter, loc, notTrue,
+                                  boolNot(rewriter, loc, truth.unknown));
       result = {resultValue, truth.unknown};
       break;
     }
@@ -1260,12 +1261,13 @@ public:
       llvm_unreachable("bitwise binary kind handled above");
     }
     Value invalid = boolOr(rewriter, loc, anyUnknown, extraInvalid);
-    replaceLogic(
-        op,
-        {select(rewriter, loc, invalid, zero(rewriter, loc, type), computed),
-         select(rewriter, loc, invalid, ones(rewriter, loc, type),
-                zero(rewriter, loc, type))},
-        rewriter);
+    Value resultValue =
+        select(rewriter, loc, invalid, zero(rewriter, loc, type), computed);
+    Value allOnes = ones(rewriter, loc, type);
+    replaceLogic(op,
+                 {resultValue, select(rewriter, loc, invalid, allOnes,
+                                      zero(rewriter, loc, type))},
+                 rewriter);
     return success();
   }
 };
@@ -1508,19 +1510,20 @@ public:
         op.getKind() == sim::CompareKind::Ne) {
       Value unknownBits =
           rewriter.createOrFold<arith::OrIOp>(loc, lhs.unknown, rhs.unknown);
+      Value differing =
+          rewriter.createOrFold<arith::XOrIOp>(loc, lhs.value, rhs.value);
       Value mismatchBits = arith::AndIOp::create(
-          rewriter, loc,
-          rewriter.createOrFold<arith::XOrIOp>(loc, lhs.value, rhs.value),
-          bitNot(rewriter, loc, unknownBits));
+          rewriter, loc, differing, bitNot(rewriter, loc, unknownBits));
       Value knownMismatch = isNonZero(rewriter, loc, mismatchBits);
-      Value unknown =
-          boolAnd(rewriter, loc, isNonZero(rewriter, loc, unknownBits),
-                  boolNot(rewriter, loc, knownMismatch));
-      Value value =
-          op.getKind() == sim::CompareKind::Eq
-              ? boolAnd(rewriter, loc, boolNot(rewriter, loc, knownMismatch),
-                        boolNot(rewriter, loc, unknown))
-              : knownMismatch;
+      Value someUnknown = isNonZero(rewriter, loc, unknownBits);
+      Value unknown = boolAnd(rewriter, loc, someUnknown,
+                              boolNot(rewriter, loc, knownMismatch));
+      Value value = knownMismatch;
+      if (op.getKind() == sim::CompareKind::Eq) {
+        Value noKnownMismatch = boolNot(rewriter, loc, knownMismatch);
+        value = boolAnd(rewriter, loc, noKnownMismatch,
+                        boolNot(rewriter, loc, unknown));
+      }
       replaceLogic(op, {value, unknown}, rewriter);
       return success();
     }

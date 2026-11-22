@@ -299,10 +299,11 @@ static void emitWholeNBACapture(OpBuilder &builder, Operation *nbaStage,
   Value rewritten = arith::CmpIOp::create(
       builder, loc, arith::CmpIPredicate::eq, prior,
       llvmConstant(builder, loc, i32, TALOS_RT_NBA_WHOLE_REWRITTEN));
-  Value previousChanges = LLVM::SelectOp::create(
-      builder, loc, rewritten,
-      LLVM::LoadOp::create(builder, loc, scalar, transients, 8),
-      LLVM::ZeroOp::create(builder, loc, scalar));
+  Value storedChanges =
+      LLVM::LoadOp::create(builder, loc, scalar, transients, 8);
+  Value previousChanges =
+      LLVM::SelectOp::create(builder, loc, rewritten, storedChanges,
+                             LLVM::ZeroOp::create(builder, loc, scalar));
   LLVM::StoreOp::create(
       builder, loc, LLVM::OrOp::create(builder, loc, delta, previousChanges),
       transients, 8);
@@ -313,12 +314,12 @@ static void emitWholeNBACapture(OpBuilder &builder, Operation *nbaStage,
     LLVM::StoreOp::create(builder, loc, unknown, unknowns, 8);
   uint32_t firstState = initialChanges.empty() ? TALOS_RT_NBA_WHOLE_PENDING
                                                : TALOS_RT_NBA_WHOLE_COMPARED;
+  Value rewrittenState =
+      llvmConstant(builder, loc, i32, TALOS_RT_NBA_WHOLE_REWRITTEN);
   LLVM::StoreOp::create(
       builder, loc,
-      LLVM::SelectOp::create(
-          builder, loc, pending,
-          llvmConstant(builder, loc, i32, TALOS_RT_NBA_WHOLE_REWRITTEN),
-          llvmConstant(builder, loc, i32, firstState)),
+      LLVM::SelectOp::create(builder, loc, pending, rewrittenState,
+                             llvmConstant(builder, loc, i32, firstState)),
       validity, 4);
   markPendingNBARoot(builder, loc, root);
   cf::BranchOp::create(builder, loc, after);
@@ -1095,10 +1096,12 @@ static void normalizeGeneratedWideTransitions(
                              byteGEP(builder, location, plane, byteOffset),
                              bits);
       };
+      Value offset =
+          llvmConstant(builder, location, i64, range->localOffset + low);
+      SmallVector<Value, 4> words = llvm::map_to_vector(planes, word);
       auto transition = schedule::NativeTransitionOp::create(
-          builder, location, wide.getRuntimeContext(),
-          llvmConstant(builder, location, i64, range->localOffset + low),
-          word(planes[0]), word(planes[1]), word(planes[2]), word(planes[3]),
+          builder, location, wide.getRuntimeContext(), offset, words[0],
+          words[1], words[2], words[3],
           builder.getI64IntegerAttr(range->staticID),
           builder.getI64IntegerAttr(bits), wide.getSourceOwnerAttr());
       if (whole)
@@ -1972,37 +1975,29 @@ FailureOr<bool> makeNativeEvalPlan(
   auto emitPromotionReset = [&](uint64_t groupCount) {
     Block *invalidateEntry = promotionInvalidate.addEntryBlock(builder);
     builder.setInsertionPointToStart(invalidateEntry);
+    // Zero `bytes` bytes at global `name`.
+    auto clearBytes = [&](StringRef name, uint64_t bytes) {
+      Value address =
+          LLVM::AddressOfOp::create(builder, location, pointer, name);
+      Value zero = llvmConstant(builder, location, builder.getI8Type(), 0);
+      LLVM::MemsetOp::create(builder, location, address, zero,
+                             llvmConstant(builder, location, i64, bytes),
+                             /*isVolatile=*/false);
+    };
+    Value notLatched = llvmConstant(builder, location, builder.getI8Type(), 0);
     LLVM::StoreOp::create(
-        builder, location,
-        llvmConstant(builder, location, builder.getI8Type(), 0),
+        builder, location, notLatched,
         LLVM::AddressOfOp::create(builder, location, pointer,
                                   promotionLatched.getSymName()),
         1);
-    LLVM::MemsetOp::create(
-        builder, location,
-        LLVM::AddressOfOp::create(builder, location, pointer,
-                                  promotionKernelLatched.getSymName()),
-        llvmConstant(builder, location, builder.getI8Type(), 0),
-        llvmConstant(builder, location, i64, mergedFragments.size()),
-        /*isVolatile=*/false);
+    clearBytes(promotionKernelLatched.getSymName(), mergedFragments.size());
     if (groupCount)
-      LLVM::MemsetOp::create(
-          builder, location,
-          LLVM::AddressOfOp::create(builder, location, pointer,
-                                    groupPromotionLatchName),
-          llvmConstant(builder, location, builder.getI8Type(), 0),
-          llvmConstant(builder, location, i64, groupCount), false);
+      clearBytes(groupPromotionLatchName, groupCount);
     storeMaskWords(builder, location, schedule::EvalMask::PromotionPending,
                    initialPromotionPendingMask);
     if (nbaTaintWordCount != 0)
-      LLVM::MemsetOp::create(
-          builder, location,
-          LLVM::AddressOfOp::create(builder, location, pointer,
-                                    evalFastNBARootsName),
-          llvmConstant(builder, location, builder.getI8Type(), 0),
-          llvmConstant(builder, location, i64,
-                       uint64_t{nbaTaintWordCount} * sizeof(uint64_t)),
-          /*isVolatile=*/false);
+      clearBytes(evalFastNBARootsName,
+                 uint64_t{nbaTaintWordCount} * sizeof(uint64_t));
     LLVM::ReturnOp::create(builder, location, ValueRange{});
   };
 
@@ -2384,10 +2379,10 @@ FailureOr<bool> makeNativeEvalPlan(
       Value oldUnknown = call.getOldUnknown();
       Value newValue = call.getNewValue();
       Value newUnknown = call.getNewUnknown();
+      Value valueChanged = arith::XOrIOp::create(
+          transitionBuilder, call.getLoc(), oldValue, newValue);
       Value changed = arith::OrIOp::create(
-          transitionBuilder, call.getLoc(),
-          arith::XOrIOp::create(transitionBuilder, call.getLoc(), oldValue,
-                                newValue),
+          transitionBuilder, call.getLoc(), valueChanged,
           arith::XOrIOp::create(transitionBuilder, call.getLoc(), oldUnknown,
                                 newUnknown));
       if (!lowBit) {
@@ -2620,26 +2615,28 @@ FailureOr<bool> makeNativeEvalPlan(
                                               newKnown, invert(newValue));
         Value newOne = arith::AndIOp::create(transitionBuilder, call.getLoc(),
                                              newKnown, newValue);
-        if (needsPosedge)
+        if (needsPosedge) {
+          Value fromZero = arith::AndIOp::create(
+              transitionBuilder, call.getLoc(), oldZero, invert(newZero));
           posedge = arith::AndIOp::create(
               transitionBuilder, call.getLoc(),
-              arith::OrIOp::create(
-                  transitionBuilder, call.getLoc(),
-                  arith::AndIOp::create(transitionBuilder, call.getLoc(),
-                                        oldZero, invert(newZero)),
-                  arith::AndIOp::create(transitionBuilder, call.getLoc(),
-                                        oldUnknown, newOne)),
+              arith::OrIOp::create(transitionBuilder, call.getLoc(), fromZero,
+                                   arith::AndIOp::create(transitionBuilder,
+                                                         call.getLoc(),
+                                                         oldUnknown, newOne)),
               widthMask);
-        if (needsNegedge)
+        }
+        if (needsNegedge) {
+          Value fromOne = arith::AndIOp::create(
+              transitionBuilder, call.getLoc(), oldOne, invert(newOne));
           negedge = arith::AndIOp::create(
               transitionBuilder, call.getLoc(),
-              arith::OrIOp::create(
-                  transitionBuilder, call.getLoc(),
-                  arith::AndIOp::create(transitionBuilder, call.getLoc(),
-                                        oldOne, invert(newOne)),
-                  arith::AndIOp::create(transitionBuilder, call.getLoc(),
-                                        oldUnknown, newZero)),
+              arith::OrIOp::create(transitionBuilder, call.getLoc(), fromOne,
+                                   arith::AndIOp::create(transitionBuilder,
+                                                         call.getLoc(),
+                                                         oldUnknown, newZero)),
               widthMask);
+        }
       }
       for (const MergedPublication &publication : publications) {
         Value observed = llvmConstant(transitionBuilder, call.getLoc(), i64, 0);
@@ -2659,10 +2656,11 @@ FailureOr<bool> makeNativeEvalPlan(
             transitionBuilder, call.getLoc(), arith::CmpIPredicate::ne,
             observed, llvmConstant(transitionBuilder, call.getLoc(), i64, 0));
         bool publicationHeld = held && !publication.toSource;
-        Value selected = arith::SelectOp::create(
-            transitionBuilder, call.getLoc(), triggered,
+        Value publicationBit =
             llvmConstant(transitionBuilder, call.getLoc(), i64,
-                         uint64_t{1} << (publication.bit % 64)),
+                         uint64_t{1} << (publication.bit % 64));
+        Value selected = arith::SelectOp::create(
+            transitionBuilder, call.getLoc(), triggered, publicationBit,
             llvmConstant(transitionBuilder, call.getLoc(), i64, 0));
         publishWake(transitionBuilder, call.getLoc(), publicationHeld,
                     publication.bit / 64, selected);
@@ -2896,10 +2894,11 @@ FailureOr<bool> makeNativeEvalPlan(
             nbaBuilder, nbaStage.getLoc(),
             llvmConstant(nbaBuilder, nbaStage.getLoc(), i64, rootWidth),
             baseOffset);
-        Value overlaps = arith::AndIOp::create(
-            nbaBuilder, nbaStage.getLoc(),
+        Value aboveLower =
             arith::CmpIOp::create(nbaBuilder, nbaStage.getLoc(),
-                                  arith::CmpIPredicate::sgt, dynamicBit, lower),
+                                  arith::CmpIPredicate::sgt, dynamicBit, lower);
+        Value overlaps = arith::AndIOp::create(
+            nbaBuilder, nbaStage.getLoc(), aboveLower,
             arith::CmpIOp::create(nbaBuilder, nbaStage.getLoc(),
                                   arith::CmpIPredicate::slt, dynamicBit,
                                   upper));
@@ -2937,9 +2936,10 @@ FailureOr<bool> makeNativeEvalPlan(
                             fixedTarget->second;
           for (uint64_t chunk = 0; chunk < (width + 63) / 64; ++chunk) {
             unsigned bits = std::min<uint64_t>(64, width - chunk * 64);
+            Value valueChunk = loadChunk(nbaStage.getValue(), chunk);
             Value delta = buildNativeNBAChange(
                 nbaBuilder, nbaStage.getLoc(), offset + chunk * 64, bits,
-                loadChunk(nbaStage.getValue(), chunk), loadUnknownChunk(chunk));
+                valueChunk, loadUnknownChunk(chunk));
             difference = arith::OrIOp::create(nbaBuilder, nbaStage.getLoc(),
                                               difference, delta);
             if ((!changeBanks[root->second].empty() &&
@@ -3819,9 +3819,9 @@ FailureOr<bool> makeNativeEvalPlan(
       Value fallbackValue = arith::ConstantOp::create(
           loadBuilder, loc, resultType,
           loadBuilder.getIntegerAttr(resultType, fallbackBits));
+      Value kept = arith::AndIOp::create(loadBuilder, loc, loaded, overlapMask);
       Value selected = arith::OrIOp::create(
-          loadBuilder, loc,
-          arith::AndIOp::create(loadBuilder, loc, loaded, overlapMask),
+          loadBuilder, loc, kept,
           arith::AndIOp::create(
               loadBuilder, loc, fallbackValue,
               arith::XOrIOp::create(loadBuilder, loc, overlapMask, widthMask)));
@@ -3872,12 +3872,12 @@ FailureOr<bool> makeNativeEvalPlan(
             Value baseOffset = LLVM::SExtOp::create(
                 offsetBuilder, loc, i64,
                 LLVM::TruncOp::create(offsetBuilder, loc, i32, base));
+            Value aboveMin = arith::CmpIOp::create(
+                offsetBuilder, loc, arith::CmpIPredicate::sge, amount,
+                arith::SubIOp::create(offsetBuilder, loc, constant(INT32_MIN),
+                                      baseOffset));
             Value valid = arith::AndIOp::create(
-                offsetBuilder, loc,
-                arith::CmpIOp::create(
-                    offsetBuilder, loc, arith::CmpIPredicate::sge, amount,
-                    arith::SubIOp::create(offsetBuilder, loc,
-                                          constant(INT32_MIN), baseOffset)),
+                offsetBuilder, loc, aboveMin,
                 arith::CmpIOp::create(
                     offsetBuilder, loc, arith::CmpIPredicate::sle, amount,
                     arith::SubIOp::create(offsetBuilder, loc,
@@ -4727,12 +4727,11 @@ FailureOr<bool> makeNativeEvalPlan(
                 source->getBitOffset() / 8, 1)
                 ->getResult(0);
         uint8_t sourceMask = uint8_t{1} << (source->getBitOffset() % 8);
+        Value sourceBits = arith::AndIOp::create(
+            builder, location, sourceByte,
+            llvmConstant(builder, location, builder.getI8Type(), sourceMask));
         Value sourceSet = arith::CmpIOp::create(
-            builder, location, arith::CmpIPredicate::ne,
-            arith::AndIOp::create(builder, location, sourceByte,
-                                  llvmConstant(builder, location,
-                                               builder.getI8Type(),
-                                               sourceMask)),
+            builder, location, arith::CmpIPredicate::ne, sourceBits,
             llvmConstant(builder, location, builder.getI8Type(), 0));
         Value driverByte =
             schedule::NativeStateLoadOp::create(
@@ -4740,11 +4739,11 @@ FailureOr<bool> makeNativeEvalPlan(
                 alias.getDriverBitOffset() / 8, 1)
                 ->getResult(0);
         uint8_t driverMask = uint8_t{1} << (alias.getDriverBitOffset() % 8);
+        Value driverSet = arith::OrIOp::create(
+            builder, location, driverByte,
+            llvmConstant(builder, location, builder.getI8Type(), driverMask));
         Value driverValue = arith::SelectOp::create(
-            builder, location, sourceSet,
-            arith::OrIOp::create(builder, location, driverByte,
-                                 llvmConstant(builder, location,
-                                              builder.getI8Type(), driverMask)),
+            builder, location, sourceSet, driverSet,
             arith::AndIOp::create(
                 builder, location, driverByte,
                 llvmConstant(builder, location, builder.getI8Type(),
@@ -5109,11 +5108,11 @@ FailureOr<bool> makeNativeEvalPlan(
                           Value{}, clock.getBitOffset() / 8, 1)
                           ->getResult(0);
       uint8_t bitMask = uint8_t{1} << (clock.getBitOffset() % 8);
+      Value oldBits = arith::AndIOp::create(
+          builder, location, oldByte,
+          llvmConstant(builder, location, builder.getI8Type(), bitMask));
       Value oldSet = arith::CmpIOp::create(
-          builder, location, arith::CmpIPredicate::ne,
-          arith::AndIOp::create(
-              builder, location, oldByte,
-              llvmConstant(builder, location, builder.getI8Type(), bitMask)),
+          builder, location, arith::CmpIPredicate::ne, oldBits,
           llvmConstant(builder, location, builder.getI8Type(), 0));
       Value toggled = arith::XOrIOp::create(
           builder, location, oldByte,
@@ -5159,12 +5158,12 @@ FailureOr<bool> makeNativeEvalPlan(
                                stateValue, Value{}, bitOffset / 8, 1)
                                ->getResult(0);
           uint8_t aliasMask = uint8_t{1} << (bitOffset % 8);
+          Value aliasCleared = arith::AndIOp::create(
+              builder, location, aliasOld,
+              llvmConstant(builder, location, builder.getI8Type(),
+                           static_cast<uint8_t>(~aliasMask)));
           Value aliasValue = arith::SelectOp::create(
-              builder, location, oldSet,
-              arith::AndIOp::create(
-                  builder, location, aliasOld,
-                  llvmConstant(builder, location, builder.getI8Type(),
-                               static_cast<uint8_t>(~aliasMask))),
+              builder, location, oldSet, aliasCleared,
               arith::OrIOp::create(builder, location, aliasOld,
                                    llvmConstant(builder, location,
                                                 builder.getI8Type(),
@@ -5174,20 +5173,18 @@ FailureOr<bool> makeNativeEvalPlan(
           schedule::NativeStateStoreOp::create(builder, location, storedAlias,
                                                stateValue, Value{},
                                                bitOffset / 8, 1);
-          Value aliasOldSet = arith::CmpIOp::create(
-              builder, location, arith::CmpIPredicate::ne,
-              arith::AndIOp::create(builder, location, aliasOld,
-                                    llvmConstant(builder, location,
-                                                 builder.getI8Type(),
-                                                 aliasMask)),
-              llvmConstant(builder, location, builder.getI8Type(), 0));
-          Value aliasNewSet = arith::CmpIOp::create(
-              builder, location, arith::CmpIPredicate::ne,
-              arith::AndIOp::create(builder, location, storedAlias,
-                                    llvmConstant(builder, location,
-                                                 builder.getI8Type(),
-                                                 aliasMask)),
-              llvmConstant(builder, location, builder.getI8Type(), 0));
+          // Whether `byte` has the alias bit set.
+          auto aliasBitSet = [&](Value byte) -> Value {
+            Value bits = arith::AndIOp::create(builder, location, byte,
+                                               llvmConstant(builder, location,
+                                                            builder.getI8Type(),
+                                                            aliasMask));
+            return arith::CmpIOp::create(
+                builder, location, arith::CmpIPredicate::ne, bits,
+                llvmConstant(builder, location, builder.getI8Type(), 0));
+          };
+          Value aliasOldSet = aliasBitSet(aliasOld);
+          Value aliasNewSet = aliasBitSet(storedAlias);
           if (bitOffset == alias.getTargetBitOffset() &&
               mlir::failed(publishRuntimeClockBit(alias.getTargetStaticState(),
                                                   bitOffset, aliasOldSet,
@@ -5202,9 +5199,9 @@ FailureOr<bool> makeNativeEvalPlan(
         uint64_t fallMask = ownerMaskWord(fallOwners, word);
         if (riseMask == 0 && fallMask == 0)
           continue;
+        Value fall = llvmConstant(builder, location, i64, fallMask);
         Value edgeMask = arith::SelectOp::create(
-            builder, location, oldSet,
-            llvmConstant(builder, location, i64, fallMask),
+            builder, location, oldSet, fall,
             llvmConstant(builder, location, i64, riseMask));
         Value selected =
             arith::SelectOp::create(builder, location, due, edgeMask,
@@ -5224,9 +5221,9 @@ FailureOr<bool> makeNativeEvalPlan(
         uint64_t fallMask = ownerMaskWord(directFallOwners, word);
         if (riseMask == 0 && fallMask == 0)
           continue;
+        Value fall = llvmConstant(builder, location, i64, fallMask);
         Value edgeMask = arith::SelectOp::create(
-            builder, location, oldSet,
-            llvmConstant(builder, location, i64, fallMask),
+            builder, location, oldSet, fall,
             llvmConstant(builder, location, i64, riseMask));
         Value selected =
             arith::SelectOp::create(builder, location, due, edgeMask,
@@ -5416,11 +5413,11 @@ FailureOr<bool> makeNativeEvalPlan(
         if (canCompressSilentFall)
           return nullptr;
         unsigned bit = mergedFragments[recordIndex].bit;
+        Value readyBit = arith::AndIOp::create(
+            builder, location, directReady[bit / 64],
+            llvmConstant(builder, location, i64, uint64_t{1} << (bit % 64)));
         Value selected = arith::CmpIOp::create(
-            builder, location, arith::CmpIPredicate::ne,
-            arith::AndIOp::create(builder, location, directReady[bit / 64],
-                                  llvmConstant(builder, location, i64,
-                                               uint64_t{1} << (bit % 64))),
+            builder, location, arith::CmpIPredicate::ne, readyBit,
             llvmConstant(builder, location, i64, 0));
         Block *executeOwner = new Block;
         Block *nextOwner = new Block;
@@ -6663,10 +6660,10 @@ FailureOr<bool> makeNativeEvalPlan(
         arith::SubIOp::create(builder, location, safeRequestedStart,
                               maximumOffset),
         zero64);
+    Value lowContained = arith::CmpIOp::create(
+        builder, location, arith::CmpIPredicate::eq, lowClip, zero64);
     Value fullyContained = arith::AndIOp::create(
-        builder, location,
-        arith::CmpIOp::create(builder, location, arith::CmpIPredicate::eq,
-                              lowClip, zero64),
+        builder, location, lowContained,
         arith::CmpIOp::create(builder, location, arith::CmpIPredicate::eq,
                               highClip, zero64));
     Value dynamicByte =
@@ -6877,9 +6874,10 @@ FailureOr<bool> makeNativeEvalPlan(
     requestedMask = arith::SelectOp::create(builder, location, active,
                                             requestedMask, zero64);
     auto mergePublished = [&](Value oldValue, Value stagedValue) {
+      Value requested =
+          arith::AndIOp::create(builder, location, stagedValue, requestedMask);
       return arith::OrIOp::create(
-          builder, location,
-          arith::AndIOp::create(builder, location, stagedValue, requestedMask),
+          builder, location, requested,
           arith::AndIOp::create(
               builder, location, oldValue,
               arith::XOrIOp::create(
@@ -6914,14 +6912,14 @@ FailureOr<bool> makeNativeEvalPlan(
                                           invertPublished(newPublishedValue));
     Value newOne =
         arith::AndIOp::create(builder, location, newKnown, newPublishedValue);
+    Value valueChanged = arith::XOrIOp::create(
+        builder, location, oldPublishedValue, newPublishedValue);
     Value changed = arith::AndIOp::create(
         builder, location,
-        arith::OrIOp::create(
-            builder, location,
-            arith::XOrIOp::create(builder, location, oldPublishedValue,
-                                  newPublishedValue),
-            arith::XOrIOp::create(builder, location, oldPublishedUnknown,
-                                  newPublishedUnknown)),
+        arith::OrIOp::create(builder, location, valueChanged,
+                             arith::XOrIOp::create(builder, location,
+                                                   oldPublishedUnknown,
+                                                   newPublishedUnknown)),
         widthMask);
     const talos_rt_static_nba_root &dynamicRoot = nbaRoots[entry.rootIndex];
     auto dynamicFanout = fanoutIndicesOf(dynamicRoot.static_state);
@@ -6940,20 +6938,20 @@ FailureOr<bool> makeNativeEvalPlan(
           publish, ValueRange{}, nextDynamic, ValueRange{});
       builder.setInsertionPointToStart(publish);
     }
+    Value fromZero = arith::AndIOp::create(builder, location, oldZero,
+                                           invertPublished(newZero));
     Value posedge = arith::AndIOp::create(
         builder, location,
-        arith::OrIOp::create(builder, location,
-                             arith::AndIOp::create(builder, location, oldZero,
-                                                   invertPublished(newZero)),
+        arith::OrIOp::create(builder, location, fromZero,
                              arith::AndIOp::create(builder, location,
                                                    oldPublishedUnknown,
                                                    newOne)),
         widthMask);
+    Value fromOne = arith::AndIOp::create(builder, location, oldOne,
+                                          invertPublished(newOne));
     Value negedge = arith::AndIOp::create(
         builder, location,
-        arith::OrIOp::create(builder, location,
-                             arith::AndIOp::create(builder, location, oldOne,
-                                                   invertPublished(newOne)),
+        arith::OrIOp::create(builder, location, fromOne,
                              arith::AndIOp::create(builder, location,
                                                    oldPublishedUnknown,
                                                    newZero)),
@@ -7067,12 +7065,13 @@ FailureOr<bool> makeNativeEvalPlan(
   // quiescence test (applying the whole batch first is an order IEEE
   // 1800-2023 4.4.2.2 and 4.5 permit). An early error return keeps the
   // summary set, which is conservative.
-  if (hasDynamicNBASlots)
-    LLVM::StoreOp::create(builder, location,
-                          llvmConstant(builder, location, i32, 0),
+  if (hasDynamicNBASlots) {
+    Value notPending = llvmConstant(builder, location, i32, 0);
+    LLVM::StoreOp::create(builder, location, notPending,
                           LLVM::AddressOfOp::create(builder, location, pointer,
                                                     evalDynamicNBAPendingName),
                           4);
+  }
 
   size_t scalarCount = 0;
   for (const auto &roots : scalarRootsByWord)

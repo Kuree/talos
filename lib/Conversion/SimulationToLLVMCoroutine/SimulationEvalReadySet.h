@@ -191,10 +191,10 @@ inline void materializeEvalReadyIndexes(mlir::OpBuilder &builder,
   unsigned child = word;
   for (unsigned level = 1; level != layout.levels; ++level) {
     unsigned parent = layout.offsets[level] + child / 64;
+    Value childBit =
+        llvmConstant(builder, loc, i64, uint64_t{1} << (child % 64));
     Value bit = builder.createOrFold<arith::SelectOp>(
-        loc, nonzero,
-        llvmConstant(builder, loc, i64, uint64_t{1} << (child % 64)),
-        llvmConstant(builder, loc, i64, 0));
+        loc, nonzero, childBit, llvmConstant(builder, loc, i64, 0));
     Value next = builder.createOrFold<arith::OrIOp>(
         loc, loadReadyWord(builder, loc, set, parent), bit);
     storeReadyWord(builder, loc, next, set, parent);
@@ -257,10 +257,10 @@ materializeEvalReadyWords(mlir::OpBuilder &builder, mlir::Location loc,
                            ? parents.at(parent)
                            : loadReadyWord(builder, loc, set,
                                            layout.offsets[level] + parent);
+      Value childBit =
+          llvmConstant(builder, loc, i64, uint64_t{1} << (child % 64));
       Value bit = builder.createOrFold<arith::SelectOp>(
-          loc, nonzero,
-          llvmConstant(builder, loc, i64, uint64_t{1} << (child % 64)),
-          llvmConstant(builder, loc, i64, 0));
+          loc, nonzero, childBit, llvmConstant(builder, loc, i64, 0));
       parents[parent] = builder.createOrFold<arith::OrIOp>(loc, previous, bit);
       Value &any = parentAdded[parent];
       any =

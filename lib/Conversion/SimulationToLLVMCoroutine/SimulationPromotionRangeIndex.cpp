@@ -444,11 +444,13 @@ LogicalResult materializeNativePromotionRangeIndex(ModuleOp module,
       module, "__talos_eval_proof_aggregate_invalidate_v1", voidType, {});
   builder.setInsertionPointToStart(reset.addEntryBlock(builder));
   for (StringRef name : {"__talos_eval_promotion_latched_v1"})
-    if (auto global = module.lookupSymbol<LLVM::GlobalOp>(name))
+    if (auto global = module.lookupSymbol<LLVM::GlobalOp>(name)) {
+      Value zero =
+          LLVM::ZeroOp::create(builder, location, global.getGlobalType());
       LLVM::StoreOp::create(
-          builder, location,
-          LLVM::ZeroOp::create(builder, location, global.getGlobalType()),
+          builder, location, zero,
           LLVM::AddressOfOp::create(builder, location, pointer, name));
+    }
   if (auto dirty = module.lookupSymbol<LLVM::GlobalOp>(
           "__talos_eval_route_promotion_dirty_v1"))
     LLVM::StoreOp::create(
