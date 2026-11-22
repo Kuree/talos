@@ -1,20 +1,80 @@
-// RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o %t.llvm.mlir
+// RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' --mlir-print-ir-after=materialize-native-processes -o %t.llvm.mlir 2> %t.materialized.mlir
 // RUN: FileCheck %s --check-prefix=PLAN < %t.llvm.mlir
-// RUN: talos-opt %t.llvm.mlir --pass-pipeline='builtin.module(llvm.func(mem2reg))' | FileCheck %s --check-prefix=SSA
+// RUN: FileCheck %s --check-prefix=SLICE < %t.materialized.mlir
 
 // A 65-bit blocking copy must publish both words without leaving generated
 // evaluation. A high-word-only change wakes change observers, not vector
-// posedge observers: vector edges use only the LSB (LRM 9.4.2).
+// posedge observers: vector edges use only the LSB (IEEE 1800-2023 9.4.2).
 // Shared helpers retain monitor-aware runtime output; only their private
 // generated copies may use snapshot output. Warnings are not dropped.
-// Reload integer snapshots at their original width so that mem2reg can remove
-// the snapshot ABI's stack spills before group analysis. Both planes and the
-// partial high word retain their original numeric values.
-// SSA-LABEL: llvm.func @publish.__talos_eval_body_0(
-// SSA-NOT: llvm.alloca
-// SSA: llvm.lshr {{.*}} : i65
-// SSA-NOT: llvm.alloca
-// SSA: llvm.return
+// The store's transition carries its planes as values. AOT planning publishes
+// it as one transition per 64-bit slice of the root, a shift and truncation
+// of each plane, with no stack snapshot: the low slice, bits 0-63, wakes the
+// posedge observer (ingress bit 4) on its LSB and the change observer (bit 2)
+// on any change; the high slice, bit 64, wakes only the change observer.
+// SLICE-LABEL: func.func private @publish.__talos_eval_body_0(
+// SLICE-NOT: llvm.alloca
+// SLICE: %[[OLD_WORDS:[0-9]+]] = schedule.state.load @__talos_state_value[1] {alignment = 1 : i64} : i72
+// SLICE-NEXT: %[[OLD:[0-9]+]] = llvm.trunc %[[OLD_WORDS]] : i72 to i65
+// SLICE-NEXT: %[[OLD_UNKNOWN_WORDS:[0-9]+]] = schedule.state.load @__talos_state_unknown[1] {alignment = 1 : i64} : i72
+// SLICE-NEXT: %[[OLD_UNKNOWN:[0-9]+]] = llvm.trunc %[[OLD_UNKNOWN_WORDS]] : i72 to i65
+// SLICE: %[[NEW:[0-9]+]] = arith.select %{{[0-9]+}}, %{{[^ ]+}}, %[[OLD]] : i65
+// SLICE: %[[NEW_UNKNOWN:[0-9]+]] = arith.select %{{[0-9]+}}, %{{[^ ]+}}, %[[OLD_UNKNOWN]] : i65
+// SLICE-NOT: llvm.alloca
+// SLICE: %[[OLD_LOW:[0-9]+]] = llvm.trunc %[[OLD]] : i65 to i64
+// SLICE-NEXT: %[[OLD_UNKNOWN_LOW:[0-9]+]] = llvm.trunc %[[OLD_UNKNOWN]] : i65 to i64
+// SLICE-NEXT: %[[NEW_LOW:[0-9]+]] = llvm.trunc %[[NEW]] : i65 to i64
+// SLICE-NEXT: %[[NEW_UNKNOWN_LOW:[0-9]+]] = llvm.trunc %[[NEW_UNKNOWN]] : i65 to i64
+// SLICE-NEXT: %[[LOW_VALUE_CHANGES:[0-9]+]] = arith.xori %[[OLD_LOW]], %[[NEW_LOW]] : i64
+// SLICE-NEXT: %[[LOW_UNKNOWN_CHANGES:[0-9]+]] = arith.xori %[[OLD_UNKNOWN_LOW]], %[[NEW_UNKNOWN_LOW]] : i64
+// SLICE-NEXT: %[[LOW_CHANGES:[0-9]+]] = arith.ori %[[LOW_VALUE_CHANGES]], %[[LOW_UNKNOWN_CHANGES]] : i64
+// SLICE: %[[LSB:[0-9]+]] = llvm.mlir.constant(1 : i64) : i64
+// SLICE-NEXT: %[[LSB_POSEDGE:[0-9]+]] = arith.andi %{{[0-9]+}}, %[[LSB]] : i64
+// SLICE-NEXT: %[[POSEDGES:[0-9]+]] = arith.ori %{{[0-9]+}}, %[[LSB_POSEDGE]] : i64
+// SLICE-NEXT: %[[NO_POSEDGE:[0-9]+]] = llvm.mlir.constant(0 : i64) : i64
+// SLICE-NEXT: %[[POSEDGE:[0-9]+]] = arith.cmpi ne, %[[POSEDGES]], %[[NO_POSEDGE]] : i64
+// SLICE-NEXT: %[[POSEDGE_OBSERVER:[0-9]+]] = llvm.mlir.constant(4 : i64) : i64
+// SLICE-NEXT: %[[NO_POSEDGE_WAKE:[0-9]+]] = llvm.mlir.constant(0 : i64) : i64
+// SLICE-NEXT: %[[POSEDGE_WAKE:[0-9]+]] = arith.select %[[POSEDGE]], %[[POSEDGE_OBSERVER]], %[[NO_POSEDGE_WAKE]] : i64
+// SLICE-NEXT: schedule.ready.update @__talos_aot_model_ingress_v1[0], %[[POSEDGE_WAKE]] {capacity = 64 : i64, consume = false}
+// SLICE-NEXT: %[[NO_LOW_CHANGE:[0-9]+]] = llvm.mlir.constant(0 : i64) : i64
+// SLICE-NEXT: %[[LOW_MASK:[0-9]+]] = llvm.mlir.constant(-1 : i64) : i64
+// SLICE-NEXT: %[[LOW_SLICE_CHANGES:[0-9]+]] = arith.andi %[[LOW_CHANGES]], %[[LOW_MASK]] : i64
+// SLICE-NEXT: %[[LOW_ANY:[0-9]+]] = arith.ori %[[NO_LOW_CHANGE]], %[[LOW_SLICE_CHANGES]] : i64
+// SLICE-NEXT: %[[LOW_NONE:[0-9]+]] = llvm.mlir.constant(0 : i64) : i64
+// SLICE-NEXT: %[[LOW_CHANGED:[0-9]+]] = arith.cmpi ne, %[[LOW_ANY]], %[[LOW_NONE]] : i64
+// SLICE-NEXT: %[[CHANGE_OBSERVER:[0-9]+]] = llvm.mlir.constant(2 : i64) : i64
+// SLICE-NEXT: %[[NO_LOW_WAKE:[0-9]+]] = llvm.mlir.constant(0 : i64) : i64
+// SLICE-NEXT: %[[LOW_WAKE:[0-9]+]] = arith.select %[[LOW_CHANGED]], %[[CHANGE_OBSERVER]], %[[NO_LOW_WAKE]] : i64
+// SLICE-NEXT: schedule.ready.update @__talos_aot_model_ingress_v1[0], %[[LOW_WAKE]] {capacity = 64 : i64, consume = false}
+// SLICE-NEXT: %{{[0-9]+}} = llvm.mlir.constant(64 : i64) : i64
+// SLICE-NEXT: %[[OLD_SHIFT:[0-9]+]] = llvm.mlir.constant(64 : i65) : i65
+// SLICE-NEXT: %[[OLD_HIGH_PLANE:[0-9]+]] = llvm.lshr %[[OLD]], %[[OLD_SHIFT]] : i65
+// SLICE-NEXT: %[[OLD_HIGH:[0-9]+]] = llvm.trunc %[[OLD_HIGH_PLANE]] : i65 to i64
+// SLICE-NEXT: %[[OLD_UNKNOWN_SHIFT:[0-9]+]] = llvm.mlir.constant(64 : i65) : i65
+// SLICE-NEXT: %[[OLD_UNKNOWN_HIGH_PLANE:[0-9]+]] = llvm.lshr %[[OLD_UNKNOWN]], %[[OLD_UNKNOWN_SHIFT]] : i65
+// SLICE-NEXT: %[[OLD_UNKNOWN_HIGH:[0-9]+]] = llvm.trunc %[[OLD_UNKNOWN_HIGH_PLANE]] : i65 to i64
+// SLICE-NEXT: %[[NEW_SHIFT:[0-9]+]] = llvm.mlir.constant(64 : i65) : i65
+// SLICE-NEXT: %[[NEW_HIGH_PLANE:[0-9]+]] = llvm.lshr %[[NEW]], %[[NEW_SHIFT]] : i65
+// SLICE-NEXT: %[[NEW_HIGH:[0-9]+]] = llvm.trunc %[[NEW_HIGH_PLANE]] : i65 to i64
+// SLICE-NEXT: %[[NEW_UNKNOWN_SHIFT:[0-9]+]] = llvm.mlir.constant(64 : i65) : i65
+// SLICE-NEXT: %[[NEW_UNKNOWN_HIGH_PLANE:[0-9]+]] = llvm.lshr %[[NEW_UNKNOWN]], %[[NEW_UNKNOWN_SHIFT]] : i65
+// SLICE-NEXT: %[[NEW_UNKNOWN_HIGH:[0-9]+]] = llvm.trunc %[[NEW_UNKNOWN_HIGH_PLANE]] : i65 to i64
+// SLICE-NEXT: %[[HIGH_VALUE_CHANGES:[0-9]+]] = arith.xori %[[OLD_HIGH]], %[[NEW_HIGH]] : i64
+// SLICE-NEXT: %[[HIGH_UNKNOWN_CHANGES:[0-9]+]] = arith.xori %[[OLD_UNKNOWN_HIGH]], %[[NEW_UNKNOWN_HIGH]] : i64
+// SLICE-NEXT: %[[HIGH_CHANGES:[0-9]+]] = arith.ori %[[HIGH_VALUE_CHANGES]], %[[HIGH_UNKNOWN_CHANGES]] : i64
+// SLICE-NEXT: %{{[0-9]+}} = llvm.mlir.constant(1 : i64) : i64
+// SLICE-NEXT: %[[NO_HIGH_CHANGE:[0-9]+]] = llvm.mlir.constant(0 : i64) : i64
+// SLICE-NEXT: %[[HIGH_MASK:[0-9]+]] = llvm.mlir.constant(1 : i64) : i64
+// SLICE-NEXT: %[[HIGH_SLICE_CHANGES:[0-9]+]] = arith.andi %[[HIGH_CHANGES]], %[[HIGH_MASK]] : i64
+// SLICE-NEXT: %[[HIGH_ANY:[0-9]+]] = arith.ori %[[NO_HIGH_CHANGE]], %[[HIGH_SLICE_CHANGES]] : i64
+// SLICE-NEXT: %[[HIGH_NONE:[0-9]+]] = llvm.mlir.constant(0 : i64) : i64
+// SLICE-NEXT: %[[HIGH_CHANGED:[0-9]+]] = arith.cmpi ne, %[[HIGH_ANY]], %[[HIGH_NONE]] : i64
+// SLICE-NEXT: %[[HIGH_CHANGE_OBSERVER:[0-9]+]] = llvm.mlir.constant(2 : i64) : i64
+// SLICE-NEXT: %[[NO_HIGH_WAKE:[0-9]+]] = llvm.mlir.constant(0 : i64) : i64
+// SLICE-NEXT: %[[HIGH_WAKE:[0-9]+]] = arith.select %[[HIGH_CHANGED]], %[[HIGH_CHANGE_OBSERVER]], %[[NO_HIGH_WAKE]] : i64
+// SLICE-NEXT: schedule.ready.update @__talos_aot_model_ingress_v1[0], %[[HIGH_WAKE]] {capacity = 64 : i64, consume = false}
+// SLICE-NEXT: cf.br
 // PLAN-LABEL: llvm.func @report(
 // PLAN: llvm.call @talos_rt_v1_display(
 // PLAN-LABEL: llvm.func @report.__talos_eval_private_

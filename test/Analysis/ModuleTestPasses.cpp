@@ -33,6 +33,7 @@
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/MemoryBuffer.h"
 
 using namespace mlir;
@@ -759,17 +760,56 @@ public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(
       LowerNativeHandleTransitionsTestPass)
 
+  LowerNativeHandleTransitionsTestPass() = default;
+  LowerNativeHandleTransitionsTestPass(
+      const LowerNativeHandleTransitionsTestPass &other)
+      : PassWrapper(other) {}
+
   StringRef getArgument() const final {
     return "test-talos-lower-native-handle-transitions";
   }
   StringRef getDescription() const final {
-    return "lower handle-addressed transitions to the runtime's signal transition";
+    return "lower handle-addressed transitions to the runtime's signal "
+           "transition, or to an actor's owned or projected wide publication";
   }
   void getDependentDialects(DialectRegistry &registry) const final {
     registry.insert<LLVM::LLVMDialect>();
   }
+
+  Option<std::string> entry{
+      *this, "entry",
+      llvm::cl::desc("the runtime entry: signal, or the wide publication "
+                     "'owned' or 'projected' from `actor`"),
+      llvm::cl::init("signal")};
+  Option<unsigned> actor{
+      *this, "actor",
+      llvm::cl::desc("the actor that executes an owned or projected "
+                     "publication"),
+      llvm::cl::init(0)};
+
   void runOnOperation() final {
-    talos::lowerNativeHandleTransitions(getOperation());
+    std::optional<talos::NativeRuntimeEntry> callee =
+        llvm::StringSwitch<std::optional<talos::NativeRuntimeEntry>>(entry)
+            .Case("signal",
+                  talos::NativeRuntimeEntry::SchedulerSignalTransition)
+            .Case("owned",
+                  talos::NativeRuntimeEntry::SchedulerWideTransitionOwned)
+            .Case("projected",
+                  talos::NativeRuntimeEntry::SchedulerWideTransitionProjected)
+            .Default(std::nullopt);
+    if (!callee) {
+      getOperation().emitError("unknown transition entry '") << entry << "'";
+      return signalPassFailure();
+    }
+    if (*callee == talos::NativeRuntimeEntry::SchedulerSignalTransition)
+      return talos::lowerNativeHandleTransitions(getOperation());
+    SmallVector<Operation *> transitions;
+    getOperation().walk([&](Operation *op) {
+      if (talos::isNativeHandleTransition(op))
+        transitions.push_back(op);
+    });
+    for (Operation *transition : transitions)
+      talos::lowerNativeHandleTransition(transition, *callee, actor.getValue());
   }
 };
 
