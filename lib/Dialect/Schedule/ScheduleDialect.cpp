@@ -50,7 +50,8 @@ struct ReadyInlinerInterface final : DialectInlinerInterface {
                NativeNBAIndexStoreOp, NativeNBAStageOp, NativeStateLoadHandleOp,
                NativeStateLoadHandleBytesOp, NativeStateStoreHandleOp,
                NativeStateStoreHandleBytesOp, NativeStateFrameStoreOp,
-               NativeStateLoadAutomaticOp, NativeHandleTransitionBytesOp>(op);
+               NativeStateLoadAutomaticOp, NativeHandleTransitionOp,
+               NativeHandleTransitionBytesOp>(op);
   }
 };
 } // namespace

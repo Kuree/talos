@@ -20,6 +20,7 @@
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Transforms/DialectConversion.h"
 
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/MathExtras.h"
 
 using namespace mlir;
@@ -90,25 +91,11 @@ void notifySignal(ConversionPatternRewriter &builder, Location location,
   // order before the runtime transition.
   if (storeOnChange)
     storeOnChange();
-  SmallVector<Value, 4> temporaries;
-  auto save = [&](Value value) -> Value {
-    if (!value)
-      return {};
-    Value storage = beginTemporary(builder, location, value.getType(), 1);
-    LLVM::StoreOp::create(builder, location, value, storage, 1);
-    temporaries.push_back(storage);
-    return storage;
-  };
-  Value oldValueSnapshot = save(oldValue);
-  Value oldUnknownSnapshot = save(oldUnknown);
-  Value newValueSnapshot = save(newValue);
-  Value newUnknownSnapshot = save(newUnknown);
-  schedule::NativeHandleTransitionBytesOp::create(
-      builder, location, context, handle, oldValueSnapshot, oldUnknownSnapshot,
-      newValueSnapshot, newUnknownSnapshot, width, sourceOwner, nbaEquivalent);
-  // The runtime consumes the transition before returning.
-  for (Value storage : temporaries)
-    endTemporary(builder, location, storage);
+  assert(oldValue.getType().getIntOrFloatBitWidth() == width &&
+         "a transition's planes are as wide as its store");
+  schedule::NativeHandleTransitionOp::create(
+      builder, location, context, handle, oldValue, oldUnknown, newValue,
+      newUnknown, sourceOwner, nbaEquivalent);
 }
 std::optional<DirectStaticStateRange>
 resolveDirectStaticStateRange(Value handle, unsigned width,
@@ -1551,46 +1538,68 @@ void lowerNativeStateHandleAccesses(ModuleOp module) {
     lowerNativeStateHandleAccess(access);
 }
 
-LLVM::CallOp
-lowerNativeHandleTransition(schedule::NativeHandleTransitionBytesOp transition,
-                            NativeRuntimeEntry entry,
-                            std::optional<uint32_t> actor) {
+bool isNativeHandleTransition(Operation *op) {
+  return isa<schedule::NativeHandleTransitionOp,
+             schedule::NativeHandleTransitionBytesOp>(op);
+}
+
+void lowerNativeHandleTransition(Operation *transition,
+                                 NativeRuntimeEntry entry,
+                                 std::optional<uint32_t> actor) {
   assert(actor.has_value() ==
              (entry != NativeRuntimeEntry::SchedulerSignalTransition) &&
          "only an owned or projected publication names its actor");
   OpBuilder builder(transition);
-  Location location = transition.getLoc();
+  Location location = transition->getLoc();
   Type pointer = LLVM::LLVMPointerType::get(builder.getContext());
-  SmallVector<Value, 8> arguments{transition.getRuntimeContext()};
-  if (actor)
-    arguments.push_back(
-        detail::llvmConstant(builder, location, builder.getI32Type(), *actor));
-  // A missing unknown snapshot is the null pointer: the plane has no X/Z
-  // bits.
-  auto snapshot = [&](Value buffer) -> Value {
-    return buffer ? buffer : LLVM::ZeroOp::create(builder, location, pointer);
+  SmallVector<Value, 4> temporaries;
+  // The runtime reads each plane from memory: a value through a temporary
+  // live only around the call. A missing unknown plane is the null pointer:
+  // the plane has no X/Z bits.
+  auto snapshot = [&](Value plane) -> Value {
+    if (!plane)
+      return LLVM::ZeroOp::create(builder, location, pointer);
+    if (plane.getType() == pointer)
+      return plane;
+    Value storage =
+        detail::beginTemporary(builder, location, plane.getType(), 1);
+    LLVM::StoreOp::create(builder, location, plane, storage, 1);
+    temporaries.push_back(storage);
+    return storage;
   };
-  arguments.append({transition.getHandle(),
-                    detail::llvmConstant(builder, location,
-                                         builder.getI64Type(),
-                                         transition.getWidth()),
-                    transition.getOldValue(),
-                    snapshot(transition.getOldUnknown()),
-                    transition.getNewValue(),
-                    snapshot(transition.getNewUnknown())});
-  auto call = LLVM::CallOp::create(
-      builder, location, TypeRange{},
-      getNativeRuntimeCallee(builder.getContext(), entry), arguments);
-  transition.erase();
-  return call;
+  SmallVector<Value, 8> arguments;
+  llvm::TypeSwitch<Operation *>(transition)
+      .Case<schedule::NativeHandleTransitionOp,
+            schedule::NativeHandleTransitionBytesOp>([&](auto transition) {
+        arguments.push_back(transition.getRuntimeContext());
+        if (actor)
+          arguments.push_back(detail::llvmConstant(
+              builder, location, builder.getI32Type(), *actor));
+        arguments.append({transition.getHandle(),
+                          detail::llvmConstant(builder, location,
+                                               builder.getI64Type(),
+                                               transition.getWidth()),
+                          snapshot(transition.getOldValue()),
+                          snapshot(transition.getOldUnknown()),
+                          snapshot(transition.getNewValue()),
+                          snapshot(transition.getNewUnknown())});
+      });
+  LLVM::CallOp::create(builder, location, TypeRange{},
+                       getNativeRuntimeCallee(builder.getContext(), entry),
+                       arguments);
+  // The runtime consumes the transition before returning.
+  for (Value storage : temporaries)
+    detail::endTemporary(builder, location, storage);
+  transition->erase();
 }
 
 void lowerNativeHandleTransitions(ModuleOp module) {
-  SmallVector<schedule::NativeHandleTransitionBytesOp> transitions;
-  module.walk([&](schedule::NativeHandleTransitionBytesOp transition) {
-    transitions.push_back(transition);
+  SmallVector<Operation *> transitions;
+  module.walk([&](Operation *op) {
+    if (isNativeHandleTransition(op))
+      transitions.push_back(op);
   });
-  for (schedule::NativeHandleTransitionBytesOp transition : transitions)
+  for (Operation *transition : transitions)
     lowerNativeHandleTransition(transition);
 }
 

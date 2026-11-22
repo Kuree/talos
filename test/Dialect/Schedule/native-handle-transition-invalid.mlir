@@ -31,3 +31,30 @@ llvm.mlir.global internal @outside() : !llvm.ptr {
   schedule.transition.handle_bytes %null, %handle from %null to %null {width = 72 : i64}
   llvm.return %null : !llvm.ptr
 }
+
+// -----
+
+llvm.func @no_value_bits(%context: !llvm.ptr, %handle: i64, %value: i0) {
+  // expected-error @below {{publishes no bits}}
+  schedule.transition.handle %context, %handle from %value to %value : i0
+  llvm.return
+}
+
+// -----
+
+llvm.func @value_fact(%context: !llvm.ptr, %handle: i64, %value: i72) {
+  // expected-error @below {{carries the schedule fact 'schedule.eval.source_owner' as a property, not an attribute}}
+  schedule.transition.handle %context, %handle from %value to %value {schedule.eval.source_owner = #schedule.source_owner<codeUnit = 3 : i64, continuation = 1 : i64>} : i72
+  llvm.return
+}
+
+// -----
+
+llvm.mlir.global internal @value_outside() : i72 {
+  %null = llvm.mlir.zero : !llvm.ptr
+  %handle = llvm.mlir.constant(0 : i64) : i64
+  %value = llvm.mlir.constant(0 : i72) : i72
+  // expected-error @below {{must be in a function}}
+  schedule.transition.handle %null, %handle from %value to %value : i72
+  llvm.return %value : i72
+}

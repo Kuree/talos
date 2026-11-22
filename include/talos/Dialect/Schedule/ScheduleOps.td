@@ -218,9 +218,47 @@ def NativeTransitionOp
       I64Attr:$width, OptionalAttr<ScheduleSourceOwnerAttr>:$source_owner);
   let hasVerifier = 1;
 }
+def NativeHandleTransitionOp
+    : ScheduleNativeOp<"transition.handle", [
+          AttrSizedOperandSegments,
+          TypesMatchWith<"the new value has the old value's type",
+                         "old_value", "new_value", "$_self">,
+          OptionalTypesMatchWith<"the old X/Z bits have the value's type",
+                                 "old_value", "old_unknown", "$_self">,
+          OptionalTypesMatchWith<"the new X/Z bits have the value's type",
+                                 "old_value", "new_unknown", "$_self">]> {
+  let summary = "publish a store's transition at a stable handle from values";
+  let description = [{
+    Publishes the transition of one store to the state the stable `handle`
+    names, as schedule.transition.handle_bytes does, with the old and new
+    value and unknown planes as values as wide as the store; without an
+    unknown plane the plane has no X/Z bits (IEEE 1800-2023 6.3.1).
+
+    It stands for the runtime's `talos_rt_v1_scheduler_signal_transition` on
+    temporaries that hold the planes, which its lowering creates, and has the
+    unknown memory effects of that call.
+  }];
+  let arguments = (ins LLVM_DefaultPointer:$runtime_context, I64:$handle,
+                       AnySignlessInteger:$old_value,
+                       Optional<AnySignlessInteger>:$old_unknown,
+                       AnySignlessInteger:$new_value,
+                       Optional<AnySignlessInteger>:$new_unknown,
+                       OptionalAttr<ScheduleSourceOwnerAttr>:$source_owner,
+                       UnitAttr:$nba_equivalent);
+  let assemblyFormat = [{
+    $runtime_context `,` $handle `from` $old_value (`unknown` $old_unknown^)?
+    `to` $new_value (`unknown` $new_unknown^)?
+    (`nba_equivalent` $nba_equivalent^)? attr-dict `:` type($old_value)
+  }];
+  let extraClassDeclaration = [{
+    /// The number of bits the store publishes.
+    uint64_t getWidth() { return getOldValue().getType().getWidth(); }
+  }];
+  let hasVerifier = 1;
+}
 def NativeHandleTransitionBytesOp
     : ScheduleNativeOp<"transition.handle_bytes", [AttrSizedOperandSegments]> {
-  let summary = "publish a store's transition at a stable handle";
+  let summary = "publish a store's transition at a stable handle from buffers";
   let description = [{
     Publishes the transition of one store of `width` bits to the state the
     stable `handle` names, for the runtime context `runtime_context`, in the
@@ -236,10 +274,11 @@ def NativeHandleTransitionBytesOp
 
     It stands for the runtime's `talos_rt_v1_scheduler_signal_transition`
     and has the unknown memory effects of that call. AOT materialization
-    publishes a wide one at a static root of a generated eval body word by
-    word as schedule.transition, and a whole one whose observers the runtime
-    owns through the runtime's owned or projected wide publication from its
-    actor; the others become the call once it has read them.
+    publishes a wide one, of either form, at a static root of a generated
+    eval body word by word as schedule.transition, and a whole one whose
+    observers the runtime owns through the runtime's owned or projected wide
+    publication from its actor; the others become the call once it has read
+    them.
   }];
   let arguments = (ins LLVM_DefaultPointer:$runtime_context, I64:$handle,
                        LLVM_DefaultPointer:$old_value,

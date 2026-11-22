@@ -1054,6 +1054,13 @@ LogicalResult NativeTransitionOp::verify() {
     return emitOpError("transition width must be between 1 and 64");
   return verifySourceOwner(*this, getSourceOwnerAttr());
 }
+LogicalResult NativeHandleTransitionOp::verify() {
+  if (failed(verifyTypedMemoryOp(*this)))
+    return failure();
+  if (getWidth() == 0)
+    return emitOpError("publishes no bits");
+  return verifySourceOwner(*this, getSourceOwnerAttr());
+}
 LogicalResult NativeHandleTransitionBytesOp::verify() {
   if (failed(verifyTypedMemoryOp(*this)))
     return failure();

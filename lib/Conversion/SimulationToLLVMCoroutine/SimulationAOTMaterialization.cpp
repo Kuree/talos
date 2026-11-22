@@ -35,6 +35,7 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/IR/DataLayout.h"
 #include <functional>
 #include <numeric>
@@ -931,9 +932,8 @@ materializeGenericNBAQueueWindows(ModuleOp module,
     // Recheck authority at each original query in such a body.
     WalkResult window = function.walk([&](Operation *op) {
       if (isa<LLVM::CallOp, schedule::NativeNBAStageOp,
-              schedule::NativeHandleOffsetOp,
-              schedule::NativeHandleTransitionBytesOp>(op) ||
-          isNativeStateHandleAccess(op))
+              schedule::NativeHandleOffsetOp>(op) ||
+          isNativeStateHandleAccess(op) || isNativeHandleTransition(op))
         return hasNativeRuntimeEffect(op, native_runtime::QueueStable)
                    ? WalkResult::advance()
                    : WalkResult::interrupt();
@@ -997,18 +997,16 @@ materializeGenericNBAQueueWindows(ModuleOp module,
   }
 }
 
-// Wide port/storage copies publish through snapshot buffers during state
-// lowering. On a clean, fully owned generated route, publish their
-// machine-word slices through the same exact fanout logic as narrow stores.
-// All state bytes have already been written; no actor executes between these
-// publications.
+// Wide port/storage copies publish a handle-addressed transition during state
+// lowering. On a clean, fully owned generated route, publish its machine-word
+// slices through the same exact fanout logic as narrow stores. All state bytes
+// have already been written; no actor executes between these publications.
 static void normalizeGeneratedWideTransitions(
     ModuleOp module, const llvm::DataLayout &dataLayout,
     const NativeStateLayout &layout, const NativeStaticFanoutPlan &fanout,
     ArrayRef<NativeDirectFragment> directFragments,
     const llvm::StringSet<> *selectedRawBodies,
-    DenseMap<Operation *, schedule::NativeHandleTransitionBytesOp>
-        &wholePublications) {
+    DenseMap<Operation *, Operation *> &wholePublications) {
   llvm::StringSet<> ownedBodies;
   if (schedule::has<schedule::Field::EvalRuntimeCalendar>(module))
     for (const auto &direct : directFragments)
@@ -1018,63 +1016,63 @@ static void normalizeGeneratedWideTransitions(
           ownedBodies.insert(direct.twoStateBody);
       }
   NativeStateLayout clean = makeCleanEvalStateLayout(layout);
-  SmallVector<schedule::NativeHandleTransitionBytesOp> transitions;
+  SmallVector<Operation *> transitions;
   for (auto function :
        collectGeneratedEvalCallClosure(module, selectedRawBodies))
-    function.walk([&](schedule::NativeHandleTransitionBytesOp transition) {
-      transitions.push_back(transition);
+    function.walk([&](Operation *op) {
+      if (isNativeHandleTransition(op))
+        transitions.push_back(op);
     });
-  for (schedule::NativeHandleTransitionBytesOp wide : transitions) {
+  auto normalize = [&](auto wide) {
     uint64_t width = wide.getWidth();
     if (width <= 64 || width > UINT_MAX)
-      continue;
+      return;
     auto range = resolveDirectStaticStateRange(wide.getHandle(), width, &clean);
     if (!range)
-      continue;
+      return;
     bool whole = fanout.runtimeTransitionStates.contains(range->staticID);
     if (whole && !ownedBodies.contains(
-                     wide->getParentOfType<sim::SimFuncOp>().getSymName()))
-      continue;
+                     wide->template getParentOfType<sim::SimFuncOp>()
+                         .getSymName()))
+      return;
     OpBuilder builder(wide);
     Location location = wide.getLoc();
     auto i64 = builder.getI64Type();
-    Value snapshots[] = {wide.getOldValue(), wide.getOldUnknown(),
-                         wide.getNewValue(), wide.getNewUnknown()};
-    // Integer snapshots must retain their original access type. Reloading
-    // each word through an i8 GEP hides the store/load pair from mem2reg and
-    // leaves stack spills even after LLVM SROA (notably for i76 and i2930).
-    // Recover the SSA snapshot before extracting words. Byte-buffer snapshots
-    // keep their existing layout-dependent path.
-    DenseMap<Value, Value> values;
-    if (width <= 4096)
-      for (Value snapshot : snapshots) {
-        auto allocation = snapshot
-                              ? snapshot.getDefiningOp<LLVM::AllocaOp>()
-                              : LLVM::AllocaOp{};
-        if (allocation && allocation.getElemType().isInteger(width) &&
-            !values.contains(snapshot))
-          values[snapshot] = LLVM::LoadOp::create(
-              builder, location, allocation.getElemType(), snapshot, 1);
-      }
+    Value planes[] = {wide.getOldValue(), wide.getOldUnknown(),
+                      wide.getNewValue(), wide.getNewUnknown()};
+    // A plane wider than 4096 bits is read word by word through a temporary.
+    // LLVM legalizes integers that wide slowly; finalization splits closed
+    // bitwise components of them into words (lowerWideNativeBitwiseIntegers),
+    // and a shift would leave the plane's component whole.
+    SmallVector<Value, 4> temporaries;
+    if (width > 4096)
+      for (Value &plane : planes)
+        if (plane && isa<IntegerType>(plane.getType())) {
+          Value storage = beginTemporary(builder, location, plane.getType(), 1);
+          LLVM::StoreOp::create(builder, location, plane, storage, 1);
+          temporaries.push_back(storage);
+          plane = storage;
+        }
     for (uint64_t low = 0; low < width; low += 64) {
       unsigned bits = std::min<uint64_t>(64, width - low);
       uint64_t byteOffset = dataLayout.isLittleEndian()
                                 ? low / 8
                                 : (width + 7) / 8 - low / 8 - (bits + 7) / 8;
-      auto load = [&](Value snapshot) -> Value {
-        // A missing unknown snapshot has no X/Z bits.
-        if (!snapshot)
+      // The word of a plane value is a shift; that of a snapshot, a load.
+      auto word = [&](Value plane) -> Value {
+        // A missing unknown plane has no X/Z bits.
+        if (!plane)
           return llvmConstant(builder, location, i64, 0);
-        if (Value value = values.lookup(snapshot)) {
+        if (isa<IntegerType>(plane.getType())) {
           if (low)
-            value = LLVM::LShrOp::create(
-                builder, location, value,
-                llvmConstant(builder, location, value.getType(), low));
-          return LLVM::TruncOp::create(builder, location, i64, value);
+            plane = LLVM::LShrOp::create(
+                builder, location, plane,
+                llvmConstant(builder, location, plane.getType(), low));
+          return LLVM::TruncOp::create(builder, location, i64, plane);
         }
         Value value = LLVM::LoadOp::create(
             builder, location, builder.getIntegerType(bits),
-            byteGEP(builder, location, snapshot, byteOffset), 1);
+            byteGEP(builder, location, plane, byteOffset), 1);
         return bits == 64
                    ? value
                    : LLVM::ZExtOp::create(builder, location, i64, value)
@@ -1083,8 +1081,8 @@ static void normalizeGeneratedWideTransitions(
       auto transition = schedule::NativeTransitionOp::create(
           builder, location, wide.getRuntimeContext(),
           llvmConstant(builder, location, i64, range->localOffset + low),
-          load(snapshots[0]), load(snapshots[1]), load(snapshots[2]),
-          load(snapshots[3]), builder.getI64IntegerAttr(range->staticID),
+          word(planes[0]), word(planes[1]), word(planes[2]), word(planes[3]),
+          builder.getI64IntegerAttr(range->staticID),
           builder.getI64IntegerAttr(bits), wide.getSourceOwnerAttr());
       if (whole)
         wholePublications.try_emplace(transition, wide);
@@ -1093,12 +1091,15 @@ static void normalizeGeneratedWideTransitions(
             ::talos::schedule::Field::EvalNbaEquivalentStore>(
             transition, builder.getUnitAttr());
     }
-    // TEMPORARY until the measured F5 step: erase the runtime call rather
-    // than the op, leaving the call's dead width and null-pointer constants,
-    // which ranked-group bodyCost counts, as before.
+    for (Value storage : temporaries)
+      endTemporary(builder, location, storage);
     if (!whole)
-      lowerNativeHandleTransition(wide).erase();
-  }
+      wide.erase();
+  };
+  for (Operation *transition : transitions)
+    llvm::TypeSwitch<Operation *>(transition)
+        .Case<schedule::NativeHandleTransitionOp,
+              schedule::NativeHandleTransitionBytesOp>(normalize);
 }
 
 namespace {
@@ -1218,8 +1219,7 @@ FailureOr<bool> makeNativeEvalPlan(
   SymbolTable executorSymbols(module);
   SmallVector<GeneratedTransitionRange> generatedTransitionRanges;
   llvm::DenseMap<Operation *, DynamicEvalNBAProof> dynamicNBAProofs;
-  DenseMap<Operation *, schedule::NativeHandleTransitionBytesOp>
-      wholePublications;
+  DenseMap<Operation *, Operation *> wholePublications;
   if (!resolved->clockKernels.empty()) {
     // Normalize before the ingress/NBA proof so wide clock disturbances are
     // visible to the same range analysis as ordinary narrow publications.
@@ -2264,7 +2264,7 @@ FailureOr<bool> makeNativeEvalPlan(
     DenseSet<Operation *> projectedSources;
     DenseMap<Operation *, unsigned> wholeChunks, projectedChunks;
     for (auto &entry : wholePublications)
-      ++wholeChunks[entry.second.getOperation()];
+      ++wholeChunks[entry.second];
     DenseSet<uint32_t> mixedRoutes;
     if (native::has<native::ClosedExecutable>(module) &&
         schedule::has<schedule::Field::EvalRuntimeCalendar>(module) &&
@@ -2352,7 +2352,7 @@ FailureOr<bool> makeNativeEvalPlan(
         // runtime waits observe one complete packed assignment, including bits
         // in different words (1800-2023 4.6, 9.4.2).
         if (!physicalSourceOwner)
-          return whole.emitError("wide publication has no source actor"),
+          return whole->emitError("wide publication has no source actor"),
                  failure();
         wholeOwners.try_emplace(whole, physicalSourceOwner->first);
         hasRuntimeOwnedObserver = false;
@@ -2561,7 +2561,7 @@ FailureOr<bool> makeNativeEvalPlan(
         continue;
       if (!held && physicalSourceOwner && mixedRoutes.contains(*staticState)) {
         if (auto whole = wholePublications.lookup(call))
-          ++projectedChunks[whole.getOperation()];
+          ++projectedChunks[whole];
         else
           projectedSources.insert(call);
       }
@@ -2693,7 +2693,7 @@ FailureOr<bool> makeNativeEvalPlan(
 
     for (auto [op, actor] : wholeOwners)
       lowerNativeHandleTransition(
-          cast<schedule::NativeHandleTransitionBytesOp>(op),
+          op,
           wholeChunks.lookup(op) &&
                   projectedChunks.lookup(op) == wholeChunks.lookup(op)
               ? NativeRuntimeEntry::SchedulerWideTransitionProjected

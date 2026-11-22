@@ -5,10 +5,10 @@
 // A store through a stable handle publishes its transition through the
 // runtime (IEEE 1800-2023 4.3, 9.4.2): as a typed handle-addressed transition
 // until AOT planning has read it, then as the runtime's signal transition. A
-// scalar store snapshots its planes in temporaries live only around the
-// publication; a value wider than a word publishes the byte buffers its store
-// already holds. A two-state value has no X/Z bits (6.3.1) and no unknown
-// snapshots.
+// scalar store publishes its planes as values, which only the runtime call
+// passes through temporaries; a value wider than a word publishes the byte
+// buffers its store already holds. A two-state value has no X/Z bits (6.3.1)
+// and no unknown planes.
 module attributes {
   llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128",
   llvm.target_triple = "x86_64-unknown-linux-gnu"
@@ -21,25 +21,15 @@ module attributes {
 
     // TYPED-LABEL: simulation.func @scalar(
     // TYPED-SAME: %[[HANDLE:[^:]*]]: i64 {{.*}}, %[[VALUE:[^:]*]]: i8 {{.*}}, %[[UNKNOWN:[^:]*]]: i8
-    // TYPED: %[[OLD_VALUE:.*]] = schedule.state.load_handle @__talos_state_value[%[[HANDLE]]]
-    // TYPED-NEXT: %[[OLD_UNKNOWN_VALUE:.*]] = schedule.state.load_handle @__talos_state_unknown[%[[HANDLE]]]
-    // TYPED: %[[NEW_VALUE:.*]] = schedule.state.load_handle @__talos_state_value[%[[HANDLE]]]
-    // TYPED-NEXT: %[[NEW_UNKNOWN_VALUE:.*]] = schedule.state.load_handle @__talos_state_unknown[%[[HANDLE]]]
+    // TYPED-NOT: lifetime.start
+    // TYPED: %[[OLD:.*]] = schedule.state.load_handle @__talos_state_value[%[[HANDLE]]]
+    // TYPED-NEXT: %[[OLD_UNKNOWN:.*]] = schedule.state.load_handle @__talos_state_unknown[%[[HANDLE]]]
+    // TYPED: %[[NEW:.*]] = schedule.state.load_handle @__talos_state_value[%[[HANDLE]]]
+    // TYPED-NEXT: %[[NEW_UNKNOWN:.*]] = schedule.state.load_handle @__talos_state_unknown[%[[HANDLE]]]
     // TYPED-NEXT: %[[CURRENT:.*]] = llvm.mlir.addressof @__talos_current_context
     // TYPED-NEXT: %[[CONTEXT:.*]] = llvm.load %[[CURRENT]]
-    // TYPED-NEXT: llvm.intr.lifetime.start %[[OLD:[^ ]*]] :
-    // TYPED-NEXT: llvm.store %[[OLD_VALUE]], %[[OLD]]
-    // TYPED-NEXT: llvm.intr.lifetime.start %[[OLD_UNKNOWN:[^ ]*]] :
-    // TYPED-NEXT: llvm.store %[[OLD_UNKNOWN_VALUE]], %[[OLD_UNKNOWN]]
-    // TYPED-NEXT: llvm.intr.lifetime.start %[[NEW:[^ ]*]] :
-    // TYPED-NEXT: llvm.store %[[NEW_VALUE]], %[[NEW]]
-    // TYPED-NEXT: llvm.intr.lifetime.start %[[NEW_UNKNOWN:[^ ]*]] :
-    // TYPED-NEXT: llvm.store %[[NEW_UNKNOWN_VALUE]], %[[NEW_UNKNOWN]]
-    // TYPED-NEXT: schedule.transition.handle_bytes %[[CONTEXT]], %[[HANDLE]] from %[[OLD]] unknown %[[OLD_UNKNOWN]] to %[[NEW]] unknown %[[NEW_UNKNOWN]] {source_owner = #schedule.source_owner<codeUnit = 1 : i64, continuation = 0 : i64>, width = 8 : i64}
-    // TYPED-NEXT: llvm.intr.lifetime.end %[[OLD]]
-    // TYPED-NEXT: llvm.intr.lifetime.end %[[OLD_UNKNOWN]]
-    // TYPED-NEXT: llvm.intr.lifetime.end %[[NEW]]
-    // TYPED-NEXT: llvm.intr.lifetime.end %[[NEW_UNKNOWN]]
+    // TYPED-NEXT: schedule.transition.handle %[[CONTEXT]], %[[HANDLE]] from %[[OLD]] unknown %[[OLD_UNKNOWN]] to %[[NEW]] unknown %[[NEW_UNKNOWN]] {source_owner = #schedule.source_owner<codeUnit = 1 : i64, continuation = 0 : i64>} : i8
+    // TYPED-NOT: lifetime.start
     // TYPED-NOT: llvm.call @talos_rt_v1_scheduler_signal_transition
     // TYPED: simulation.return
     simulation.func @scalar(
@@ -53,7 +43,7 @@ module attributes {
 
     // TYPED-LABEL: simulation.func @two_state(
     // TYPED-SAME: %[[HANDLE:[^:]*]]: i64
-    // TYPED: schedule.transition.handle_bytes %{{[^,]*}}, %[[HANDLE]] from %{{[^ ]*}} to %{{[^ ]*}} {width = 8 : i64}
+    // TYPED: schedule.transition.handle %{{[^,]*}}, %[[HANDLE]] from %{{[^ ]*}} to %{{[^ ]*}} : i8
     // TYPED: simulation.return
     simulation.func @two_state(
         %ctx: !simulation.context {simulation.capture_kind = 0 : i32},
@@ -97,7 +87,7 @@ module attributes {
 // CALL-NEXT: llvm.intr.lifetime.end %[[NEW_UNKNOWN]]
 // CALL-LABEL: llvm.func @two_state(
 // CALL: %[[NO_OLD_UNKNOWN:.*]] = llvm.mlir.zero : !llvm.ptr
-// CALL-NEXT: %[[NO_NEW_UNKNOWN:.*]] = llvm.mlir.zero : !llvm.ptr
+// CALL: %[[NO_NEW_UNKNOWN:.*]] = llvm.mlir.zero : !llvm.ptr
 // CALL-NEXT: llvm.call @talos_rt_v1_scheduler_signal_transition(%{{[^,]*}}, %{{[^,]*}}, %{{[^,]*}}, %{{[^,]*}}, %[[NO_OLD_UNKNOWN]], %{{[^,]*}}, %[[NO_NEW_UNKNOWN]])
 // CALL-LABEL: llvm.func @bulk(
 // CALL-SAME: %{{[^:]*}}: !llvm.ptr, %{{[^:]*}}: i64, %[[DESTINATION:[^:]*]]: i64

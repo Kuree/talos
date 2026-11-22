@@ -44,7 +44,7 @@ endmodule
 // CHECK: %[[HELD:.+]] = llvm.mlir.addressof @__talos_eval_nba_held_wakes_v1
 // CHECK-NOT: @__talos_aot_model_ingress_v1
 // CHECK-NOT: transition
-// CHECK: %[[OLD:.+]] = llvm.load %[[HELD]]
+// CHECK: %[[OLD:.+]] = llvm.load %[[HELD]] {alignment = 8 : i64} : !llvm.ptr -> i64
 // CHECK-NEXT: %[[NEW:.+]] = llvm.or %[[OLD]], %{{.+}}
 // CHECK-NEXT: llvm.store %[[NEW]], %[[HELD]]
 // CHECK-NOT: @__talos_aot_model_ingress_v1

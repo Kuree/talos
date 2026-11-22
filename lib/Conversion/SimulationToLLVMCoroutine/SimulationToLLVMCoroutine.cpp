@@ -1319,7 +1319,7 @@ LogicalResult declareNativeImports(ModuleOp module) {
       // It becomes the runtime's handle offset; see lowerNativeHandleOps.
       reference = getNativeRuntimeCallee(
           operation->getContext(), NativeRuntimeEntry::NativeHandleOffset);
-    else if (isa<schedule::NativeHandleTransitionBytesOp>(operation))
+    else if (isNativeHandleTransition(operation))
       // It becomes the runtime's signal transition; see
       // lowerNativeHandleTransitions.
       reference = getNativeRuntimeCallee(
