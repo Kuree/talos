@@ -5,13 +5,17 @@
 // RUN: %t.o0
 // RUN: %llvm_dist/bin/clang -O3 %t.ll %S/Inputs/native-ready-batch.c -o %t.o3
 // RUN: %t.o3
+// RUN: talos-opt %s --schedule-coalesce-native-ready | FileCheck %s --check-prefix=FORM --implicit-check-not=schedule.ready.region
 
 // Multiple leaves share dirty words. Dynamic masks, repeated leaf updates and
 // consumes write each leaf and dirty word once: a dirty bit is set for every
 // leaf that may have received an add, and consumes leave dirty bits alone.
 // A callback sees all pending work; its changes survive the following batch.
-// The trap path keeps the CFG out of ready-region formation, so straight-line
-// batches lower these actions.
+// The trap path keeps the CFG out of ready-region formation: llvm.unreachable
+// is neither a return nor a branch, so no region forms (FORM) and
+// straight-line batches lower these actions.
+// FORM-LABEL: llvm.func @exercise
+// FORM: llvm.unreachable
 // CHECK-LABEL: llvm.func @exercise
 // CHECK-NOT: schedule.ready
 // CHECK-COUNT-6: llvm.store

@@ -77,12 +77,13 @@ module {
   // holds for an aliased source too. The last word, whose bits above capacity
   // are ignored, is masked once and added after every lower word.
   // CHECK-LABEL: llvm.func @merge_7553(
+  // CHECK-SAME: %[[FROM:.*]]: !llvm.ptr)
   // CHECK: %[[SET:.*]] = llvm.mlir.addressof @__talos_aot_model_ingress_v1
   // CHECK-NOT: llvm.call
   // CHECK: cf.br ^[[GROUP:bb[0-9]+]]({{.*}} : i64)
   // CHECK: ^[[LAST:bb[0-9]+]]:
   // CHECK: %[[LASTINDEX:.*]] = llvm.mlir.constant(118 : i64)
-  // CHECK: llvm.getelementptr %arg0[%[[LASTINDEX]]]
+  // CHECK: llvm.getelementptr %[[FROM]][%[[LASTINDEX]]]
   // CHECK: %[[LASTWORD:.*]] = llvm.load
   // CHECK: %[[LASTBITS:.*]] = arith.andi %[[LASTWORD]],
   // CHECK: %[[LASTEMPTY:.*]] = arith.cmpi eq, %[[LASTBITS]],
@@ -99,7 +100,7 @@ module {
   // CHECK: %[[GROUPSDONE:.*]] = arith.cmpi uge, %[[START]], %[[WHOLEEND]]
   // CHECK: cf.cond_br %[[GROUPSDONE]], ^[[REST:bb[0-9]+]], ^[[SCAN:bb[0-9]+]]
   // CHECK: ^[[HEAD:bb[0-9]+]](%[[WORD:.*]]: i64, %[[END:.*]]: i64):
-  // CHECK: llvm.getelementptr %arg0[%[[WORD]]]
+  // CHECK: llvm.getelementptr %[[FROM]][%[[WORD]]]
   // CHECK: %[[SOURCE:.*]] = llvm.load {{.*}} -> i64
   // CHECK-NOT: arith.select
   // CHECK: %[[EMPTY:.*]] = arith.cmpi eq, %[[SOURCE]],
@@ -119,7 +120,7 @@ module {
   // CHECK: cf.cond_br %[[MORE]], ^[[HEAD]](%[[FOLLOWING]], %[[END]] : i64, i64), ^[[GROUP]](%[[END]] : i64)
   // CHECK: ^[[SCAN]]:
   // CHECK: %[[NEXT:.*]] = arith.addi %[[START]],
-  // CHECK: %[[FIRST:.*]] = llvm.getelementptr %arg0[%[[START]]]
+  // CHECK: %[[FIRST:.*]] = llvm.getelementptr %[[FROM]][%[[START]]]
   // CHECK: %[[WORDS:.*]] = llvm.load %[[FIRST]] {{.*}} -> vector<8xi64>
   // CHECK: %[[ANY:.*]] = "llvm.intr.vector.reduce.or"(%[[WORDS]])
   // CHECK: %[[NONE:.*]] = arith.cmpi eq, %[[ANY]],

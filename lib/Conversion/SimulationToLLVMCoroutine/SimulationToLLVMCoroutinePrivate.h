@@ -129,9 +129,9 @@ inline constexpr llvm::StringLiteral evalDynamicNBAPendingName =
 /// ingress layout. Generated fanout publishes these wakes here instead of into
 /// the ingress set; the coordinator merges them when the updates of the NBA
 /// region are complete: after the commit, or at quiescence when nothing was
-/// staged (IEEE 1800-2023 4.5, 4.6(b), 4.7). Every other coordinator exit
-/// merges them into the ingress set first. The global's EvalNbaHeldWords field
-/// lists the leaf words a publication can reach.
+/// staged (IEEE 1800-2023 4.4.2.4, 4.5, 4.6(b), 4.7). Every other coordinator
+/// exit merges them into the ingress set first. The global's EvalNbaHeldWords
+/// field lists the leaf words a publication can reach.
 inline constexpr llvm::StringLiteral evalNBAHeldWakesName =
     "__talos_eval_nba_held_wakes_v1";
 /// The generated function that merges evalNBAHeldWakesName into the ingress

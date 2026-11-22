@@ -1,10 +1,12 @@
 // RUN: talos-opt %s --talos-materialize-native-eval-groups | FileCheck %s --implicit-check-not=llvm.alloca
 
 // A group reads and consumes its ingress words where its members do, in the
-// ready set itself (IEEE 1800-2023 4.7): every typed word access stays at its
-// place, with its activation entry, and the group neither copies a word into a
-// local nor writes it back around an opaque call or at the return. A member
-// expanded in place keeps its own accesses.
+// ready set itself: each member removes its event from the set before it
+// evaluates its process (IEEE 1800-2023 4.5), and an opaque call sees the set
+// as the reference algorithm leaves it (4.3, 4.7). Every typed word access
+// stays at its place, with its activation entry, and the group neither copies
+// a word into a local nor writes it back around an opaque call or at the
+// return. A member expanded in place keeps its own accesses.
 // CHECK-LABEL: llvm.func @group(
 // CHECK: %[[FIRST:.*]] = schedule.ready.word.load @__talos_aot_model_ingress_v1[0] {activation_entry = 0 : i32}
 // CHECK: %[[CONSUMED:.*]] = llvm.xor %[[FIRST]],

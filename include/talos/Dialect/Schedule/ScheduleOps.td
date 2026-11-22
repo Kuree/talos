@@ -359,8 +359,12 @@ def NativeReadyMergeOp
     word is read immediately before adding its bits to the corresponding
     DirtyReadySetLayout leaf of the ready set `set` and setting that leaf's
     dirty bits. Bits above capacity in the last source word are ignored.
-    Source may overlap the set; earlier leaf/dirty writes are visible to later
-    source reads. Source addresses storage aligned to at least eight bytes.
+    Source may overlap the set at or after its first word: an overlapping
+    pointer derives from the set's address. Leaf i is written after source
+    word i is read, and later source reads are at higher words, so no leaf
+    write reaches them; an earlier dirty-level write does when source extends
+    into the dirty levels. Source addresses storage aligned to at least eight
+    bytes.
     The lowering may first test a group of consecutive words for emptiness and
     skip an empty group: a skipped group adds nothing, so the result equals
     the word-by-word merge.
