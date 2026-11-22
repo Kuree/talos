@@ -1,14 +1,18 @@
-// RUN: not talos-opt %s --convert-talos-sim-processes-to-llvm-coroutines -o /dev/null 2>&1 | FileCheck %s
+// RUN: talos-opt %s --convert-talos-sim-processes-to-llvm-coroutines --verify-diagnostics -o /dev/null
 
 // A predeclared runtime entry must have its catalog prototype; lowering does
-// not reuse a declaration of another type.
-// CHECK: error: 'llvm.func' op runtime symbol @talos_rt_v1_scheduler_fail is predeclared with an incompatible type
+// not reuse a declaration of another type. The pipeline rejects each one on
+// entry, once, whether or not lowering would call it: it calls
+// scheduler_fail, but never strength_resolve.
 
 module attributes {
   llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128",
   llvm.target_triple = "x86_64-unknown-linux-gnu"
 } {
+  // expected-error @+1 {{runtime symbol @talos_rt_v1_scheduler_fail is predeclared with an incompatible type}}
   llvm.func @talos_rt_v1_scheduler_fail(i64)
+  // expected-error @+1 {{runtime symbol @talos_rt_v1_strength_resolve is predeclared with an incompatible type}}
+  llvm.func @talos_rt_v1_strength_resolve(i64)
   simulation.design @design attributes {
     compute_graph = #schedule.graph<
       version = 1, vpi = full, workers = 1,

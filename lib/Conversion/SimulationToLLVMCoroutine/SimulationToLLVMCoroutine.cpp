@@ -4819,6 +4819,10 @@ class PrepareNativeScheduleInputsPass final
                                "pipeline phase Empty");
       return signalPassFailure();
     }
+    // Lowering reuses a predeclared runtime entry (declareNativeRuntime), so
+    // one of another type fails here, before anything calls it.
+    if (failed(verifyNativeRuntimeDeclarations(getOperation())))
+      return signalPassFailure();
     analysis::prepareIntegerRangeIPO(getOperation());
     auto &state = getAnalysis<Analysis>();
     if (state.stage != Analysis::Stage::Empty) {

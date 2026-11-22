@@ -147,4 +147,19 @@ void declareNativeRuntimes(mlir::ModuleOp module,
     declareNativeRuntime(module, entry);
 }
 
+llvm::LogicalResult verifyNativeRuntimeDeclarations(mlir::ModuleOp module) {
+  bool valid = true;
+  for (auto function : module.getOps<mlir::LLVM::LLVMFuncOp>()) {
+    std::optional<NativeRuntimeEntry> entry =
+        getNativeRuntimeEntry(function.getSymName());
+    if (!entry || function.getFunctionType() ==
+                      getNativeRuntimeFunctionType(module.getContext(), *entry))
+      continue;
+    function.emitOpError() << "runtime symbol @" << function.getSymName()
+                           << " is predeclared with an incompatible type";
+    valid = false;
+  }
+  return llvm::success(valid);
+}
+
 } // namespace talos

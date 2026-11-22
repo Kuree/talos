@@ -175,7 +175,7 @@ module attributes {
   llvm.target_triple = "x86_64-unknown-linux-gnu",
   schedule.eval.generated
 } {
-  llvm.func @talos_rt_v1_display()
+  llvm.func @talos_rt_v1_display(!llvm.ptr, i32, i32, i32, !llvm.ptr, i64, !llvm.ptr) -> i32
   llvm.func @__talos_eval_fast_coordinator_checkpoint() attributes {
       schedule.eval.call_closure_root
   } {
@@ -190,8 +190,11 @@ module attributes {
     llvm.return
   }
   llvm.func @checkpoint_body() {
+    %null = llvm.mlir.zero : !llvm.ptr
+    %zero = llvm.mlir.constant(0 : i32) : i32
+    %none = llvm.mlir.constant(0 : i64) : i64
     // expected-error @+1 {{generated eval hot closure calls runtime symbol talos_rt_v1_display}}
-    llvm.call @talos_rt_v1_display() : () -> ()
+    %status = llvm.call @talos_rt_v1_display(%null, %zero, %zero, %zero, %null, %none, %null) : (!llvm.ptr, i32, i32, i32, !llvm.ptr, i64, !llvm.ptr) -> i32
     llvm.return
   }
 }
