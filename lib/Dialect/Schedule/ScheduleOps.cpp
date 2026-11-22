@@ -365,7 +365,7 @@ std::optional<EvalMask> getEvalMaskOfGlobal(StringRef name) {
 }
 
 // A root's own access is to the dirty word that holds its bit, or to the
-// summary word that holds its dirty word's bit.
+// summary word that holds its dirty word's bit: a static word.
 static LogicalResult verifyIndexAccess(Operation *op, StringRef global,
                                        Value dynamicWord, uint64_t staticWord,
                                        std::optional<uint32_t> root,
@@ -377,8 +377,11 @@ static LogicalResult verifyIndexAccess(Operation *op, StringRef global,
     return failure();
   if (canonicalCapture && !root)
     return op->emitOpError("marks a canonical capture without its root");
-  if (!root || dynamicWord)
+  if (!root)
     return success();
+  if (dynamicWord)
+    return op->emitOpError("accesses a dynamic word, not the word of root ")
+           << *root;
   uint64_t word =
       *index == NBAIndex::DirtyRoots ? *root / 64 : *root / (64 * 64);
   if (staticWord != word)

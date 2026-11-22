@@ -106,3 +106,48 @@ module {
     llvm.return %x : i64
   }
 }
+
+// -----
+
+module {
+  llvm.mlir.global internal @__talos_aot_nba_dirty_roots_v1(dense<0> : tensor<8xi8>) : !llvm.array<8 x i8>
+  llvm.func @capture_without_root(%v: i64) {
+    // expected-error @below {{certifies a capture without marking a generated capture's dirty root}}
+    schedule.nba.index.store %v, @__talos_aot_nba_dirty_roots_v1[0] {capture = array<i64: 1, 0, 8, 255, 2, 0>}
+    llvm.return
+  }
+}
+
+// -----
+
+// A root's own access is to the word that holds its bit, which a dynamic word
+// cannot show.
+module {
+  llvm.mlir.global internal @__talos_aot_nba_dirty_roots_v1(dense<0> : tensor<16xi8>) : !llvm.array<16 x i8>
+  llvm.func @root_at_dynamic_word(%word: i64) -> i64 {
+    // expected-error @below {{accesses a dynamic word, not the word of root 65}}
+    %x = schedule.nba.index.load @__talos_aot_nba_dirty_roots_v1[%word + 1] {root = 65 : i32}
+    llvm.return %x : i64
+  }
+}
+
+// -----
+
+module {
+  llvm.func @store_without_global(%v: i64) {
+    // expected-error @below {{must reference the llvm.mlir.global of its index}}
+    schedule.nba.index.store %v, @__talos_aot_nba_dirty_summary_v1[0]
+    llvm.return
+  }
+}
+
+// -----
+
+module {
+  llvm.mlir.global internal @__talos_aot_nba_dirty_roots_v1(dense<0> : tensor<8xi8>) : !llvm.array<8 x i8>
+  llvm.mlir.global internal @copy() : i64 {
+    // expected-error @below {{must be in a function}}
+    %x = schedule.nba.index.load @__talos_aot_nba_dirty_roots_v1[0]
+    llvm.return %x : i64
+  }
+}

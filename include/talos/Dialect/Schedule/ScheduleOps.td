@@ -1383,9 +1383,9 @@ def NativeNBAAccumulatorStoreOp : ScheduleNativeOp<"nba.acc.store"> {
 // index is accessed only through these operations in functions.
 //
 // What native passes need to know about an access is a property:
-// - root: the access is root `root`'s own: the dirty word holding its bit or
-//   the summary word holding its dirty word's bit, read to test or written to
-//   mark the root's pending capture;
+// - root: the access is root `root`'s own, at a static word: the dirty word
+//   holding its bit or the summary word holding its dirty word's bit, read to
+//   test or written to mark the root's pending capture;
 // - canonical_capture: with `root`, the capture's payload is held where the
 //   runtime commits it (a runtime-routed or fixed-slot capture), so the root
 //   stays in the canonical index;

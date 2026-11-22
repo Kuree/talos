@@ -64,3 +64,15 @@ module {
     llvm.return %x : i64
   }
 }
+
+// -----
+
+module {
+  llvm.mlir.global internal @acc(dense<0> : tensor<104xi8>) : !llvm.array<104 x i8>
+  llvm.func @unknown_store(%x: i64) {
+    %r = schedule.nba.acc.address @acc : !llvm.ptr
+    // expected-error @below {{accesses the X/Z field of a two-state NBA accumulator record}}
+    schedule.nba.acc.store %x, %r[unknown] {alignment = 8 : i64} : i64
+    llvm.return
+  }
+}
