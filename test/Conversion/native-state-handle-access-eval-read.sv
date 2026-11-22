@@ -119,6 +119,21 @@ endmodule
 // CHECK-NEXT: %[[UNKNOWN:[0-9]+]] = arith.ori %[[UNKNOWN_KEPT]], %[[UNKNOWN_FILL]] : i65
 // CHECK-NEXT: cf.br ^{{bb[0-9]+}}(%[[UNKNOWN]] : i65)
 // CHECK-NOT: llvm.call @talos_rt_v1_native_state_load_plane
+// The register's update is staged from its payload in two words (IEEE
+// 1800-2023 10.4.2): the first eight bytes, then the last byte truncated to
+// the high bit, since the payload is one store of an i65.
+// CHECK: llvm.store %{{[0-9]+}}, %[[PAYLOAD:[0-9]+]] {alignment = 1 : i64} : i65, !llvm.ptr
+// CHECK: llvm.mlir.addressof @__talos_eval_nba_offset_{{[0-9]+}}
+// CHECK: %[[LOW:[0-9]+]] = llvm.load %[[PAYLOAD]] {alignment = 1 : i64} : !llvm.ptr -> i64
+// CHECK-NEXT: %[[LOW_SLOT:[0-9]+]] = llvm.mlir.addressof @__talos_eval_nba_value_{{[0-9]+}} : !llvm.ptr
+// CHECK-NEXT: llvm.store %[[LOW]], %[[LOW_SLOT]] {alignment = 8 : i64} : i64, !llvm.ptr
+// CHECK: %[[HIGH_ADDRESS:[0-9]+]] = llvm.getelementptr %[[PAYLOAD]][8] : (!llvm.ptr) -> !llvm.ptr, i8
+// CHECK-NEXT: %[[HIGH_BYTE:[0-9]+]] = llvm.load %[[HIGH_ADDRESS]] {alignment = 1 : i64} : !llvm.ptr -> i8
+// CHECK-NEXT: %[[HIGH_BIT:[0-9]+]] = llvm.trunc %[[HIGH_BYTE]] : i8 to i1
+// CHECK-NEXT: %[[HIGH:[0-9]+]] = llvm.zext %[[HIGH_BIT]] : i1 to i64
+// CHECK-NEXT: %[[HIGH_SLOT:[0-9]+]] = llvm.mlir.addressof @__talos_eval_nba_value_{{[0-9]+}} : !llvm.ptr
+// CHECK-NEXT: llvm.store %[[HIGH]], %[[HIGH_SLOT]] {alignment = 8 : i64} : i64, !llvm.ptr
+// CHECK-NOT: -> i1{{$}}
 // CHECK: return
 
 // Each `_bytes` read stores its selection to its buffer.

@@ -2828,6 +2828,12 @@ FailureOr<bool> makeNativeEvalPlan(
                               ? payload
                               : byteGEP(nbaBuilder, nbaStage.getLoc(), payload,
                                         index * sizeof(uint64_t));
+          // The payload is one store of the staged value: a payload of at
+          // most 64 bits loads as the stored type, and a chunk of a wider one
+          // is a slice of its bytes.
+          if (width > 64)
+            return loadByteSlice(nbaBuilder, nbaStage.getLoc(), address,
+                                 chunkWidth);
           Value chunk = LLVM::LoadOp::create(
               nbaBuilder, nbaStage.getLoc(),
               IntegerType::get(context, chunkWidth), address, 1);
