@@ -1319,6 +1319,12 @@ LogicalResult declareNativeImports(ModuleOp module) {
       // It becomes the runtime's handle offset; see lowerNativeHandleOps.
       reference = getNativeRuntimeCallee(
           operation->getContext(), NativeRuntimeEntry::NativeHandleOffset);
+    else if (isa<schedule::NativeHandleTransitionBytesOp>(operation))
+      // It becomes the runtime's signal transition; see
+      // lowerNativeHandleTransitions.
+      reference = getNativeRuntimeCallee(
+          operation->getContext(),
+          NativeRuntimeEntry::SchedulerSignalTransition);
     auto import = [&](FlatSymbolRefAttr reference) {
       if (!reference || symbols.lookupSymbolIn(design, reference))
         return;
@@ -2125,11 +2131,12 @@ LogicalResult NativePipelineAnalysis::materialize() {
       evalScheduler = false;
     }
   }
-  // A static NBA stage, handle-addressed state access or handle chain the
-  // eval plan did not rewrite is a runtime call from here on, including to
-  // the legacy plan.
+  // A static NBA stage, handle-addressed state access or transition, or a
+  // handle chain the eval plan did not rewrite is a runtime call from here
+  // on, including to the legacy plan.
   lowerNativeNBAStages(module);
   lowerNativeStateHandleAccesses(module);
+  lowerNativeHandleTransitions(module);
   lowerNativeHandleOps(module);
   if (useAOT && !evalScheduler &&
       failed(makeNativeAOTPlanLegacy(

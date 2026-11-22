@@ -20,12 +20,14 @@ class RewritePatternSet;
 class Operation;
 class SymbolTableCollection;
 namespace LLVM {
+class CallOp;
 class LLVMFuncOp;
 } // namespace LLVM
 } // namespace mlir
 
 namespace talos::schedule {
 class NativeGlobalLookup;
+class NativeHandleTransitionBytesOp;
 } // namespace talos::schedule
 
 namespace talos {
@@ -101,6 +103,22 @@ void lowerNativeStateHandleAccess(mlir::Operation *access);
 /// calls it inside AOT planning, after the eval bodies' accesses are read, so
 /// later passes see only the runtime calls.
 void lowerNativeStateHandleAccesses(mlir::ModuleOp module);
+
+/// Replace a handle-addressed transition (schedule.transition.handle_bytes)
+/// by the call of the runtime's signal transition on its context, handle,
+/// width and snapshot buffers, the null pointer for a missing unknown
+/// snapshot. With the `actor` that executes it, call `entry` instead, the
+/// runtime's owned or projected wide publication from that actor. Returns the
+/// call.
+mlir::LLVM::CallOp lowerNativeHandleTransition(
+    schedule::NativeHandleTransitionBytesOp transition,
+    NativeRuntimeEntry entry = NativeRuntimeEntry::SchedulerSignalTransition,
+    std::optional<uint32_t> actor = std::nullopt);
+/// Lower every handle-addressed transition in `module` to the runtime's
+/// signal transition. The native pipeline calls it inside AOT planning, after
+/// the eval bodies' transitions are read, so later passes see only the runtime
+/// calls.
+void lowerNativeHandleTransitions(mlir::ModuleOp module);
 
 /// Address each native state plane through one invariant base per function
 /// that accesses it in several blocks, instead of constant offsets from the

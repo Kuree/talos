@@ -91,29 +91,21 @@ void notifySignal(ConversionPatternRewriter &builder, Location location,
   if (storeOnChange)
     storeOnChange();
   SmallVector<Value, 4> temporaries;
-  auto save = [&](Value value) {
+  auto save = [&](Value value) -> Value {
     if (!value)
-      return LLVM::ZeroOp::create(builder, location, pointer).getResult();
+      return {};
     Value storage = beginTemporary(builder, location, value.getType(), 1);
     LLVM::StoreOp::create(builder, location, value, storage, 1);
     temporaries.push_back(storage);
     return storage;
   };
-  auto transition = LLVM::CallOp::create(
-      builder, location, TypeRange{},
-      getNativeRuntimeCallee(builder.getContext(),
-                             NativeRuntimeEntry::SchedulerSignalTransition),
-      ValueRange{context, handle, llvmConstant(builder, location, i64, width),
-                 save(oldValue), save(oldUnknown), save(newValue),
-                 save(newUnknown)});
-  if (sourceOwner)
-    ::talos::schedule::set<schedule::metadata::evalSourceOwner>(transition,
-                                                                sourceOwner);
-  // Its machine-word slices inherit the mark (see
-  // normalizeGeneratedWideTransitions).
-  if (nbaEquivalent)
-    ::talos::schedule::set<::talos::schedule::Field::EvalNbaEquivalentStore>(
-        transition, builder.getUnitAttr());
+  Value oldValueSnapshot = save(oldValue);
+  Value oldUnknownSnapshot = save(oldUnknown);
+  Value newValueSnapshot = save(newValue);
+  Value newUnknownSnapshot = save(newUnknown);
+  schedule::NativeHandleTransitionBytesOp::create(
+      builder, location, context, handle, oldValueSnapshot, oldUnknownSnapshot,
+      newValueSnapshot, newUnknownSnapshot, width, sourceOwner, nbaEquivalent);
   // The runtime consumes the transition before returning.
   for (Value storage : temporaries)
     endTemporary(builder, location, storage);
@@ -1557,6 +1549,49 @@ void lowerNativeStateHandleAccesses(ModuleOp module) {
   });
   for (Operation *access : accesses)
     lowerNativeStateHandleAccess(access);
+}
+
+LLVM::CallOp
+lowerNativeHandleTransition(schedule::NativeHandleTransitionBytesOp transition,
+                            NativeRuntimeEntry entry,
+                            std::optional<uint32_t> actor) {
+  assert(actor.has_value() ==
+             (entry != NativeRuntimeEntry::SchedulerSignalTransition) &&
+         "only an owned or projected publication names its actor");
+  OpBuilder builder(transition);
+  Location location = transition.getLoc();
+  Type pointer = LLVM::LLVMPointerType::get(builder.getContext());
+  SmallVector<Value, 8> arguments{transition.getRuntimeContext()};
+  if (actor)
+    arguments.push_back(
+        detail::llvmConstant(builder, location, builder.getI32Type(), *actor));
+  // A missing unknown snapshot is the null pointer: the plane has no X/Z
+  // bits.
+  auto snapshot = [&](Value buffer) -> Value {
+    return buffer ? buffer : LLVM::ZeroOp::create(builder, location, pointer);
+  };
+  arguments.append({transition.getHandle(),
+                    detail::llvmConstant(builder, location,
+                                         builder.getI64Type(),
+                                         transition.getWidth()),
+                    transition.getOldValue(),
+                    snapshot(transition.getOldUnknown()),
+                    transition.getNewValue(),
+                    snapshot(transition.getNewUnknown())});
+  auto call = LLVM::CallOp::create(
+      builder, location, TypeRange{},
+      getNativeRuntimeCallee(builder.getContext(), entry), arguments);
+  transition.erase();
+  return call;
+}
+
+void lowerNativeHandleTransitions(ModuleOp module) {
+  SmallVector<schedule::NativeHandleTransitionBytesOp> transitions;
+  module.walk([&](schedule::NativeHandleTransitionBytesOp transition) {
+    transitions.push_back(transition);
+  });
+  for (schedule::NativeHandleTransitionBytesOp transition : transitions)
+    lowerNativeHandleTransition(transition);
 }
 
 } // namespace talos

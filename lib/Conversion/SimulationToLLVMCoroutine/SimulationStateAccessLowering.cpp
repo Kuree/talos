@@ -170,28 +170,10 @@ void notifyBulkSignal(ConversionPatternRewriter &rewriter, Location location,
                       Value oldUnknown, Value newValue, Value newUnknown,
                       schedule::SourceOwnerAttr sourceOwner = {},
                       bool nbaEquivalent = false) {
-  Type pointer = LLVM::LLVMPointerType::get(rewriter.getContext());
-  auto pointerOrNull = [&](Value value) {
-    return value
-               ? value
-               : LLVM::ZeroOp::create(rewriter, location, pointer).getResult();
-  };
-  auto call = LLVM::CallOp::create(
-      rewriter, location, TypeRange{},
-      getNativeRuntimeCallee(rewriter.getContext(),
-                             NativeRuntimeEntry::SchedulerSignalTransition),
-      ValueRange{loadCurrentRuntimeContext(rewriter, location), handle,
-                 llvmConstant(rewriter, location, rewriter.getI64Type(), width),
-                 oldValue, pointerOrNull(oldUnknown), newValue,
-                 pointerOrNull(newUnknown)});
-  if (sourceOwner)
-    ::talos::schedule::set<schedule::metadata::evalSourceOwner>(call,
-                                                                sourceOwner);
-  // Its machine-word slices inherit the mark (see
-  // normalizeGeneratedWideTransitions).
-  if (nbaEquivalent)
-    ::talos::schedule::set<::talos::schedule::Field::EvalNbaEquivalentStore>(
-        call, rewriter.getUnitAttr());
+  schedule::NativeHandleTransitionBytesOp::create(
+      rewriter, location, loadCurrentRuntimeContext(rewriter, location), handle,
+      oldValue, oldUnknown, newValue, newUnknown, width, sourceOwner,
+      nbaEquivalent);
 }
 
 class BulkRefCopyConversion final

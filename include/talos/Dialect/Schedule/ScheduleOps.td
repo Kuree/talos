@@ -218,6 +218,44 @@ def NativeTransitionOp
       I64Attr:$width, OptionalAttr<ScheduleSourceOwnerAttr>:$source_owner);
   let hasVerifier = 1;
 }
+def NativeHandleTransitionBytesOp
+    : ScheduleNativeOp<"transition.handle_bytes", [AttrSizedOperandSegments]> {
+  let summary = "publish a store's transition at a stable handle";
+  let description = [{
+    Publishes the transition of one store of `width` bits to the state the
+    stable `handle` names, for the runtime context `runtime_context`, in the
+    executing process's current event region, as schedule.transition does
+    for at most 64 bits at a static root (IEEE 1800-2023 4.3, 9.4.2).
+    `old_value`, `old_unknown`, `new_value` and `new_unknown` point to
+    snapshots of the old and new value and unknown planes, ceil(width / 8)
+    little-endian bytes each; without an unknown snapshot the plane has no
+    X/Z bits. `source_owner` identifies the original logical process,
+    including inside a fused activation. `nba_equivalent` marks a store that
+    performs an NBA update early, a clocked kernel's direct store (4.5,
+    10.4.2).
+
+    It stands for the runtime's `talos_rt_v1_scheduler_signal_transition`
+    and has the unknown memory effects of that call. AOT materialization
+    publishes a wide one at a static root of a generated eval body word by
+    word as schedule.transition, and a whole one whose observers the runtime
+    owns through the runtime's owned or projected wide publication from its
+    actor; the others become the call once it has read them.
+  }];
+  let arguments = (ins LLVM_DefaultPointer:$runtime_context, I64:$handle,
+                       LLVM_DefaultPointer:$old_value,
+                       Optional<LLVM_DefaultPointer>:$old_unknown,
+                       LLVM_DefaultPointer:$new_value,
+                       Optional<LLVM_DefaultPointer>:$new_unknown,
+                       I64Attr:$width,
+                       OptionalAttr<ScheduleSourceOwnerAttr>:$source_owner,
+                       UnitAttr:$nba_equivalent);
+  let assemblyFormat = [{
+    $runtime_context `,` $handle `from` $old_value (`unknown` $old_unknown^)?
+    `to` $new_value (`unknown` $new_unknown^)?
+    (`nba_equivalent` $nba_equivalent^)? attr-dict
+  }];
+  let hasVerifier = 1;
+}
 // The generated eval ready sets (ReadySet) are named by their globals. A
 // ready action names its set and the leaf word it updates or reads; its
 // capacity freezes the set's DirtyReadySetLayout.

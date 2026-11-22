@@ -1034,6 +1034,17 @@ LogicalResult NativeNBACommitOp::verify() {
   }
   return success();
 }
+static LogicalResult verifySourceOwner(Operation *op, SourceOwnerAttr owner) {
+  if (!owner)
+    return success();
+  auto code = owner.getCodeUnit();
+  auto continuation = owner.getContinuation();
+  if (!code || !continuation || code.getValue().getBitWidth() > 64 ||
+      continuation.getValue().getBitWidth() > 64 ||
+      continuation.getUInt() > UINT32_MAX)
+    return op->emitOpError("requires a canonical code-unit/continuation owner");
+  return success();
+}
 LogicalResult NativeTransitionOp::verify() {
   if (getStaticStateAttr().getValue().isNegative() ||
       getStaticState() > UINT32_MAX)
@@ -1041,15 +1052,14 @@ LogicalResult NativeTransitionOp::verify() {
         "static state must fit an unsigned 32-bit root identity");
   if (getWidth() < 1 || getWidth() > 64)
     return emitOpError("transition width must be between 1 and 64");
-  if (auto owner = getSourceOwnerAttr()) {
-    auto code = owner.getCodeUnit();
-    auto continuation = owner.getContinuation();
-    if (!code || !continuation || code.getValue().getBitWidth() > 64 ||
-        continuation.getValue().getBitWidth() > 64 ||
-        continuation.getUInt() > UINT32_MAX)
-      return emitOpError("requires a canonical code-unit/continuation owner");
-  }
-  return success();
+  return verifySourceOwner(*this, getSourceOwnerAttr());
+}
+LogicalResult NativeHandleTransitionBytesOp::verify() {
+  if (failed(verifyTypedMemoryOp(*this)))
+    return failure();
+  if (getWidth() == 0)
+    return emitOpError("publishes no bits");
+  return verifySourceOwner(*this, getSourceOwnerAttr());
 }
 // A ready action names a generated eval ready set and, unless it merges a
 // whole bitmap, one of its leaves within capacity.

@@ -29,6 +29,12 @@ bool hasNativeRuntimeEffect(mlir::Operation *op, Effect effect) {
   if (isNativeStateHandleAccess(op))
     return (getNativeRuntimeEffects(getNativeStateHandleAccessEntry(op)) &
             effect) == effect;
+  // A handle-addressed transition is the runtime's signal transition until
+  // the eval plan publishes it itself.
+  if (llvm::isa<schedule::NativeHandleTransitionBytesOp>(op))
+    return (getNativeRuntimeEffects(
+                NativeRuntimeEntry::SchedulerSignalTransition) &
+            effect) == effect;
   return false;
 }
 

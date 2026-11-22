@@ -750,6 +750,27 @@ public:
     talos::lowerNativeStateHandleAccesses(getOperation());
   }
 };
+
+class LowerNativeHandleTransitionsTestPass
+    : public PassWrapper<LowerNativeHandleTransitionsTestPass,
+                         OperationPass<ModuleOp>> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(
+      LowerNativeHandleTransitionsTestPass)
+
+  StringRef getArgument() const final {
+    return "test-talos-lower-native-handle-transitions";
+  }
+  StringRef getDescription() const final {
+    return "lower handle-addressed transitions to the runtime's signal transition";
+  }
+  void getDependentDialects(DialectRegistry &registry) const final {
+    registry.insert<LLVM::LLVMDialect>();
+  }
+  void runOnOperation() final {
+    talos::lowerNativeHandleTransitions(getOperation());
+  }
+};
 } // namespace
 
 namespace talos {
@@ -763,5 +784,6 @@ void registerModuleTestPasses() {
   PassRegistration<ReplicateTestPass>();
   PassRegistration<LowerNativeHandleOpsTestPass>();
   PassRegistration<LowerNativeStateHandleAccessesTestPass>();
+  PassRegistration<LowerNativeHandleTransitionsTestPass>();
 }
 } // namespace talos
