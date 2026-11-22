@@ -1136,12 +1136,12 @@ materializeNativeEvalDispatch(ModuleOp module,
     }
     Value ownerBit =
         llvmConstant(builder, location, i64, uint64_t{1} << (record.bit % 64));
+    Value ownerPending = arith::AndIOp::create(
+        builder, location, ownerBit,
+        loadMaskWord(builder, location, schedule::EvalMask::PromotionPending,
+                     record.bit / 64));
     Value selectedPromotionPending = arith::CmpIOp::create(
-        builder, location, arith::CmpIPredicate::ne,
-        arith::AndIOp::create(builder, location, ownerBit,
-                              loadMaskWord(builder, location,
-                                           schedule::EvalMask::PromotionPending,
-                                           record.bit / 64)),
+        builder, location, arith::CmpIPredicate::ne, ownerPending,
         llvmConstant(builder, location, i64, 0));
     if (mergedTwoStateExecutors[recordIndex].empty()) {
       LLVM::StoreOp::create(
@@ -2047,12 +2047,15 @@ materializeNativeEvalDispatch(ModuleOp module,
     emitHeldMerge(merged, ValueRange{}, merged, ValueRange{});
     builder.setInsertionPointToStart(merged);
   }
-  Value postNBAReady =
-      sweep
-          ? arith::OrIOp::create(builder, location, activeDirty(),
-                                 maskedReadyWords(builder, location, ingressSet,
-                                                  deferredOwnerMask))
-          : combinedIngress();
+  Value postNBAReady;
+  if (sweep) {
+    Value dirty = activeDirty();
+    postNBAReady = arith::OrIOp::create(
+        builder, location, dirty,
+        maskedReadyWords(builder, location, ingressSet, deferredOwnerMask));
+  } else {
+    postNBAReady = combinedIngress();
+  }
   Value postNBAEmpty = arith::CmpIOp::create(
       builder, location, arith::CmpIPredicate::eq, postNBAReady,
       llvmConstant(builder, location, i64, 0));

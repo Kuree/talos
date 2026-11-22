@@ -1594,10 +1594,10 @@ emitGroupDomainGuard(OpBuilder &builder, Location loc,
   Value needed = zero;
   SmallVector<std::pair<unsigned, Value>> words;
   for (auto [word, mask] : masks) {
-    Value bits = LLVM::AndOp::create(
-        builder, loc,
-        loadMaskWord(builder, loc, schedule::EvalMask::PromotionPending, word),
-        llvmConstant(builder, loc, i64, mask));
+    Value pending =
+        loadMaskWord(builder, loc, schedule::EvalMask::PromotionPending, word);
+    Value bits = LLVM::AndOp::create(builder, loc, pending,
+                                     llvmConstant(builder, loc, i64, mask));
     words.emplace_back(word, bits);
     needed = LLVM::OrOp::create(builder, loc, needed, bits);
   }

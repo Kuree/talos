@@ -1473,10 +1473,10 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
             // private batch clears its leaf word only afterward. Do not
             // republish an already committed capture at the next opaque cut
             // (IEEE 1800-2023 4.9.4, 10.4.2).
+            Value bitmap = load(builder, loc, frame, root.bitmapOffset);
             store(builder, loc, frame, root.bitmapOffset,
                   LLVM::AndOp::create(
-                      builder, loc,
-                      load(builder, loc, frame, root.bitmapOffset),
+                      builder, loc, bitmap,
                       constant(builder, loc,
                                ~(uint64_t{1} << (root.root % 64)))));
           }
@@ -1489,11 +1489,12 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
               Value staged = selected(
                   builder, loc, load(builder, loc, frame, root.bitmapOffset),
                   root, 0);
-              replacement = LLVM::SelectOp::create(
-                  builder, loc,
+              Value isStaged =
                   LLVM::ICmpOp::create(builder, loc, LLVM::ICmpPredicate::ne,
-                                       staged, constant(builder, loc, 0)),
-                  constant(builder, loc, root.mask), constant(builder, loc, 0));
+                                       staged, constant(builder, loc, 0));
+              Value rootMask = constant(builder, loc, root.mask);
+              replacement = LLVM::SelectOp::create(
+                  builder, loc, isStaged, rootMask, constant(builder, loc, 0));
             }
           } else if (access->field == NBAField::Valid && access->offset == 0) {
             // A caller can inspect validity outside the commit's selected
@@ -1501,14 +1502,13 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
             // actual capture bit there too; the existence of a typed consumer
             // does not prove that this barrier staged the root (IEEE
             // 1800-2023 4.9.4, 10.4.2).
+            Value captured =
+                selected(builder, loc,
+                         load(builder, loc, frame, root.bitmapOffset), root, 0);
             replacement = LLVM::ZExtOp::create(
                 builder, loc, typedRead.getType(),
-                LLVM::ICmpOp::create(
-                    builder, loc, LLVM::ICmpPredicate::ne,
-                    selected(builder, loc,
-                             load(builder, loc, frame, root.bitmapOffset), root,
-                             0),
-                    constant(builder, loc, 0)));
+                LLVM::ICmpOp::create(builder, loc, LLVM::ICmpPredicate::ne,
+                                     captured, constant(builder, loc, 0)));
           } else {
             replacement = llvmConstant(builder, loc, typedRead.getType(),
                                        access->field == NBAField::ExecRegion &&
@@ -1588,10 +1588,10 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
           Value present =
               LLVM::ICmpOp::create(builder, loc, LLVM::ICmpPredicate::ne, bits,
                                    constant(builder, loc, 0));
+          Value pageBit = constant(builder, loc, bit);
           privatePage = LLVM::OrOp::create(
               builder, loc, privatePage,
-              LLVM::SelectOp::create(builder, loc, present,
-                                     constant(builder, loc, bit),
+              LLVM::SelectOp::create(builder, loc, present, pageBit,
                                      constant(builder, loc, 0)));
         }
         if (!localMask)

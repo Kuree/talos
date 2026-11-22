@@ -465,17 +465,18 @@ void emitScalarNBACommitLoop(OpBuilder &b, ModuleOp module,
   // Match the unrolled barrier: consume only the roots committed here. A
   // root staged in the canonical accumulator by a runtime-executed actor keeps
   // its bit for the canonical index owner (IEEE 1800-2023 4.9.4, 10.4.2).
-  schedule::NativeNBAIndexStoreOp::create(
-      b, loc,
-      band(schedule::NativeNBAIndexLoadOp::create(b, loc, dirtyRoots, word, 0),
-           inv(arith::ShLIOp::create(b, loc, c(1), bit))),
-      dirtyRoots, word, 0);
+  Value dirtyWord =
+      schedule::NativeNBAIndexLoadOp::create(b, loc, dirtyRoots, word, 0);
+  Value uncommitted =
+      band(dirtyWord, inv(arith::ShLIOp::create(b, loc, c(1), bit)));
+  schedule::NativeNBAIndexStoreOp::create(b, loc, uncommitted, dirtyRoots, word,
+                                          0);
   Value offset = load(offsetTable, index), shift = load(shiftTable, index),
         widthMask = load(widthTable, index),
         fixedMask = load(fixedTable, index);
+  Value unfixed = eq(fixedMask, c(0));
   Value writeMask =
-      select(eq(fixedMask, c(0)), band(field64(NBAField::WriteMask), widthMask),
-             fixedMask);
+      select(unfixed, band(field64(NBAField::WriteMask), widthMask), fixedMask);
   Value stagedValue = field64(NBAField::Value);
   // The two-state commit variants read staged X/Z data as zero.
   Value stagedUnknown = field64(NBAField::Unknown);

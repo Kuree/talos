@@ -224,8 +224,9 @@ void lowerNativeReadyRegion(schedule::NativeReadyRegionOp region,
     for (auto &[key, value] : pending) {
       if (!(mask & (uint64_t{1} << keys.at(key))))
         continue;
-      schedule::NativeReadyCommitOp::create(b, loc, key.global,
-                                            load(value.remove), load(value.add),
+      Value removed = load(value.remove);
+      Value added = load(value.add);
+      schedule::NativeReadyCommitOp::create(b, loc, key.global, removed, added,
                                             key.capacity, key.word);
       store(zero, value.remove);
       store(zero, value.add);

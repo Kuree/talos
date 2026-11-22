@@ -508,15 +508,17 @@ private:
       for (uint64_t local = 0; local < root.getWidth(); local += 64) {
         unsigned width = std::min<uint64_t>(64, root.getWidth() - local);
         uint64_t word = local / 64;
-        Value writeMask =
-            band(loadField(acc, NBAField::WriteMask, word * 8), c(mask(width)));
+        Value stagedMask = loadField(acc, NBAField::WriteMask, word * 8);
+        Value writeMask = band(stagedMask, c(mask(width)));
         Value value = loadField(acc, NBAField::Value, word * 8);
         Value unknown = loadField(acc, NBAField::Unknown, word * 8);
         Value transient = loadField(acc, NBAField::Transient, word * 8);
+        Value chunkOffset = c(root.getOffset() + local);
         Value observed =
-            commitChunk(c(root.getOffset() + local), root.getOffset() + local,
-                        width, c(width), writeMask, value, unknown, transient);
-        activate(root, c(local), c(width), observed, local);
+            commitChunk(chunkOffset, root.getOffset() + local, width, c(width),
+                        writeMask, value, unknown, transient);
+        Value chunkLocal = c(local);
+        activate(root, chunkLocal, c(width), observed, local);
         storeField(c(0), acc, NBAField::WriteMask, word * 8);
         storeField(c(0), acc, NBAField::Transient, word * 8);
         if (root.getWidth() > 64) {
