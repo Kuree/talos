@@ -11,17 +11,19 @@ module {
   llvm.func @talos_rt_v1_native_handle_offset(i64, i64) -> i64
   llvm.func @use(i64, i64, i64)
 
+  // A guarded handle may be invalid, so an offset of it is not proved in
+  // bounds: the runtime offsets it, and keeps the invalid handle.
   // CHECK-LABEL: llvm.func @chain(
   // CHECK-SAME: %[[ROOT:.*]]: i64, %[[INDEX:.*]]: i64, %[[VALID:.*]]: i1)
   // CHECK-NEXT: %[[ELEMENT:.*]] = llvm.call @talos_rt_v1_native_handle_offset(%[[ROOT]], %[[INDEX]]) : (i64, i64) -> i64
   // CHECK-NEXT: %[[INVALID:.*]] = arith.constant -1 : i64
   // CHECK-NEXT: %[[GUARDED:.*]] = arith.select %[[VALID]], %[[ELEMENT]], %[[INVALID]] : i64
-  // CHECK-NEXT: %[[FIELD:.*]] = llvm.add %[[GUARDED]], %[[INDEX]] : i64
+  // CHECK-NEXT: %[[FIELD:.*]] = llvm.call @talos_rt_v1_native_handle_offset(%[[GUARDED]], %[[INDEX]]) : (i64, i64) -> i64
   // CHECK-NEXT: llvm.return %[[FIELD]]
   llvm.func @chain(%root: i64, %index: i64, %valid: i1) -> i64 {
     %element = schedule.handle.offset %root, %index
     %guarded = schedule.handle.guard %valid, %element
-    %field = schedule.handle.offset %guarded, %index in_bounds
+    %field = schedule.handle.offset %guarded, %index
     llvm.return %field : i64
   }
 
@@ -100,7 +102,9 @@ module {
   llvm.func @unused(%root: i64, %index: i64, %valid: i1) {
     %element = schedule.handle.offset %root, %index
     %guarded = schedule.handle.guard %valid, %element
-    %field = schedule.handle.offset %guarded, %index in_bounds
+    %field = schedule.handle.offset %guarded, %index
+    %proved = schedule.handle.offset %root, %index in_bounds
+    %member = schedule.handle.offset %proved, %index in_bounds
     llvm.return
   }
 }

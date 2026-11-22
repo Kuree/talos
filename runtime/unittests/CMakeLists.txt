@@ -44,6 +44,7 @@ add_executable(TalosRuntimeTests
   PromotionRangeIndexTest.cpp
   RuntimeControlTest.cpp
   RuntimeTest.cpp
+  StableHandleTest.cpp
   VCDTest.cpp
   VPIObjectModelTest.cpp
   VPIAutomaticStateTest.cpp

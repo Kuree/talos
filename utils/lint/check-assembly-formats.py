@@ -74,6 +74,8 @@ for td in inputs:
 # the custom syntax, including malformed metadata that attr-dict can represent.
 exceptions = {
     ("Dialect/Schedule/native-invalid.mlir", "schedule.known.roots"),  # Empty type list.
+    ("Dialect/Schedule/native-handle-ops-invalid.mlir", "schedule.handle.offset"),  # Inferred operand types.
+    ("Dialect/Schedule/native-handle-ops-invalid.mlir", "schedule.handle.guard"),  # Inferred operand types.
     ("IR/slang-invalid.mlir", "slang.type.string_type"),  # Missing symbol name.
     ("IR/simulation-invalid.mlir", "simulation.design"),  # Zero-block region.
     ("IR/simulation-invalid.mlir", "simulation.suspend.observe"),  # Empty type list.

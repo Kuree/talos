@@ -81,3 +81,29 @@ func.func @guards(%valid: i1, %handle: i64) -> (i64, i64, i64, i64, i64, i64) {
   %f = schedule.handle.guard %valid, %invalid
   return %a, %b, %c, %d, %e, %f : i64, i64, i64, i64, i64, i64
 }
+
+// Any other validity keeps the guard: a compare of the handle with another
+// constant, an ordering compare with the invalid handle, or the compare of
+// another handle with it (the shape of a frame handle's guard over its sum).
+// CHECK-LABEL: func.func @guards_kept
+// CHECK-SAME: (%[[HANDLE:.*]]: i64, %[[OTHER:.*]]: i64)
+// CHECK-DAG: %[[INVALID:.*]] = arith.constant -1 : i64
+// CHECK-DAG: %[[ZERO:.*]] = arith.constant 0 : i64
+// CHECK-DAG: %[[NONZERO:.*]] = arith.cmpi ne, %[[HANDLE]], %[[ZERO]] : i64
+// CHECK-DAG: %[[BELOW:.*]] = arith.cmpi slt, %[[HANDLE]], %[[INVALID]] : i64
+// CHECK-DAG: %[[OTHER_LIVE:.*]] = arith.cmpi ne, %[[OTHER]], %[[INVALID]] : i64
+// CHECK-DAG: %[[A:.*]] = schedule.handle.guard %[[NONZERO]], %[[HANDLE]]
+// CHECK-DAG: %[[B:.*]] = schedule.handle.guard %[[BELOW]], %[[HANDLE]]
+// CHECK-DAG: %[[C:.*]] = schedule.handle.guard %[[OTHER_LIVE]], %[[HANDLE]]
+// CHECK: return %[[A]], %[[B]], %[[C]] :
+func.func @guards_kept(%handle: i64, %other: i64) -> (i64, i64, i64) {
+  %invalid = arith.constant -1 : i64
+  %zero = arith.constant 0 : i64
+  %nonzero = arith.cmpi ne, %handle, %zero : i64
+  %a = schedule.handle.guard %nonzero, %handle
+  %below = arith.cmpi slt, %handle, %invalid : i64
+  %b = schedule.handle.guard %below, %handle
+  %other_live = arith.cmpi ne, %other, %invalid : i64
+  %c = schedule.handle.guard %other_live, %handle
+  return %a, %b, %c : i64, i64, i64
+}
