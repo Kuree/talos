@@ -1,5 +1,4 @@
-//===- NativeSplitClusters.h - Private callees of physical split units -*- C++
-//-*-===//
+//===- NativeSplitClusters.h - Native split clusters -----------*- C++ -*-===//
 
 #ifndef TALOS_TOOLS_DRIVER_NATIVESPLITCLUSTERS_H
 #define TALOS_TOOLS_DRIVER_NATIVESPLITCLUSTERS_H
