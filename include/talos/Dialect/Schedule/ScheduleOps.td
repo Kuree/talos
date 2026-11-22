@@ -1566,8 +1566,11 @@ def NativeHandleGuardOp : ScheduleNativeOp<"handle.guard", [Pure]> {
 // like them, have unknown memory effects. Each names the plane it accesses
 // by its global, like the other state operations. A scalar access moves an
 // SSA value; a `_bytes` access moves `width` bits through a byte buffer:
-// little endian, ceil(width / 8) bytes, the padding bits of the last byte
-// zero. `state_bits` is the size of the design state.
+// little endian, ceil(width / 8) bytes. The padding bits of the last byte
+// carry nothing: the runtime writes them zero, a direct copy from a state
+// plane leaves the neighbouring state bits there, and a buffer's readers
+// (the runtime, a direct state store, a transition) read only its `width`
+// bits. `state_bits` is the size of the design state.
 //
 // Native lowering creates them; once AOT planning has read the eval bodies'
 // accesses, they become the runtime calls, a scalar access passing its value

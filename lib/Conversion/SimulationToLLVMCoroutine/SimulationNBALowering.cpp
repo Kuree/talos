@@ -842,7 +842,10 @@ public:
           arith::AndIOp::create(rewriter, location, directValid, guard->valid);
     } else if (isa_and_nonnull<arith::SelectOp, LLVM::SelectOp>(
                    destination.getDefiningOp())) {
-      // Any other select hides which of its handles are valid.
+      // Any other select hides which of its handles are valid. Producers
+      // state guards as schedule.handle.guard, so such a select merges
+      // distinct handles; it keeps the destination off the direct commit
+      // path.
       exactDestinationValidity = false;
     }
     schedule::NBASiteAttr site = op.getSiteAttr();

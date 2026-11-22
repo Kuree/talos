@@ -1123,7 +1123,10 @@ struct DynamicPlaneLoad {
   }
 
   /// Replace the read by `value`: the scalar read's result, or what
-  /// `builder` stores to the buffer. The read is erased.
+  /// `builder` stores to the buffer. The read is erased. A store of an iN
+  /// leaves the buffer's padding bits unspecified (LLVM LangRef, store), which
+  /// the `_bytes` form allows: its buffer is a copy-only value whose readers
+  /// read its `width` bits only.
   void replace(OpBuilder &builder, Value value) {
     if (auto load = dyn_cast<schedule::NativeStateLoadHandleOp>(access))
       load.getResult().replaceAllUsesWith(value);
@@ -3501,7 +3504,10 @@ FailureOr<bool> makeNativeEvalPlan(
       const bool twoState = entry.second;
       Operation *access = load.access;
       // The selection below is integer arithmetic of the field's own width, so
-      // a field wider than a machine word lowers the same way.
+      // a field wider than a machine word lowers the same way. Producers size
+      // every access by this layout, so a read of another state size comes
+      // only from IR they did not produce; it fails closed. (No test pass
+      // runs this decoder on hand-written IR, so no test reaches it.)
       if (load.stateBits != stateLayout.bitCount)
         return access->emitError(
                    "runtime-free eval cannot lower dynamic state load"),
@@ -3532,6 +3538,11 @@ FailureOr<bool> makeNativeEvalPlan(
         handle = guard->handle;
       } else if (isa_and_nonnull<arith::SelectOp, LLVM::SelectOp>(
                      handleSelect)) {
+        // Producers state every invalid-index guard as a typed
+        // schedule.handle.guard, so a select here merges distinct handles,
+        // e.g. after a rewrite of their CFG join. One that the finite-handle
+        // proof above did not resolve hides which handle is valid: fail
+        // closed.
         return access->emitError(
                    "dynamic state handle has no invalid-handle guard"),
                failure();

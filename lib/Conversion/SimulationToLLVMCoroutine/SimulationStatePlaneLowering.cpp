@@ -94,7 +94,8 @@ void notifySignal(ConversionPatternRewriter &builder, Location location,
     storeOnChange();
   // The op takes its width from the planes, whose types its verifier keeps
   // equal; a plane of another width would publish other bits than the store
-  // wrote. Fail closed in every build.
+  // wrote. Fail closed in every build. Every caller sizes the planes by
+  // `width`, so no input IR reaches this.
   if (oldValue.getType().getIntOrFloatBitWidth() != width)
     llvm::report_fatal_error(
         "native transition planes are " +
