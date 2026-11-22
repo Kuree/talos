@@ -60,8 +60,10 @@ struct NativeBackendTestPipelineOptions
   Option<std::string> stopAfter{
       *this, "stop-after",
       llvm::cl::desc("stop after 'lowering' (simulation IR with the backend "
-                     "attributes) or 'graph' (plus the verified compute "
-                     "graph that native analyses read)"),
+                     "attributes), 'graph' (plus the verified compute "
+                     "graph that native analyses read) or 'materialize' "
+                     "(native lowering through materialize-native-processes, "
+                     "before the closed-world checks of LLVM functions)"),
       llvm::cl::init("")};
 };
 
@@ -101,6 +103,25 @@ void buildSimulationNativeTestPipeline(
                              Twine(error));
 }
 
+/// The passes of convert-talos-sim-processes-to-llvm-coroutines up to and
+/// including the one named `last`, as a textual pipeline.
+std::string nativeLoweringThrough(StringRef last) {
+  OpPassManager lowering("builtin.module");
+  talos::buildSimulationToLLVMCoroutinePipeline(lowering);
+  std::string pipeline;
+  llvm::raw_string_ostream stream(pipeline);
+  for (Pass &pass : lowering.getPasses()) {
+    if (!pipeline.empty())
+      stream << ',';
+    pass.printAsTextualPipeline(stream);
+    if (pass.getArgument() == last)
+      return pipeline;
+  }
+  llvm::report_fatal_error("test-talos-native-backend: native lowering has no "
+                           "pass '" +
+                           Twine(last) + "'");
+}
+
 void buildNativeBackendTestPipeline(
     OpPassManager &manager, const NativeBackendTestPipelineOptions &options) {
   std::optional<int> mode =
@@ -114,9 +135,13 @@ void buildNativeBackendTestPipeline(
     llvm::report_fatal_error("test-talos-native-backend: unknown scheduler '" +
                              Twine(options.scheduler) + "'");
   StringRef stopAfter = options.stopAfter;
-  if (!stopAfter.empty() && stopAfter != "lowering" && stopAfter != "graph")
+  if (!stopAfter.empty() && stopAfter != "lowering" && stopAfter != "graph" &&
+      stopAfter != "materialize")
     llvm::report_fatal_error("test-talos-native-backend: unknown stop-after '" +
                              Twine(stopAfter) + "'");
+  if (stopAfter == "materialize" && *mode == 1)
+    llvm::report_fatal_error("test-talos-native-backend: stop-after "
+                             "'materialize' needs a hybrid scheduler");
   std::string backendAttributes =
       llvm::formatv("schedule.native_scheduler = {0} : i32, "
                     "native.optimization_level = {1} : i32",
@@ -168,7 +193,7 @@ void buildNativeBackendTestPipeline(
   } else if (stopAfter.empty() && *mode == 1) {
     pipeline += ",talos-sim-insert-gc-polls,"
                 "convert-talos-sim-processes-to-llvm-coroutines";
-  } else if (stopAfter.empty()) {
+  } else if (stopAfter.empty() || stopAfter == "materialize") {
     // Mirrors the driver for a hybrid (non-generic) build: one SSA shape for
     // both tiers, bytecode for fragments that need it, and native-only
     // region rewrites.
@@ -182,8 +207,11 @@ void buildNativeBackendTestPipeline(
         "talos-sim-specialize-static-state-nba,"
         "talos-sim-plan-static-superstep),"
         "encode-talos-sim-to-bytecode{vpi=off prune-native=true},"
-        "simulation.design(talos-sim-optimize-native-regions),"
-        "convert-talos-sim-processes-to-llvm-coroutines";
+        "simulation.design(talos-sim-optimize-native-regions),";
+    pipeline += stopAfter.empty()
+                    ? std::string("convert-talos-sim-processes-to-llvm-"
+                                  "coroutines")
+                    : nativeLoweringThrough("materialize-native-processes");
   }
   std::string error;
   llvm::raw_string_ostream errorStream(error);
