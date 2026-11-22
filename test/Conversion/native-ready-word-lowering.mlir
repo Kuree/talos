@@ -39,4 +39,32 @@ module {
     %any = llvm.or %leaf, %dirty : i64
     llvm.return %any : i64
   }
+  // An index defined in the access's block takes its words' addresses right
+  // after it, in order of first use, each static word with its own i64 GEP
+  // (as the cost model charges it); every access of the same word in the
+  // block shares its address.
+  // CHECK-LABEL: llvm.func @local_index(
+  // CHECK-SAME: %[[W:.*]]: i64, %[[V:.*]]: i64)
+  // CHECK-NEXT: %[[SET:.*]] = llvm.mlir.addressof @__talos_aot_model_ingress_v1 : !llvm.ptr
+  // CHECK-NEXT: %[[ONE:.*]] = llvm.mlir.constant(1 : i64) : i64
+  // CHECK-NEXT: %[[I:.*]] = llvm.add %[[W]], %[[ONE]] : i64
+  // CHECK-NEXT: %[[AT:.*]] = llvm.getelementptr %[[SET]][%[[I]]] : (!llvm.ptr, i64) -> !llvm.ptr, i64
+  // CHECK-NEXT: %[[NEXT:.*]] = llvm.getelementptr %[[SET]][%[[I]]] : (!llvm.ptr, i64) -> !llvm.ptr, i64
+  // CHECK-NEXT: %[[UP:.*]] = llvm.getelementptr %[[NEXT]][8] : (!llvm.ptr) -> !llvm.ptr, i8
+  // CHECK-NEXT: %[[OLD:.*]] = llvm.load %[[AT]] {alignment = 8 : i64} : !llvm.ptr -> i64
+  // CHECK-NEXT: llvm.store %[[V]], %[[AT]] {alignment = 8 : i64} : i64, !llvm.ptr
+  // CHECK-NEXT: %[[ABOVE:.*]] = llvm.load %[[UP]] {alignment = 8 : i64} : !llvm.ptr -> i64
+  // CHECK-NEXT: %[[AGAIN:.*]] = llvm.load %[[AT]] {alignment = 8 : i64} : !llvm.ptr -> i64
+  // CHECK-NEXT: llvm.or %[[OLD]], %[[ABOVE]]
+  llvm.func @local_index(%w: i64, %bits: i64) -> i64 {
+    %one = llvm.mlir.constant(1 : i64) : i64
+    %i = llvm.add %w, %one : i64
+    %old = schedule.ready.word.load @__talos_aot_model_ingress_v1[%i]
+    schedule.ready.word.store %bits, @__talos_aot_model_ingress_v1[%i]
+    %above = schedule.ready.word.load @__talos_aot_model_ingress_v1[%i + 1]
+    %again = schedule.ready.word.load @__talos_aot_model_ingress_v1[%i]
+    %both = llvm.or %old, %above : i64
+    %all = llvm.or %both, %again : i64
+    llvm.return %all : i64
+  }
 }

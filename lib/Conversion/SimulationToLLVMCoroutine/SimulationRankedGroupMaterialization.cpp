@@ -104,10 +104,12 @@ planNativeRankedGroups(ModuleOp module, const NativeEvalCoordinatorPlan &plan,
     uint64_t cost = 0;
     SmallVector<Attribute, 2> masks;
     function.walk([&](Operation *op) {
-      // A wake names its ready set; it stands for the set's address and the
-      // update, as its LLVM form computes the address at the wake. A mask
-      // word access stands for its LLVM access, and the body shares the
-      // mask's address (lower-native-mask-words).
+      // A wake counts 2, as it did when its LLVM form computed the set's
+      // address at the wake. Action lowering and lower-native-ready-words
+      // now share one address per function; the 2 keeps the plans
+      // (simulation-ranked-group-wake-cost). A mask word access stands for
+      // its LLVM access, and the body shares the mask's address
+      // (lower-native-mask-words).
       if (isa<schedule::NativeMaskLoadOp, schedule::NativeMaskStoreOp>(op)) {
         cost += nativeLoweredSize(op);
         FlatSymbolRefAttr mask = getNativeWordGlobal(op);

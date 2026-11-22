@@ -35,7 +35,9 @@ inline mlir::FlatSymbolRefAttr getNativeWordGlobal(mlir::Operation *operation) {
 /// address computation and the access; a ready set or mask word access is
 /// the access and the GEPs to its word, an i64 GEP by a dynamic word and a
 /// byte GEP to a nonzero static word, of its global's address
-/// (nativeWordGlobalAddressCost).
+/// (nativeWordGlobalAddressCost). Accesses of one dynamic word in one block
+/// share its GEPs in the LLVM form (lower-native-ready-words); each is still
+/// charged them here, an over-count that only makes a budget stricter.
 inline uint64_t nativeLoweredSize(mlir::Operation *operation) {
   auto wordSize = [](mlir::Value dynamicWord, uint64_t staticWord) {
     return uint64_t{1} + bool(dynamicWord) + (staticWord != 0);

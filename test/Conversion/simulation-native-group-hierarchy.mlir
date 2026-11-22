@@ -1,7 +1,9 @@
-// RUN: talos-opt %s --talos-materialize-native-eval-groups -o %t.mlir
+// RUN: talos-opt %s '--test-talos-set-module-attributes=attrs="{schedule.native.max_inline_ops = 183 : i64}"' --talos-materialize-native-eval-groups -o %t.mlir
 // RUN: FileCheck %s < %t.mlir
 // RUN: FileCheck %s --check-prefix=CFG < %t.mlir
-// RUN: talos-opt %s '--test-talos-set-module-attributes=attrs="{schedule.native.max_inline_ops = 1 : i64}"' --talos-materialize-native-eval-groups | FileCheck %s --check-prefix=BUDGET --implicit-check-not=group_children --implicit-check-not=dataflow_executor --implicit-check-not=dataflow_candidate
+// RUN: talos-opt %s '--test-talos-set-module-attributes=attrs="{schedule.native.max_inline_ops = 115 : i64}"' --talos-materialize-native-eval-groups | FileCheck %s --check-prefix=BUDGET --implicit-check-not=group_children --implicit-check-not=dataflow_executor --implicit-check-not=dataflow_candidate
+// RUN: talos-opt %s '--test-talos-set-module-attributes=attrs="{schedule.native.max_inline_ops = 116 : i64}"' --talos-materialize-native-eval-groups | FileCheck %s --check-prefix=SPLIT --implicit-check-not=@group.child2.child
+// RUN: talos-opt %s '--test-talos-set-module-attributes=attrs="{schedule.native.max_inline_ops = 182 : i64}"' --talos-materialize-native-eval-groups | FileCheck %s --check-prefix=SPLIT --implicit-check-not=@group.child2.child
 
 // Runtime behavior is checked in ../Runtime/simulation-native-group-hierarchy.test.
 
@@ -43,7 +45,15 @@
 // CFG: llvm.br ^[[DONE]]
 // CFG: ^[[DONE]]:
 // CFG-NEXT: llvm.return
+// A trial split charges both executors and then their children, each with the
+// address of the ingress set it names (nativeWordGlobalAddressCost), against
+// the remaining budget. The first level fits from 116, and the nested split
+// of child2 from 183 (the budget of the first RUN line).
 // BUDGET: llvm.func @group()
+// SPLIT-LABEL: llvm.func @group()
+// SPLIT-SAME: schedule.eval.group_children = [@group.child0, @group.child2]
+// SPLIT: llvm.func @group.child2()
+// SPLIT-SAME: schedule.eval.group_parent = @group
 
 module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu"} {
   llvm.mlir.global internal @__talos_state_value(dense<0> : tensor<3xi8>) : !llvm.array<3 x i8>

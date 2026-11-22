@@ -1,7 +1,7 @@
-// RUN: talos-opt %S/simulation-static-nba-publication.mlir --pass-pipeline='builtin.module(test-talos-set-module-attributes{attrs="{schedule.native.max_inline_ops = 800 : i64}"},simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off prune-native=true},convert-talos-sim-processes-to-llvm-coroutines,materialize-runtime-byte-globals)' -o %t.llvm.mlir 2> %t.llvm.plan && FileCheck %s --check-prefix=INLINE < %t.llvm.plan && FileCheck %s --check-prefix=CALLS --implicit-check-not='llvm.call @__talos_eval_static_nba_publication_guard_v1' < %t.llvm.mlir
+// RUN: talos-opt %S/simulation-static-nba-publication.mlir --pass-pipeline='builtin.module(test-talos-set-module-attributes{attrs="{schedule.native.max_inline_ops = 256 : i64}"},simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off prune-native=true},convert-talos-sim-processes-to-llvm-coroutines,materialize-runtime-byte-globals)' -o %t.llvm.mlir 2> %t.llvm.plan && FileCheck %s --check-prefix=INLINE < %t.llvm.plan && FileCheck %s --check-prefix=CALLS --implicit-check-not='llvm.call @__talos_eval_static_nba_publication_guard_v1' < %t.llvm.mlir
 // RUN: talos-translate --mlir-to-llvmir %t.llvm.mlir | %llvm_dist/bin/opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>' | %llc -filetype=obj -relocation-model=pic -o %t.llvm.o
 // RUN: %target_cxx %t.llvm.o %runtime_link_flags -o %t.llvm.exe && %t.llvm.exe --execution-tier=native | FileCheck %S/simulation-static-nba-publication.mlir --check-prefix=OUTPUT
-// RUN: talos-opt %S/simulation-static-nba-publication.mlir --pass-pipeline='builtin.module(test-talos-set-module-attributes{attrs="{schedule.native.max_inline_ops = 251 : i64}"},simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off prune-native=true},convert-talos-sim-processes-to-llvm-coroutines,materialize-runtime-byte-globals)' -o %t.mixed.mlir 2> %t.mixed.plan && FileCheck %s --check-prefix=MIXED < %t.mixed.plan
+// RUN: talos-opt %S/simulation-static-nba-publication.mlir --pass-pipeline='builtin.module(test-talos-set-module-attributes{attrs="{schedule.native.max_inline_ops = 255 : i64}"},simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off prune-native=true},convert-talos-sim-processes-to-llvm-coroutines,materialize-runtime-byte-globals)' -o %t.mixed.mlir 2> %t.mixed.plan && FileCheck %s --check-prefix=MIXED < %t.mixed.plan
 // RUN: talos-opt %S/simulation-static-nba-publication.mlir --pass-pipeline='builtin.module(test-talos-set-module-attributes{attrs="{schedule.native.max_inline_ops = 1 : i64}"},simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off prune-native=true},convert-talos-sim-processes-to-llvm-coroutines,materialize-runtime-byte-globals)' -o %t.tiny.mlir 2> %t.tiny.plan && FileCheck %s --check-prefix=TINY < %t.tiny.plan && FileCheck %s --check-prefix=FALLBACK --implicit-check-not='llvm.call @__talos_eval_static_nba_publication' < %t.tiny.mlir
 // RUN: talos-translate --mlir-to-llvmir %t.tiny.mlir | %llvm_dist/bin/opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>' | %llc -filetype=obj -relocation-model=pic -o %t.tiny.o
 // RUN: %target_cxx %t.tiny.o %runtime_link_flags -o %t.tiny.exe && %t.tiny.exe --execution-tier=native | FileCheck %S/simulation-static-nba-publication.mlir --check-prefix=OUTPUT
@@ -9,11 +9,17 @@
 
 // Only eligibility checks are copied into the caller, with all copies charged
 // against its current size. Publication bodies stay eligible for LLVM inlining.
-// INLINE-COUNT-3: limit=800 decision=inline
-// INLINE: guards complete: caller=__talos_eval_dispatch_v1 size={{[0-7][0-9][0-9]}} limit=800
-// MIXED-COUNT-2: limit=251 decision=inline
-// MIXED: limit=251 decision=fallback
-// MIXED: guards complete: caller=__talos_eval_dispatch_v1 size={{2[0-5][0-9]}} limit=251
+// A guard is copied when the caller's size, the guard and 8 operations for
+// its branch fit the limit: the third needs 236 + 12 + 8 = 256. The exact
+// sizes pin the dispatcher's cost, its ready set and mask words included.
+// INLINE: talos static NBA guard: caller=__talos_eval_dispatch_v1 size=208 guard=12 limit=256 decision=inline
+// INLINE-NEXT: talos static NBA guard: caller=__talos_eval_dispatch_v1 size=222 guard=12 limit=256 decision=inline
+// INLINE-NEXT: talos static NBA guard: caller=__talos_eval_dispatch_v1 size=236 guard=12 limit=256 decision=inline
+// INLINE-NEXT: talos static NBA guards complete: caller=__talos_eval_dispatch_v1 size=250 limit=256
+// MIXED: talos static NBA guard: caller=__talos_eval_dispatch_v1 size=208 guard=12 limit=255 decision=inline
+// MIXED-NEXT: talos static NBA guard: caller=__talos_eval_dispatch_v1 size=222 guard=12 limit=255 decision=inline
+// MIXED-NEXT: talos static NBA guard: caller=__talos_eval_dispatch_v1 size=236 guard=12 limit=255 decision=fallback
+// MIXED-NEXT: talos static NBA guards complete: caller=__talos_eval_dispatch_v1 size=236 limit=255
 // TINY-COUNT-3: limit=1 decision=fallback
 // UNLIMITED-COUNT-3: limit=18446744073709551615 decision=inline
 
