@@ -235,3 +235,56 @@ module attributes {schedule.eval.runtime_calendar, native.closed_executable} {
     llvm.return
   }
 }
+
+// -----
+
+// A call between cuts keeps the cut's proof when everything it reaches is
+// quiet: a runtime entry the catalog marks CutQuiet, such as the priority
+// signal query, publishes to no runtime actor. The handoff query is not
+// CutQuiet, so the proof is cleared before it (1800-2023 4.4.2.3-4, 4.5).
+// CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1(
+// CHECK: %[[STAMP:.*]] = llvm.alloca
+// CHECK: llvm.call @__talos_clocked_a(
+// CHECK-NEXT: {{.*}}llvm.call @talos_rt_v1_scheduler_prepare_quiet_eval_nba(
+// CHECK-NEXT: llvm.call @poll_quiet(
+// CHECK: llvm.call @__talos_clocked_b(
+// CHECK-NEXT: {{.*}}llvm.call @talos_rt_v1_scheduler_prepare_quiet_eval_nba(
+// CHECK-NEXT: llvm.store %{{.*}}, %[[STAMP]]
+// CHECK-NEXT: llvm.call @poll_opaque(
+module attributes {schedule.eval.runtime_calendar, native.closed_executable} {
+  llvm.func @talos_rt_v1_scheduler_prepare_eval_nba(!llvm.ptr, !llvm.ptr) -> i32
+  llvm.func @talos_rt_v1_scheduler_prepare_quiet_eval_nba(!llvm.ptr, !llvm.ptr, !llvm.ptr) -> i32
+  llvm.func @talos_rt_v1_scheduler_priority_signal_pending(!llvm.ptr) -> i32
+  llvm.func @talos_rt_v1_scheduler_handoff_pending(!llvm.ptr) -> i32
+  llvm.func @poll_quiet(%ctx: !llvm.ptr) {
+    %pending = llvm.call @talos_rt_v1_scheduler_priority_signal_pending(%ctx) : (!llvm.ptr) -> i32
+    llvm.return
+  }
+  llvm.func @poll_opaque(%ctx: !llvm.ptr) {
+    %pending = llvm.call @talos_rt_v1_scheduler_handoff_pending(%ctx) : (!llvm.ptr) -> i32
+    llvm.return
+  }
+  llvm.func @__talos_clocked_a() attributes {schedule.eval.role = #schedule.eval_role<clocked_kernel>} {
+    llvm.return
+  }
+  llvm.func @__talos_clocked_b() attributes {schedule.eval.role = #schedule.eval_role<clocked_kernel>} {
+    llvm.return
+  }
+  llvm.func @__talos_clocked_c() attributes {schedule.eval.role = #schedule.eval_role<clocked_kernel>} {
+    llvm.return
+  }
+  llvm.func @__talos_eval_dispatch_v1(%ctx: !llvm.ptr, %out: !llvm.ptr) {
+    %s0 = llvm.call @talos_rt_v1_scheduler_prepare_eval_nba(%ctx, %out) : (!llvm.ptr, !llvm.ptr) -> i32
+    llvm.call @__talos_clocked_a() : () -> ()
+    %s1 = llvm.call @talos_rt_v1_scheduler_prepare_eval_nba(%ctx, %out) : (!llvm.ptr, !llvm.ptr) -> i32
+    llvm.call @poll_quiet(%ctx) : (!llvm.ptr) -> ()
+    %s2 = llvm.call @talos_rt_v1_scheduler_prepare_eval_nba(%ctx, %out) : (!llvm.ptr, !llvm.ptr) -> i32
+    llvm.call @__talos_clocked_b() : () -> ()
+    %s3 = llvm.call @talos_rt_v1_scheduler_prepare_eval_nba(%ctx, %out) : (!llvm.ptr, !llvm.ptr) -> i32
+    llvm.call @poll_opaque(%ctx) : (!llvm.ptr) -> ()
+    %s4 = llvm.call @talos_rt_v1_scheduler_prepare_eval_nba(%ctx, %out) : (!llvm.ptr, !llvm.ptr) -> i32
+    llvm.call @__talos_clocked_c() : () -> ()
+    %s5 = llvm.call @talos_rt_v1_scheduler_prepare_eval_nba(%ctx, %out) : (!llvm.ptr, !llvm.ptr) -> i32
+    llvm.return
+  }
+}

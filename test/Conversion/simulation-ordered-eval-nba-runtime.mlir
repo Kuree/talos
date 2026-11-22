@@ -3,7 +3,7 @@
 // RUN: FileCheck %s --check-prefix=PLAN < %t.plan.mlir
 // RUN: FileCheck %s --check-prefix=COLD < %t.plan.mlir
 // RUN: talos-opt %t.scheduled.mlir '--test-talos-set-module-attributes=attrs="{schedule.force_generic_nba, native.closed_executable}"' --convert-talos-sim-processes-to-llvm-coroutines --materialize-runtime-byte-globals -o %t.generic.mlir
-// RUN: FileCheck %s --check-prefix=GENERIC --implicit-check-not=__talos_eval_ordered_nba_queue_v1 --implicit-check-not=__talos_aot_nba_accumulator_ < %t.generic.mlir
+// RUN: FileCheck %s --check-prefix=GENERIC --implicit-check-not=__talos_eval_ordered_nba_queue_v1 --implicit-check-not=__talos_aot_nba_accumulator_ --implicit-check-not='llvm.call @talos_rt_v1_scheduler_generic_nba_pending' < %t.generic.mlir
 
 // Growing the queue is the cold arm of a capacity test, so its runtime
 // entries are declared cold.
@@ -28,7 +28,15 @@
 
 // Forcing the generic queue keeps the generated writer and dispatcher.
 // Each activation enqueues its captured value through the ordinary NBA ABI.
+// Every call in the writer is one the catalog marks QueueStable (the queue
+// query and the scalar capture), so the queue's words are bound once on entry
+// and each query reads them in place of a runtime call (1800-2023 4.6(b),
+// 10.4.2).
 // GENERIC-LABEL: llvm.func @writer.__talos_eval_body_0(
+// GENERIC: %[[CONTEXT:.*]] = llvm.load %{{.*}} : !llvm.ptr -> !llvm.ptr
+// GENERIC-NEXT: %[[ROOT:.*]] = llvm.mlir.constant(4 : i32) : i32
+// GENERIC-NEXT: %[[WORDS:.*]] = llvm.call @talos_rt_v1_scheduler_generic_nba_words(%[[CONTEXT]], %[[ROOT]])
+// GENERIC: llvm.load %[[WORDS]]
 // GENERIC: llvm.call @talos_rt_v1_scheduler_nba_scalar(
 // GENERIC-LABEL: llvm.func @__talos_eval_dispatch_v1(
 

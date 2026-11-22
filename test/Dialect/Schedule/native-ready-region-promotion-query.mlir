@@ -11,6 +11,8 @@ module {
   llvm.func @__talos_eval_kernel_promotion_ready_v1(i64) -> i1
   llvm.func @__talos_eval_group_promotion_ready_v1(i64) -> i1
   llvm.func @observe()
+  llvm.func @talos_rt_v1_scheduler_time(!llvm.ptr) -> i64
+  llvm.func @talos_rt_v1_scheduler_handoff_pending(!llvm.ptr) -> i32
 
   // CHECK-LABEL: llvm.func @query
   // CHECK-NOT: llvm.store
@@ -51,5 +53,43 @@ module {
       schedule.ready.yield
     }
     llvm.return
+  }
+
+  // A runtime entry the catalog marks ReadinessTransparent, such as the
+  // time query, keeps the ready words local too; one it does not, such as
+  // the handoff query, materializes them first.
+  // CHECK-LABEL: llvm.func @runtime_transparent
+  // CHECK-NOT: llvm.store
+  // CHECK: llvm.call @talos_rt_v1_scheduler_time
+  // CHECK-NOT: llvm.call
+  // CHECK: llvm.store
+  // CHECK: llvm.return
+  llvm.func @runtime_transparent(%ctx: !llvm.ptr) -> i64 {
+    %one = arith.constant 1 : i64
+    %two = arith.constant 2 : i64
+    %now = schedule.ready.region {
+      schedule.ready.update @__talos_aot_model_ingress_v1[0], %one {capacity = 4096 : i64, consume = true}
+      %time = llvm.call @talos_rt_v1_scheduler_time(%ctx) : (!llvm.ptr) -> i64
+      schedule.ready.update @__talos_aot_model_ingress_v1[0], %two {capacity = 4096 : i64, consume = false}
+      schedule.ready.yield %time : i64
+    } : i64
+    llvm.return %now : i64
+  }
+
+  // CHECK-LABEL: llvm.func @runtime_opaque
+  // CHECK: llvm.store
+  // CHECK-NEXT: llvm.call @talos_rt_v1_scheduler_handoff_pending
+  // CHECK: llvm.store
+  // CHECK: llvm.return
+  llvm.func @runtime_opaque(%ctx: !llvm.ptr) -> i32 {
+    %one = arith.constant 1 : i64
+    %two = arith.constant 2 : i64
+    %pending = schedule.ready.region {
+      schedule.ready.update @__talos_aot_model_ingress_v1[0], %one {capacity = 4096 : i64, consume = true}
+      %handoff = llvm.call @talos_rt_v1_scheduler_handoff_pending(%ctx) : (!llvm.ptr) -> i32
+      schedule.ready.update @__talos_aot_model_ingress_v1[0], %two {capacity = 4096 : i64, consume = false}
+      schedule.ready.yield %handoff : i32
+    } : i32
+    llvm.return %pending : i32
   }
 }

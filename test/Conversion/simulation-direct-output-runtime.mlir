@@ -1,7 +1,7 @@
 // RUN: talos-opt %s --talos-sim-materialize-clocked-control | FileCheck %s --check-prefix=STATE
 // RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-suspension),talos-sim-materialize-clocked-control,talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o %t.llvm.mlir
 // RUN: FileCheck %s --check-prefix=PLAN --check-prefix=BARRIER < %t.llvm.mlir
-// RUN: FileCheck %s --check-prefix=NBAKNOWN < %t.llvm.mlir
+// RUN: FileCheck %s --check-prefix=COLD --check-prefix=NBAKNOWN < %t.llvm.mlir
 // RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-suspension),talos-sim-materialize-clocked-control,talos-sim-build-compute-graph{vpi=read},talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=read},convert-talos-sim-processes-to-llvm-coroutines)' | FileCheck %s --check-prefix=PLAN --check-prefix=VPIBARRIER
 // RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-suspension),talos-sim-materialize-clocked-control,talos-sim-build-compute-graph{vpi=full},talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=full},convert-talos-sim-processes-to-llvm-coroutines)' | FileCheck %s --check-prefix=PLAN --check-prefix=VPIBARRIER
 // RUN: talos-opt %s '--test-talos-set-module-attributes=attrs="{native.disable_two_state_specialization}"' | talos-opt --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-suspension),talos-sim-materialize-clocked-control,talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' | FileCheck %s --check-prefix=PLAN --implicit-check-not='__talos_two_state' --implicit-check-not='schedule.eval.local_promotion_ranges'
@@ -27,6 +27,10 @@
 // PLAN: llvm.call @talos_rt_v1_eval_display
 // PLAN: llvm.call @talos_rt_v1_scheduler_prepare_periodic_aot
 // A terminating checkpoint returns to finals without re-entering the model.
+
+// The generated display is a diagnostic service (IEEE 1800-2023 21.2.1),
+// whose entry the catalog declares cold.
+// COLD: llvm.func @talos_rt_v1_eval_display(!llvm.ptr, i32, i32, i32, !llvm.ptr, i64, !llvm.ptr) -> i32 attributes {native.runtime_entry = #native.runtime_entry<eval_display>, passthrough = ["cold"]}
 
 // The known-state predicate must bypass every accumulator in an empty bitmap
 // word, as occurs in the post-NBA combinational fixpoint. The dirty-root path

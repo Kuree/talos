@@ -1,4 +1,4 @@
-// RUN: talos-opt %s | FileCheck %s
+// RUN: talos-opt %s --verify-roundtrip | FileCheck %s
 
 // CHECK: func.func private @abi_records(!runtime.handle, !runtime.action, !runtime.fragment, !runtime.bytecode, !runtime.bytecode_entry, !runtime.bytecode_validation, !runtime.bytecode_operand, !runtime.bytecode_service_site, !runtime.opcode, !runtime.bytecode_type, !runtime.bytecode_operand_kind, !runtime.bytecode_operand_direction, !runtime.bytecode_service_value, !runtime.bytecode_service, !runtime.arg, !runtime.cstring)
 module attributes {
@@ -180,6 +180,35 @@ func.func @runtime_calls(
       (!runtime.context, !runtime.fd) -> (!runtime.status, i64)
   %rewind_status = runtime.file.rewind %ctx, %fd :
       (!runtime.context, !runtime.fd) -> !runtime.status
+
+  %program_exit_status = runtime.program.exit %ctx :
+      (!runtime.context) -> !runtime.status
+  %gc_status = runtime.gc.collect %ctx :
+      (!runtime.context) -> !runtime.status
+  %program_owned = runtime.program.owned %ctx :
+      (!runtime.context) -> i1
+  %now = runtime.scheduler.time %ctx : (!runtime.context) -> i64
+  %cohort = runtime.scheduler.cohort %ctx : (!runtime.context) -> i64
+  %fields_status, %fields_string = runtime.string_output_fields %ctx,
+      %bytes, %limit, %offset :
+      (!runtime.context, !runtime.bytes, i64, i64) -> (!runtime.status, i64)
+  %time_format_status = runtime.time.format %ctx, %continuation,
+      %continuation, %bytes, %continuation :
+      (!runtime.context, i32, i32, !runtime.bytes, i32) -> !runtime.status
+  %dump_open_status = runtime.dump.open %ctx, %bytes :
+      (!runtime.context, !runtime.bytes) -> !runtime.status
+  %dump_timescale_status = runtime.dump.timescale %ctx, %time_precision :
+      (!runtime.context, i32) -> !runtime.status
+  %dump_vars_status = runtime.dump.vars %ctx, %limit, %bytes :
+      (!runtime.context, i64, !runtime.bytes) -> !runtime.status
+  %dump_all_status = runtime.dump.all %ctx :
+      (!runtime.context) -> !runtime.status
+  %dump_control_status = runtime.dump.control %ctx, %continuation :
+      (!runtime.context, i32) -> !runtime.status
+  %dump_limit_status = runtime.dump.limit %ctx, %limit :
+      (!runtime.context, i64) -> !runtime.status
+  %dump_flush_status = runtime.dump.flush %ctx :
+      (!runtime.context) -> !runtime.status
 
   // CHECK: runtime.fragment.execute
   %execute_status, %action = runtime.fragment.execute
