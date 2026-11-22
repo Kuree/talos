@@ -1,5 +1,6 @@
 // RUN: talos -O3 --vpi=off --mlir-timing %s -o %t.native 2> %t.timing
 // RUN: %llvm_dist/bin/llvm-nm %t.native | FileCheck %s --check-prefix=WORDS
+// RUN: talos -O3 --vpi=off --dump-ir-after=finalize-native-functions --dump-ir-path=%t.mlir %s -o %t.dump && FileCheck %s --check-prefix=RANKED < %t.mlir
 // RUN: env TALOS_RT_VERIFY_UNKNOWN_SUMMARY=1 %t.native > %t.native.out
 // RUN: FileCheck %s < %t.native.out
 // RUN: %t.native --execution-tier=bytecode | diff -u %t.native.out -
@@ -67,7 +68,13 @@ endmodule
 // Every ready word with Active owners has its sweep function.
 // WORDS-DAG: __talos_eval_dispatch_v1.word_0
 // WORDS-DAG: __talos_eval_dispatch_v1.word_1
-// WORDS-DAG: __talos_eval_ranked_group_
+
+// The first word's sweep runs its ranked group. LLVM inlines the group into
+// its only caller, so a dead-stripping link (Mach-O) leaves no symbol of it;
+// check the call in the driver's final MLIR instead.
+// RANKED-LABEL: llvm.func @__talos_eval_dispatch_v1.word_0(
+// RANKED: llvm.call @__talos_eval_ranked_group_{{[0-9]+}}(%arg0)
+// RANKED-LABEL: llvm.func @__talos_eval_dispatch_v1.word_1(
 // CHECK: round 0 count 1 chain 00
 // CHECK-NEXT: round 1 count 2 chain xx
 // CHECK-NEXT: round 2 count 3 chain 02
