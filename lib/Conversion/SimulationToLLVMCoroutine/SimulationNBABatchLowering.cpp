@@ -173,7 +173,7 @@ public:
       for (auto &[word, scratch] : ready) {
         Value mask = load(scratch);
         schedule::NativeReadyUpdateOp::create(
-            b, loc, layout.getIngress().getValue(), mask, readyLayout.capacity,
+            b, loc, schedule::ReadySet::Ingress, mask, readyLayout.capacity,
             word, /*consume=*/false);
         pending = bor(pending, mask);
       }

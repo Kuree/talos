@@ -52,7 +52,7 @@ module {
   }
 }
 // -----
-#batch = #schedule.nba_batch_layout<plan = @plan, value = @value, unknown = @unknown, dirty = @dirty, summary = @summary, ingress = @ingress, bitCount = 256, rootCount = 1, capacity = 130>
+#batch = #schedule.nba_batch_layout<plan = @plan, value = @value, unknown = @unknown, dirty = @dirty, summary = @summary, ingress = @__talos_aot_model_ingress_v1, bitCount = 256, rootCount = 1, capacity = 130>
 #consumer = #schedule.nba_consumer<low = 0, width = 1, bit = 130>
 #root = #schedule.nba_commit_layout<offset = 0, width = 8, accumulator = @accumulator, slots = [], consumers = [#consumer]>
 module {
@@ -66,7 +66,7 @@ module {
   }
 }
 // -----
-#batch = #schedule.nba_batch_layout<plan = @plan, value = @value, unknown = @unknown, dirty = @dirty, summary = @summary, ingress = @ingress, bitCount = 256, rootCount = 1, capacity = 130>
+#batch = #schedule.nba_batch_layout<plan = @plan, value = @value, unknown = @unknown, dirty = @dirty, summary = @summary, ingress = @__talos_aot_model_ingress_v1, bitCount = 256, rootCount = 1, capacity = 130>
 #root = #schedule.nba_commit_layout<offset = 250, width = 8, accumulator = @accumulator, slots = [], consumers = []>
 module {
   llvm.func @bad_range(%ctx: !llvm.ptr, %region: i32, %changed: !llvm.ptr) {
@@ -79,7 +79,7 @@ module {
   }
 }
 // -----
-#batch = #schedule.nba_batch_layout<plan = @plan, value = @value, unknown = @unknown, dirty = @dirty, summary = @summary, ingress = @ingress, bitCount = 256, rootCount = 1, capacity = 130>
+#batch = #schedule.nba_batch_layout<plan = @plan, value = @value, unknown = @unknown, dirty = @dirty, summary = @summary, ingress = @__talos_aot_model_ingress_v1, bitCount = 256, rootCount = 1, capacity = 130>
 #slot = #schedule.nba_slot_layout<offset = @offset, value = @staged_value, unknown = @staged_unknown, valid = @valid, width = 5, constantOffset = 4 : i64>
 #root = #schedule.nba_commit_layout<offset = 0, width = 8, slots = [#slot], consumers = []>
 module {
@@ -93,7 +93,7 @@ module {
   }
 }
 // -----
-#batch = #schedule.nba_batch_layout<plan = @plan, value = @value, unknown = @unknown, dirty = @dirty, summary = @summary, ingress = @ingress, bitCount = 256, rootCount = 1, capacity = 130>
+#batch = #schedule.nba_batch_layout<plan = @plan, value = @value, unknown = @unknown, dirty = @dirty, summary = @summary, ingress = @__talos_aot_model_ingress_v1, bitCount = 256, rootCount = 1, capacity = 130>
 #slot = #schedule.nba_slot_layout<offset = @offset, value = @staged_value, unknown = @staged_unknown, valid = @valid, width = 5, constantOffset = -1 : i64>
 #root = #schedule.nba_commit_layout<offset = 0, width = 8, slots = [#slot], consumers = []>
 module {
@@ -107,13 +107,41 @@ module {
   }
 }
 // -----
-#batch = #schedule.nba_batch_layout<plan = @plan, value = @value, unknown = @unknown, dirty = @dirty, summary = @summary, ingress = @ingress, bitCount = 256, rootCount = 1, capacity = 130>
+#batch = #schedule.nba_batch_layout<plan = @plan, value = @value, unknown = @unknown, dirty = @dirty, summary = @summary, ingress = @__talos_aot_model_ingress_v1, bitCount = 256, rootCount = 1, capacity = 130>
 #slot = #schedule.nba_slot_layout<offset = @offset, value = @staged_value, unknown = @staged_unknown, valid = @valid, width = 5, constantOffset = 18446744073709551616 : i128>
 #root = #schedule.nba_commit_layout<offset = 0, width = 8, slots = [#slot], consumers = []>
 module {
   llvm.func @bad_constant_target(%ctx: !llvm.ptr, %region: i32, %changed: !llvm.ptr) {
     %r = schedule.nba.batch %ctx, %region, %changed {
       // expected-error @+1 {{constant slot target must lie within its root}}
+      schedule.nba.commit 0 {layout = #root}
+      schedule.nba.yield
+    } {layout = #batch} : (!llvm.ptr, i32, !llvm.ptr) -> i32
+    llvm.return
+  }
+}
+// -----
+// The batch's consumer wakes are ready updates of the model's ingress set;
+// a global of another name is no ready set.
+#batch = #schedule.nba_batch_layout<plan = @plan, value = @value, unknown = @unknown, dirty = @dirty, summary = @summary, ingress = @ingress, bitCount = 256, rootCount = 1, capacity = 130>
+#root = #schedule.nba_commit_layout<offset = 0, width = 8, accumulator = @accumulator, slots = [], consumers = []>
+module {
+  llvm.func @bad_ingress(%ctx: !llvm.ptr, %region: i32, %changed: !llvm.ptr) {
+    // expected-error @+1 {{layout ingress must name the generated ingress ready set, not 'ingress'}}
+    %r = schedule.nba.batch %ctx, %region, %changed {
+      schedule.nba.commit 0 {layout = #root}
+      schedule.nba.yield
+    } {layout = #batch} : (!llvm.ptr, i32, !llvm.ptr) -> i32
+    llvm.return
+  }
+}
+// -----
+#batch = #schedule.nba_batch_layout<plan = @plan, value = @value, unknown = @unknown, dirty = @dirty, summary = @summary, ingress = @__talos_eval_nba_held_wakes_v1, bitCount = 256, rootCount = 1, capacity = 130>
+#root = #schedule.nba_commit_layout<offset = 0, width = 8, accumulator = @accumulator, slots = [], consumers = []>
+module {
+  llvm.func @held_ingress(%ctx: !llvm.ptr, %region: i32, %changed: !llvm.ptr) {
+    // expected-error @+1 {{layout ingress must name the generated ingress ready set, not '__talos_eval_nba_held_wakes_v1'}}
+    %r = schedule.nba.batch %ctx, %region, %changed {
       schedule.nba.commit 0 {layout = #root}
       schedule.nba.yield
     } {layout = #batch} : (!llvm.ptr, i32, !llvm.ptr) -> i32

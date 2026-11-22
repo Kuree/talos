@@ -12,6 +12,8 @@ class ScheduleAttr<string name, string mnemonicValue, list<Trait> traits = []>
 }
 // Revision-coupled storage and activation facts carried by an executable NBA
 // region. Conversion consumes these facts, never inferring them from stores.
+// `ingress` names the generated ingress ready set, which receives the
+// region's consumer wakes (the batch's verifier checks it).
 def NBABatchLayoutAttr : ScheduleAttr<"NBABatchLayout", "nba_batch_layout"> {
   let parameters = (ins "::mlir::FlatSymbolRefAttr":$plan,
       "::mlir::FlatSymbolRefAttr":$value, "::mlir::FlatSymbolRefAttr":$unknown,

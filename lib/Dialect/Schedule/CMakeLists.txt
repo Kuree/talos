@@ -30,4 +30,8 @@ add_mlir_library(TalosScheduleIR
 # Record their mutual linkage on the static archives, not on the independent
 # object-library compilation targets created by add_mlir_library.
 target_link_libraries(TalosScheduleIR PUBLIC TalosSimulationIR)
+# Ready-set verification sizes a set by the runtime's layout.
+target_include_directories(TalosScheduleIR PRIVATE
+  "${PROJECT_SOURCE_DIR}/runtime/include"
+)
 add_subdirectory(Transforms)

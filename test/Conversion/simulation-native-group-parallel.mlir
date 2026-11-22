@@ -175,7 +175,7 @@ module {
 // serial and concurrent materialization build the same module. The input
 // holds no arith or cf operation: the pass itself loads the dialects that
 // action and batch lowering create.
-#batch = #schedule.nba_batch_layout<plan = @plan, value = @value, unknown = @unknown, dirty = @dirty, summary = @summary, ingress = @ingress, bitCount = 256, rootCount = 66, capacity = 130>
+#batch = #schedule.nba_batch_layout<plan = @plan, value = @value, unknown = @unknown, dirty = @dirty, summary = @summary, ingress = @__talos_aot_model_ingress_v1, bitCount = 256, rootCount = 66, capacity = 130>
 #aux = #schedule.nba_commit_layout<offset = 232, width = 8, accumulator = @aux, slots = [], consumers = []>
 module {
   llvm.mlir.global external @plan() : i8
@@ -183,7 +183,7 @@ module {
   llvm.mlir.global external @unknown() : !llvm.array<40 x i8>
   llvm.mlir.global external @dirty() : !llvm.array<2 x i64>
   llvm.mlir.global external @summary() : i64
-  llvm.mlir.global external @ingress() : !llvm.array<8 x i64>
+  llvm.mlir.global external @__talos_aot_model_ingress_v1() : !llvm.array<8 x i64>
   llvm.mlir.global external @aux() : !llvm.array<136 x i8>
   llvm.mlir.global external @changed() : i8
   llvm.func @first() attributes {schedule.eval.infallible} {

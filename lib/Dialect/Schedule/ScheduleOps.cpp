@@ -12,6 +12,7 @@
 #include "talos/Dialect/Schedule/ScheduleDialect.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
+#include "talos/Runtime/ReadySet.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/TypeSwitch.h"
 using namespace mlir;
@@ -991,10 +992,17 @@ LogicalResult NativeNBABatchOp::verify() {
   }
   if (previous == -1)
     return emitOpError("requires at least one commit");
-  if (auto layout = getLayoutAttr())
+  if (auto layout = getLayoutAttr()) {
     if (!layout.getBitCount() || !layout.getRootCount() ||
         uint64_t(previous) >= layout.getRootCount())
       return emitOpError("requires a nonempty layout covering every root");
+    // The batch's consumer wakes are ready updates of the model's ingress.
+    if (getReadySetOfGlobal(layout.getIngress().getValue()) !=
+        ReadySet::Ingress)
+      return emitOpError("layout ingress must name the generated ingress "
+                         "ready set, not '")
+             << layout.getIngress().getValue() << "'";
+  }
   return success();
 }
 LogicalResult NativeNBACommitOp::verify() {
@@ -1083,11 +1091,12 @@ static LogicalResult verifyReadyAction(Operation *op, StringRef set,
   return success();
 }
 
-// The set's global holds whole 64-bit words, at least the leaves an action
-// accesses. Producers may freeze different capacities for one set (a ranked
-// group's is at least 64), so only those leaves are required.
+// The set's global holds whole 64-bit words, at least the words an access
+// reaches: up to `lastWord`. Producers may freeze different capacities for
+// one set (a ranked group's is at least 64), so only the words of the
+// access's own capacity are required.
 static LogicalResult verifyReadySetUse(Operation *op, FlatSymbolRefAttr set,
-                                       uint64_t words,
+                                       uint64_t lastWord,
                                        SymbolTableCollection &tables) {
   auto global = tables.lookupNearestSymbolFrom<LLVM::GlobalOp>(op, set);
   auto array =
@@ -1095,11 +1104,21 @@ static LogicalResult verifyReadySetUse(Operation *op, FlatSymbolRefAttr set,
   if (!array || !array.getElementType().isInteger(64))
     return op->emitOpError("must reference the llvm.mlir.global of its ready "
                            "set, an array of i64 words");
-  if (array.getNumElements() < words)
+  if (lastWord >= array.getNumElements())
     return op->emitOpError("accesses word ")
-           << words - 1 << " of a ready set of " << array.getNumElements()
+           << lastWord << " of a ready set of " << array.getNumElements()
            << " words";
   return success();
+}
+
+// The last word of the set's layout at `capacity`, which an action that adds
+// may write: an add sets its leaf's dirty bit at every level, and the dirty
+// levels follow the leaves (runtime::DirtyReadySetLayout). The action's
+// verifier has bounded the capacity to UINT32_MAX.
+static uint64_t getReadySetLastWord(uint64_t capacity) {
+  return runtime::DirtyReadySetLayout(static_cast<uint32_t>(capacity))
+             .storageWords -
+         1;
 }
 
 // Read and write the named set, and inspect or change the pending
@@ -1133,7 +1152,10 @@ LogicalResult NativeReadyUpdateOp::verify() {
 }
 LogicalResult
 NativeReadyUpdateOp::verifySymbolUses(SymbolTableCollection &tables) {
-  return verifyReadySetUse(*this, getSetAttr(), getWord() + 1, tables);
+  // A consume changes only its leaf; an add also its dirty bits.
+  return verifyReadySetUse(
+      *this, getSetAttr(),
+      getConsume() ? getWord() : getReadySetLastWord(getCapacity()), tables);
 }
 void NativeReadyUpdateOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
@@ -1148,7 +1170,8 @@ LogicalResult NativeReadyCommitOp::verify() {
 }
 LogicalResult
 NativeReadyCommitOp::verifySymbolUses(SymbolTableCollection &tables) {
-  return verifyReadySetUse(*this, getSetAttr(), getWord() + 1, tables);
+  return verifyReadySetUse(*this, getSetAttr(),
+                           getReadySetLastWord(getCapacity()), tables);
 }
 void NativeReadyCommitOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
@@ -1168,7 +1191,7 @@ LogicalResult NativeReadyReadOp::verify() {
 }
 LogicalResult
 NativeReadyReadOp::verifySymbolUses(SymbolTableCollection &tables) {
-  return verifyReadySetUse(*this, getSetAttr(), getWord() + 1, tables);
+  return verifyReadySetUse(*this, getSetAttr(), getWord(), tables);
 }
 void NativeReadyReadOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
@@ -1187,8 +1210,8 @@ LogicalResult NativeReadyMergeOp::verify() {
 }
 LogicalResult
 NativeReadyMergeOp::verifySymbolUses(SymbolTableCollection &tables) {
-  return verifyReadySetUse(*this, getSetAttr(), (getCapacity() + 63) / 64,
-                           tables);
+  return verifyReadySetUse(*this, getSetAttr(),
+                           getReadySetLastWord(getCapacity()), tables);
 }
 void NativeReadyMergeOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
@@ -1223,7 +1246,7 @@ LogicalResult NativeReadyWordLoadOp::verify() {
 }
 LogicalResult
 NativeReadyWordLoadOp::verifySymbolUses(SymbolTableCollection &tables) {
-  return verifyReadySetUse(*this, getSetAttr(), getStaticWord() + 1, tables);
+  return verifyReadySetUse(*this, getSetAttr(), getStaticWord(), tables);
 }
 
 void NativeReadyWordStoreOp::build(OpBuilder &builder, OperationState &state,
@@ -1243,7 +1266,7 @@ LogicalResult NativeReadyWordStoreOp::verify() {
 }
 LogicalResult
 NativeReadyWordStoreOp::verifySymbolUses(SymbolTableCollection &tables) {
-  return verifyReadySetUse(*this, getSetAttr(), getStaticWord() + 1, tables);
+  return verifyReadySetUse(*this, getSetAttr(), getStaticWord(), tables);
 }
 
 // A mask word access names a generated eval mask; its static word lies in

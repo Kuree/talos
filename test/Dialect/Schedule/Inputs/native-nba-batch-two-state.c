@@ -3,7 +3,7 @@
 #include <string.h>
 
 uint8_t plan;
-uint64_t value[5], dirty, summary, ingress;
+uint64_t value[5], dirty, summary, __talos_aot_model_ingress_v1;
 struct {
   uint64_t value[4], mask[4];
   uint32_t valid, region;

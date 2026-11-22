@@ -40,6 +40,28 @@ module {
 }
 
 // -----
+// A static word is unsigned: -1 names word 2^64 - 1, past the end of any
+// mask, not the word before it.
+module {
+  llvm.mlir.global internal @__talos_eval_promotion_pending_mask_v1(dense<0> : tensor<2xi64>) : !llvm.array<2 x i64>
+  llvm.func @bad() -> i64 {
+    // expected-error @+1 {{accesses word 18446744073709551615 of a mask of 2 words}}
+    %word = schedule.mask.load @__talos_eval_promotion_pending_mask_v1[-1]
+    llvm.return %word : i64
+  }
+}
+
+// -----
+module {
+  llvm.mlir.global internal @__talos_eval_promotion_pending_mask_v1(dense<0> : tensor<2xi64>) : !llvm.array<2 x i64>
+  llvm.func @bad(%bits: i64) {
+    // expected-error @+1 {{accesses word 18446744073709551615 of a mask of 2 words}}
+    schedule.mask.store %bits, @__talos_eval_promotion_pending_mask_v1[-1]
+    llvm.return
+  }
+}
+
+// -----
 module {
   llvm.mlir.global internal @__talos_eval_promotion_pending_mask_v1(dense<0> : tensor<2xi64>) : !llvm.array<2 x i64>
   llvm.func @bad() -> i64 {
