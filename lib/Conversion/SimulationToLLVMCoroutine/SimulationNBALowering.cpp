@@ -12,6 +12,7 @@
 #include "talos/Dialect/Schedule/ScheduleOps.h"
 
 #include "talos/Conversion/SimulationRuntime.h"
+#include "talos/Conversion/SimulationToLLVMCoroutine.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Runtime/Runtime.h"
@@ -2034,6 +2035,9 @@ void populateNBAToLLVMConversionPatterns(
                                        staticSitesEnabled, guardedClaims);
 }
 
+} // namespace talos::detail
+
+namespace talos {
 void lowerNativeNBAStages(ModuleOp module) {
   SmallVector<schedule::NativeNBAStageOp> stages;
   module.walk(
@@ -2055,15 +2059,16 @@ void lowerNativeNBAStages(ModuleOp module) {
         builder, location, TypeRange{i32},
         getNativeRuntimeCallee(builder.getContext(),
                                NativeRuntimeEntry::SchedulerStaticNba),
-        ValueRange{stage.getRuntimeContext(),
-                   llvmConstant(builder, location, i64, stage.getSite()),
-                   detail::createStatePlaneAddress(builder, location,
-                                                   schedule::StatePlane::Value),
-                   unknownPlane,
-                   llvmConstant(builder, location, i64, stage.getStateBits()),
-                   stage.getHandle(),
-                   llvmConstant(builder, location, i64, stage.getWidth()),
-                   stage.getValue(), unknown});
+        ValueRange{
+            stage.getRuntimeContext(),
+            detail::llvmConstant(builder, location, i64, stage.getSite()),
+            detail::createStatePlaneAddress(builder, location,
+                                            schedule::StatePlane::Value),
+            unknownPlane,
+            detail::llvmConstant(builder, location, i64, stage.getStateBits()),
+            stage.getHandle(),
+            detail::llvmConstant(builder, location, i64, stage.getWidth()),
+            stage.getValue(), unknown});
     LLVM::CallOp::create(
         builder, location, TypeRange{},
         getNativeRuntimeCallee(builder.getContext(),
@@ -2073,4 +2078,4 @@ void lowerNativeNBAStages(ModuleOp module) {
   }
 }
 
-} // namespace talos::detail
+} // namespace talos

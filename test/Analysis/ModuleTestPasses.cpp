@@ -8,8 +8,9 @@
 // chain deeper than any hand-written input, constant-trip loops unroll into
 // straight-line code, and marked operations replicate into many processes,
 // so scale tests keep a small input instead of a generated one. Typed
-// stable-handle operations and handle-addressed state accesses lower on their
-// own, so their runtime form is tested without a whole native pipeline.
+// stable-handle operations, handle-addressed state accesses and static NBA
+// stages lower on their own, so their runtime form is tested without a whole
+// native pipeline.
 //
 //===----------------------------------------------------------------------===//
 
@@ -771,6 +772,24 @@ public:
     talos::lowerNativeHandleTransitions(getOperation());
   }
 };
+
+class LowerNativeNBAStagesTestPass
+    : public PassWrapper<LowerNativeNBAStagesTestPass,
+                         OperationPass<ModuleOp>> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LowerNativeNBAStagesTestPass)
+
+  StringRef getArgument() const final {
+    return "test-talos-lower-native-nba-stages";
+  }
+  StringRef getDescription() const final {
+    return "lower static NBA stages to the runtime's static NBA entry";
+  }
+  void getDependentDialects(DialectRegistry &registry) const final {
+    registry.insert<LLVM::LLVMDialect>();
+  }
+  void runOnOperation() final { talos::lowerNativeNBAStages(getOperation()); }
+};
 } // namespace
 
 namespace talos {
@@ -785,5 +804,6 @@ void registerModuleTestPasses() {
   PassRegistration<LowerNativeHandleOpsTestPass>();
   PassRegistration<LowerNativeStateHandleAccessesTestPass>();
   PassRegistration<LowerNativeHandleTransitionsTestPass>();
+  PassRegistration<LowerNativeNBAStagesTestPass>();
 }
 } // namespace talos

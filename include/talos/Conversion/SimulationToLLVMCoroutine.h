@@ -121,6 +121,13 @@ void lowerNativeHandleTransition(
 /// calls.
 void lowerNativeHandleTransitions(mlir::ModuleOp module);
 
+/// Lower every schedule.nba.stage to the call of the runtime's static NBA
+/// entry on the state planes' addresses (the unknown plane's only for a value
+/// with X/Z bits), followed by the failure check of its status. The eval plan
+/// calls it once it has rewritten the stages of generated bodies; the stages
+/// that remain belong to the runtime. The caller declares the runtime entries.
+void lowerNativeNBAStages(mlir::ModuleOp module);
+
 /// Address each native state plane through one invariant base per function
 /// that accesses it in several blocks, instead of constant offsets from the
 /// plane global. Run last, just before translation to LLVM IR.

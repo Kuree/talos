@@ -161,11 +161,6 @@ mlir::LogicalResult markCleanStaticNBAsInGuardedBodies(
     mlir::ArrayRef<talos_rt_static_nba_root> staticNBARoots,
     const NativeStateLayout &stateLayout);
 
-/// Lowers every schedule.nba.stage to the runtime's static NBA entry and its
-/// failure check. The eval plan calls it once it has rewritten the stages of
-/// generated bodies; the stages that remain belong to the runtime.
-void lowerNativeNBAStages(mlir::ModuleOp module);
-
 } // namespace talos::detail
 
 #endif // TALOS_LIB_CONVERSION_SIMULATIONTOLLVMCOROUTINE_NBA_LOWERING_H
