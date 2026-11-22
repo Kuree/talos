@@ -1,5 +1,5 @@
 // RUN: talos-opt %s --convert-talos-sim-processes-to-llvm-coroutines -o %t.lowered
-// RUN: FileCheck %s --implicit-check-not=native.nba_field --implicit-check-not=__talos_state_unknown < %t.lowered
+// RUN: FileCheck %s --implicit-check-not=schedule.nba. --implicit-check-not=__talos_state_unknown < %t.lowered
 // RUN: talos-translate --mlir-to-llvmir %t.lowered | %llc -filetype=obj -relocation-model=pic -o %t.o
 // RUN: %target_clang %target_link_flags -O2 %t.o %S/Inputs/native-nba-batch-two-state.c -o %t.exe
 // RUN: %t.exe

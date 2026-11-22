@@ -1,7 +1,7 @@
 // RUN: talos-opt %s --convert-talos-sim-processes-to-llvm-coroutines | FileCheck %s --check-prefix=STATE --implicit-check-not=__talos_state_unknown
 // RUN: talos-opt %s --encode-talos-sim-to-bytecode='vpi=off require-bytecode=true' --convert-talos-sim-processes-to-llvm-coroutines | FileCheck %s --check-prefix=BYTECODE --implicit-check-not=__talos_state_unknown
 // RUN: talos-opt %S/simulation-eval-clock-cohort.mlir '--test-talos-set-module-attributes=attrs="{native.two_state}"' | talos-opt --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-suspension),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),convert-talos-sim-processes-to-llvm-coroutines)' -o %t.cohort.mlir
-// RUN: FileCheck %s --check-prefix=NBA --implicit-check-not=__talos_state_unknown --implicit-check-not=__talos_eval_nba_unknown_ --implicit-check-not='native.nba_field' < %t.cohort.mlir
+// RUN: FileCheck %s --check-prefix=NBA --implicit-check-not=__talos_state_unknown --implicit-check-not=__talos_eval_nba_unknown_ --implicit-check-not=schedule.nba. < %t.cohort.mlir
 // RUN: talos-translate --mlir-to-llvmir %t.cohort.mlir | opt -passes=verify -disable-output
 
 // Integer storage plus its private unaligned-access guard occupies one plane.

@@ -4015,9 +4015,13 @@ LogicalResult materializeEvalNBACommitVariants(
   // source without such loads has nothing to zero: either way the variant
   // would equal its source, so its canonical callers keep calling the source.
   // Staged unknown data is what a commit reads from an accumulator record's
-  // X/Z field. A two-state step stages none, but a record can still hold X/Z
-  // bits an earlier four-state step staged (IEEE 1800-2023 10.4.2): the
-  // two-state variants read them as zero.
+  // X/Z field. A two-state step stages none, but the field can still hold X/Z
+  // bits an earlier four-state step staged. The two-state variants read it as
+  // zero, which is exact only because their callers prove the two-state
+  // domain: the eval dispatch enters one only when no NBA it commits staged
+  // X/Z bits, and the canonical variant is defined only for a caller that
+  // declared it. A commit applies the value each NBA staged (IEEE 1800-2023
+  // 4.9.4, 10.4.2).
   auto readsStagedUnknown = [](schedule::NativeNBAAccumulatorLoadOp load) {
     return load.getField() == schedule::NBAAccumulatorField::Unknown;
   };

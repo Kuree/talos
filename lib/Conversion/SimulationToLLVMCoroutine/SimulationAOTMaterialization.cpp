@@ -239,8 +239,9 @@ static std::string makeWholeNBASlot(ModuleOp module, Location loc,
 // can supply its exact comparison against CURRENT. After a second write the
 // stored mask instead describes transitions *between captures*, so both a
 // cold interposed writer and the barrier may compare against their own image.
-// A two-state bank captures no X/Z bits: a two-state executable has none
-// (IEEE 1800-2023 6.11.2).
+// A two-state bank captures no X/Z bits: a two-state executable simulates
+// every variable as a 2-state type, which holds no X or Z (IEEE 1800-2023
+// 6.11.2).
 static void emitWholeNBACapture(OpBuilder &builder, Operation *nbaStage,
                                 StringRef bank, uint32_t root, unsigned width,
                                 Value enabled, Value source,

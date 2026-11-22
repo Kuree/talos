@@ -168,8 +168,9 @@ Value selected(OpBuilder &builder, Location loc, Value bits,
 }
 
 // Export/adopt at a real execution cut, preserving captured operands rather
-// than replaying producers (LRM 4.6(b), 4.9.4, 10.4.2). Packed CURRENT state
-// remains handled by its existing publication proof; this is PENDING state.
+// than replaying producers (IEEE 1800-2023 4.6(b), 4.9.4, 10.4.2). Packed
+// CURRENT state remains handled by its existing publication proof; this is
+// PENDING state.
 void transfer(OpBuilder &builder, Location loc, Value frame,
               ArrayRef<PendingRoot> roots, ArrayRef<PendingWord> words,
               const llvm::SmallBitVector &mask, bool exporting, bool writable) {
@@ -275,7 +276,8 @@ void transfer(OpBuilder &builder, Location loc, Value frame,
                                      constant(builder, loc, root.mask))));
         // The leaf bit also covers runtime/ordered captures. Leave those forms
         // addressable for the common NBA prefix; importing their bit alone
-        // would consume work without its captured payload (LRM 4.9.4/10.4.2).
+        // would consume work without its captured payload (IEEE 1800-2023
+        // 4.9.4, 10.4.2).
         Block *adopt = new Block;
         copy->getParent()->getBlocks().insert(Region::iterator(tail), adopt);
         LLVM::CondBrOp::create(builder, loc, generated, adopt, ValueRange{},
@@ -334,7 +336,8 @@ void transfer(OpBuilder &builder, Location loc, Value frame,
         // Adoption transfers ownership, not just the index bit. Runtime
         // snapshots and generated knownness predicates also inspect validity
         // directly. A stale canonical valid/mask could republish this capture
-        // after the private consumer commits it (LRM 4.9.4/10.4.2).
+        // after the private consumer commits it (IEEE 1800-2023 4.9.4,
+        // 10.4.2).
         schedule::NativeNBAAccumulatorStoreOp::create(
             builder, loc, llvmConstant(builder, loc, builder.getI32Type(), 0),
             accumulator, NBAField::Valid, 0, 4);
@@ -436,7 +439,7 @@ bool pendingRuntimeTransparent(LLVM::CallOp call) {
   case NativeRuntimeEntry::SchedulerStaticTransitionOwned:
     // The verified publication bridge delivers waits but cannot execute a
     // waiting actor or consume pending captures. CURRENT publication still
-    // occurs at this call (LRM 4.6(a), 9.4.2).
+    // occurs at this call (IEEE 1800-2023 4.6(a), 9.4.2).
     return arguments.size() == 9 && constant(1) && constant(2);
   default:
     return false;
@@ -1041,7 +1044,7 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
     // Inventory every use of an accumulator address, not just typed field
     // accesses. A cast, CFG argument or memory intrinsic can hide an alias.
     // Localizing only the visible accesses would split capture ownership and
-    // change the consumed payload (LRM 4.9.4/10.4.2).
+    // change the consumed payload (IEEE 1800-2023 4.9.4, 10.4.2).
     cast<LLVM::LLVMFuncOp>(operation).walk(
         [&](schedule::NativeNBAAccumulatorAddressOp record) {
           auto &memory = memoryInventory[record.getGlobal()];
@@ -1125,7 +1128,7 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
   }
   // Dynamic or escaping readiness addresses cannot be projected onto the
   // private sparse index. Retain one canonical owner rather than localizing
-  // only the visible constant-offset queries (LRM 4.9.4/10.4.2).
+  // only the visible constant-offset queries (IEEE 1800-2023 4.9.4, 10.4.2).
   for (schedule::NBAIndex index :
        {schedule::NBAIndex::DirtyRoots, schedule::NBAIndex::DirtySummary}) {
     StringRef name = schedule::getNBAIndexGlobalName(index);
@@ -1159,10 +1162,11 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
         consumer == commitConsumers.end() ||
         consumer->second != name.getValue())
       continue;
-    // LRM 4.9.4/10.4.2: a private capture needs the typed generated consumer
-    // that commits it at the common barrier. Source writer ownership alone
-    // does not close an interval whose publication is runtime-owned. Such a
-    // root would export at every NBA cut and retain the accumulator round trip.
+    // IEEE 1800-2023 4.9.4, 10.4.2: a private capture needs the typed
+    // generated consumer that commits it at the common barrier. Source writer
+    // ownership alone does not close an interval whose publication is
+    // runtime-owned. Such a root would export at every NBA cut and retain the
+    // accumulator round trip.
     const auto &lowered = capture->second;
     if (lowered.target[1] != data[2] || lowered.target[2] != data[4] ||
         !lowered.target[3] || lowered.target[4] != data[6] ||
@@ -1448,7 +1452,7 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
               // it are not a logical pending value: commit blends them from
               // CURRENT. Make that interface explicit so a partial stage need
               // not preserve unused accumulator bits across outlined calls
-              // (LRM 4.9.4/10.4.2).
+              // (IEEE 1800-2023 4.9.4, 10.4.2).
               builder.setInsertionPointAfter(frameRead);
               value = LLVM::AndOp::create(builder, loc, frameRead,
                                           constant(builder, loc, root.mask));
@@ -1468,7 +1472,7 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
             // Clearing captured validity consumes this local NBA, even when a
             // private batch clears its leaf word only afterward. Do not
             // republish an already committed capture at the next opaque cut
-            // (LRM 4.9.4/10.4.2).
+            // (IEEE 1800-2023 4.9.4, 10.4.2).
             store(builder, loc, frame, root.bitmapOffset,
                   LLVM::AndOp::create(
                       builder, loc,
@@ -1495,8 +1499,8 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
             // A caller can inspect validity outside the commit's selected
             // root branch (for example a knownness predicate). Preserve the
             // actual capture bit there too; the existence of a typed consumer
-            // does not prove that this barrier staged the root (LRM
-            // 4.9.4/10.4.2).
+            // does not prove that this barrier staged the root (IEEE
+            // 1800-2023 4.9.4, 10.4.2).
             replacement = LLVM::ZExtOp::create(
                 builder, loc, typedRead.getType(),
                 LLVM::ICmpOp::create(
@@ -1542,7 +1546,8 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
             // capture for a localized root: its producers mark their root or
             // use an opaque captured-value ABI. Preserve canonical bits only
             // when the old canonical index and this update both retain them
-            // (LRM 4.9.4/10.4.2: one owner and one consumption per capture).
+            // (IEEE 1800-2023 4.9.4, 10.4.2: one owner and one consumption
+            // per capture).
             Value prior = loadNBAIndex(
                 builder, loc, schedule::NBAIndex::DirtyRoots, *index->word);
             Value canonical = LLVM::OrOp::create(
@@ -1575,7 +1580,8 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
             // A logical page may contain private-only leaf words. The
             // canonical summary indexes canonical payloads only; testing the
             // canonical leaf also preserves mixed private/canonical words
-            // (LRM 4.9.4/10.4.2: coherent ownership at both levels).
+            // (IEEE 1800-2023 4.9.4, 10.4.2: coherent ownership at both
+            // levels).
             bits = loadNBAIndex(builder, loc, schedule::NBAIndex::DirtyRoots,
                                 word.canonicalWord);
           }
@@ -1649,7 +1655,8 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
         call.erase();
         // A successful TERMINATED result cancels the transaction's pending NBA
         // on finish; never export it again after final procedures have run.
-        // Do not read the out parameter on a handoff/error (LRM 4.5, 20.2).
+        // Do not read the out parameter on a handoff/error (IEEE 1800-2023
+        // 4.5, 20.2).
         builder.setInsertionPointAfter(replacement);
         Value ok = LLVM::ICmpOp::create(
             builder, loc, LLVM::ICmpPredicate::eq, replacement.getResult(),
@@ -1679,7 +1686,8 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
                  (!callee || !reachable.contains(callee.getOperation()) ||
                   opaque.contains(callee.getOperation()))) {
         // Cold/fine/opaque execution retains the existing captured NBA ABI.
-        // LRM 38.15/38.34: no private continuation is exposed to foreign code.
+        // IEEE 1800-2023 38.15, 38.34: no private continuation is exposed to
+        // foreign code.
         transfer(builder, loc, frame, roots, words, allRoots, true, writable);
         builder.setInsertionPointAfter(call);
         transfer(builder, loc, frame, roots, words, allRoots, false, writable);

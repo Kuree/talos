@@ -194,3 +194,44 @@ module attributes {schedule.eval.runtime_calendar, native.closed_executable} {
     llvm.return
   }
 }
+
+// -----
+
+// A record pointer read from memory is not proved to be a generated record:
+// a store through it may write any state. The body that makes one is not
+// quiet; with one quiet body left, every prepare keeps its own cut
+// (1800-2023 4.4.2.3-4, 4.5).
+// CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1(
+// CHECK-NEXT: llvm.call @talos_rt_v1_scheduler_prepare_eval_nba(
+// CHECK-NEXT: llvm.call @__talos_clocked_a(
+// CHECK-NEXT: llvm.call @talos_rt_v1_scheduler_prepare_eval_nba(
+// CHECK-NEXT: llvm.call @__talos_clocked_b(
+// CHECK-NEXT: llvm.call @talos_rt_v1_scheduler_prepare_eval_nba(
+module attributes {schedule.eval.runtime_calendar, native.closed_executable} {
+  llvm.mlir.global internal @acc0(dense<0> : tensor<136xi8>) : !llvm.array<136 x i8>
+  llvm.mlir.global internal @records() : !llvm.ptr {
+    %record = llvm.mlir.addressof @acc0 : !llvm.ptr
+    llvm.return %record : !llvm.ptr
+  }
+  llvm.func @talos_rt_v1_scheduler_prepare_eval_nba(!llvm.ptr, !llvm.ptr) -> i32
+  llvm.func @talos_rt_v1_scheduler_prepare_quiet_eval_nba(!llvm.ptr, !llvm.ptr, !llvm.ptr) -> i32
+  llvm.func @__talos_clocked_a(%v: i64) attributes {schedule.eval.role = #schedule.eval_role<clocked_kernel>} {
+    %r = schedule.nba.acc.address @acc0 : !llvm.ptr
+    schedule.nba.acc.store %v, %r[value] {alignment = 8 : i64} : i64
+    llvm.return
+  }
+  llvm.func @__talos_clocked_b(%v: i64) attributes {schedule.eval.role = #schedule.eval_role<clocked_kernel>} {
+    %table = llvm.mlir.addressof @records : !llvm.ptr
+    %r = llvm.load %table : !llvm.ptr -> !llvm.ptr
+    schedule.nba.acc.store %v, %r[value] {alignment = 8 : i64} : i64
+    llvm.return
+  }
+  llvm.func @__talos_eval_dispatch_v1(%ctx: !llvm.ptr, %out: !llvm.ptr, %v: i64) {
+    %s0 = llvm.call @talos_rt_v1_scheduler_prepare_eval_nba(%ctx, %out) : (!llvm.ptr, !llvm.ptr) -> i32
+    llvm.call @__talos_clocked_a(%v) : (i64) -> ()
+    %s1 = llvm.call @talos_rt_v1_scheduler_prepare_eval_nba(%ctx, %out) : (!llvm.ptr, !llvm.ptr) -> i32
+    llvm.call @__talos_clocked_b(%v) : (i64) -> ()
+    %s2 = llvm.call @talos_rt_v1_scheduler_prepare_eval_nba(%ctx, %out) : (!llvm.ptr, !llvm.ptr) -> i32
+    llvm.return
+  }
+}

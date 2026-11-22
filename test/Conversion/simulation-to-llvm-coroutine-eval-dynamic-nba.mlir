@@ -5,6 +5,10 @@
 // RUN:   --convert-talos-sim-processes-to-llvm-coroutines -o %t.mlir
 // RUN: FileCheck %s < %t.mlir
 // RUN: FileCheck %s --check-prefix=COMMIT < %t.mlir
+// RUN: talos-opt %t.planned.mlir --mlir-disable-threading \
+// RUN:   --convert-talos-sim-processes-to-llvm-coroutines \
+// RUN:   --mlir-print-ir-before=lower-native-state-access -o /dev/null 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=TYPED
 
 // Feed preplanned Simulation IR to only the coroutine conversion pass.  The
 // eval body bases a dynamic NBA at bit 8 of a wider root.  The pass must merge
@@ -125,6 +129,21 @@ module attributes {
 // CHECK-NOT: llvm.call @talos_rt_v1_scheduler_static_nba
 // CHECK-NOT: llvm.call @malloc
 // CHECK: llvm.return
+
+// The eval body merges the NBA into its root's accumulator in place, where the
+// runtime commits it: its dirty-root and summary marks name a canonical
+// capture, which keeps the eval transaction from localizing the root. The
+// commit reads the root's write mask only where the root is staged.
+// TYPED-LABEL: llvm.func @update.__talos_eval_body_0(
+// TYPED: %[[ROOTS:.*]] = schedule.nba.index.load @__talos_aot_nba_dirty_roots_v1[0] {canonical_capture, root = 0 : i32}
+// TYPED-NEXT: %[[MARKED:.*]] = llvm.or %[[ROOTS]], %{{.*}} : i64
+// TYPED-NEXT: schedule.nba.index.store %[[MARKED]], @__talos_aot_nba_dirty_roots_v1[0] {canonical_capture, root = 0 : i32}
+// TYPED: %[[PAGE:.*]] = schedule.nba.index.load @__talos_aot_nba_dirty_summary_v1[0] {canonical_capture, root = 0 : i32}
+// TYPED-NEXT: %[[PAGE_MARKED:.*]] = llvm.or %[[PAGE]], %{{.*}} : i64
+// TYPED-NEXT: schedule.nba.index.store %[[PAGE_MARKED]], @__talos_aot_nba_dirty_summary_v1[0] {canonical_capture, root = 0 : i32}
+// TYPED-LABEL: llvm.func @__talos_aot_static_nba_commit_v1(
+// TYPED: schedule.nba.acc.load %{{.*}}[write_mask] {alignment = 8 : i64, at_commit} : i64
+// TYPED-LABEL: llvm.func internal @__talos_aot_static_nba_commit_two_state_v1(
 
 // The NBA barrier consumes only the dirty bit of a root it commits. Another
 // root of the word, such as a canonical accumulator staged by a

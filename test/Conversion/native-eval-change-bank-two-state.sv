@@ -5,9 +5,10 @@
 // for a change stage the complete value in a whole-value change bank (IEEE
 // 1800-2023 4.6(b), 9.4.2, 10.4.2). A four-state bank also keeps the X/Z
 // words of the value, compares them with the staged ones and stores them. A
-// two-state executable has no X/Z bits (6.11.2): its bank has no X/Z words,
-// its slot passes a null unknown array, which the runtime reads as zero in a
-// two-state executable, and its captures neither compare nor store X/Z bits.
+// two-state executable simulates every variable as a 2-state type, which
+// holds no X or Z (6.11.2): its bank has no X/Z words, its slot passes a null
+// unknown array, which the runtime reads as zero in a two-state executable,
+// and its captures neither compare nor store X/Z bits.
 
 module top;
   bit clk;

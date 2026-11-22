@@ -6,6 +6,9 @@
 // RUN:   | FileCheck %s
 // RUN: FileCheck %s --check-prefix=ORIGIN < %t.planned.mlir
 // RUN: talos-opt %t.planned.mlir --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph))' | FileCheck %s --check-prefix=ORIGIN
+// RUN: talos-opt %t.planned.mlir '--test-talos-set-module-attributes=attrs="{native.two_state}"' \
+// RUN:   --convert-talos-sim-processes-to-llvm-coroutines \
+// RUN:   | FileCheck %s --check-prefix=TWO --implicit-check-not=__talos_eval_nba_unknown_
 
 // Byte lanes from different semantic NBA sites cannot overlap even when their
 // array indices differ. Keep a separate once-per-edge latch for each lane;
@@ -127,7 +130,14 @@ module attributes {
   }
 }
 
+// Each lane's fixed slot has an X/Z word. A two-state executable simulates
+// every variable as a 2-state type, which holds no X or Z (IEEE 1800-2023
+// 6.11.2): AOT marks that word as its slot's X/Z field, and the marked
+// globals go with the unknown plane.
 // CHECK-COUNT-2: llvm.mlir.global internal @__talos_eval_nba_valid_
+// CHECK: llvm.mlir.global internal @__talos_eval_nba_unknown_1()
+// TWO: llvm.mlir.global internal @__talos_eval_nba_value_1()
+// TWO: llvm.mlir.global internal @__talos_eval_nba_value_0()
 // CHECK-LABEL: llvm.func @update.__talos_eval_body_0(
 // CHECK-NOT: llvm.call @talos_rt_v1_scheduler_static_nba
 // CHECK: llvm.mlir.constant(2147483647 : i64)

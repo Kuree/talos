@@ -1,24 +1,28 @@
 // RUN: talos-opt %s --split-input-file --materialize-native-eval-transactions | FileCheck %s --implicit-check-not=schedule.nba.slot
 
-// A two-state executable has no X/Z words: the fixed NBA capture slot
-// globals marked as X/Z fields go with the unknown plane. Their loads read 0,
-// their stores vanish and a slot table holds null in their place. The mark,
-// not the name, selects them: a same-named global without one stays.
+// A two-state executable simulates every variable as a 2-state type, which
+// holds no X or Z (IEEE 1800-2023 6.11.2), so it has no X/Z words: the fixed
+// NBA capture slot globals marked as X/Z fields go with the unknown plane.
+// Their loads read 0, their stores vanish and a slot table holds null in
+// their place. The mark, not the name, selects them: a same-named global
+// without one stays.
 // CHECK-LABEL: module attributes {native.two_state}
-// CHECK-NOT: @__talos_eval_nba_unknown_3(
-// CHECK: llvm.mlir.global internal @__talos_eval_nba_value_3()
+// CHECK-NEXT: llvm.mlir.global internal @__talos_eval_nba_value_3()
+// CHECK-NOT: @__talos_eval_nba_unknown_3
 // CHECK: llvm.mlir.global internal @__talos_eval_nba_unknown_9()
 // CHECK-LABEL: llvm.mlir.global internal constant @slots()
-// CHECK: %[[VALUE:.*]] = llvm.mlir.addressof @__talos_eval_nba_value_3
-// CHECK: %[[NULL:.*]] = llvm.mlir.zero : !llvm.ptr
-// CHECK: llvm.insertvalue %[[VALUE]], %{{.*}}[0]
-// CHECK: llvm.insertvalue %[[NULL]], %{{.*}}[1]
+// CHECK-NEXT: %[[TABLE:.*]] = llvm.mlir.undef
+// CHECK-NEXT: %[[VALUE:.*]] = llvm.mlir.addressof @__talos_eval_nba_value_3
+// CHECK-NEXT: %[[NULL:.*]] = llvm.mlir.zero : !llvm.ptr
+// CHECK-NEXT: %[[FIRST:.*]] = llvm.insertvalue %[[VALUE]], %[[TABLE]][0]
+// CHECK-NEXT: llvm.insertvalue %[[NULL]], %[[FIRST]][1]
 // CHECK-LABEL: llvm.func @stage(
 // CHECK-SAME: %[[WORD:.*]]: i64)
-// CHECK: %[[KEPT:.*]] = llvm.mlir.addressof @__talos_eval_nba_unknown_9
+// CHECK-NEXT: llvm.mlir.zero : !llvm.ptr
+// CHECK-NEXT: %[[KEPT:.*]] = llvm.mlir.addressof @__talos_eval_nba_unknown_9
 // CHECK-NEXT: llvm.store %[[WORD]], %[[KEPT]]
-// CHECK: %[[ZERO:.*]] = llvm.mlir.zero : i64
-// CHECK: llvm.return %[[ZERO]] : i64
+// CHECK-NEXT: %[[ZERO:.*]] = llvm.mlir.zero : i64
+// CHECK-NEXT: llvm.return %[[ZERO]] : i64
 module attributes {native.two_state} {
   llvm.mlir.global internal @__talos_eval_nba_value_3() {alignment = 8 : i64, schedule.nba.slot = #schedule.nba_slot<site = 3, field = value>} : i64 {
     %zero = llvm.mlir.zero : i64

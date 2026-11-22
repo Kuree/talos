@@ -5,9 +5,14 @@
 // cannot retroactively admit or cancel the edge. Both roots must retain
 // ordered publication; independently merging en before queued clk is wrong.
 // The runtime queues the four NBAs in source order: clk, en, clk, en (the
-// destination handle is the fifth operand).
-// CHECK: llvm.call @talos_rt_v1_scheduler_nba({{[^,]+}}, {{[^,]+}}, {{[^,]+}}, {{[^,]+}}, [[CLK:%[0-9]+]],
-// CHECK: llvm.call @talos_rt_v1_scheduler_nba({{[^,]+}}, {{[^,]+}}, {{[^,]+}}, {{[^,]+}}, [[EN:%[0-9]+]],
+// destination handle is the fifth operand). A handle names a static state
+// object (tag bit 62) by its ID in bits 32-61: clk is object 1 and en object 2,
+// both at offset 0.
+// CHECK-LABEL: llvm.func @unit_4.__talos_coro_ramp(
+// CHECK-DAG: [[CLK:%[0-9]+]] = llvm.mlir.constant(4611686022722355200 : i64) : i64
+// CHECK-DAG: [[EN:%[0-9]+]] = llvm.mlir.constant(4611686027017322496 : i64) : i64
+// CHECK: llvm.call @talos_rt_v1_scheduler_nba({{[^,]+}}, {{[^,]+}}, {{[^,]+}}, {{[^,]+}}, [[CLK]],
+// CHECK: llvm.call @talos_rt_v1_scheduler_nba({{[^,]+}}, {{[^,]+}}, {{[^,]+}}, {{[^,]+}}, [[EN]],
 // CHECK: llvm.call @talos_rt_v1_scheduler_nba({{[^,]+}}, {{[^,]+}}, {{[^,]+}}, {{[^,]+}}, [[CLK]],
 // CHECK: llvm.call @talos_rt_v1_scheduler_nba({{[^,]+}}, {{[^,]+}}, {{[^,]+}}, {{[^,]+}}, [[EN]],
 // CHECK-NOT: llvm.call @talos_rt_v1_scheduler_nba(
