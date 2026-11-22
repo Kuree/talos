@@ -2731,9 +2731,9 @@ FailureOr<bool> makeNativeEvalPlan(
       Operation *handleOffsetToErase = nullptr;
       Operation *handleSelectToErase = nullptr;
       {
-        std::optional<uint64_t> site = nbaStage.getSite();
-        std::optional<uint64_t> width = nbaStage.getWidth();
-        auto root = staticNBAPlan.siteRoots.find(*site);
+        uint64_t site = nbaStage.getSite();
+        uint64_t width = nbaStage.getWidth();
+        auto root = staticNBAPlan.siteRoots.find(site);
         Value handle = nbaStage.getHandle();
         // The proof admits a fixed handle, or an offset of the root under at
         // most one validity guard.
@@ -2745,6 +2745,9 @@ FailureOr<bool> makeNativeEvalPlan(
         Value dynamicValid =
             destinationGuard ? destinationGuard->valid : Value{};
         auto proof = dynamicNBAProofs.find(nbaStage.getOperation());
+        // Planning proved every stage of the generated eval closure eligible,
+        // or kept the runtime fallback and generated no eval body. A stage
+        // without an eligible proof here is a planning bug: fail closed.
         if (proof == dynamicNBAProofs.end() || !proof->second.eligible) {
           const DynamicEvalNBAProof emptyProof;
           const DynamicEvalNBAProof &details =
@@ -2752,8 +2755,7 @@ FailureOr<bool> makeNativeEvalPlan(
           auto diagnostic = nbaStage.emitError(
               "runtime-free eval cannot lower dynamic NBA site");
           diagnostic
-              << " (site=" << static_cast<bool>(site)
-              << ", width=" << (width ? *width : 0) << ", root="
+              << " (site=" << site << ", width=" << width << ", root="
               << (root != staticNBAPlan.siteRoots.end()
                       ? static_cast<uint64_t>(root->second)
                       : UINT64_MAX)
@@ -2791,7 +2793,7 @@ FailureOr<bool> makeNativeEvalPlan(
             proof->second.periodicWideLatch || proof->second.coalescedWholeRoot;
         uint64_t slotSourceSite = proof->second.coalescedWholeRoot
                                       ? proof->second.firstRootSite
-                                      : *site;
+                                      : site;
         handleSelectToErase = destinationGuard ? destinationGuard->op : nullptr;
         handleOffsetToErase =
             destinationOffset ? destinationOffset->op : nullptr;
@@ -2804,7 +2806,7 @@ FailureOr<bool> makeNativeEvalPlan(
         // the staged payload. A payload of at most 64 bits is one chunk.
         auto loadChunk = [&, &nbaStage = nbaStage](Value payload,
                                                    uint64_t index) -> Value {
-          uint64_t chunkWidth = std::min<uint64_t>(64, *width - index * 64);
+          uint64_t chunkWidth = std::min<uint64_t>(64, width - index * 64);
           Value address = index == 0
                               ? payload
                               : byteGEP(nbaBuilder, nbaStage.getLoc(), payload,
@@ -2833,7 +2835,7 @@ FailureOr<bool> makeNativeEvalPlan(
         // Wide payloads use consecutive fixed slots when the activation
         // count and independent-write proofs hold, otherwise ordered records.
         Value staged64, stagedUnknown64;
-        if (*width <= 64) {
+        if (width <= 64) {
           staged64 = loadChunk(nbaStage.getValue(), 0);
           stagedUnknown64 = loadUnknownChunk(0);
         }
@@ -2865,7 +2867,7 @@ FailureOr<bool> makeNativeEvalPlan(
         Value lower = arith::SubIOp::create(
             nbaBuilder, nbaStage.getLoc(),
             llvmConstant(nbaBuilder, nbaStage.getLoc(), i64,
-                         -static_cast<int64_t>(*width)),
+                         -static_cast<int64_t>(width)),
             baseOffset);
         Value upper = arith::SubIOp::create(
             nbaBuilder, nbaStage.getLoc(),
@@ -2894,24 +2896,24 @@ FailureOr<bool> makeNativeEvalPlan(
         // first chunk. In the shared calendar even a one-word ordered record
         // marks its root dirty, so an equal second write still restores the
         // value after an earlier pulse (1800-2023 4.6(b), 9.4.2, 10.4.2).
-        auto fixedTarget = staticNBAPlan.siteFixedOffsets.find(*site);
+        auto fixedTarget = staticNBAPlan.siteFixedOffsets.find(site);
         bool inertCandidate =
-            (*width > 64 ||
+            (width > 64 ||
              (orderedWide &&
               schedule::has<schedule::Field::EvalRuntimeCalendar>(module))) &&
             fixedTarget != staticNBAPlan.siteFixedOffsets.end() &&
-            staticNBAPlan.canDiscardUnchanged(root->second, *site,
-                                              fixedTarget->second, *width) &&
+            staticNBAPlan.canDiscardUnchanged(root->second, site,
+                                              fixedTarget->second, width) &&
             fixedTarget->second <= rootWidth &&
-            *width <= rootWidth - fixedTarget->second;
+            width <= rootWidth - fixedTarget->second;
         SmallVector<Value> orderedChunkDifferences;
         Value pendingBeforeCapture;
         if (inertCandidate) {
           Value difference = zero64;
           uint64_t offset = staticNBAPlan.generatedOffsets[root->second] +
                             fixedTarget->second;
-          for (uint64_t chunk = 0; chunk < (*width + 63) / 64; ++chunk) {
-            unsigned bits = std::min<uint64_t>(64, *width - chunk * 64);
+          for (uint64_t chunk = 0; chunk < (width + 63) / 64; ++chunk) {
+            unsigned bits = std::min<uint64_t>(64, width - chunk * 64);
             Value delta = buildNativeNBAChange(
                 nbaBuilder, nbaStage.getLoc(), offset + chunk * 64, bits,
                 loadChunk(nbaStage.getValue(), chunk), loadUnknownChunk(chunk));
@@ -2919,8 +2921,8 @@ FailureOr<bool> makeNativeEvalPlan(
                                               difference, delta);
             if ((!changeBanks[root->second].empty() &&
                  staticNBAPlan.unchangedSafeRoots[root->second]) ||
-                (orderedWide && *width > 64 &&
-                 !atomicOrderedWidth(root->second, *width) &&
+                (orderedWide && width > 64 &&
+                 !atomicOrderedWidth(root->second, width) &&
                  schedule::has<schedule::Field::EvalRuntimeCalendar>(module)))
               orderedChunkDifferences.push_back(delta);
           }
@@ -2966,15 +2968,15 @@ FailureOr<bool> makeNativeEvalPlan(
         }
         if (!changeBanks[root->second].empty()) {
           emitWholeNBACapture(nbaBuilder, nbaStage, changeBanks[root->second],
-                              root->second, *width, overlaps,
+                              root->second, width, overlaps,
                               nbaStage.getValue(), nbaStage.getUnknown(),
                               orderedChunkDifferences, twoStateBanks);
         } else if (orderedWide) {
-          uint64_t chunks = (*width + 63) / 64;
+          uint64_t chunks = (width + 63) / 64;
           auto chunkSite = [&](uint64_t index) {
-            return chunks == 1 ? *site : evalNBAChunkSite(*site, index);
+            return chunks == 1 ? site : evalNBAChunkSite(site, index);
           };
-          uint64_t atomicWidth = atomicOrderedWidth(root->second, *width);
+          uint64_t atomicWidth = atomicOrderedWidth(root->second, width);
           bool packed = atomicWidth != 0;
           uint64_t fullRecords =
               packed ? runtime::packedWideNBARecords(chunks) : chunks;
@@ -2995,9 +2997,9 @@ FailureOr<bool> makeNativeEvalPlan(
           // to the same FIFO. Each layout has its own first-record key.
           for (uint64_t index = 0; index != chunks; ++index)
             registerRecord(chunkSite(index),
-                           std::min<uint64_t>(64, *width - index * 64));
+                           std::min<uint64_t>(64, width - index * 64));
           if (packed)
-            registerRecord(runtime::packedWideNBATag | *site, *width);
+            registerRecord(runtime::packedWideNBATag | site, width);
           // Preserve each activation, including repeated writes to one lane.
           // The hot path is only direct record stores. Storage growth is cold
           // and cannot execute actors or re-enter the scheduler.
@@ -3102,7 +3104,7 @@ FailureOr<bool> makeNativeEvalPlan(
                                     8);
             };
             field(0, llvmConstant(nbaBuilder, loc, i64,
-                                  runtime::packedWideNBATag | *site));
+                                  runtime::packedWideNBATag | site));
             field(1, requestedStart);
             for (uint64_t lane = 0; lane != chunks; ++lane) {
               field(2 + lane, loadChunk(nbaStage.getValue(), lane));
@@ -3179,7 +3181,7 @@ FailureOr<bool> makeNativeEvalPlan(
                                      ValueRange{});
             nbaBuilder.setInsertionPointToStart(stage);
           }
-          uint64_t chunks = (*width + 63) / 64;
+          uint64_t chunks = (width + 63) / 64;
           bool runtimeCalendar = ::talos::schedule::has<
               ::talos::schedule::Field::EvalRuntimeCalendar>(module);
           Value validBit = LLVM::ZExtOp::create(nbaBuilder, nbaStage.getLoc(),
@@ -3194,13 +3196,13 @@ FailureOr<bool> makeNativeEvalPlan(
                                           });
             if (existing == dynamicEvalNBAs.end()) {
               DynamicEvalNBA entry{root->second, slotSite,
-                                   std::min<uint64_t>(64, *width - index * 64)};
+                                   std::min<uint64_t>(64, width - index * 64)};
               // The fixed target of every staging into this slot. A
               // coalesced whole-root slot is shared by the root's sites, each
               // proven to write the whole root from offset 0.
               if (proof->second.coalescedWholeRoot)
                 entry.constantOffset = index * 64;
-              else if (auto target = staticNBAPlan.siteFixedOffsets.find(*site);
+              else if (auto target = staticNBAPlan.siteFixedOffsets.find(site);
                        target != staticNBAPlan.siteFixedOffsets.end())
                 entry.constantOffset = target->second + index * 64;
               entry.offsetName =
@@ -3326,7 +3328,7 @@ FailureOr<bool> makeNativeEvalPlan(
                                                 below, zero64, requestedStart);
           Value requestedEnd = arith::AddIOp::create(
               nbaBuilder, nbaStage.getLoc(), requestedStart,
-              llvmConstant(nbaBuilder, nbaStage.getLoc(), i64, *width));
+              llvmConstant(nbaBuilder, nbaStage.getLoc(), i64, width));
           Value rootWidthValue =
               llvmConstant(nbaBuilder, nbaStage.getLoc(), i64, rootWidth);
           Value above = arith::CmpIOp::create(nbaBuilder, nbaStage.getLoc(),
