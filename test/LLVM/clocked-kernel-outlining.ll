@@ -8,6 +8,8 @@
 ; Extraction must retain a sampled value across a call that changes its source,
 ; preserve early exits, and rematerialize chained addresses in dependency order.
 ; The small explicit threshold exercises the same selection as large kernels.
+; The attribute selects a kernel body, not the name: @kernel_test is outlined
+; and @__talos_clocked_unmarked.__talos_eval_body_0 is not.
 
 @state = internal global [8 x i64] zeroinitializer
 @sample = internal global i64 11
@@ -17,14 +19,14 @@ define internal void @change_sample() noinline {
   ret void
 }
 
-; CHECK-LABEL: define i32 @__talos_clocked_test.__talos_eval_body_0(
+; CHECK-LABEL: define i32 @kernel_test(
 ; CHECK-NOT: alloca
 ; CHECK: %sampled = load i64, ptr @sample
 ; CHECK-NOT: alloca
-; CHECK: call fastcc {{.*}}@__talos_clocked_test.__talos_eval_body_0.__talos_update_group
+; CHECK: call fastcc {{.*}}@kernel_test.__talos_update_group
 ; CHECK-NOT: alloca
 ; CHECK: ret i32
-define i32 @__talos_clocked_test.__talos_eval_body_0(ptr %base, i1 %fail) #0 {
+define i32 @kernel_test(ptr %base, i1 %fail) #0 {
 entry:
   %sampled = load i64, ptr @sample
   %middle = getelementptr i64, ptr %base, i64 1
@@ -223,9 +225,57 @@ fourth:
   ret i64 %result
 }
 
+; CHECK-LABEL: define void @__talos_clocked_unmarked.__talos_eval_body_0(
+; CHECK-NOT: call
+; CHECK: ret void
+define void @__talos_clocked_unmarked.__talos_eval_body_0(ptr %p) {
+entry:
+  br label %first
+first:
+  store volatile i64 0, ptr %p
+  store volatile i64 1, ptr %p
+  store volatile i64 2, ptr %p
+  store volatile i64 3, ptr %p
+  store volatile i64 4, ptr %p
+  store volatile i64 5, ptr %p
+  store volatile i64 6, ptr %p
+  store volatile i64 7, ptr %p
+  br label %second
+second:
+  store volatile i64 0, ptr %p
+  store volatile i64 1, ptr %p
+  store volatile i64 2, ptr %p
+  store volatile i64 3, ptr %p
+  store volatile i64 4, ptr %p
+  store volatile i64 5, ptr %p
+  store volatile i64 6, ptr %p
+  store volatile i64 7, ptr %p
+  br label %third
+third:
+  store volatile i64 0, ptr %p
+  store volatile i64 1, ptr %p
+  store volatile i64 2, ptr %p
+  store volatile i64 3, ptr %p
+  store volatile i64 4, ptr %p
+  store volatile i64 5, ptr %p
+  store volatile i64 6, ptr %p
+  store volatile i64 7, ptr %p
+  br label %fourth
+fourth:
+  store volatile i64 0, ptr %p
+  store volatile i64 1, ptr %p
+  store volatile i64 2, ptr %p
+  store volatile i64 3, ptr %p
+  store volatile i64 4, ptr %p
+  store volatile i64 5, ptr %p
+  store volatile i64 6, ptr %p
+  store volatile i64 7, ptr %p
+  ret void
+}
+
 define i32 @main() {
   store i64 11, ptr @sample
-  %ok = call i32 @__talos_clocked_test.__talos_eval_body_0(ptr @state, i1 false)
+  %ok = call i32 @kernel_test(ptr @state, i1 false)
   %a = load i64, ptr @state
   %b = load i64, ptr getelementptr ([8 x i64], ptr @state, i64 0, i64 1)
   %c = load i64, ptr getelementptr ([8 x i64], ptr @state, i64 0, i64 2)
@@ -237,7 +287,7 @@ define i32 @main() {
   %cscc = and i1 %cc, %cs
   %success = and i1 %ab, %cscc
   store i64 11, ptr @sample
-  %err = call i32 @__talos_clocked_test.__talos_eval_body_0(ptr @state, i1 true)
+  %err = call i32 @kernel_test(ptr @state, i1 true)
   %e = load i64, ptr @state
   %ce = icmp eq i64 %e, 32
   %cerr = icmp eq i32 %err, 7
@@ -250,7 +300,7 @@ define i32 @main() {
   ret i32 %result
 }
 
-; CHECK-LABEL: define internal fastcc void @__talos_clocked_test.__talos_eval_body_0.__talos_update_group(
+; CHECK-LABEL: define internal fastcc void @kernel_test.__talos_update_group(
 ; CHECK: getelementptr i8, ptr {{.*}}, i64 8
 ; CHECK: getelementptr i8, ptr {{.*}}, i64 16
 ; CHECK: call void @change_sample()

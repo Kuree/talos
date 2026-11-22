@@ -5,8 +5,10 @@
 // forwarded value after the join without reloading state. The terminal
 // partial write is not observed by any later probe read and stays out of the
 // predicate. Neither predicate may publish a speculative update.
+// A predicate holds code of its eval body and keeps the body's eval_body role.
 
 // CHECK-LABEL: llvm.func @work.__talos_eval_body_0.__talos_path_known_0(
+// CHECK-SAME: schedule.eval.role = #schedule.eval_role<eval_body>,
 // CHECK-DAG: %[[LIMIT:.*]] = llvm.mlir.constant(500 : i32)
 // CHECK-NOT: llvm.{{store|call}}
 // CHECK: %[[OLD:.*]] = llvm.load

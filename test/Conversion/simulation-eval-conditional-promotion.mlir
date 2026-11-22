@@ -8,7 +8,8 @@
 // reread the enable on every activation, including value-only changes.
 // It may never publish a persistent positive certificate for this state.
 // LRM 4.5-4.7/10.4.2: the proof executes no stores or NBA staging.
-// CHECK-DAG: llvm.func @lane.__talos_eval_body_0.__talos_conditional_known
+// The proof holds code of its eval body and keeps the body's eval_body role.
+// CHECK-DAG: llvm.func @lane.__talos_eval_body_0.__talos_conditional_known({{.*}}schedule.eval.role = #schedule.eval_role<eval_body>,
 // CHECK-DAG: llvm.func @__talos_eval_kernel_conditional_ready_0_v1
 // CHECK-DAG: schedule.eval.conditional_promotion_ranges
 // DISPATCH-LABEL: llvm.func @__talos_aot_schedule_run_v1

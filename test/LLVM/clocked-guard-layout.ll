@@ -6,10 +6,11 @@
 ; unlikely edge, in either orientation, with internal control flow, and when
 ; arms share a tail. A diamond, an existing weight, branches whose paths only
 ; meet at a return, loop back edges and exit tests, and every function outside
-; a clocked kernel keep their layout.
+; a clocked kernel keep their layout. The attribute decides, not the name: a
+; function named like a clocked kernel body but without it keeps its layout.
 
-; CHECK-LABEL: define i32 @__talos_clocked_3_1_0.__talos_eval_body_0
-define i32 @__talos_clocked_3_1_0.__talos_eval_body_0(ptr %state, i1 %c0, i1 %c1, i1 %c2, i1 %c3, i1 %c4, i1 %c5, i1 %c6, i1 %c7) #0 {
+; CHECK-LABEL: define i32 @kernel_body
+define i32 @kernel_body(ptr %state, i1 %c0, i1 %c1, i1 %c2, i1 %c3, i1 %c4, i1 %c5, i1 %c6, i1 %c7) #0 {
 entry:
   ; CHECK: br i1 %c0, label %arm0, label %join0, !prof ![[UNLIKELY_TRUE:[0-9]+]]
   br i1 %c0, label %arm0, label %join0
@@ -99,15 +100,18 @@ out:
   ret i32 0
 }
 
-; CHECK-LABEL: define i32 @__talos_region_kernel_0_0.__talos_eval_body_0
+; CHECK-LABEL: define i32 @__talos_clocked_9_0_0.__talos_eval_body_0
 ; CHECK-NOT: !prof
-define i32 @__talos_region_kernel_0_0.__talos_eval_body_0(ptr %state, i1 %c0) {
+define i32 @__talos_clocked_9_0_0.__talos_eval_body_0(ptr %state, i1 %c0) {
 entry:
   br i1 %c0, label %arm, label %join
 arm:
   store i8 1, ptr %state
   br label %join
 join:
+  store i8 2, ptr %state
+  br label %done
+done:
   ret i32 0
 }
 

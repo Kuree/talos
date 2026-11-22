@@ -1,6 +1,13 @@
 // RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph,talos-sim-fuse-compute-fragments{body-fusion=true},talos-sim-materialize-compute-fusion))' | FileCheck %s
+// RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-set-module-attributes{attrs="{schedule.native_scheduler = 3 : i32}"},simulation.design(talos-sim-build-compute-graph,talos-sim-fuse-compute-fragments{body-fusion=true},talos-sim-materialize-compute-fusion))' | FileCheck %s --check-prefix=EVAL
 
 // Without the observer, the index storage is private to the fused kernel.
+// Under the eval scheduler each fused kernel also gets an eval body made from
+// its code: it keeps the kernel's fused_kernel role and adds eval_body.
+// EVAL-LABEL: simulation.func private @__talos_fused_0_0(
+// EVAL-SAME: schedule.eval.role = #schedule.eval_role<fused_kernel>
+// EVAL-LABEL: simulation.func private @__talos_fused_0_0.__talos_eval_body_0(
+// EVAL-SAME: schedule.eval.role = #schedule.eval_role<fused_kernel|eval_body>
 // CHECK-LABEL: simulation.func private @__talos_fused_0
 // CHECK-SAME: schedule.eval.role = #schedule.eval_role<fused_kernel>
 // CHECK-NOT: simulation.ref.store

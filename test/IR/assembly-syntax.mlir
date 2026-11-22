@@ -50,6 +50,8 @@ module {
   // CHECK: schedule.gc.root_range.push %{{.*}} slots %{{.*}} count %{{.*}} : !llvm.ptr<2>, !llvm.ptr<3>
   // CHECK: schedule.gc.root_range.push %{{.*}} slots %{{.*}} count %{{.*}} lazy : !llvm.ptr<2>, !llvm.ptr<3>
   // CHECK: schedule.gc.root_range.pop %{{.*}} : !llvm.ptr<2>
+  // CHECK: simulation.status.check %[[PUSHED:.*]] root_range_push{{$}}
+  // CHECK-NEXT: simulation.status.check %[[PUSHED]]{{$}}
   // CHECK: schedule.observer(%{{.*}} : i64) captures 1
   // CHECK: schedule.observer() captures 0
   func.func @native(%record: !llvm.ptr<2>, %slots: !llvm.ptr<3>, %count: i64) {
@@ -60,6 +62,9 @@ module {
     %lazy = schedule.gc.root_range.push %record slots %slots count %count lazy
       : !llvm.ptr<2>, !llvm.ptr<3>
     schedule.gc.root_range.pop %record : !llvm.ptr<2>
+    %pushed = runtime.status.from_bits %status
+    simulation.status.check %pushed root_range_push
+    simulation.status.check %pushed
     %observer = schedule.observer(%count : i64) captures 1 {
       schedule.native.observer_id = 0 : i64,
       schedule.native.observer_width = 1 : i32,

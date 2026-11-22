@@ -5,8 +5,11 @@
 // The existing growth budget keeps these helpers outlined (each does 300
 // additions once its loop is unrolled). Their selected packed lanes cross
 // the call as values; observers still publish/reacquire.
+// A values body holds its source's code: it keeps the source's origin role
+// (clocked_kernel) but not spawn_helper, which describes only the source.
 // CHECK-LABEL: llvm.func internal @lane_write.__talos_eval_values(
 // CHECK-SAME: i16
+// CHECK-SAME: schedule.eval.role = #schedule.eval_role<clocked_kernel>,
 // CHECK-SAME: schedule.eval.value_lanes = array<i64: 0, 0, 2, 1, 1, 0, 2, 1>
 // CHECK-NOT: schedule.state.load
 // CHECK-NOT: schedule.state.store
@@ -57,7 +60,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", s
     llvm.return %null : !llvm.ptr
   }
   llvm.func @observer(i16, i16) -> i1
-  llvm.func @lane_write(%take: i1 {simulation.capture_kind = 1 : i32}) attributes {schedule.eval.raw_captures, passthrough = ["noinline"]} {
+  llvm.func @lane_write(%take: i1 {simulation.capture_kind = 1 : i32}) attributes {schedule.eval.raw_captures, schedule.eval.role = #schedule.eval_role<clocked_kernel|spawn_helper>, passthrough = ["noinline"]} {
     %old = schedule.state.load @__talos_state_value[0] {alignment = 1 : i64} : i16
     %oldx = schedule.state.load @__talos_state_unknown[0] {alignment = 1 : i64} : i16
     %ctx = llvm.mlir.addressof @context : !llvm.ptr
