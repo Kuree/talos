@@ -1130,9 +1130,20 @@ lowerNativeStartupLifecycle(ModuleOp module,
       schedule::getStatePlaneGlobalName(schedule::StatePlane::Value));
   auto stateUnknown = module.lookupSymbol<LLVM::GlobalOp>(
       schedule::getStatePlaneGlobalName(schedule::StatePlane::Unknown));
-  if (!main || !current || !stateValue)
-    return module.emitError("native state synchronization requires a "
-                            "generated scheduler main");
+  // The lifecycle names the context and the planes only by lookup. When the
+  // driver prunes symbols before this lowering, it keeps them because the
+  // generated main itself uses them: it stores the context and initializes the
+  // planes before the startup steps. Name the one that is missing.
+  if (!main)
+    return module.emitError(
+        "the startup lifecycle requires a generated scheduler main");
+  if (!current)
+    return module.emitError("the startup lifecycle requires the current "
+                            "context global @__talos_current_context");
+  if (!stateValue)
+    return module.emitError("the startup lifecycle requires the native state "
+                            "value plane @")
+           << schedule::getStatePlaneGlobalName(schedule::StatePlane::Value);
   bool vpi = start && start.getVpi();
   if (!start || (vpi && (finishes.size() != 1 || shutdowns.size() != 1)))
     return module.emitError("generated scheduler lifecycle is incomplete");
