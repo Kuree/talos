@@ -998,6 +998,25 @@ materializeGenericNBAQueueWindows(ModuleOp module,
   }
 }
 
+/// The `bits`-bit integer at `address`, a slice of the bytes of a wider value
+/// in memory, zero-extended to i64. A load of an integer type that is not a
+/// whole number of bytes reads an undefined value unless a store of that type
+/// wrote the memory (LLVM LangRef, load), which a slice's bytes never are: the
+/// slice loads its whole bytes and truncates them.
+static Value loadByteSlice(OpBuilder &builder, Location location, Value address,
+                           unsigned bits) {
+  unsigned loadBits = llvm::alignTo(bits, 8);
+  Value value = LLVM::LoadOp::create(
+      builder, location, builder.getIntegerType(loadBits), address, 1);
+  if (loadBits != bits)
+    value = LLVM::TruncOp::create(builder, location,
+                                  builder.getIntegerType(bits), value);
+  return bits == 64 ? value
+                    : LLVM::ZExtOp::create(builder, location,
+                                           builder.getI64Type(), value)
+                          .getResult();
+}
+
 // Wide port/storage copies publish a handle-addressed transition during state
 // lowering. On a clean, fully owned generated route, publish its machine-word
 // slices through the same exact fanout logic as narrow stores. All state bytes
@@ -1059,7 +1078,8 @@ static void normalizeGeneratedWideTransitions(
       uint64_t byteOffset = dataLayout.isLittleEndian()
                                 ? low / 8
                                 : (width + 7) / 8 - low / 8 - (bits + 7) / 8;
-      // The word of a plane value is a shift; that of a snapshot, a load.
+      // The word of a plane value is a shift; that of a snapshot (bytes the
+      // runtime, a copy or a store of the whole plane wrote), a load.
       auto word = [&](Value plane) -> Value {
         // A missing unknown plane has no X/Z bits.
         if (!plane)
@@ -1071,13 +1091,9 @@ static void normalizeGeneratedWideTransitions(
                 llvmConstant(builder, location, plane.getType(), low));
           return LLVM::TruncOp::create(builder, location, i64, plane);
         }
-        Value value = LLVM::LoadOp::create(
-            builder, location, builder.getIntegerType(bits),
-            byteGEP(builder, location, plane, byteOffset), 1);
-        return bits == 64
-                   ? value
-                   : LLVM::ZExtOp::create(builder, location, i64, value)
-                         .getResult();
+        return loadByteSlice(builder, location,
+                             byteGEP(builder, location, plane, byteOffset),
+                             bits);
       };
       auto transition = schedule::NativeTransitionOp::create(
           builder, location, wide.getRuntimeContext(),

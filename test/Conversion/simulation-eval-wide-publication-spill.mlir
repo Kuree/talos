@@ -5,8 +5,10 @@
 // 9.4.2). A plane up to 4096 bits wide gives each slice as a shift of the
 // plane value. A wider plane is stored once to an entry-block temporary, live
 // only around the slices, and each slice loads its bytes from it: LLVM
-// legalizes integers that wide slowly. The last slice of a 4097-bit plane is
-// one bit.
+// legalizes integers that wide slowly. The last slice of a 4097-bit plane,
+// one bit, loads its byte and truncates it, since a load of an integer that
+// is not a whole number of bytes from memory that no store of that type
+// wrote is undefined (LLVM LangRef, load).
 
 // 4097 bits: each plane through a temporary.
 // CHECK-LABEL: func.func private @spill.__talos_eval_body_0(
@@ -42,17 +44,22 @@
 // CHECK-NEXT: llvm.load %{{[0-9]+}} {alignment = 1 : i64} : !llvm.ptr -> i64
 // CHECK: llvm.mlir.constant(4096 : i64) : i64
 // CHECK-NEXT: %[[OLD_TOP:[0-9]+]] = llvm.getelementptr %[[OLD_SLOT]][512] : (!llvm.ptr) -> !llvm.ptr, i8
-// CHECK-NEXT: %[[OLD_BIT:[0-9]+]] = llvm.load %[[OLD_TOP]] {alignment = 1 : i64} : !llvm.ptr -> i1
+// CHECK-NEXT: %[[OLD_BIT_BYTE:[0-9]+]] = llvm.load %[[OLD_TOP]] {alignment = 1 : i64} : !llvm.ptr -> i8
+// CHECK-NEXT: %[[OLD_BIT:[0-9]+]] = llvm.trunc %[[OLD_BIT_BYTE]] : i8 to i1
 // CHECK-NEXT: llvm.zext %[[OLD_BIT]] : i1 to i64
 // CHECK-NEXT: llvm.getelementptr %[[OLD_UNKNOWN_SLOT]][512] : (!llvm.ptr) -> !llvm.ptr, i8
-// CHECK-NEXT: llvm.load %{{[0-9]+}} {alignment = 1 : i64} : !llvm.ptr -> i1
+// CHECK-NEXT: llvm.load %{{[0-9]+}} {alignment = 1 : i64} : !llvm.ptr -> i8
+// CHECK-NEXT: llvm.trunc %{{[0-9]+}} : i8 to i1
 // CHECK-NEXT: llvm.zext %{{[0-9]+}} : i1 to i64
 // CHECK-NEXT: llvm.getelementptr %[[NEW_SLOT]][512] : (!llvm.ptr) -> !llvm.ptr, i8
-// CHECK-NEXT: llvm.load %{{[0-9]+}} {alignment = 1 : i64} : !llvm.ptr -> i1
+// CHECK-NEXT: llvm.load %{{[0-9]+}} {alignment = 1 : i64} : !llvm.ptr -> i8
+// CHECK-NEXT: llvm.trunc %{{[0-9]+}} : i8 to i1
 // CHECK-NEXT: llvm.zext %{{[0-9]+}} : i1 to i64
 // CHECK-NEXT: llvm.getelementptr %[[NEW_UNKNOWN_SLOT]][512] : (!llvm.ptr) -> !llvm.ptr, i8
-// CHECK-NEXT: llvm.load %{{[0-9]+}} {alignment = 1 : i64} : !llvm.ptr -> i1
+// CHECK-NEXT: llvm.load %{{[0-9]+}} {alignment = 1 : i64} : !llvm.ptr -> i8
+// CHECK-NEXT: llvm.trunc %{{[0-9]+}} : i8 to i1
 // CHECK-NEXT: llvm.zext %{{[0-9]+}} : i1 to i64
+// CHECK-NOT: !llvm.ptr -> i1{{$}}
 // CHECK: schedule.ready.update @__talos_aot_model_ingress_v1
 // CHECK-NEXT: llvm.intr.lifetime.end %[[OLD_SLOT]] : !llvm.ptr
 // CHECK-NEXT: llvm.intr.lifetime.end %[[OLD_UNKNOWN_SLOT]] : !llvm.ptr

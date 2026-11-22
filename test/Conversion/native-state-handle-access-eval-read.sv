@@ -15,7 +15,10 @@
 // 0 in the value plane and 1 in the unknown plane (IEEE 1800-2023 7.4.5,
 // 11.5.1). A scalar read becomes that value; a `_bytes` read stores it to its
 // buffer. No typed access is left. The copy's transition then publishes the
-// buffers word by word (9.4.2), loading each slice at its byte offset.
+// buffers word by word (9.4.2): a slice of fewer bits than its bytes loads the
+// bytes and truncates them, since a load of an integer that is not a whole
+// number of bytes from memory no store of that type wrote is undefined (LLVM
+// LangRef, load).
 // The pipeline stops after materialize-native-processes: the guard is a
 // runtime call that the eval call closure check rejects later, so the driver
 // compiles this design again with the generic scheduler
@@ -131,7 +134,7 @@ endmodule
 // CHECK-NEXT: llvm.store %[[NEW_VALUE]], %[[NEW:[0-9]+]] {alignment = 1 : i64} : i65, !llvm.ptr
 // CHECK: %[[NEW_UNKNOWN_VALUE:[0-9]+]] = arith.ori %{{[0-9]+}}, %{{[0-9]+}} : i65
 // CHECK-NEXT: llvm.store %[[NEW_UNKNOWN_VALUE]], %[[NEW_UNKNOWN:[0-9]+]] {alignment = 1 : i64} : i65, !llvm.ptr
-// The transition's low words are whole bytes; its high bit is an i1 load.
+// The transition's low words are whole bytes; its high bit truncates a byte.
 // CHECK-NOT: llvm.call
 // CHECK: llvm.getelementptr %[[OLD]][0] : (!llvm.ptr) -> !llvm.ptr, i8
 // CHECK-NEXT: llvm.load %{{[0-9]+}} {alignment = 1 : i64} : !llvm.ptr -> i64
@@ -142,14 +145,20 @@ endmodule
 // CHECK-NEXT: llvm.getelementptr %[[NEW_UNKNOWN]][0] : (!llvm.ptr) -> !llvm.ptr, i8
 // CHECK-NEXT: llvm.load %{{[0-9]+}} {alignment = 1 : i64} : !llvm.ptr -> i64
 // CHECK: %[[OLD_HIGH:[0-9]+]] = llvm.getelementptr %[[OLD]][8] : (!llvm.ptr) -> !llvm.ptr, i8
-// CHECK-NEXT: %[[OLD_BIT:[0-9]+]] = llvm.load %[[OLD_HIGH]] {alignment = 1 : i64} : !llvm.ptr -> i1
+// CHECK-NEXT: %[[OLD_BIT_BYTE:[0-9]+]] = llvm.load %[[OLD_HIGH]] {alignment = 1 : i64} : !llvm.ptr -> i8
+// CHECK-NEXT: %[[OLD_BIT:[0-9]+]] = llvm.trunc %[[OLD_BIT_BYTE]] : i8 to i1
 // CHECK-NEXT: llvm.zext %[[OLD_BIT]] : i1 to i64
 // CHECK-NEXT: llvm.getelementptr %[[OLD_UNKNOWN]][8] : (!llvm.ptr) -> !llvm.ptr, i8
-// CHECK-NEXT: llvm.load %{{[0-9]+}} {alignment = 1 : i64} : !llvm.ptr -> i1
+// CHECK-NEXT: llvm.load %{{[0-9]+}} {alignment = 1 : i64} : !llvm.ptr -> i8
+// CHECK-NEXT: llvm.trunc %{{[0-9]+}} : i8 to i1
 // CHECK-NEXT: llvm.zext %{{[0-9]+}} : i1 to i64
 // CHECK-NEXT: llvm.getelementptr %[[NEW]][8] : (!llvm.ptr) -> !llvm.ptr, i8
-// CHECK-NEXT: llvm.load %{{[0-9]+}} {alignment = 1 : i64} : !llvm.ptr -> i1
+// CHECK-NEXT: llvm.load %{{[0-9]+}} {alignment = 1 : i64} : !llvm.ptr -> i8
+// CHECK-NEXT: llvm.trunc %{{[0-9]+}} : i8 to i1
 // CHECK-NEXT: llvm.zext %{{[0-9]+}} : i1 to i64
 // CHECK-NEXT: llvm.getelementptr %[[NEW_UNKNOWN]][8] : (!llvm.ptr) -> !llvm.ptr, i8
-// CHECK-NEXT: llvm.load %{{[0-9]+}} {alignment = 1 : i64} : !llvm.ptr -> i1
+// CHECK-NEXT: llvm.load %{{[0-9]+}} {alignment = 1 : i64} : !llvm.ptr -> i8
+// CHECK-NEXT: llvm.trunc %{{[0-9]+}} : i8 to i1
 // CHECK-NEXT: llvm.zext %{{[0-9]+}} : i1 to i64
+// CHECK-NOT: !llvm.ptr -> i1{{$}}
+// CHECK: return
