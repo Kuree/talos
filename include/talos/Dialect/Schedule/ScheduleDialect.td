@@ -18,6 +18,8 @@ def ScheduleDialect : Dialect {
     lowering after simulation values and handles acquire physical layouts.
   }];
   let useDefaultAttributePrinterParser = 1;
+  // Typed scheduling fields name the operation they belong on.
+  let hasOperationAttrVerify = 1;
   // State-plane addresses fold to their plane symbol, like
   // llvm.mlir.addressof, and are rematerialized as state-plane addresses.
   let hasConstantMaterializer = 1;

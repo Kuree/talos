@@ -2,9 +2,12 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/DialectImplementation.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Transforms/InliningUtils.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
+#include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleOps.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -68,6 +71,46 @@ Operation *ScheduleDialect::materializeConstant(OpBuilder &builder,
   if (integer && type.isSignlessInteger(64) && integer.getType() == type)
     return arith::ConstantOp::create(builder, loc, type, integer);
   return nullptr;
+}
+
+// The typed fields that replaced name tests and untyped markers have their
+// payload and belong on one kind of operation: a function's roles, a fixed
+// NBA slot global's field, a module's VPI write profile. Passes read them
+// through typed accessors, which would take a misplaced or mistyped field for
+// an absent one. Other fields are not checked here.
+LogicalResult
+ScheduleDialect::verifyOperationAttribute(Operation *operation,
+                                          NamedAttribute attribute) {
+  std::optional<Field> field = symbolizeField(attribute.getName().strref());
+  if (!field)
+    return success();
+  Attribute value = attribute.getValue();
+  auto error = [&] {
+    return operation->emitOpError("attribute '")
+           << attribute.getName().strref() << "' ";
+  };
+  switch (*field) {
+  case Field::EvalRole:
+    if (!isa<EvalRoleAttr>(value))
+      return error() << "has the wrong payload kind";
+    if (!isa<FunctionOpInterface>(operation))
+      return error() << "belongs on a function";
+    return success();
+  case Field::NbaSlot:
+    if (!isa<NBASlotAttr>(value))
+      return error() << "has the wrong payload kind";
+    if (!isa<LLVM::GlobalOp>(operation))
+      return error() << "belongs on an llvm.mlir.global";
+    return success();
+  case Field::EvalWritableVpi:
+    if (!isa<UnitAttr>(value))
+      return error() << "has the wrong payload kind";
+    if (!isa<ModuleOp>(operation))
+      return error() << "belongs on a module";
+    return success();
+  default:
+    return success();
+  }
 }
 
 void ScheduleDialect::initialize() {
