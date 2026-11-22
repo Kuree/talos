@@ -568,6 +568,13 @@ LogicalResult NativeStateLoadAutomaticOp::verify() {
   return success();
 }
 
+Speculation::Speculatability NativeHandleOffsetOp::getSpeculatability() {
+  // An in_bounds proof holds where the offset was made; above the guards it
+  // depends on, its sum would name storage the runtime's offset does not.
+  return getInBounds() ? Speculation::NotSpeculatable
+                       : Speculation::Speculatable;
+}
+
 OpFoldResult NativeHandleOffsetOp::fold(FoldAdaptor adaptor) {
   // The runtime re-encodes a stable handle offset by zero unchanged and keeps
   // the invalid handle.

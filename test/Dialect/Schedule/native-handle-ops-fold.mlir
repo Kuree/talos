@@ -3,9 +3,9 @@
 // A handle offset does not fold constant operands, like the runtime call it
 // stands for: producers offset constants when they create it. An offset by
 // zero is its handle, since the runtime re-encodes a stable handle unchanged
-// and keeps the invalid handle. It is pure (an invalid selection is its
-// invalid-handle result, IEEE 1800-2023 7.4.5, 11.5.1), so an unused one goes
-// away.
+// and keeps the invalid handle. It reads and writes no state (an invalid
+// selection is its invalid-handle result, IEEE 1800-2023 7.4.5, 11.5.1), so
+// an unused one goes away, proved in bounds or not.
 // CHECK-LABEL: func.func @offsets
 // CHECK-SAME: (%[[HANDLE:.*]]: i64, %{{.*}}: i64)
 // CHECK-DAG: %[[ROOT:.*]] = arith.constant 4611686031312289797 : i64
@@ -22,6 +22,7 @@ func.func @offsets(%handle: i64, %amount: i64) -> (i64, i64, i64) {
   %same = schedule.handle.offset %handle, %zero
   %proved = schedule.handle.offset %handle, %zero in_bounds
   %unused = schedule.handle.offset %handle, %amount
+  %unused_proved = schedule.handle.offset %handle, %amount in_bounds
   return %constant, %same, %proved : i64, i64, i64
 }
 

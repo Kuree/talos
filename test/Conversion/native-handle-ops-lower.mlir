@@ -4,9 +4,9 @@
 // handle offset, and one proved in bounds the plain sum: its offset field
 // neither carries nor borrows. A guard becomes a select of the invalid handle
 // (IEEE 1800-2023 7.4.5, 11.5.1). The order of the selection is kept.
-// Handle operations are pure, so first an offset recomputing a dominating
-// one takes its handle, offsets by zero and proved chains fold, and unused
-// ones go away: none of them reaches the runtime.
+// Handle operations read and write no state, so first an offset recomputing
+// a dominating one takes its handle, offsets by zero and proved chains fold,
+// and unused ones go away: none of them reaches the runtime.
 module {
   llvm.func @talos_rt_v1_native_handle_offset(i64, i64) -> i64
   llvm.func @use(i64, i64, i64)
@@ -75,6 +75,22 @@ module {
   ^else:
     %other = schedule.handle.offset %root, %index
     llvm.call @use(%other, %other, %other) : (i64, i64, i64) -> ()
+    llvm.return
+  }
+
+  // An offset not proved in bounds takes the sum of a dominating proved one:
+  // that one ran on the same operands, which therefore satisfy its proof. It
+  // is not speculatable (native-handle-ops-speculation.mlir), so no rewrite
+  // has moved it above the guards its proof depends on.
+  // CHECK-LABEL: llvm.func @proved_first(
+  // CHECK-SAME: %[[ROOT:.*]]: i64, %[[INDEX:.*]]: i64)
+  // CHECK-NEXT: %[[SUM:.*]] = llvm.add %[[ROOT]], %[[INDEX]] : i64
+  // CHECK-NEXT: llvm.call @use(%[[SUM]], %[[SUM]], %[[SUM]])
+  // CHECK-NEXT: llvm.return
+  llvm.func @proved_first(%root: i64, %index: i64) {
+    %proved = schedule.handle.offset %root, %index in_bounds
+    %unproved = schedule.handle.offset %root, %index
+    llvm.call @use(%proved, %unproved, %unproved) : (i64, i64, i64) -> ()
     llvm.return
   }
 

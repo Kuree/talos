@@ -1483,7 +1483,8 @@ def NativeNBAStageOp : ScheduleNativeOp<"nba.stage"> {
 // the invalid-index value and a write through it does nothing
 // (IEEE 1800-2023 7.4.5, 11.5.1, 11.5.2). A selection is a chain of these
 // operations above a root handle.
-def NativeHandleOffsetOp : ScheduleNativeOp<"handle.offset", [Pure]> {
+def NativeHandleOffsetOp : ScheduleNativeOp<"handle.offset", [
+    NoMemoryEffect, DeclareOpInterfaceMethods<ConditionallySpeculatable>]> {
   let summary = "offset a stable native state handle";
   let description = [{
     The handle of the bit `amount` (signed) bits after the one `handle`
@@ -1501,10 +1502,13 @@ def NativeHandleOffsetOp : ScheduleNativeOp<"handle.offset", [Pure]> {
     field then neither carries nor borrows, so the result is the plain sum
     `handle + amount`.
 
-    Being a total function of its operands, it is pure: it reads and writes
-    no state and has no failure to preserve, since an invalid selection is
-    the invalid-handle result that its readers and writers handle (IEEE
-    1800-2023 7.4.5, 11.5.1).
+    Being a total function of its operands, it reads and writes no state
+    and has no failure to preserve, since an invalid selection is the
+    invalid-handle result that its readers and writers handle (IEEE
+    1800-2023 7.4.5, 11.5.1). Without `in_bounds` it is pure. With it, it is
+    not speculatable: its proof is a fact of the program point where it was
+    made, under the selection's guards, so it does not move above them.
+    Wherever it runs, its operands satisfy the proof.
 
     An offset by zero is `handle` itself: the runtime re-encodes a stable
     handle unchanged and keeps the invalid handle. An offset proved in

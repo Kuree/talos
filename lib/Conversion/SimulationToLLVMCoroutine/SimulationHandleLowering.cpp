@@ -433,13 +433,16 @@ SmallVector<Operation *> collectNativeHandleOps(ModuleOp module) {
   return handles;
 }
 
-// Handle operations are pure (a total function whose invalid selection is
-// the invalid handle, IEEE 1800-2023 7.4.5, 11.5.1), and AOT planning has
-// read every selection by now. An offset recomputing one that dominates it
-// takes that one's handle, whether or not either is proved in bounds: equal
-// operands give an equal handle. Folding then drops offsets by zero, merges
-// offsets proved in bounds and erases handle operations nothing uses, so
-// none of those reaches the runtime.
+// Handle operations read and write no state (a total function whose invalid
+// selection is the invalid handle, IEEE 1800-2023 7.4.5, 11.5.1), and AOT
+// planning has read every selection by now. An offset recomputing one that
+// dominates it takes that one's handle, whether or not either is proved in
+// bounds: equal operands give an equal handle. A dominating offset proved in
+// bounds ran on those operands, so they satisfy its proof: being not
+// speculatable, it has not moved above the guards its proof depends on.
+// Folding then drops offsets by zero, merges offsets proved in bounds and
+// erases handle operations nothing uses, so none of those reaches the
+// runtime.
 void simplifyNativeHandleOps(ModuleOp module, ArrayRef<Operation *> handles) {
   llvm::MapVector<std::pair<Value, Value>,
                   SmallVector<schedule::NativeHandleOffsetOp, 2>>
