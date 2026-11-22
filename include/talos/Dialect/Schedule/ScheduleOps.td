@@ -1570,7 +1570,9 @@ def NativeHandleGuardOp : ScheduleNativeOp<"handle.guard", [Pure]> {
 // carry nothing: the runtime writes them zero, a direct copy from a state
 // plane leaves the neighbouring state bits there, and a buffer's readers
 // (the runtime, a direct state store, a transition) read only its `width`
-// bits. `state_bits` is the size of the design state.
+// bits. `state_bits` is the size of the design state; it is 0 in a design
+// without static state, whose handles name only automatic variables, which
+// the runtime resolves without the design state.
 //
 // Native lowering creates them; once AOT planning has read the eval bodies'
 // accesses, they become the runtime calls, a scalar access passing its value

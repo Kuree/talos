@@ -2844,7 +2844,7 @@ FailureOr<bool> makeNativeEvalPlan(
         // Keep the source value and destination offset from this execution.
         // The ordered wide path records every activation; a one-entry latch
         // would lose intermediate updates from overlapping or repeated sites,
-        // contrary to IEEE 1800-2017 4.6 and 10.4.2.
+        // contrary to IEEE 1800-2023 4.6 and 10.4.2.
         uint64_t rootWidth = staticNBAPlan.roots[root->second].bit_width;
         Value encodedBase =
             destinationOffset ? destinationOffset->handle : handle;
@@ -3509,8 +3509,11 @@ FailureOr<bool> makeNativeEvalPlan(
       // The selection below is integer arithmetic of the field's own width, so
       // a field wider than a machine word lowers the same way. Producers size
       // every access by this layout, so a read of another state size comes
-      // only from IR they did not produce; it fails closed. (No test pass
-      // runs this decoder on hand-written IR, so no test reaches it.)
+      // only from IR they did not produce; it fails closed, as do a select of
+      // handles without a guard, a handle without a fixed root and a root out
+      // of bounds below. The decoder runs only inside AOT planning, on the
+      // native preparation pipeline's analysis, which no test pass rebuilds
+      // around edited IR, so no test reaches these errors.
       if (load.stateBits != stateLayout.bitCount)
         return access->emitError(
                    "runtime-free eval cannot lower dynamic state load"),

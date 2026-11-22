@@ -243,7 +243,7 @@ public:
 
     // A generic packed store may be partially masked by a force or procedural
     // assign. Reload the visible destination planes before publication, just
-    // like the scalar lowering required by IEEE 1800-2017 10.6.1-10.6.2.
+    // like the scalar lowering required by IEEE 1800-2023 10.6.1-10.6.2.
     Value newValue = loadBulkStatePlane(rewriter, location, destination, *width,
                                         schedule::StatePlane::Value,
                                         stateBitCount, directLayout, false);
@@ -1000,7 +1000,7 @@ public:
                         /*trackChange=*/true, continuous);
     // Runtime plane stores can suppress a write while force or procedural
     // assign owns the variable. Publish the value that actually became
-    // visible, not the attempted procedural assignment (IEEE 1800-2017
+    // visible, not the attempted procedural assignment (IEEE 1800-2023
     // 10.6.1-10.6.2). A no-change store likewise retains the already loaded
     // value, so the same selects cover both cases without another plane load.
     notificationValue = arith::SelectOp::create(
@@ -1063,7 +1063,7 @@ public:
                                   *width),
                      save(oldValue), save(notificationValue)});
     } else {
-      // IEEE 1800-2017 Clause 31.9.1 transport commits must wake the
+      // IEEE 1800-2023 Clause 31.9.1 transport commits must wake the
       // runtime-owned delayed-terminal coordinator. Select the generic
       // publication call while lowering this structurally certified cold
       // function; ordinary stores retain the branch-free static AOT call.
