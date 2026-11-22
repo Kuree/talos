@@ -1,7 +1,8 @@
-// RUN: talos-opt %s --split-input-file --verify-diagnostics | FileCheck %s
+// RUN: talos-opt %s --split-input-file --verify-diagnostics | talos-opt --split-input-file | FileCheck %s
 
 // A declaration of a runtime entry names it by its symbol without the
-// version prefix, and has the entry's prototype.
+// version prefix, and has the entry's prototype. The printed form parses back
+// to the same entry (NativeRuntimePrototypeTest checks every row).
 // CHECK: llvm.func @talos_rt_v1_scheduler_fail(!llvm.ptr, i32) attributes {native.runtime_entry = #native.runtime_entry<scheduler_fail>}
 // CHECK: llvm.func @talos_rt_v2_recursive_export_bitstream({{.*}}) -> i32 attributes {native.runtime_entry = #native.runtime_entry<v2_recursive_export_bitstream>}
 llvm.func @talos_rt_v1_scheduler_fail(!llvm.ptr, i32) attributes {native.runtime_entry = #native.runtime_entry<scheduler_fail>}
@@ -33,3 +34,20 @@ llvm.func @talos_rt_v1_scheduler_fail(%context: !llvm.ptr, %status: i32) attribu
 
 // expected-error @+1 {{unknown native runtime entry 'no_such_entry'}}
 llvm.func @talos_rt_v1_no_such_entry(!llvm.ptr) attributes {native.runtime_entry = #native.runtime_entry<no_such_entry>}
+
+// -----
+
+// The runtime library defines its entries as C functions.
+// expected-error @+1 {{attribute 'native.runtime_entry' declares @talos_rt_v1_scheduler_fail with the fastcc calling convention; runtime entries use the C calling convention}}
+llvm.func fastcc @talos_rt_v1_scheduler_fail(!llvm.ptr, i32) attributes {native.runtime_entry = #native.runtime_entry<scheduler_fail>}
+
+// -----
+
+// expected-error @+1 {{attribute 'native.runtime_entry' has the wrong payload kind}}
+llvm.func @talos_rt_v1_scheduler_fail(!llvm.ptr, i32) attributes {native.runtime_entry = 3 : i32}
+
+// -----
+
+// The entry is a bare keyword.
+// expected-error @+1 {{expected valid keyword}}
+llvm.func @talos_rt_v1_scheduler_fail(!llvm.ptr, i32) attributes {native.runtime_entry = #native.runtime_entry<"scheduler_fail">}

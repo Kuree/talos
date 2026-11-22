@@ -121,14 +121,16 @@ mlir::LLVM::LLVMFuncOp createNativeRuntimeDeclaration(mlir::OpBuilder &builder,
                                                       NativeRuntimeEntry entry);
 /// The declaration of `entry` in `module`: the existing one, or a new one
 /// (createNativeRuntimeDeclaration) at the start of the module. An existing
-/// declaration of another type is reported as an error on it; native
-/// lowering rejects such a module on entry (verifyNativeRuntimeDeclarations),
-/// so only a lowering pass run on its own reaches that report.
+/// declaration of another type or calling convention is reported as an error
+/// on it; native lowering rejects such a module on entry
+/// (verifyNativeRuntimeDeclarations), so only a lowering pass run on its own
+/// reaches that report.
 mlir::LLVM::LLVMFuncOp declareNativeRuntime(mlir::ModuleOp module,
                                             NativeRuntimeEntry entry);
 /// Whether every function of `module` that a runtime entry names has the
-/// entry's prototype, whether or not anything calls it: declareNativeRuntime
-/// reuses such a declaration. Reports each one that does not.
+/// entry's prototype and the C calling convention, whether or not anything
+/// calls it: declareNativeRuntime reuses such a declaration. Reports each one
+/// that does not.
 llvm::LogicalResult verifyNativeRuntimeDeclarations(mlir::ModuleOp module);
 /// Declares each of `entries` in order (declareNativeRuntime).
 void declareNativeRuntimes(mlir::ModuleOp module,

@@ -2,14 +2,21 @@
 //
 // Lowering declares each native runtime entry with the prototype of its row
 // in NativeRuntimeEntries.def. Each row with a prototype in the public runtime
-// headers is checked against it at compile time, so a row that disagrees with
-// the C ABI fails the build and names its symbol.
+// headers or the runtime's private entry header is checked against it at
+// compile time, so a row that disagrees with the C ABI fails the build and
+// names its symbol.
 //
 //===----------------------------------------------------------------------===//
 
+#include "lib/PrivateEntries.h"
+#include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Native/NativeRuntimeEntries.h"
 #include "talos/Runtime/EvalNBAQueue.h"
 #include "talos/Runtime/Runtime.h"
+
+#include "mlir/AsmParser/AsmParser.h"
+#include "mlir/IR/MLIRContext.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include "gtest/gtest.h"
 
@@ -73,6 +80,19 @@ template <typename Result, typename... Parameters>
 struct Prototype<Result (*)(Parameters...) noexcept>
     : Prototype<Result (*)(Parameters...)> {};
 
+// The check can fail: in the result's or a parameter's width, its kind, or
+// the number of parameters.
+static_assert(Prototype<int32_t (*)(void *)>::matches({I32, Ptr}));
+static_assert(!Prototype<int32_t (*)(void *)>::matches({I64, Ptr}));
+static_assert(!Prototype<int32_t (*)(uint16_t)>::matches({I32, I32}));
+static_assert(!Prototype<int32_t (*)(void *)>::matches({I32}));
+static_assert(!Prototype<int32_t (*)(void *)>::matches({I32, Ptr, Ptr}));
+static_assert(!Prototype<int32_t (*)(int64_t)>::matches({I32, Ptr}));
+static_assert(!Prototype<void *(*)()>::matches({I64}));
+static_assert(!Prototype<bool (*)()>::matches({I8}));
+static_assert(!Prototype<float (*)()>::matches({F64}));
+static_assert(!Prototype<void (*)()>::matches({I32}));
+
 #define SIG(...) {__VA_ARGS__}
 #define TALOS_NATIVE_RUNTIME(Enum, symbol, signature, effects)                 \
   static_assert(Prototype<decltype(&::symbol)>::matches(signature),            \
@@ -91,6 +111,25 @@ TEST(NativeRuntimeEntries, SymbolsFindTheirRows) {
 #include "talos/Dialect/Native/NativeRuntimeEntries.def"
   EXPECT_FALSE(talos::getNativeRuntimeEntry("talos_rt_v1_no_such_entry"));
   EXPECT_FALSE(talos::getNativeRuntimeEntry(""));
+}
+
+// Every entry's native.runtime_entry attribute parses back from its printed
+// form: the printer drops the symbol's talos_rt_v1_ (else talos_rt_) prefix,
+// and the parser tries the talos_rt_v1_ symbol first.
+TEST(NativeRuntimeEntries, AttributesRoundTrip) {
+  mlir::MLIRContext context;
+  context.loadDialect<talos::native::NativeDialect>();
+  static constexpr NativeRuntimeEntry entries[] = {
+#define TALOS_NATIVE_RUNTIME(Enum, symbol, signature, effects)                 \
+  NativeRuntimeEntry::Enum,
+#include "talos/Dialect/Native/NativeRuntimeEntries.def"
+  };
+  for (NativeRuntimeEntry entry : entries) {
+    auto attribute = talos::native::RuntimeEntryAttr::get(&context, entry);
+    std::string text;
+    llvm::raw_string_ostream(text) << attribute;
+    EXPECT_EQ(mlir::parseAttribute(text, &context), attribute) << text;
+  }
 }
 
 } // namespace

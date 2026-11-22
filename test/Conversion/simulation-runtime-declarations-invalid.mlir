@@ -1,9 +1,10 @@
 // RUN: talos-opt %s --convert-talos-sim-processes-to-llvm-coroutines --verify-diagnostics -o /dev/null
 
-// A predeclared runtime entry must have its catalog prototype; lowering does
-// not reuse a declaration of another type. The pipeline rejects each one on
-// entry, once, whether or not lowering would call it: it calls
-// scheduler_fail, but never strength_resolve.
+// A predeclared runtime entry must have its catalog prototype and the C
+// calling convention; lowering does not reuse a declaration of another type
+// or convention. The pipeline rejects each one on entry, once, whether or not
+// lowering would call it: it calls scheduler_fail, but never strength_resolve
+// or context_destroy.
 
 module attributes {
   llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128",
@@ -13,6 +14,11 @@ module attributes {
   llvm.func @talos_rt_v1_scheduler_fail(i64)
   // expected-error @+1 {{runtime symbol @talos_rt_v1_strength_resolve is predeclared with an incompatible type}}
   llvm.func @talos_rt_v1_strength_resolve(i64)
+  // expected-error @+1 {{runtime symbol @talos_rt_v1_context_destroy is predeclared with the fastcc calling convention; runtime entries use the C calling convention}}
+  llvm.func fastcc @talos_rt_v1_context_destroy(!llvm.ptr)
+  // A declaration wrong in both is reported once, for its type.
+  // expected-error @+1 {{runtime symbol @talos_rt_v1_buffer_release is predeclared with an incompatible type}}
+  llvm.func fastcc @talos_rt_v1_buffer_release(i64)
   simulation.design @design attributes {
     compute_graph = #schedule.graph<
       version = 1, vpi = full, workers = 1,

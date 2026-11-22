@@ -11,6 +11,7 @@
 #include "ExceptionSupport.h"
 #include "FlatU64Table.h"
 #include "NetBitTables.h"
+#include "PrivateEntries.h"
 #include "StrengthFormat.h"
 #include "TimedUpdateQueue.h"
 #include "talos/Coverage/CoverageDatabase.h"
@@ -4436,12 +4437,6 @@ talos_rt_status talos_rt_run_dpi_export_task_logical(talos_rt_context *context,
 talos_rt_status
 talos_rt_initialize_design_state(talos_rt_context *context) noexcept;
 
-// Generated process spawns are already bound to a validated context. Reuse
-// its immutable design-bytecode image while retaining the public standalone
-// creation entry point for descriptors without a context.
-extern "C" talos_rt_status talos_rt_v1_process_instance_create_for_context(
-    talos_rt_context *context, const talos_rt_process_descriptor_v1 *descriptor,
-    talos_rt_process_instance_v1 **outInstance);
 // Replaces the bits of a read of driver slots [stateOffset, stateOffset +
 // width) that belong to mirror drivers (TALOS_RT_DB_DRIVER_MIRRORS_NET) with
 // the net bits they drive: native drives leave those slots stale.

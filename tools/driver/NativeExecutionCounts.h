@@ -4,12 +4,50 @@
 #ifndef TALOS_DRIVER_NATIVEEXECUTIONCOUNTS_H
 #define TALOS_DRIVER_NATIVEEXECUTIONCOUNTS_H
 
+#include "talos/Dialect/Native/NativeRuntimeEntries.h"
+
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
 
 namespace talos::driver::detail {
+
+/// The LLVM IR type of `entry`'s prototype in the native runtime catalog.
+inline llvm::FunctionType *
+getNativeRuntimeIRFunctionType(llvm::LLVMContext &context,
+                               NativeRuntimeEntry entry) {
+  auto convert = [&](native_runtime::Type type) -> llvm::Type * {
+    switch (type) {
+    case native_runtime::V:
+      return llvm::Type::getVoidTy(context);
+    case native_runtime::I1:
+      return llvm::Type::getInt1Ty(context);
+    case native_runtime::I8:
+      return llvm::Type::getInt8Ty(context);
+    case native_runtime::I16:
+      return llvm::Type::getInt16Ty(context);
+    case native_runtime::I32:
+      return llvm::Type::getInt32Ty(context);
+    case native_runtime::I64:
+      return llvm::Type::getInt64Ty(context);
+    case native_runtime::F32:
+      return llvm::Type::getFloatTy(context);
+    case native_runtime::F64:
+      return llvm::Type::getDoubleTy(context);
+    case native_runtime::Ptr:
+      return llvm::PointerType::getUnqual(context);
+    }
+    llvm_unreachable("unknown native runtime type");
+  };
+  llvm::ArrayRef<native_runtime::Type> signature =
+      getNativeRuntimeSignature(entry);
+  llvm::SmallVector<llvm::Type *> parameters;
+  for (native_runtime::Type parameter : signature.drop_front())
+    parameters.push_back(convert(parameter));
+  return llvm::FunctionType::get(convert(signature.front()), parameters,
+                                 /*isVarArg=*/false);
+}
 
 /// Counts generated function entries before native optimization/partitioning.
 /// Coroutine ramps (before splitting) also count their entries and resumes,
@@ -77,8 +115,10 @@ inline bool addNativeExecutionCounts(llvm::Module &module) {
     Value *runtime = builder.CreateLoad(pointer, current);
     builder.CreateCondBr(builder.CreateIsNull(runtime), zero, query);
     builder.SetInsertPoint(query);
+    constexpr NativeRuntimeEntry timeEntry = NativeRuntimeEntry::SchedulerTime;
     FunctionCallee time = module.getOrInsertFunction(
-        "talos_rt_v1_scheduler_time", FunctionType::get(i64, {pointer}, false));
+        getNativeRuntimeSymbol(timeEntry),
+        getNativeRuntimeIRFunctionType(context, timeEntry));
     Value *now = builder.CreateCall(time, {runtime});
     builder.CreateRet(builder.CreateZExt(
         builder.CreateICmpNE(now, builder.getInt64(0)), i64));

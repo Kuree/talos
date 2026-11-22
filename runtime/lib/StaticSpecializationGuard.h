@@ -3,6 +3,7 @@
 #ifndef TALOS_RUNTIME_LIB_STATICSPECIALIZATIONGUARD_H
 #define TALOS_RUNTIME_LIB_STATICSPECIALIZATIONGUARD_H
 
+#include "PrivateEntries.h"
 #include "ProcessShared.h"
 
 // Keep the scalar ABI and batch query on one implementation. The compiler
@@ -75,10 +76,5 @@ staticSpecializationRootGuard(talos_rt_context *context, uint32_t actorSlot,
   record(false);
   return 0;
 }
-
-// Compiler-private ABI. Empty root sets are clean; every nonempty root is
-// queried even after rejection so diagnostic accounting remains exact.
-extern "C" uint32_t talos_rt_v1_static_specialization_guard_roots(
-    talos_rt_context *context, const uint32_t *roots, uint64_t count);
 
 #endif

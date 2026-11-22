@@ -125,6 +125,18 @@ createNativeRuntimeDeclaration(mlir::OpBuilder &builder,
   return function;
 }
 
+/// Reports a declaration of a runtime entry that does not use the C calling
+/// convention: the runtime library defines its entries as C functions, and a
+/// call through another convention would not match them.
+static void reportCallingConvention(mlir::LLVM::LLVMFuncOp function) {
+  function.emitOpError() << "runtime symbol @" << function.getSymName()
+                         << " is predeclared with the "
+                         << mlir::LLVM::cconv::stringifyCConv(
+                                function.getCConv())
+                         << " calling convention; runtime entries use the C "
+                            "calling convention";
+}
+
 mlir::LLVM::LLVMFuncOp declareNativeRuntime(mlir::ModuleOp module,
                                             NativeRuntimeEntry entry) {
   StringRef symbol = getNativeRuntimeSymbol(entry);
@@ -134,6 +146,8 @@ mlir::LLVM::LLVMFuncOp declareNativeRuntime(mlir::ModuleOp module,
         getNativeRuntimeFunctionType(module.getContext(), entry))
       existing.emitOpError() << "runtime symbol @" << symbol
                              << " is predeclared with an incompatible type";
+    else if (existing.getCConv() != mlir::LLVM::cconv::CConv::C)
+      reportCallingConvention(existing);
     return existing;
   }
   mlir::OpBuilder builder(module.getContext());
@@ -152,12 +166,17 @@ llvm::LogicalResult verifyNativeRuntimeDeclarations(mlir::ModuleOp module) {
   for (auto function : module.getOps<mlir::LLVM::LLVMFuncOp>()) {
     std::optional<NativeRuntimeEntry> entry =
         getNativeRuntimeEntry(function.getSymName());
-    if (!entry || function.getFunctionType() ==
-                      getNativeRuntimeFunctionType(module.getContext(), *entry))
+    if (!entry)
       continue;
-    function.emitOpError() << "runtime symbol @" << function.getSymName()
-                           << " is predeclared with an incompatible type";
-    valid = false;
+    if (function.getFunctionType() !=
+        getNativeRuntimeFunctionType(module.getContext(), *entry)) {
+      function.emitOpError() << "runtime symbol @" << function.getSymName()
+                             << " is predeclared with an incompatible type";
+      valid = false;
+    } else if (function.getCConv() != mlir::LLVM::cconv::CConv::C) {
+      reportCallingConvention(function);
+      valid = false;
+    }
   }
   return llvm::success(valid);
 }

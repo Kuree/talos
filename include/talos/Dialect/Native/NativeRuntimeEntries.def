@@ -6,10 +6,12 @@
 // V is void, Ptr any pointer). The effects are the facts of
 // native_runtime::Effect (NativeRuntimeEntries.h). An entry a pass admits
 // only for certain arguments has the facts it holds for every call; the pass
-// checks those arguments itself. Rows whose symbol has no prototype in the
-// public runtime headers (runtime/include) sit inside
-// `#ifndef TALOS_NATIVE_RUNTIME_PROTOTYPED_ONLY`; the build-time prototype
-// check (test/Support/NativeRuntimePrototypeTest.cpp) skips them.
+// checks those arguments itself. The build-time prototype check
+// (test/Support/NativeRuntimePrototypeTest.cpp) compares each row with the
+// symbol's prototype in the public runtime headers (runtime/include) or, for
+// an entry only generated code calls, runtime/lib/PrivateEntries.h. Rows
+// whose symbol has no prototype in either, the link anchors, sit inside
+// `#ifndef TALOS_NATIVE_RUNTIME_PROTOTYPED_ONLY`, which the check skips.
 //
 //===----------------------------------------------------------------------===//
 
@@ -41,8 +43,10 @@ TALOS_NATIVE_RUNTIME(SchedulerHandoffPending,
                      talos_rt_v1_scheduler_handoff_pending, SIG(I32, Ptr),
                      PendingTransparent)
 
-// Pure Table 28-8 strength combination: value arguments only, no scheduler
-// or context edge, like an outlined arithmetic helper.
+// Pure combination of the strength ranges of two signals on one net (IEEE
+// 1800-2023 28.12, the scale of Figure 28-2, and the wired logic of 28.12.4):
+// value arguments only, no scheduler or context edge, like an outlined
+// arithmetic helper.
 TALOS_NATIVE_RUNTIME(StrengthResolveKind, talos_rt_v1_strength_resolve_kind,
                      SIG(I16, I16, I16, I32), EvalInline | PendingTransparent)
 // A line hit is a relaxed atomic increment through the context argument. It
@@ -51,8 +55,9 @@ TALOS_NATIVE_RUNTIME(CoveragePointHit, talos_rt_v1_coverage_point_hit,
                      SIG(I32, Ptr, I64, I32),
                      EvalInline | PendingTransparent | ReadinessTransparent)
 // eval_display formats its already captured arguments and writes to
-// runtime-owned FILE streams. It reads no pending accumulator and calls
-// neither the scheduler nor VPI; no NBA is committed for display (4.9.4).
+// runtime-owned FILE streams (the display tasks, 21.2.1). It reads no pending
+// accumulator and calls neither the scheduler nor VPI; no NBA is committed for
+// display (4.9.4).
 // Like the other diagnostic services, its declaration is cold.
 TALOS_NATIVE_RUNTIME(EvalDisplay, talos_rt_v1_eval_display,
                      SIG(I32, Ptr, I32, I32, I32, Ptr, I64, Ptr),
@@ -160,12 +165,10 @@ TALOS_NATIVE_RUNTIME(NativeStateMarkUnknown,
 TALOS_NATIVE_RUNTIME(StaticSpecializationGuard,
                      talos_rt_v1_static_specialization_guard,
                      SIG(I32, Ptr, I32, I32, I32), PendingTransparent)
-// Declared by the runtime library internally, not in its public headers.
-#ifndef TALOS_NATIVE_RUNTIME_PROTOTYPED_ONLY
+// Declared in runtime/lib/PrivateEntries.h, not in the public headers.
 TALOS_NATIVE_RUNTIME(StaticSpecializationGuardRoots,
                      talos_rt_v1_static_specialization_guard_roots,
                      SIG(I32, Ptr, Ptr, I64), PendingTransparent)
-#endif
 
 // An epoch-armed deferred report (12.4.2.1, 12.5.3.1, 16.4.1) only queues its
 // ticket; an eval activation keeps it for a direct generated output. The
@@ -333,12 +336,10 @@ TALOS_NATIVE_RUNTIME(ProcessEventPending, talos_rt_v1_process_event_pending,
                      SIG(I32, Ptr, I64, Ptr), ObservesThread)
 TALOS_NATIVE_RUNTIME(ProcessInstanceCreate, talos_rt_v1_process_instance_create,
                      SIG(I32, Ptr, Ptr), ObservesThread)
-// Declared by the runtime library internally, not in its public headers.
-#ifndef TALOS_NATIVE_RUNTIME_PROTOTYPED_ONLY
+// Declared in runtime/lib/PrivateEntries.h, not in the public headers.
 TALOS_NATIVE_RUNTIME(ProcessInstanceCreateForContext,
                      talos_rt_v1_process_instance_create_for_context,
                      SIG(I32, Ptr, Ptr, Ptr), ObservesThread)
-#endif
 TALOS_NATIVE_RUNTIME(ProcessInstanceDestroy,
                      talos_rt_v1_process_instance_destroy, SIG(I32, Ptr),
                      ObservesThread)

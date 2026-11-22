@@ -111,6 +111,12 @@ NativeDialect::verifyOperationAttribute(Operation *operation,
     if (function.getSymName() != symbol)
       return error() << "names @" << symbol << " but the function is @"
                      << function.getSymName();
+    // The runtime library defines its entries as C functions.
+    if (function.getCConv() != LLVM::cconv::CConv::C)
+      return error() << "declares @" << symbol << " with the "
+                     << LLVM::cconv::stringifyCConv(function.getCConv())
+                     << " calling convention; runtime entries use the C "
+                        "calling convention";
     LLVM::LLVMFunctionType prototype =
         talos::getNativeRuntimeFunctionType(operation->getContext(), entry);
     if (function.getFunctionType() != prototype)

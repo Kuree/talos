@@ -4,6 +4,7 @@
 #include "NativeModulePruning.h"
 #include "NativePartitionCost.h"
 #include "NativeSplitClusters.h"
+#include "talos/LLVM/FunctionRoles.h"
 
 #include "mlir/Parser/Parser.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
@@ -126,6 +127,37 @@ TEST(NativeExecutionCounts, NoExecutorHasNoInstrumentationCost) {
   EXPECT_EQ(module.size(), 1u);
   EXPECT_EQ(main->getInstructionCount(), 1u);
   EXPECT_TRUE(module.global_empty());
+}
+
+// Splitting counts by simulation time asks the runtime for the time through
+// the scheduler_time entry, declared with its catalog prototype, i64(ptr).
+TEST(NativeExecutionCounts, PhaseQueriesTheCatalogTimeEntry) {
+  LLVMContext context;
+  Module module("phase", context);
+  IRBuilder<> builder(context);
+  auto *main = Function::Create(FunctionType::get(builder.getInt32Ty(), false),
+                                GlobalValue::ExternalLinkage, "main", module);
+  builder.SetInsertPoint(BasicBlock::Create(context, "entry", main));
+  builder.CreateRet(builder.getInt32(0));
+  auto *ramp = Function::Create(FunctionType::get(builder.getVoidTy(), false),
+                                GlobalValue::ExternalLinkage,
+                                "p.__talos_coro_ramp", module);
+  builder.SetInsertPoint(BasicBlock::Create(context, "entry", ramp));
+  builder.CreateRetVoid();
+  new GlobalVariable(
+      module, builder.getPtrTy(), false, GlobalValue::InternalLinkage,
+      ConstantPointerNull::get(builder.getPtrTy()), "__talos_current_context");
+  ASSERT_TRUE(talos::driver::detail::addNativeExecutionCounts(module));
+  Function *time = module.getFunction("talos_rt_v1_scheduler_time");
+  ASSERT_NE(time, nullptr);
+  EXPECT_TRUE(time->isDeclaration());
+  EXPECT_EQ(time->getFunctionType(),
+            talos::driver::detail::getNativeRuntimeIRFunctionType(
+                context, talos::NativeRuntimeEntry::SchedulerTime));
+  EXPECT_EQ(
+      time->getFunctionType(),
+      FunctionType::get(builder.getInt64Ty(), {builder.getPtrTy()}, false));
+  EXPECT_FALSE(verifyModule(module, &errs()));
 }
 
 TEST(NativeExecutionCounts, ReportsBothExitsAndKeepsDistinctDomainEntries) {
@@ -320,13 +352,20 @@ TEST(NativeSplitClusters, PrivateCalleesJoinTheirSoleCaller) {
   StringMap<Function *> functions;
   for (StringRef name :
        {"execute", "body", "leaf", "shared", "other", "escaped", "entry",
-        "foreign", "big", "big_leaf", "ring_b", "ring_a", "recursive"}) {
+        "entry_callee", "passed", "foreign", "big", "big_leaf", "ring_tail",
+        "ring_b", "ring_a", "recursive"}) {
     auto *function =
         Function::Create(type, GlobalValue::ExternalLinkage, name, module);
     builder.SetInsertPoint(BasicBlock::Create(context, "entry", function));
     builder.CreateRetVoid();
     functions[name] = function;
   }
+  // Declarations have no cluster, and a call to one changes nothing.
+  auto *external =
+      Function::Create(type, GlobalValue::ExternalLinkage, "external", module);
+  auto *consume = Function::Create(
+      FunctionType::get(builder.getVoidTy(), {builder.getPtrTy()}, false),
+      GlobalValue::ExternalLinkage, "consume", module);
   auto call = [&](StringRef caller, StringRef callee) {
     builder.SetInsertPoint(functions[caller]->getEntryBlock().getTerminator());
     builder.CreateCall(functions[callee]);
@@ -347,6 +386,14 @@ TEST(NativeSplitClusters, PrivateCalleesJoinTheirSoleCaller) {
   call("ring_b", "ring_a");
   call("body", "recursive"); // Its own recursion is no other caller.
   call("recursive", "recursive");
+  call("entry", "entry_callee"); // An exported caller: its own unit.
+  call("execute", "passed");     // Also passed as an argument: its own unit.
+  builder.SetInsertPoint(functions["execute"]->getEntryBlock().getTerminator());
+  builder.CreateCall(consume, {functions["passed"]});
+  builder.CreateCall(external);
+  // A tail called only from a cycle joins it, also when the walk starts at
+  // the tail and enters the cycle at its larger name.
+  call("ring_b", "ring_tail");
 
   StringSet<> exported;
   exported.insert("entry");
@@ -374,7 +421,36 @@ TEST(NativeSplitClusters, PrivateCalleesJoinTheirSoleCaller) {
   EXPECT_EQ(rootOf("big_leaf"), "big_leaf");
   EXPECT_EQ(rootOf("ring_a"), "ring_a");
   EXPECT_EQ(rootOf("ring_b"), "ring_a");
+  EXPECT_EQ(rootOf("ring_tail"), "ring_a");
+  EXPECT_EQ(rootOf("entry_callee"), "entry_callee");
+  EXPECT_EQ(rootOf("passed"), "passed");
+  EXPECT_FALSE(roots.count(external));
+  EXPECT_FALSE(roots.count(consume));
   EXPECT_EQ(roots.size(), functions.size());
+}
+
+// The role attributes are dropped from bitcode handed to the linker (they
+// would change the ThinLTO module hash), and nothing else is.
+TEST(FunctionRoles, DropFunctionRoleAttributesRemovesOnlyRoles) {
+  LLVMContext context;
+  Module module("roles", context);
+  auto *type = FunctionType::get(Type::getVoidTy(context), false);
+  auto *kernel =
+      Function::Create(type, GlobalValue::ExternalLinkage, "kernel", module);
+  kernel->addFnAttr(talos::kClockedKernelFnAttr);
+  kernel->addFnAttr(talos::kEvalBodyFnAttr);
+  kernel->addFnAttr(Attribute::NoInline);
+  kernel->addFnAttr("keep", "yes");
+  auto *plain =
+      Function::Create(type, GlobalValue::ExternalLinkage, "plain", module);
+  plain->addFnAttr(talos::kEvalBodyFnAttr);
+  talos::dropFunctionRoleAttributes(module);
+  for (Function *function : {kernel, plain}) {
+    EXPECT_FALSE(function->hasFnAttribute(talos::kClockedKernelFnAttr));
+    EXPECT_FALSE(function->hasFnAttribute(talos::kEvalBodyFnAttr));
+  }
+  EXPECT_TRUE(kernel->hasFnAttribute(Attribute::NoInline));
+  EXPECT_EQ(kernel->getFnAttribute("keep").getValueAsString(), "yes");
 }
 
 } // namespace

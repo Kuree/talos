@@ -441,6 +441,7 @@ target_include_directories(TalosNativePartitionTests PRIVATE
   "${PROJECT_SOURCE_DIR}/runtime/include"
 )
 target_link_libraries(TalosNativePartitionTests PRIVATE
+  TalosNativeIR
   MLIRBuiltinToLLVMIRTranslation
   MLIRLLVMToLLVMIRTranslation
   MLIRTargetLLVMIRExport
@@ -469,9 +470,11 @@ add_llvm_executable(TalosAnalysisOracleTests EXCLUDE_FROM_ALL
   Support/ParallelWalkTest.cpp
 )
 llvm_update_compile_flags(TalosAnalysisOracleTests)
-# The native runtime prototype check reads the public runtime headers.
+# The native runtime prototype check reads the public runtime headers and the
+# runtime's private entry header (runtime/lib/PrivateEntries.h).
 target_include_directories(TalosAnalysisOracleTests PRIVATE
   "${PROJECT_SOURCE_DIR}/runtime/include"
+  "${PROJECT_SOURCE_DIR}/runtime"
 )
 target_link_libraries(TalosAnalysisOracleTests PRIVATE
   TalosSimulationAnalysis
