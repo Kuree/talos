@@ -142,3 +142,90 @@ module {
     llvm.return %status : i32
   }
 }
+
+// -----
+
+// The reads name canonical planes too.
+module {
+  llvm.mlir.global external @__talos_continuous_value() : !llvm.ptr
+  llvm.func @load_contribution(%handle: i64) -> i8 {
+    // expected-error @below {{names a contribution plane, which only the runtime accesses through a handle}}
+    %value = schedule.state.load_handle @__talos_continuous_value[%handle] {state_bits = 8 : i64} : i8
+    llvm.return %value : i8
+  }
+}
+
+// -----
+
+module {
+  llvm.mlir.global external @__talos_continuous_unknown() : !llvm.ptr
+  llvm.func @load_bytes_contribution(%handle: i64, %buffer: !llvm.ptr) {
+    // expected-error @below {{names a contribution plane, which only the runtime accesses through a handle}}
+    schedule.state.load_handle_bytes @__talos_continuous_unknown[%handle] into %buffer {state_bits = 8 : i64, width = 8 : i64}
+    llvm.return
+  }
+}
+
+// -----
+
+module {
+  llvm.func @scalar_missing_plane(%handle: i64) -> i8 {
+    // expected-error @below {{must reference the llvm.mlir.global of its plane}}
+    %value = schedule.state.load_handle @__talos_state_value[%handle] {state_bits = 8 : i64} : i8
+    llvm.return %value : i8
+  }
+}
+
+// -----
+
+module {
+  llvm.func @scalar_store_missing_plane(%handle: i64, %value: i8) {
+    // expected-error @below {{must reference the llvm.mlir.global of its plane}}
+    %changed = schedule.state.store_handle %value, @__talos_state_unknown[%handle] {state_bits = 8 : i64} : i8
+    llvm.return
+  }
+}
+
+// -----
+
+module {
+  llvm.mlir.global internal @frame_outside() : i8 {
+    %handle = llvm.mlir.constant(0 : i64) : i64
+    %value = llvm.mlir.constant(0 : i8) : i8
+    // expected-error @below {{must be in a function}}
+    schedule.state.frame_store %value to %handle {state_bits = 128 : i64} : i8
+    llvm.return %value : i8
+  }
+}
+
+// -----
+
+module {
+  llvm.func @frame_fact(%handle: i64, %value: i8) {
+    // expected-error @below {{carries the schedule fact 'schedule.eval.group_owner' as a property, not an attribute}}
+    schedule.state.frame_store %value to %handle {state_bits = 128 : i64, schedule.eval.group_owner = 3 : i32} : i8
+    llvm.return
+  }
+}
+
+// -----
+
+module {
+  llvm.mlir.global internal @automatic_outside() : i32 {
+    %null = llvm.mlir.zero : !llvm.ptr
+    %handle = llvm.mlir.constant(0 : i64) : i64
+    // expected-error @below {{must be in a function}}
+    %status = schedule.state.load_automatic %null, %handle into %null {width = 8 : i64}
+    llvm.return %status : i32
+  }
+}
+
+// -----
+
+module {
+  llvm.func @automatic_fact(%context: !llvm.ptr, %handle: i64, %buffer: !llvm.ptr) -> i32 {
+    // expected-error @below {{carries the schedule fact 'schedule.eval.group_owner' as a property, not an attribute}}
+    %status = schedule.state.load_automatic %context, %handle into %buffer {width = 8 : i64, schedule.eval.group_owner = 3 : i32}
+    llvm.return %status : i32
+  }
+}

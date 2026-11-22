@@ -1,6 +1,6 @@
 // RUN: talos-opt %s --convert-talos-sim-processes-to-llvm-coroutines --mlir-print-ir-after=prepare-native-fragments -o %t.mlir 2> %t.fragments
 // RUN: FileCheck %s --check-prefix=TYPED < %t.fragments
-// RUN: FileCheck %s --check-prefix=CALL < %t.mlir
+// RUN: FileCheck %s --check-prefix=CALL --implicit-check-not=schedule.state.load_handle --implicit-check-not=schedule.state.store_handle < %t.mlir
 
 // A reference argument holds a stable handle, so native lowering accesses its
 // state through the runtime: as typed handle-addressed accesses until AOT
@@ -60,8 +60,6 @@ module attributes {
   }
 }
 
-// CALL-NOT: schedule.state.load_handle
-// CALL-NOT: schedule.state.store_handle
 // CALL-LABEL: llvm.func @scalar(
 // CALL: llvm.intr.lifetime.start %[[OUT:.*]] : !llvm.ptr
 // CALL: llvm.call @talos_rt_v1_native_state_load_plane({{.*}}, %[[OUT]])

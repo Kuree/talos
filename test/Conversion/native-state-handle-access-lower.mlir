@@ -163,6 +163,59 @@ module {
     llvm.return
   }
 
+  // A four-state destination written without X/Z bits passes its unknown
+  // plane and an unknown word of 0; a two-state continuous contribution sets
+  // only the continuous flag.
+  // CHECK-LABEL: llvm.func @frame_flags(
+  // CHECK-SAME: %[[HANDLE:.*]]: i64, %[[VALUE:.*]]: i7)
+  // CHECK-NEXT: %[[VALUE_PLANE:.*]] = schedule.state.address @__talos_state_value
+  // CHECK-NEXT: %[[UNKNOWN_PLANE:.*]] = schedule.state.address @__talos_state_unknown
+  // CHECK-NEXT: %[[KNOWN:.*]] = llvm.mlir.constant(0 : i64) : i64
+  // CHECK-NEXT: %[[CURRENT:.*]] = llvm.mlir.addressof @__talos_current_context
+  // CHECK-NEXT: %[[CONTEXT:.*]] = llvm.load %[[CURRENT]]
+  // CHECK-NEXT: %[[STATE:.*]] = llvm.mlir.constant(128 : i64) : i64
+  // CHECK-NEXT: %[[WIDTH:.*]] = llvm.mlir.constant(7 : i32) : i32
+  // CHECK-NEXT: %[[FOUR_STATE:.*]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK-NEXT: %[[VALUE_WORD:.*]] = arith.extui %[[VALUE]] : i7 to i64
+  // CHECK-NEXT: llvm.call @talos_rt_v1_native_frame_store(%[[CONTEXT]], %[[VALUE_PLANE]], %[[UNKNOWN_PLANE]], %[[STATE]], %[[HANDLE]], %[[WIDTH]], %[[FOUR_STATE]], %[[VALUE_WORD]], %[[KNOWN]])
+  // CHECK-NEXT: %[[VALUE_PLANE:.*]] = schedule.state.address @__talos_state_value
+  // CHECK-NEXT: %[[NO_PLANE:.*]] = llvm.mlir.zero : !llvm.ptr
+  // CHECK-NEXT: %[[NO_UNKNOWN:.*]] = llvm.mlir.constant(0 : i64) : i64
+  // CHECK: %[[CONTINUOUS:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-NEXT: %[[VALUE_WORD:.*]] = arith.extui %[[VALUE]] : i7 to i64
+  // CHECK-NEXT: llvm.call @talos_rt_v1_native_frame_store(%{{.*}}, %[[VALUE_PLANE]], %[[NO_PLANE]], %{{.*}}, %[[HANDLE]], %{{.*}}, %[[CONTINUOUS]], %[[VALUE_WORD]], %[[NO_UNKNOWN]])
+  // CHECK-NEXT: llvm.return
+  llvm.func @frame_flags(%handle: i64, %value: i7) {
+    schedule.state.frame_store %value to %handle four_state {state_bits = 128 : i64} : i7
+    schedule.state.frame_store %value to %handle continuous {state_bits = 128 : i64} : i7
+    llvm.return
+  }
+
+  // An access in a later block keeps its temporary in the entry block, a
+  // static alloca, live only around the call.
+  // CHECK-LABEL: llvm.func @nested(
+  // CHECK-SAME: %[[HANDLE:.*]]: i64, %{{.*}}: i1)
+  // CHECK-NEXT: %[[COUNT:.*]] = llvm.mlir.constant(1 : i64) : i64
+  // CHECK-NEXT: %[[OUT:.*]] = llvm.alloca %[[COUNT]] x i7 {alignment = 1 : i64}
+  // CHECK-NEXT: llvm.cond_br
+  // CHECK-NEXT: ^{{.*}}:
+  // CHECK-NEXT: llvm.intr.lifetime.start %[[OUT]]
+  // CHECK: llvm.call @talos_rt_v1_native_state_load_plane(%{{.*}}, %{{.*}}, %{{.*}}, %[[HANDLE]], %{{.*}}, %{{.*}}, %{{.*}}, %[[OUT]])
+  // CHECK-NEXT: %[[LOADED:.*]] = llvm.load %[[OUT]] {alignment = 1 : i64} : !llvm.ptr -> i7
+  // CHECK-NEXT: llvm.intr.lifetime.end %[[OUT]]
+  // CHECK-NEXT: llvm.br ^{{.*}}(%[[LOADED]] : i7)
+  llvm.func @nested(%handle: i64, %read: i1) -> i7 {
+    llvm.cond_br %read, ^read, ^skip
+  ^read:
+    %value = schedule.state.load_handle @__talos_state_value[%handle] {state_bits = 128 : i64} : i7
+    llvm.br ^done(%value : i7)
+  ^skip:
+    %zero = llvm.mlir.constant(0 : i7) : i7
+    llvm.br ^done(%zero : i7)
+  ^done(%result: i7):
+    llvm.return %result : i7
+  }
+
   // An automatic variable's read names its context and passes its buffer for
   // the plane of no design state; a bit outside the variable reads 0. Its
   // status is the call's.
@@ -176,6 +229,19 @@ module {
   // CHECK-NEXT: llvm.return %[[STATUS]]
   llvm.func @automatic(%context: !llvm.ptr, %handle: i64, %buffer: !llvm.ptr) -> i32 {
     %status = schedule.state.load_automatic %context, %handle into %buffer unknown {width = 65 : i64}
+    llvm.return %status : i32
+  }
+
+  // CHECK-LABEL: llvm.func @automatic_value(
+  // CHECK-SAME: %[[CONTEXT:.*]]: !llvm.ptr, %[[HANDLE:.*]]: i64, %[[BUFFER:.*]]: !llvm.ptr)
+  // CHECK-NEXT: %[[STATE:.*]] = llvm.mlir.constant(0 : i64) : i64
+  // CHECK-NEXT: %[[WIDTH:.*]] = llvm.mlir.constant(8 : i64) : i64
+  // CHECK-NEXT: %[[PLANE:.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-NEXT: %[[FALLBACK:.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-NEXT: %[[STATUS:.*]] = llvm.call @talos_rt_v1_native_state_load_plane(%[[CONTEXT]], %[[BUFFER]], %[[STATE]], %[[HANDLE]], %[[WIDTH]], %[[PLANE]], %[[FALLBACK]], %[[BUFFER]])
+  // CHECK-NEXT: llvm.return %[[STATUS]]
+  llvm.func @automatic_value(%context: !llvm.ptr, %handle: i64, %buffer: !llvm.ptr) -> i32 {
+    %status = schedule.state.load_automatic %context, %handle into %buffer {width = 8 : i64}
     llvm.return %status : i32
   }
 }

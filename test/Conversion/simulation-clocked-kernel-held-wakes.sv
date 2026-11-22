@@ -46,7 +46,7 @@ endmodule
 // CHECK-NOT: transition
 // CHECK: %[[OLD:.+]] = llvm.load %[[HELD]] {alignment = 8 : i64} : !llvm.ptr -> i64
 // CHECK-NEXT: %[[NEW:.+]] = llvm.or %[[OLD]], %{{.+}}
-// CHECK-NEXT: llvm.store %[[NEW]], %[[HELD]]
+// CHECK-NEXT: llvm.store %[[NEW]], %[[HELD]] {
 // CHECK-NOT: @__talos_aot_model_ingress_v1
 // CHECK-NOT: transition
 // CHECK: {{^  }}llvm.func
@@ -54,8 +54,8 @@ endmodule
 // runtime (and before each return).
 // CHECK-LABEL: llvm.func @__talos_aot_schedule_run_v1(
 // CHECK: %[[RHELD:.+]] = llvm.mlir.addressof @__talos_eval_nba_held_wakes_v1
-// CHECK: %[[RPEND:.+]] = llvm.load %[[RHELD]]
-// CHECK-NEXT: %[[RANY:.+]] = llvm.icmp "ne" %[[RPEND]]
+// CHECK: %[[RPEND:.+]] = llvm.load %[[RHELD]] {
+// CHECK-NEXT: %[[RANY:.+]] = llvm.icmp "ne" %[[RPEND]],
 // CHECK-NEXT: llvm.cond_br %[[RANY]], ^[[RMERGE:bb[0-9]+]], ^[[HANDOFF:bb[0-9]+]](
 // CHECK-NEXT: ^[[HANDOFF]](
 // CHECK-NEXT: llvm.call @talos_rt_v1_scheduler_handoff_periodic_aot
@@ -67,11 +67,11 @@ endmodule
 // CHECK-NEXT: %[[ZERO:.+]] = llvm.mlir.constant(0 : i64)
 // CHECK-NEXT: %[[HELD:.+]] = llvm.mlir.addressof @__talos_eval_nba_held_wakes_v1
 // CHECK-NEXT: %[[INGRESS:.+]] = llvm.mlir.addressof @__talos_aot_model_ingress_v1
-// CHECK-NEXT: %[[WAKES:.+]] = llvm.load %[[HELD]]
-// CHECK-NEXT: %[[READY:.+]] = llvm.load %[[INGRESS]]
-// CHECK-NEXT: %[[MERGED:.+]] = llvm.or %[[READY]], %[[WAKES]]
-// CHECK-NEXT: llvm.store %[[MERGED]], %[[INGRESS]]
-// CHECK-NEXT: llvm.store %[[ZERO]], %[[HELD]]
+// CHECK-NEXT: %[[WAKES:.+]] = llvm.load %[[HELD]] {
+// CHECK-NEXT: %[[READY:.+]] = llvm.load %[[INGRESS]] {
+// CHECK-NEXT: %[[MERGED:.+]] = llvm.or %[[READY]], %[[WAKES]] :
+// CHECK-NEXT: llvm.store %[[MERGED]], %[[INGRESS]] {
+// CHECK-NEXT: llvm.store %[[ZERO]], %[[HELD]] {
 // CHECK-NEXT: llvm.return
 // The coordinator merges the held set into the ingress set in five places,
 // each gated by a test of the held set. At quiescence with nothing staged the
@@ -85,8 +85,8 @@ endmodule
 // CHECK-NEXT: llvm.br ^[[DISPATCH:bb[0-9]+]]{{$}}
 // CHECK: llvm.call @__talos_eval_four_state_nba_handoff_v1(
 // CHECK: ^[[POSTNBA:bb[0-9]+]]:  //
-// CHECK-NEXT: %[[POST:.+]] = llvm.load %[[INGRESS]]
-// CHECK-NEXT: %[[EMPTY:.+]] = llvm.icmp "eq" %[[POST]]
+// CHECK-NEXT: %[[POST:.+]] = llvm.load %[[INGRESS]] {
+// CHECK-NEXT: %[[EMPTY:.+]] = llvm.icmp "eq" %[[POST]],
 // CHECK-NEXT: llvm.cond_br %[[EMPTY]], ^{{bb[0-9]+}}(%{{.+}} : i32), ^[[DISPATCH]]{{$}}
 // CHECK-NEXT: ^{{bb[0-9]+}}:  // pred:
 // CHECK-NEXT: llvm.call @__talos_eval_nba_held_merge_v1()

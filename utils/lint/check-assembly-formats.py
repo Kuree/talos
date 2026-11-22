@@ -76,6 +76,7 @@ exceptions = {
     ("Dialect/Schedule/native-invalid.mlir", "schedule.known.roots"),  # Empty type list.
     ("Dialect/Schedule/native-handle-ops-invalid.mlir", "schedule.handle.offset"),  # Inferred operand types.
     ("Dialect/Schedule/native-handle-ops-invalid.mlir", "schedule.handle.guard"),  # Inferred operand types.
+    ("Dialect/Schedule/native-handle-transition-invalid.mlir", "schedule.transition.handle"),  # Inferred plane types.
     ("IR/slang-invalid.mlir", "slang.type.string_type"),  # Missing symbol name.
     ("IR/simulation-invalid.mlir", "simulation.design"),  # Zero-block region.
     ("IR/simulation-invalid.mlir", "simulation.suspend.observe"),  # Empty type list.
