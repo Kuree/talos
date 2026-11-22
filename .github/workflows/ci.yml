@@ -228,6 +228,7 @@ jobs:
             ccache --set-config=compiler_check=content
           fi
           ccache --zero-stats
+          echo "TALOS_CCACHE_JOB_START=$(date +%s)" >> "$GITHUB_ENV"
 
       # Exercise unmodified UVM as well as the self-contained regressions.
       - name: Configure
@@ -373,6 +374,19 @@ jobs:
             du -sh build/lto.cache
           fi
 
+      # Save only the entries this job used. A hit refreshes an entry's
+      # timestamp, so older entries are objects of earlier commits; kept, they
+      # grow every leg toward --max-size, six such caches exceed the
+      # repository's 10 GB cache quota, and GitHub then evicts the cache saved
+      # earliest in the run. Trim only after every step succeeded: a failure
+      # skips later compiling steps, whose entries would then be dropped.
+      - name: Trim compiler cache
+        if: success() && github.ref == 'refs/heads/main'
+        run: |
+          du -sh "$CCACHE_DIR"
+          ccache --evict-older-than "$(( $(date +%s) - TALOS_CCACHE_JOB_START + 2 ))s"
+          du -sh "$CCACHE_DIR"
+
       # PRs restore main's cache; branch-only saves would just compete for space.
       # A failed build still saves: ccache never stores a failed compile.
       - name: Save compiler cache
@@ -495,6 +509,7 @@ jobs:
           docker run --rm -v "$CCACHE_DIR:/ccache" \
             -e CCACHE_DIR=/ccache "$WASM_IMAGE" \
             sh -c 'ccache --max-size=2G && ccache --set-config=sloppiness=pch_defines,time_macros && ccache --zero-stats'
+          echo "TALOS_CCACHE_JOB_START=$(date +%s)" >> "$GITHUB_ENV"
 
       # Feed the SDK bundled in the image to CMake through a local file URL.
       - name: Configure talos for wasm32
@@ -544,6 +559,16 @@ jobs:
         run: |
           docker run --rm -v "$CCACHE_DIR:/ccache" \
             -e CCACHE_DIR=/ccache "$WASM_IMAGE" ccache --show-stats --verbose
+
+      # As in build-and-test: save only the entries this job used.
+      - name: Trim compiler cache
+        if: success() && github.ref == 'refs/heads/main'
+        run: |
+          du -sh "$CCACHE_DIR"
+          docker run --rm -v "$CCACHE_DIR:/ccache" \
+            -e CCACHE_DIR=/ccache "$WASM_IMAGE" \
+            ccache --evict-older-than "$(( $(date +%s) - TALOS_CCACHE_JOB_START + 2 ))s"
+          du -sh "$CCACHE_DIR"
 
       - name: Save compiler cache
         if: always() && github.ref == 'refs/heads/main' && (steps.build.outcome == 'success' || steps.build.outcome == 'failure')
