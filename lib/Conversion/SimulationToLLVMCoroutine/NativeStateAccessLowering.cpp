@@ -488,8 +488,13 @@ public:
               schedule::NativeReadyWordStoreOp>(operation))
         words.push_back(operation);
       // Before this point a function accesses a ready set only through ready
-      // actions and typed words, which the passes before it inspect (the
-      // ready-region boundaries and group promotion among them).
+      // actions and typed words, which the passes before it inspect (ready
+      // region boundaries, group dataflow and hierarchy, and the elision of
+      // ranked publications). This rejects an address taken by the set's
+      // name. Generated code reaches a set no other way; a pointer that does
+      // (an argument, an llvm.mlir.alias, a loaded pointer) is not detected,
+      // and only ready-region lowering, which keeps an untyped access it
+      // cannot prove disjoint as a boundary, handles it (native-ready-region).
       if (auto address = dyn_cast<LLVM::AddressOfOp>(operation);
           address && schedule::getReadySetOfGlobal(address.getGlobalName())) {
         address.emitError("takes a ready set's address outside typed ready "

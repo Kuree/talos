@@ -30,8 +30,11 @@ bool reproducibleSetup(Operation *operation) {
              schedule::NativeNBAAccumulatorAddressOp>(operation);
 }
 
-/// An entry is an executable readiness load, not an inferred graph rank.
-/// Missing, duplicate, or reordered identities cannot certify a split.
+/// An entry is an executable readiness load, not an inferred graph rank: a
+/// typed load of its member's ingress word, as group materialization emits
+/// it. An LLVM load that carries the tag (lower-native-ready-words' output)
+/// is not one. Missing, duplicate, or reordered identities cannot certify a
+/// split.
 SmallVector<Operation *> entries(LLVM::LLVMFuncOp function,
                                  DenseI32ArrayAttr members) {
   DenseMap<int32_t, Operation *> indexed;
@@ -40,7 +43,7 @@ SmallVector<Operation *> entries(LLVM::LLVMFuncOp function,
     if (auto owner = getNativeActivationEntry(operation))
       valid &= !owner.getValue().isNegative() &&
                owner.getValue().getActiveBits() <= 31 &&
-               isa<LLVM::LoadOp, schedule::NativeReadyWordLoadOp>(operation) &&
+               isa<schedule::NativeReadyWordLoadOp>(operation) &&
                indexed.try_emplace(owner.getInt(), operation).second;
   });
   SmallVector<Operation *> result;

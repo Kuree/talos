@@ -859,12 +859,14 @@ unsigned elideUnconditionalMemberPublications(LLVM::LLVMFuncOp function) {
   // must survive for another sweep (IEEE 1800-2023 4.3-4.5, 4.9.1). Only
   // elide work whose destination will still execute after the publication.
   // Use executable entries rather than owner IDs or inferred graph ranks.
+  // A member's entry reads its ingress leaf: a ready read before action
+  // lowering, a typed word load after it.
   DenseMap<uint64_t, Operation *> entries;
   function.walk([&](Operation *operation) {
     auto owner = getNativeActivationEntry(operation);
     if (!owner ||
-        !isa<schedule::NativeReadyReadOp, schedule::NativeReadyWordLoadOp,
-             LLVM::LoadOp>(operation))
+        !isa<schedule::NativeReadyReadOp, schedule::NativeReadyWordLoadOp>(
+            operation))
       return;
     auto [found, inserted] = entries.try_emplace(owner.getUInt(), operation);
     if (!inserted)
