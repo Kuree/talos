@@ -21,6 +21,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 
 using namespace mlir;
@@ -91,8 +92,14 @@ void notifySignal(ConversionPatternRewriter &builder, Location location,
   // order before the runtime transition.
   if (storeOnChange)
     storeOnChange();
-  assert(oldValue.getType().getIntOrFloatBitWidth() == width &&
-         "a transition's planes are as wide as its store");
+  // The op takes its width from the planes, whose types its verifier keeps
+  // equal; a plane of another width would publish other bits than the store
+  // wrote. Fail closed in every build.
+  if (oldValue.getType().getIntOrFloatBitWidth() != width)
+    llvm::report_fatal_error(
+        "native transition planes are " +
+        llvm::Twine(oldValue.getType().getIntOrFloatBitWidth()) +
+        " bits wide, but their store writes " + llvm::Twine(width) + " bits");
   schedule::NativeHandleTransitionOp::create(
       builder, location, context, handle, oldValue, oldUnknown, newValue,
       newUnknown, sourceOwner, nbaEquivalent);
