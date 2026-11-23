@@ -9,6 +9,7 @@
 #include "mlir/Support/LogicalResult.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/StringSet.h"
 
 #include <string>
 #include <vector>
@@ -20,6 +21,11 @@ struct ClassifiedInputs {
   std::vector<NativeLinkInput> nativeLinkInputs;
   std::vector<SharedLibraryInput> sharedLibraries;
 };
+
+/// Can the final link run foreign code that may access VPI? A DPI import
+/// must resolve to a known leaf even when no startup module was supplied.
+bool mayHaveVPIReader(const ClassifiedInputs &inputs,
+                      const llvm::StringSet<> &dpiImports);
 
 /// Classify direct command-line inputs by their contents.  Command files are
 /// deliberately absent: -f remains entirely under the SystemVerilog

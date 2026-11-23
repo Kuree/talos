@@ -11,6 +11,7 @@
 #include "talos/Frontend/SourceTokens.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/StringSet.h"
 
 #include <cstdint>
 #include <optional>
@@ -97,11 +98,13 @@ listSystemVerilogTokens(llvm::ArrayRef<std::string> inputFilenames,
 /// Import one SystemVerilog compilation from the given primary source files.
 /// Frontend search paths, macros, libraries, and language settings are supplied
 /// through `options`. The returned module has passed the MLIR verifier when
-/// `verifyIR` is true.
+/// `verifyIR` is true. When supplied, dpiImports receives the C names of
+/// instantiated imports from the validated DPI declarations.
 mlir::FailureOr<mlir::OwningOpRef<mlir::ModuleOp>>
 importSystemVerilog(llvm::ArrayRef<std::string> inputFilenames,
                     mlir::MLIRContext &context, const FrontendOptions &options,
-                    bool verifyIR = true);
+                    bool verifyIR = true,
+                    llvm::StringSet<> *dpiImports = nullptr);
 
 /// Return the version string from the upstream slang library in this build.
 std::string getSlangVersion();

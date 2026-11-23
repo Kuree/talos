@@ -1,0 +1,8 @@
+// REQUIRES: native-elf
+// An object with an indirect call can reach a reader without a VPI symbol.
+// The final link keeps the read interface when it cannot prove the callee.
+// RUN: %split-file %S/vpi-read-link-demand.sv %t
+// RUN: %target_clang -O2 -fPIC -c %t/indirect.c -o %t/indirect.o
+// RUN: talos -O3 --vpi=read --top=top %t/design.sv %t/indirect.o -o %t/opaque
+// RUN: llvm-readelf -sW %t/opaque | FileCheck %S/vpi-read-link-demand.sv --check-prefix=OPEN
+// RUN: %t/opaque | FileCheck %S/vpi-read-link-demand.sv --check-prefix=LEAF

@@ -61,16 +61,16 @@ NativeDialect::verifyOperationAttribute(Operation *operation,
              DisableTwoStateSpecialization, TwoState, SampledPlacement,
              DebugTiming, FallbackReport, ProcessesMaterialized,
              ClosedExecutable, StartupStateSync, StartupResolveInitialDrivers,
-             StartupVpi, RuntimeEntry, Partition, PartitionManifest,
-             PartitionManifests, ElementDefaults, PhysicalPartitionManifest,
-             Frame, FrameInputs, FrameCheckpoint, EntryKind, ScratchSize,
-             ObserverWidth, ObserverFourState, SpawnCaptureOffsets,
-             SpawnCaptureSize, VirtualOwner, InitializationScope,
-             MethodArgumentSizes, MethodArgumentRoots, MethodVtablePath,
-             SynchronousTaskBody, SynchronousTaskCall, TableWait, Unmanaged,
-             SharedCallback, RuntimePublicationCertified, RankedSignalWriter,
-             OwnerReleaseInstrumented, DriverId, DriverLow, NetId,
-             ExactDriverRange, WholeDriver, MirrorContribution,
+             StartupVpi, ReadableEvalState, RuntimeEntry, Partition,
+             PartitionManifest, PartitionManifests, ElementDefaults,
+             PhysicalPartitionManifest, Frame, FrameInputs, FrameCheckpoint,
+             EntryKind, ScratchSize, ObserverWidth, ObserverFourState,
+             SpawnCaptureOffsets, SpawnCaptureSize, VirtualOwner,
+             InitializationScope, MethodArgumentSizes, MethodArgumentRoots,
+             MethodVtablePath, SynchronousTaskBody, SynchronousTaskCall,
+             TableWait, Unmanaged, SharedCallback, RuntimePublicationCertified,
+             RankedSignalWriter, OwnerReleaseInstrumented, DriverId, DriverLow,
+             NetId, ExactDriverRange, WholeDriver, MirrorContribution,
              GuardedBulkDrive, CleanBulkDrive, BulkCopySourceAssumeClean,
              GuardedRefStore, PrivateClassField, PrivateQueue,
              ManagedRootActivationPrologue, TransferredReferences,
@@ -96,6 +96,7 @@ NativeDialect::verifyOperationAttribute(Operation *operation,
                       name == StartupStateSync::getNameStr() ||
                       name == StartupResolveInitialDrivers::getNameStr() ||
                       name == StartupVpi::getNameStr() ||
+                      name == ReadableEvalState::getNameStr() ||
                       name == PartitionManifests::getNameStr() ||
                       name == ElementDefaults::getNameStr() ||
                       name == PhysicalPartitionManifest::getNameStr() ||

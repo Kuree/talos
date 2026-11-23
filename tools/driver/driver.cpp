@@ -1469,12 +1469,29 @@ static int executeCompilation(const InputArgList &args,
   });
 
   frontendOptions.enableUPF = args.hasArg(OPT_upf);
-  auto importedModule =
-      talos::frontend::importSystemVerilog(inputs, context, frontendOptions,
-                                           args.hasArg(OPT_mlir_verify_each));
+  const bool specializeRead = vpiMode == "read" && !action &&
+                              targetName == "native" && optLevel &&
+                              executionTier == "native" && !irDump.enabled() &&
+                              classifiedInputs.sharedLibraries.empty();
+  llvm::StringSet<> dpiImports;
+  auto importedModule = talos::frontend::importSystemVerilog(
+      inputs, context, frontendOptions, args.hasArg(OPT_mlir_verify_each),
+      specializeRead ? &dpiImports : nullptr);
   if (failed(importedModule))
     return 1;
   OwningOpRef<ModuleOp> module = std::move(*importedModule);
+  // Reader reachability is a final-link fact. Preserve the requested contract
+  // for reusable outputs and hosts that can attach a client later. VCD/EVCD
+  // are independent HDL consumers (IEEE 1800-2023 21.7).
+  if (specializeRead &&
+      !talos::driver::mayHaveVPIReader(classifiedInputs, dpiImports)) {
+    if (args.hasArg(OPT_mlir_timing))
+      errs() << "talos VPI: no reachable reader in native link\n";
+    vpiMode = "off";
+  }
+  if (!action && targetName == "native" && executionTier == "native" &&
+      vpiMode == "read")
+    talos::native::mark<talos::native::ReadableEvalState>(*module);
   if (args.hasArg(OPT_saif_input_EQ) && !args.hasArg(OPT_saif_EQ)) {
     emitDriverError("--saif-input requires --saif=<output.saif>");
     return 1;

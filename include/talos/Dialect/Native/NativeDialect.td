@@ -48,6 +48,8 @@ def NativeDialect : Dialect {
     "::mlir::UnitAttr":$startup_state_sync,
     "::mlir::UnitAttr":$startup_resolve_initial_drivers,
     "::mlir::UnitAttr":$startup_vpi,
+    // Tier 1 must materialize readable source state at callback boundaries.
+    "::mlir::UnitAttr":$readable_eval_state,
 
     // On an external llvm.func: the native runtime entry it declares, whose
     // symbol and prototype it must have.

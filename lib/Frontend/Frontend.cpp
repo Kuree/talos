@@ -1139,7 +1139,7 @@ public:
 
   [[nodiscard]] bool succeeded() const { return !sawInvalidNode; }
 
-  LogicalResult checkDPIDeclarations() const;
+  LogicalResult checkDPIDeclarations(llvm::StringSet<> *dpiImports) const;
 
   /// IEEE 1800-2023 Annex E: slang keeps the optional directives only as
   /// trivia of the token that follows them. Replay them over every syntax
@@ -8839,7 +8839,8 @@ static bool sameDPIShape(const slang::ast::Type &lhs,
   return a.isMatching(b);
 }
 
-LogicalResult SlangASTImporter::checkDPIDeclarations() const {
+LogicalResult
+SlangASTImporter::checkDPIDeclarations(llvm::StringSet<> *dpiImports) const {
   if (!hasDPIImports && compilation.getDPIExports().empty())
     return success();
   using Source = slang::ast::SubroutineSymbol;
@@ -8856,8 +8857,11 @@ LogicalResult SlangASTImporter::checkDPIDeclarations() const {
     StringAttr name = sub.getDpiCIdentifierAttr();
     if (!name)
       name = sub.getDpiExportCIdentifierAttr();
-    if (name && !symbol->getParentScope()->isUninstantiated())
+    if (name && !symbol->getParentScope()->isUninstantiated()) {
       declarations.push_back({sub, &symbol->as<Source>(), name});
+      if (dpiImports && sub.getIsDpiImportAttr())
+        dpiImports->insert(name.getValue());
+    }
   }
   // Retain elaboration order in diagnostics across hash-table iteration and
   // across the multiple declarations from parameterized instances.
@@ -8932,7 +8936,8 @@ preprocessSystemVerilog(ArrayRef<std::string> inputFilenames,
 
 FailureOr<OwningOpRef<ModuleOp>>
 importSystemVerilog(ArrayRef<std::string> inputFilenames, MLIRContext &context,
-                    const FrontendOptions &options, bool verifyIR) {
+                    const FrontendOptions &options, bool verifyIR,
+                    llvm::StringSet<> *dpiImports) {
   slang::driver::Driver driver;
   driver.addStandardArgs();
   driver.diagEngine.setMessage(
@@ -9126,7 +9131,8 @@ endpackage
     importer.markDPIExport(*entry.subroutine, entry.cIdentifier,
                            entry.syntax->specString.valueText() == "DPI");
   importer.markSharedDPIExports(*compilation);
-  if (!importer.succeeded() || failed(importer.checkDPIDeclarations()))
+  if (!importer.succeeded() ||
+      failed(importer.checkDPIDeclarations(dpiImports)))
     return failure();
 
   // Anonymous and typedef enums need not have an imported declaration node.

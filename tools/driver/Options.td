@@ -114,7 +114,7 @@ def thinlto_cache_dir_EQ : Joined<["--"], "thinlto-cache-dir=">,
   HelpText<"Store reusable native ThinLTO objects in <dir>">;
 def vpi_EQ : Joined<["--"], "vpi=">, Group<Compilation_Group>,
   MetaVarName<"<off|read|full>">, Values<"off,read,full">,
-  HelpText<"Select VPI observability and mutation capability">;
+  HelpText<"Select VPI capability (optimized native executables elide provably unused read access)">;
 def execution_tier_EQ : Joined<["--"], "execution-tier=">,
   Group<Compilation_Group>, MetaVarName<"<native|bytecode>">,
   Values<"native,bytecode">,

@@ -35,6 +35,7 @@ using StartupStateSync = NativeDialect::StartupStateSyncAttrHelper;
 using StartupResolveInitialDrivers =
     NativeDialect::StartupResolveInitialDriversAttrHelper;
 using StartupVpi = NativeDialect::StartupVpiAttrHelper;
+using ReadableEvalState = NativeDialect::ReadableEvalStateAttrHelper;
 using Partition = NativeDialect::PartitionAttrHelper;
 using PartitionManifest = NativeDialect::PartitionManifestAttrHelper;
 using PartitionManifests = NativeDialect::PartitionManifestsAttrHelper;

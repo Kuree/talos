@@ -20,6 +20,19 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 
+#if TALOS_HAS_DPI_LEAF_DECODER
+#include "llvm/MC/MCAsmInfo.h"
+#include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCDisassembler/MCDisassembler.h"
+#include "llvm/MC/MCInst.h"
+#include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/MC/MCTargetOptions.h"
+#include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/TargetSelect.h"
+#endif
+
 #include <cctype>
 #include <optional>
 #include <string>
@@ -368,6 +381,188 @@ LogicalResult classifySharedLibrary(StringRef suppliedPath, file_magic magic,
 }
 
 } // namespace
+
+#if TALOS_HAS_DPI_LEAF_DECODER
+// The absence of a VPI relocation alone is insufficient: a DPI routine can
+// call a function pointer, an export, or the dynamic loader. Recognize
+// register-only leaf implementations. More involved foreign code keeps VPI.
+static bool isRegisterLeaf(ArrayRef<uint8_t> bytes,
+                           const MCDisassembler &decoder,
+                           const MCInstrInfo &info,
+                           const MCRegisterInfo &regs) {
+  while (!bytes.empty()) {
+    MCInst inst;
+    uint64_t size = 0;
+    if (decoder.getInstruction(inst, size, bytes, 0, nulls()) !=
+            MCDisassembler::Success ||
+        !size || size > bytes.size())
+      return false;
+    bytes = bytes.drop_front(size);
+    const MCInstrDesc &desc = info.get(inst.getOpcode());
+    if (desc.isReturn()) {
+      // Only an ordinary C ABI return can end a leaf. An exception return
+      // or an indirect transfer through an argument may reach other code.
+      StringRef opcode = info.getName(inst.getOpcode());
+      if (opcode != "RET" && opcode != "RET64")
+        return false;
+      for (const MCOperand &operand : inst)
+        if (operand.isReg() && operand.getReg() != regs.getRARegister())
+          return false;
+      return bytes.empty();
+    }
+    // A sequence that changes SP can feed a computed address to x86 RET.
+    auto changesSP = [&](MCRegister reg) {
+      if (!reg)
+        return false;
+      StringRef name = regs.getName(reg);
+      return name == "RSP" || name == "ESP" || name == "SP" || name == "SPL" ||
+             name == "WSP";
+    };
+    for (const MCOperand &op :
+         ArrayRef(inst.begin(), inst.end()).take_front(desc.getNumDefs()))
+      if (op.isReg() && changesSP(op.getReg()))
+        return false;
+    if (llvm::any_of(desc.implicit_defs(), changesSP) ||
+        desc.mayAffectControlFlow(inst, regs) || desc.mayLoad() ||
+        desc.mayStore() || desc.hasUnmodeledSideEffects() || desc.isTrap() ||
+        (regs.getRARegister() &&
+         desc.hasDefOfPhysReg(inst, regs.getRARegister(), regs)))
+      return false;
+  }
+  return false;
+}
+
+static Expected<bool>
+collectLeafImports(StringRef path, const StringSet<> &imports,
+                   StringSet<> &defined, const MCDisassembler &decoder,
+                   const MCInstrInfo &info, const MCRegisterInfo &regs,
+                   const Triple &triple) {
+  auto buffer = MemoryBuffer::getFile(path);
+  if (!buffer)
+    return false;
+  if (identify_magic((*buffer)->getBuffer()) != file_magic::elf_relocatable)
+    return false;
+  auto elf = object::ELFFile<object::ELF64LE>::create((*buffer)->getBuffer());
+  if (!elf)
+    return elf.takeError();
+  if (elf->getHeader().e_type != ELF::ET_REL ||
+      elf->getHeader().e_machine !=
+          ELF::convertArchNameToEMachine(triple.getArchName()))
+    return false;
+  auto sections = elf->sections();
+  if (!sections)
+    return sections.takeError();
+  for (const auto &section : *sections) {
+    if (section.sh_flags & ELF::SHF_ALLOC) {
+      // Exclude constructors, destructors, loader hooks and other sections
+      // with an execution contract beyond calling the named DPI entries.
+      auto name = elf->getSectionName(section);
+      if (!name)
+        return name.takeError();
+      if (section.sh_type != ELF::SHT_PROGBITS &&
+          section.sh_type != ELF::SHT_NOBITS &&
+          section.sh_type != ELF::SHT_X86_64_UNWIND)
+        return false;
+      if (!name->starts_with(".text") && !name->starts_with(".rodata") &&
+          !name->starts_with(".data") && !name->starts_with(".bss") &&
+          *name != ".eh_frame")
+        return false;
+    }
+    if ((section.sh_type == ELF::SHT_REL || section.sh_type == ELF::SHT_RELA) &&
+        (section.sh_info >= sections->size() ||
+         ((*sections)[section.sh_info].sh_flags & ELF::SHF_EXECINSTR)))
+      return false;
+    if (section.sh_type != ELF::SHT_SYMTAB)
+      continue;
+    auto symbols = elf->symbols(&section);
+    if (!symbols)
+      return symbols.takeError();
+    auto strings = elf->getStringTableForSymtab(section);
+    if (!strings)
+      return strings.takeError();
+    if (symbols->empty())
+      return false;
+    for (const auto &symbol : symbols->drop_front()) {
+      if (symbol.getType() == ELF::STT_GNU_IFUNC)
+        return false;
+      if (!symbol.isExternal())
+        continue;
+      if (symbol.getBinding() != ELF::STB_GLOBAL ||
+          symbol.getType() != ELF::STT_FUNC ||
+          symbol.st_shndx >= sections->size())
+        return false;
+      auto name = symbol.getName(*strings);
+      if (!name)
+        return name.takeError();
+      if (!imports.contains(*name) || !defined.insert(*name).second)
+        return false;
+      const auto &code = (*sections)[symbol.st_shndx];
+      if (!(code.sh_flags & ELF::SHF_EXECINSTR))
+        return false;
+      auto contents = elf->getSectionContents(code);
+      if (!contents)
+        return contents.takeError();
+      if (symbol.st_value > contents->size() ||
+          symbol.st_size > contents->size() - symbol.st_value ||
+          !isRegisterLeaf(contents->slice(symbol.st_value, symbol.st_size),
+                          decoder, info, regs))
+        return false;
+    }
+  }
+  return true;
+}
+#endif
+
+bool mayHaveVPIReader(const ClassifiedInputs &inputs,
+                      const StringSet<> &dpiImports) {
+  if (!inputs.sharedLibraries.empty())
+    return true;
+  if (inputs.nativeLinkInputs.empty())
+    return !dpiImports.empty();
+#if TALOS_HAS_DPI_LEAF_DECODER
+  Triple triple(TALOS_NATIVE_TARGET_TRIPLE);
+  if (!triple.isOSBinFormatELF() ||
+      (triple.getArch() != Triple::aarch64 &&
+       triple.getArch() != Triple::x86_64) ||
+      dpiImports.empty() || InitializeNativeTarget() ||
+      InitializeNativeTargetDisassembler())
+    return true;
+  std::string diagnostic;
+  const Target *target = TargetRegistry::lookupTarget(triple, diagnostic);
+  if (!target)
+    return true;
+  std::unique_ptr<MCRegisterInfo> regs(target->createMCRegInfo(triple));
+  std::unique_ptr<MCSubtargetInfo> cpu(
+      target->createMCSubtargetInfo(triple, "", ""));
+  std::unique_ptr<MCInstrInfo> info(target->createMCInstrInfo());
+  if (!regs || !cpu || !info)
+    return true;
+  MCTargetOptions options;
+  std::unique_ptr<MCAsmInfo> assembly(
+      target->createMCAsmInfo(*regs, triple, options));
+  if (!assembly)
+    return true;
+  MCContext context(triple, assembly.get(), regs.get(), cpu.get());
+  std::unique_ptr<MCDisassembler> decoder(
+      target->createMCDisassembler(*cpu, context));
+  if (!decoder)
+    return true;
+  StringSet<> defined;
+  for (const auto &input : inputs.nativeLinkInputs) {
+    auto known = collectLeafImports(input.path, dpiImports, defined, *decoder,
+                                    *info, *regs, triple);
+    if (!known) {
+      consumeError(known.takeError());
+      return true;
+    }
+    if (!*known)
+      return true;
+  }
+  return defined.size() != dpiImports.size();
+#else
+  return true;
+#endif
+}
 
 // The registered native backend links one object format. Native inputs in
 // the other format are rejected like any other unsupported binary.
