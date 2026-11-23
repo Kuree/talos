@@ -1269,6 +1269,60 @@ Value buildGeneratedNBAChange(OpBuilder &builder, Location location,
   return arith::AndIOp::create(builder, location, changed, mask);
 }
 
+// Find the two-way selection that uses the destination itself on one
+// arm. The value is loaded on that arm and reaches this capture without a
+// suspension. The caller separately proves the target cannot be overwritten
+// before NBA and preserves an earlier pending update.
+static std::pair<Value, bool> selfCaptureCondition(sim::SimNBAEnqueueOp op) {
+  auto value = dyn_cast<BlockArgument>(op.getValue());
+  if (!value || value.getOwner() != op->getBlock())
+    return {};
+  auto *join = value.getOwner();
+  for (Operation &before : llvm::make_range(join->begin(), op->getIterator()))
+    if (!isMemoryEffectFree(&before))
+      return {};
+  auto predecessors = llvm::to_vector(join->getPredecessors());
+  if (predecessors.size() != 2 || predecessors[0] == predecessors[1])
+    return {};
+  Block *fork = predecessors[0]->getSinglePredecessor();
+  if (!fork || predecessors[1]->getSinglePredecessor() != fork)
+    return {};
+  auto test = dyn_cast<cf::CondBranchOp>(fork->getTerminator());
+  if (!test || test.getTrueDest() == test.getFalseDest())
+    return {};
+  auto sameReference = [](Value a, Value b) {
+    while (a != b) {
+      Operation *x = a.getDefiningOp(), *y = b.getDefiningOp();
+      if (!x || !y ||
+          !isa<sim::SimRefSubelementOp, sim::SimRefExtractOp,
+               sim::SimContextStorageOp>(x) ||
+          x->getName() != y->getName() || x->getAttrs() != y->getAttrs() ||
+          x->getResultTypes() != y->getResultTypes() ||
+          x->getNumOperands() != 1 || y->getNumOperands() != 1)
+        return false;
+      a = x->getOperand(0);
+      b = y->getOperand(0);
+    }
+    return true;
+  };
+  for (auto *edge : predecessors) {
+    auto branch = dyn_cast<cf::BranchOp>(edge->getTerminator());
+    if (!branch || branch.getDest() != join)
+      continue;
+    auto load = branch.getDestOperands()[value.getArgNumber()]
+                    .getDefiningOp<sim::SimRefLoadOp>();
+    if (!load || load->getBlock() != edge ||
+        !sameReference(load.getReference(), op.getDestination()))
+      continue;
+    auto suffix =
+        llvm::make_range(std::next(load->getIterator()), branch->getIterator());
+    if (llvm::all_of(suffix,
+                     [](Operation &op) { return isMemoryEffectFree(&op); }))
+      return {test.getCondition(), test.getTrueDest() == edge};
+  }
+  return {};
+}
+
 class ImmediateNBAConversion final
     : public OpConversionPattern<sim::SimNBAEnqueueOp> {
 public:
@@ -1276,10 +1330,12 @@ public:
                          uint64_t stateBitCount,
                          const NativeStaticNBAPlan *staticPlan,
                          const NativeStateLayout *stateLayout,
-                         bool staticSitesEnabled, bool guardedClaims)
+                         bool staticSitesEnabled, bool guardedClaims,
+                         const NativeNBAHoldConditions &holdConditions)
       : OpConversionPattern(converter, context), stateBitCount(stateBitCount),
         staticPlan(staticPlan), stateLayout(stateLayout),
-        staticSitesEnabled(staticSitesEnabled), guardedClaims(guardedClaims) {}
+        staticSitesEnabled(staticSitesEnabled), guardedClaims(guardedClaims),
+        holdConditions(holdConditions) {}
 
   LogicalResult
   matchAndRewrite(sim::SimNBAEnqueueOp op, OneToNOpAdaptor adaptor,
@@ -1434,8 +1490,7 @@ public:
       };
       auto emitDirectGeneratedStage = [&] {
         Block *unchangedContinuation = nullptr;
-        if (directPartialScalarStage &&
-            staticPlan->canDiscardUnchanged(staticRoot->second, site.getId(),
+        if (staticPlan->canDiscardUnchanged(staticRoot->second, site.getId(),
                                             decoded.offset, *width)) {
           // Retain RHS/target evaluation, and never discard a write that may
           // overwrite an earlier pending NBA (LRM 4.6, 4.9.4, 10.4.2).
@@ -1443,8 +1498,24 @@ public:
           // The plan separately excludes intervening immediate writers.
           uint64_t bitOffset =
               staticPlan->generatedOffsets[staticRoot->second] + decoded.offset;
-          Value changed = buildGeneratedNBAChange(rewriter, location, bitOffset,
-                                                  *width, value, unknown);
+          Value changed;
+          auto [condition, heldOnTrue] = holdConditions.lookup(op);
+          if (condition) {
+            if (Value held = rewriter.getRemappedValue(condition)) {
+              // On the hold arm the RHS is CURRENT. On the other arm an
+              // equal value may still be staged, just as in the source.
+              Value active = heldOnTrue
+                                 ? arith::XOrIOp::create(
+                                       rewriter, location, held,
+                                       llvmConstant(rewriter, location,
+                                                    rewriter.getI1Type(), 1))
+                                 : held;
+              changed = arith::ExtUIOp::create(rewriter, location, i64, active);
+            }
+          }
+          if (!changed)
+            changed = buildGeneratedNBAChange(rewriter, location, bitOffset,
+                                              *width, value, unknown);
           Value dirty =
               loadNBAIndex(rewriter, location, schedule::NBAIndex::DirtyRoots,
                            staticRoot->second / 64, staticRoot->second);
@@ -1972,6 +2043,7 @@ private:
   const NativeStateLayout *stateLayout;
   bool staticSitesEnabled;
   bool guardedClaims;
+  const NativeNBAHoldConditions &holdConditions;
 };
 
 } // namespace
@@ -2009,12 +2081,23 @@ Value buildNativeNBAChange(OpBuilder &builder, Location location,
                                  unknown, preserveCurrentUnknown);
 }
 
+NativeNBAHoldConditions collectNativeNBAHoldConditions(ModuleOp module) {
+  NativeNBAHoldConditions conditions;
+  module.walk([&](sim::SimNBAEnqueueOp enqueue) {
+    auto found = selfCaptureCondition(enqueue);
+    if (found.first)
+      conditions.try_emplace(enqueue, found);
+  });
+  return conditions;
+}
+
 void populateNBAToLLVMConversionPatterns(
     RewritePatternSet &patterns, TypeConverter &converter,
     uint64_t stateBitCount, const NativeStaticNBAPlan *staticPlan,
     const NativeStateLayout *stateLayout, bool staticSitesEnabled,
     bool guardedClaims, bool evalCeiling,
-    const DenseSet<Operation *> &completePackedSliceNBAs) {
+    const DenseSet<Operation *> &completePackedSliceNBAs,
+    const NativeNBAHoldConditions &holdConditions) {
   patterns.add<PowerCancelNBAConversion>(converter, patterns.getContext());
   patterns.add<PowerNBAConversion>(converter, patterns.getContext(),
                                    stateBitCount);
@@ -2033,9 +2116,9 @@ void populateNBAToLLVMConversionPatterns(
   patterns.add<PackedSliceNBAConversion>(
       converter, patterns.getContext(), stateBitCount, staticPlan, stateLayout,
       staticSitesEnabled, guardedClaims, completePackedSliceNBAs);
-  patterns.add<ImmediateNBAConversion>(converter, patterns.getContext(),
-                                       stateBitCount, staticPlan, stateLayout,
-                                       staticSitesEnabled, guardedClaims);
+  patterns.add<ImmediateNBAConversion>(
+      converter, patterns.getContext(), stateBitCount, staticPlan, stateLayout,
+      staticSitesEnabled, guardedClaims, holdConditions);
 }
 
 } // namespace talos::detail

@@ -57,16 +57,21 @@ connectedRankEnds(ArrayRef<const NativeRankedEvalNode *> members) {
 }
 
 // In a canonical two-state body there is no X/Z proof to amortize across
-// sibling producers. Start a new chain when no earlier member in this one
-// can wake the next rank. In particular, a common downstream consumer does
-// not make its independent inputs run together.
+// sibling producers. Extend a chain along a dependency or across repeatable
+// neighbors in the same ingress word and external event domain. Sharing a
+// downstream consumer alone gives no evidence of common input activity.
 static SmallVector<unsigned>
 forwardRankEnds(ArrayRef<const NativeRankedEvalNode *> members) {
   SmallVector<unsigned> ends;
   DenseMap<uint32_t, unsigned> predecessors;
   unsigned begin = 0;
   for (auto [i, member] : llvm::enumerate(members)) {
-    if (i && predecessors.lookup(member->owner) <= begin) {
+    // Repeatable producers in the same external event domain can share a
+    // two-state entry even when neither feeds the other directly.
+    bool shared = i && member->repeatable && members[i - 1]->repeatable &&
+                  member->activityDomain == members[i - 1]->activityDomain &&
+                  member->owner / 64 == members[i - 1]->owner / 64;
+    if (i && !shared && predecessors.lookup(member->owner) <= begin) {
       ends.push_back(i);
       begin = i;
     }

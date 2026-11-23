@@ -1330,6 +1330,8 @@ LogicalResult lowerPackedSimulationOperations(
   auto classLowering = collectNativeClassLowering(module);
   if (failed(classLowering))
     return failure();
+  auto holdConditions = staticNBAPlan ? collectNativeNBAHoldConditions(module)
+                                      : NativeNBAHoldConditions{};
   auto populatePackedPatterns = [&](SimulationToStandardTypeConverter &c,
                                     RewritePatternSet &patterns,
                                     SmallVectorImpl<Value> &zeroUnknownPlanes,
@@ -1369,7 +1371,7 @@ LogicalResult lowerPackedSimulationOperations(
     populateNBAToLLVMConversionPatterns(
         patterns, c, stateLayout.bitCount, staticNBAPlan, &selectedLayout,
         staticNBAPlan != nullptr, vpiAllowsWrite && !cleanEval,
-        experimentalTwoState, completePackedSliceNBAs);
+        experimentalTwoState, completePackedSliceNBAs, holdConditions);
   };
   // Each conversion collects the unknown planes it proved zero; see below.
   SmallVector<Value> moduleZeroUnknownPlanes;

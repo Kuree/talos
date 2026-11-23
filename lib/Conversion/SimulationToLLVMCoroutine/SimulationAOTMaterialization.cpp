@@ -3012,8 +3012,7 @@ FailureOr<bool> makeNativeEvalPlan(
         bool readHold = holdsInFIFO(root->second);
         bool inertCandidate =
             (readHold || width > 64 ||
-             (orderedWide &&
-              schedule::has<schedule::Field::EvalRuntimeCalendar>(module))) &&
+             schedule::has<schedule::Field::EvalRuntimeCalendar>(module)) &&
             fixedTarget != staticNBAPlan.siteFixedOffsets.end() &&
             (readHold || staticNBAPlan.canDiscardUnchanged(
                              root->second, site, fixedTarget->second, width)) &&
