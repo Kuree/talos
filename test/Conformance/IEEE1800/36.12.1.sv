@@ -1,6 +1,5 @@
 // CLAUSE: Table 36-10 current behaviour: vpiVariables has vpiReg and vpiRegArray, and an integer array is a vpiRegArray
-// XFAIL: *
-// vpi_iterate(vpiReg, array) returns null, so the elements that detail 6 of Table 36-10 describes cannot be iterated.
+// SINCE: 0.3.0
 // RUN: %clang -c -fPIC %S/Inputs/36.12.1/probe.c -I%resource_dir/include -o %t.helper0.o
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top --vpi=full -O3 --execution-tier=%tier %s %t.helper0.o -o %t.exe
 // RUN: %t.exe

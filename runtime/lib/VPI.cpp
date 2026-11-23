@@ -5631,6 +5631,15 @@ vpiHandle makeSemanticIterator(__vpiHandle *source, PLI_INT32 selector) {
              vpiNotice);
     return nullptr;
   }
+  // A var select (IEEE 1800-2023 37.17 detail 7, 37.19) is an element
+  // selected by an expression. Talos does not create var select objects for
+  // array elements yet; vpiReg iterates the elements themselves.
+  if (selector == vpiVarSelect) {
+    setError(source->owner,
+             "var select objects of an array are not available through VPI",
+             vpiNotice);
+    return nullptr;
+  }
   uint32_t relationSelector = 0;
   VPIFixedArrayShape shape;
   if (isStoredClassEventArray(source) &&
@@ -5638,9 +5647,39 @@ vpiHandle makeSemanticIterator(__vpiHandle *source, PLI_INT32 selector) {
                                           relationSelector) &&
       fixedArrayShape(source, shape) && !shape.dimensions.empty())
     kind = VPISemanticIteratorKind::FlatElements;
-  else if (selector == vpiRange &&
-           isDimensionForVPIObject(sourceType, info.kind, info.flags,
-                                   source->suppressSemanticDimension))
+  else if ((selector == vpiReg || selector == vpiMemoryWord) &&
+           info.kind == TALOS_RT_DESIGN_SEMANTIC_UNPACKED_ARRAY) {
+    // IEEE 1800-2023 37.17: vpiReg iterates the variables of an array var.
+    // Detail 9 counts every leaf element as one of those variables and
+    // detail 26 makes the array their prefix object, so the iteration walks
+    // the leaves in the model's index order, leftmost dimension outermost.
+    // 37.20 detail 1 keeps vpiMemoryWord as a method returning those
+    // elements as vpiReg objects, so it is empty when they are of another
+    // kind (an int array has no memory words).
+    if (hasManagedArrayDimensionBelow(source, semantic)) {
+      // The leaves of int fa[2][] are inside the dynamic arrays.
+      setError(source->owner,
+               "elements of a dynamic array, queue or associative array are "
+               "not available through VPI",
+               vpiNotice);
+      return nullptr;
+    }
+    shape = {};
+    if (!fixedArrayShape(source, shape) || shape.dimensions.empty())
+      return nullptr;
+    // 38.23: an iteration with no objects is NULL, not an empty iterator, so
+    // the first element must be selectable before the iterator exists.
+    vpiHandle first = makeFlatArrayElement(source, 0, shape);
+    if (!first)
+      return nullptr;
+    const bool regElements = vpiTypeForHandle(findHandle(first)) == vpiReg;
+    source->owner->handles.erase(reinterpret_cast<uintptr_t>(first));
+    if (selector == vpiMemoryWord && !regElements)
+      return nullptr;
+    kind = VPISemanticIteratorKind::FlatElements;
+  } else if (selector == vpiRange &&
+             isDimensionForVPIObject(sourceType, info.kind, info.flags,
+                                     source->suppressSemanticDimension))
     kind = VPISemanticIteratorKind::Ranges;
   else if (selector == vpiTypespecMember &&
            (info.kind == TALOS_RT_DESIGN_SEMANTIC_PACKED_STRUCT ||
