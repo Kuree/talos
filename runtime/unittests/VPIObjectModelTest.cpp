@@ -79,7 +79,7 @@ TEST(VPIObjectModel, RefObjectTypespecRequiresNetVariableOrPartSelectActual) {
 constexpr size_t kExpectedTraversalCount = 1914;
 static_assert(sizeof(vpiTraversals) / sizeof(vpiTraversals[0]) ==
               kExpectedTraversalCount);
-constexpr size_t kExpectedPropertyCount = 2334;
+constexpr size_t kExpectedPropertyCount = 2341;
 static_assert(sizeof(vpiProperties) / sizeof(vpiProperties[0]) ==
               kExpectedPropertyCount);
 constexpr size_t kExpectedValuePolicyCount = 57;
@@ -406,10 +406,16 @@ std::map<uint32_t, KindSet> buildReadPropertyApplicabilityOracle() {
   ordinaryExpressions =
       merge(std::move(ordinaryExpressions),
             makePropertyObjectSet({}, {VPIObjectFamily::Net}));
-  add({vpiPackedArrayVar, vpiStructVar, vpiUnionVar, vpiEnumVar,
-       vpiStructTypespec, vpiUnionTypespec, vpiInterconnectArray},
+  // 37.26: "-> packed" sits outside both the struct/union var and net boxes.
+  add({vpiPackedArrayVar, vpiStructVar, vpiUnionVar, vpiStructNet,
+       vpiUnionNet, vpiEnumVar, vpiStructTypespec, vpiUnionTypespec,
+       vpiInterconnectArray},
       {vpiPacked});
-  add({vpiUnionTypespec}, {vpiTagged});
+  // 37.25-37.26: "-> tagged" belongs to the struct/union group; a struct
+  // answers FALSE rather than a C-truthy vpiUndefined.
+  add({vpiStructTypespec, vpiUnionTypespec, vpiStructVar, vpiUnionVar,
+       vpiStructNet, vpiUnionNet},
+      {vpiTagged});
   add({vpiRegArray, vpiArrayTypespec}, {vpiArrayType});
   add(merge(ordinaryVariables, KindSet{vpiTypespecMember}), {vpiRandType});
   add({vpiConstant, vpiParameter}, {vpiConstType});
@@ -1116,11 +1122,15 @@ TEST(VPIObjectModel, StructuralTypePropertiesHaveExactLrmApplicability) {
        "37.11; 37.13; 37.14; 37.16; 37.17; 37.18; 37.19; 37.22; "
        "37.28; 37.35; 37.36; 37.41; 37.59; 37.85"},
       {vpiPacked,
-       {vpiPackedArrayVar, vpiStructVar, vpiUnionVar, vpiEnumVar,
-        vpiStructTypespec, vpiUnionTypespec, vpiInterconnectArray},
+       {vpiPackedArrayVar, vpiStructVar, vpiUnionVar, vpiStructNet,
+        vpiUnionNet, vpiEnumVar, vpiStructTypespec, vpiUnionTypespec,
+        vpiInterconnectArray},
        PropertyKind::Boolean,
        "37.18; 37.24; 37.25; 37.26"},
-      {vpiTagged, {vpiUnionTypespec}, PropertyKind::Boolean, "37.25"},
+      {vpiTagged,
+       {vpiStructTypespec, vpiUnionTypespec, vpiStructVar, vpiUnionVar,
+        vpiStructNet, vpiUnionNet},
+       PropertyKind::Boolean, "37.25; 37.26"},
       {vpiArrayType,
        {vpiRegArray, vpiArrayTypespec},
        PropertyKind::Integer,
@@ -1321,7 +1331,7 @@ TEST(VPIObjectModel, ReadPropertySelectorInventoryIsExhaustive) {
       STATIC_PROPERTY(vpiAlwaysType, Integer, "37.63"),
       STATIC_PROPERTY(vpiDistType, Integer, "37.34"),
       STATIC_PROPERTY(vpiPacked, Boolean, "37.18; 37.24; 37.25; 37.26"),
-      STATIC_PROPERTY(vpiTagged, Boolean, "37.25"),
+      STATIC_PROPERTY(vpiTagged, Boolean, "37.25; 37.26"),
       STATIC_PROPERTY(vpiVirtual, Boolean, "37.31; 37.34; 37.41"),
       DYNAMIC_PROPERTY(vpiHasActual, Boolean, "37.61"),
       DYNAMIC_PROPERTY(vpiIsConstraintEnabled, Boolean, "37.34"),

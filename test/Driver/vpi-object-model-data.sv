@@ -105,8 +105,8 @@ endmodule
 // CHECK-NEXT: vpiByteVar objects=2 properties=21/24 relations=5/19 answers=51
 // CHECK-NEXT: vpiStringVar objects=1 properties=21/24 relations=4/19 answers=25
 // CHECK-NEXT: vpiEnumVar objects=2 properties=23/26 relations=6/23 answers=58
-// CHECK-NEXT: vpiStructVar objects=2 properties=23/26 relations=7/25 answers=60
-// CHECK-NEXT: vpiUnionVar objects=2 properties=23/26 relations=7/25 answers=60
+// CHECK-NEXT: vpiStructVar objects=2 properties=24/27 relations=7/25 answers=62
+// CHECK-NEXT: vpiUnionVar objects=2 properties=24/27 relations=7/25 answers=62
 // CHECK-NEXT: vpiBitVar objects=1 properties=21/24 relations=8/23 answers=29
 // CHECK-NEXT: vpiChandleVar objects=1 properties=21/24 relations=4/19 answers=25
 // CHECK-NEXT: vpiLongIntTypespec objects=1 properties=5/6 relations=1/2 answers=6
@@ -121,7 +121,7 @@ endmodule
 // CHECK-NEXT: vpiIntegerTypespec objects=1 properties=5/6 relations=1/2 answers=6
 // CHECK-NEXT: vpiTimeTypespec objects=3 properties=6/6 relations=2/2 answers=20
 // CHECK-NEXT: vpiRealTypespec objects=4 properties=5/6 relations=1/2 answers=24
-// CHECK-NEXT: vpiStructTypespec objects=2 properties=7/7 relations=2/3 answers=18
+// CHECK-NEXT: vpiStructTypespec objects=2 properties=8/8 relations=2/3 answers=20
 // CHECK-NEXT: vpiUnionTypespec objects=2 properties=8/8 relations=2/3 answers=20
 // CHECK-NEXT: vpiBitTypespec objects=5 properties=6/7 relations=5/6 answers=39
 // CHECK-NEXT: vpiLogicTypespec objects=35 properties=6/7 relations=5/6 answers=309

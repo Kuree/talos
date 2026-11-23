@@ -540,10 +540,13 @@ def DynamicAllocSchemeObjects : VPIObjectSet<"DynamicAllocSchemeObjects",
    FuncCall, TaskCall, SysFuncCall, SysTaskCall, MethodFuncCall,
    MethodTaskCall], [VariableFamily, NetFamily, TransientFamily]>;
 def PackedPropertyObjects : VPIObjectSet<"PackedPropertyObjects",
-  [PackedArrayVar, StructVar, UnionVar, EnumVar, StructTypespec,
-   UnionTypespec, InterconnectArray]>;
-def TaggedTypespecObjects : VPIObjectSet<"TaggedTypespecObjects",
-  [UnionTypespec]>;
+  [PackedArrayVar, StructVar, UnionVar, StructNet, UnionNet, EnumVar,
+   StructTypespec, UnionTypespec, InterconnectArray]>;
+// IEEE 1800-2023 37.25 and 37.26 list "-> tagged" in the struct/union group
+// under the union object. Structs answer it too, always FALSE (7.3.2 tags only
+// unions): vpiUndefined (-1) would read as TRUE in a C condition.
+def TaggedPropertyObjects : VPIObjectSet<"TaggedPropertyObjects",
+  [StructTypespec, UnionTypespec, StructVar, UnionVar, StructNet, UnionNet]>;
 def ArrayTypespecObjects : VPIObjectSet<"ArrayTypespecObjects",
   [ArrayTypespec]>;
 def ArrayTypePropertyObjects : VPIObjectSet<"ArrayTypePropertyObjects",
@@ -612,7 +615,7 @@ def StructuralSizeProperty : VPIProperty<"vpiSize", 4, IntegerProperty,
 def StructuralPackedProperty : VPIProperty<"vpiPacked", 630,
   BooleanProperty, PackedPropertyObjects, "37.18; 37.24; 37.25; 37.26">;
 def StructuralTaggedProperty : VPIProperty<"vpiTagged", 632,
-  BooleanProperty, TaggedTypespecObjects, "37.25">;
+  BooleanProperty, TaggedPropertyObjects, "37.25; 37.26">;
 def StructuralArrayTypeProperty : VPIProperty<"vpiArrayType", 606,
   IntegerProperty, ArrayTypePropertyObjects, "37.17; 37.25">;
 def StructuralRandTypeProperty : VPIProperty<"vpiRandType", 610,

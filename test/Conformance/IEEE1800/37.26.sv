@@ -1,6 +1,6 @@
 // CLAUSE: Structures and unions: vpiMember walks a struct or union's fields, vpiPacked and vpiTagged classify them, and an entire unpacked struct has no value
 // XFAIL: *
-// vpiTagged returns vpiUndefined for every struct and union variable, tagged or not, and vpi_put_value on a member leaves it unchanged.
+// vpi_put_value on a member leaves it unchanged.
 // RUN: %clang -c -fPIC %S/Inputs/37.26/probe.c -I%resource_dir/include -o %t.helper0.o
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top --vpi=full -O3 --execution-tier=%tier %s %t.helper0.o -o %t.exe
 // RUN: %t.exe

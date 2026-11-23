@@ -13061,8 +13061,9 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_get(PLI_INT32 property,
            handle->selectionSteps.back().memberSelection;
   }
   if (property == vpiArray || property == vpiIsMemory ||
-      property == vpiPacked || property == vpiArrayType ||
-      property == vpiRandType || property == vpiIsRandomized) {
+      property == vpiPacked || property == vpiTagged ||
+      property == vpiArrayType || property == vpiRandType ||
+      property == vpiIsRandomized) {
     // The current physical image has no class-instance variable records and
     // therefore no source rand/randc declaration or active-randomization bit.
     // Every physical variable represented here is exactly non-random until
@@ -13142,6 +13143,11 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_get(PLI_INT32 property,
     talos_rt_design_type_info_v1 type{};
     if (!physicalTypeInfo(handle, type))
       return vpiUndefined;
+    // IEEE 1800-2023 7.3.2, 37.26: only a tagged union is tagged; a struct
+    // answers FALSE.
+    if (property == vpiTagged)
+      return type.kind == TALOS_RT_DESIGN_TYPE_UNION &&
+             (type.flags & TALOS_RT_DESIGN_TYPE_TAGGED) != 0;
     return (type.flags & TALOS_RT_DESIGN_TYPE_PACKED) != 0;
   }
   if (property == vpiSize) {
