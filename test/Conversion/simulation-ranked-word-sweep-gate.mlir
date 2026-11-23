@@ -8,7 +8,13 @@
 // word, so a chunk call is followed directly by the next chunk's test.
 // CHECK-NOT: .segment(
 // CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1.word_0(
-// CHECK-DAG: %[[READY:.*]] = llvm.mlir.addressof @__talos_aot_model_ingress_v1
+// CHECK: %[[READY:.*]] = llvm.mlir.addressof @__talos_aot_model_ingress_v1
+// CHECK-NEXT: %[[WORD:.*]] = llvm.load %[[READY]]
+// CHECK-NEXT: %[[GROUP:.*]] = llvm.mlir.constant(255 : i64)
+// CHECK-NEXT: %[[MASKED:.*]] = llvm.and %[[WORD]], %[[GROUP]]
+// CHECK: llvm.icmp "ne" %[[MASKED]],
+// CHECK-NEXT: llvm.cond_br %{{.*}}, ^[[TEST:bb[0-9]+]], ^{{bb[0-9]+}}
+// CHECK: ^[[TEST]]:
 // CHECK-DAG: %[[LOW:.*]] = llvm.load %[[READY]]
 // CHECK-DAG: %[[FIRST:.*]] = llvm.mlir.constant(1 : i64)
 // CHECK-NEXT: llvm.and %[[LOW]], %[[FIRST]]

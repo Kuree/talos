@@ -55,9 +55,15 @@
 // CHECK: ^[[WORD8]]:
 // CHECK-NEXT: llvm.call @__talos_eval_dispatch_v1.word_8(%arg1, %[[FALLBACK]])
 
-// Owners run in bit order; each consumes its own bit and polls termination.
+// Skip an idle eight-owner group. Each live member still tests its own
+// bit in rank order and polls termination after running.
 // CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1.word_0(%arg0: !llvm.ptr, %arg1: !llvm.ptr) -> i32
 // CHECK-SAME: schedule.eval.role = #schedule.eval_role<dispatch>
+// CHECK: %[[LEAF0:.*]] = llvm.load
+// CHECK-NEXT: %[[GROUP:.*]] = llvm.mlir.constant(255 : i64)
+// CHECK-NEXT: %[[LIVE:.*]] = llvm.and %[[LEAF0]], %[[GROUP]]
+// CHECK: llvm.icmp "ne" %[[LIVE]],
+// CHECK-NEXT: llvm.cond_br
 // CHECK: %[[FIRST:.*]] = llvm.mlir.constant(1 : i64)
 // CHECK: llvm.and %{{.*}}, %[[FIRST]]
 // CHECK: llvm.cond_br %{{.*}}, ^[[RUN0:bb[0-9]+]], ^[[NEXT0:bb[0-9]+]]

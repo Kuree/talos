@@ -496,8 +496,13 @@ materializeNativeRankedGroups(ModuleOp module,
       if (end - index > 1) {
         // Not nested: argument evaluation order would make the emitted IR
         // differ between ABIs (the MSVC ABI evaluates right to left).
-        Value bits =
+        uint64_t mask = 0;
+        for (const Chunk &chunk : siblings.slice(index, end - index))
+          mask |= chunk.words.front().second;
+        Value ready =
             loadReadyWord(builder, loc, schedule::ReadySet::Ingress, word);
+        Value bits = arith::AndIOp::create(builder, loc, ready,
+                                           llvmConstant(builder, loc, i64, mask));
         Value active =
             arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ne, bits,
                                   llvmConstant(builder, loc, i64, 0));

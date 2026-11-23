@@ -1619,10 +1619,15 @@ materializeNativeEvalDispatch(ModuleOp module,
       // occupied group in source rank order without an indirect branch per
       // owner. Every test reloads live ingress after its predecessor runs.
       constexpr unsigned groupSize = 8;
-      bool grouped = plan.guardSubscriberActors &&
-                     llvm::count_if(items, [](const Item &item) {
-                       return item.record && item.ranked.empty();
-                     }) >= 4 * groupSize;
+      // An ordinary word can also have many distinct ranked executors.
+      // Test their combined trigger mask before walking an idle group. If
+      // any member is ready, its successors still read the live word after
+      // every activation, including publications made in the same sweep.
+      bool grouped = plan.guardSubscriberActors
+                         ? llvm::count_if(items, [](const Item &item) {
+                             return item.record && item.ranked.empty();
+                           }) >= 4 * groupSize
+                         : items.size() >= 2 * groupSize;
       bool sparse = plan.guardSubscriberActors && items.size() >= 16 &&
                     !grouped && !consecutiveReadRanks;
       Block *groupEnd = nullptr;
