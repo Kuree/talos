@@ -118,6 +118,36 @@ module attributes {
 
 // -----
 
+// An untagged soft packed union verifies; its members may differ in width.
+module attributes {
+  test.test = #simulation.vpi_type<kind = packed_union, isSigned = false,
+    isFourState = false, name = "soft_t", range = [],
+    children = [#simulation.vpi_type<kind = bit, isSigned = false,
+      isFourState = false, range = [3, 0], children = [], childNames = []>,
+      #simulation.vpi_type<kind = bit, isSigned = false, isFourState = false,
+      range = [7, 0], children = [], childNames = []>],
+    childNames = ["a", "b"], isTagged = false, isSoft = true,
+    bitWidth = 8 : i64, selectableWidth = 8 : i64, bitstreamWidth = 8 : i64,
+    tagBits = 0 : i64, childOrdinals = [0, 1], childPackedOffsets = [0, 0]>
+} {}
+
+// -----
+
+// IEEE 1800-2023 7.3.1 and A.2.2.1 (union [ soft | tagged ]): soft qualifies
+// only an untagged packed union.
+// expected-error @+2 {{soft metadata requires an untagged packed union}}
+module attributes {
+  test.test = #simulation.vpi_type<kind = packed_union, isSigned = false,
+    isFourState = false, name = "st_t", range = [],
+    children = [#simulation.vpi_type<kind = bit, isSigned = false,
+      isFourState = false, range = [3, 0], children = [], childNames = []>],
+    childNames = ["a"], isTagged = true, isSoft = true, bitWidth = 5 : i64,
+    selectableWidth = 5 : i64, bitstreamWidth = 5 : i64, tagBits = 1 : i64,
+    childOrdinals = [0], childPackedOffsets = [0]>
+} {}
+
+// -----
+
 // expected-error @+2 {{two-state VPI semantic type has a four-state flag}}
 module attributes {
   test.test = #simulation.vpi_type<kind = bit, isSigned = false,

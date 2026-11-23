@@ -328,7 +328,7 @@ LogicalResult VPITypeSemanticsAttr::verify(
     return success();
   };
   if (failed(rejectDetail(isTagged, "tagged metadata", aggregate)) ||
-      failed(rejectDetail(isSoft, "soft-tag metadata", aggregate)) ||
+      failed(rejectDetail(isSoft, "soft metadata", aggregate)) ||
       failed(rejectDetail(bitWidth, "bit-width metadata", aggregate)) ||
       failed(rejectDetail(selectableWidth, "selectable-width metadata",
                           aggregate)) ||
@@ -395,10 +395,11 @@ LogicalResult VPITypeSemanticsAttr::verify(
         kind == VPITypeKind::PackedUnion || kind == VPITypeKind::UnpackedUnion;
     if (isTagged.getValue() && !unionType)
       return emitError() << "only VPI union semantic types may be tagged";
+    // IEEE 1800-2023 7.3.1 and A.2.2.1 (union [ soft | tagged ]): soft
+    // qualifies only an untagged packed union.
     if (isSoft.getValue() &&
-        (kind != VPITypeKind::PackedUnion || !isTagged.getValue()))
-      return emitError()
-             << "soft tagged metadata requires a tagged packed union";
+        (kind != VPITypeKind::PackedUnion || isTagged.getValue()))
+      return emitError() << "soft metadata requires an untagged packed union";
     if (!isTagged.getValue() && !tagBits.getValue().isZero())
       return emitError() << "untagged VPI aggregate cannot reserve tag bits";
     const bool packed =

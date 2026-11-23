@@ -5439,8 +5439,10 @@ bool validateDatabaseImpl(const Database &database) {
                            kind == TALOS_RT_DESIGN_SEMANTIC_PACKED_UNION;
     bool unionType = kind == TALOS_RT_DESIGN_SEMANTIC_PACKED_UNION ||
                      kind == TALOS_RT_DESIGN_SEMANTIC_UNPACKED_UNION;
+    // IEEE 1800-2023 7.3.1 and A.2.2.1 (union [ soft | tagged ]): soft
+    // qualifies only an untagged packed union.
     if ((tagged && !unionType) ||
-        (soft && (kind != TALOS_RT_DESIGN_SEMANTIC_PACKED_UNION || !tagged)) ||
+        (soft && (kind != TALOS_RT_DESIGN_SEMANTIC_PACKED_UNION || tagged)) ||
         (!tagged && tagBits != 0) || (packedAggregate && bitWidth == 0) ||
         // IEEE 1800-2023 7.3.2 specifies a tag's size and position only for
         // the packed representation; an unpacked tagged union's tag is

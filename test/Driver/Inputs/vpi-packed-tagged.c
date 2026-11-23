@@ -4,7 +4,7 @@
 // Prints vpiPacked and vpiTagged for each named object and its typespec.
 void probe(void) {
   static const char *names[] = {"top.su", "top.sp", "top.un", "top.ta",
-                                "top.sn", "top.tn"};
+                                "top.sn", "top.tn", "top.so"};
   for (unsigned i = 0; i != sizeof(names) / sizeof(names[0]); ++i) {
     vpiHandle object = vpi_handle_by_name((PLI_BYTE8 *)names[i], NULL);
     vpiHandle type = vpi_handle(vpiTypespec, object);
