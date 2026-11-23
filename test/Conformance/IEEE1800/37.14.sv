@@ -1,6 +1,6 @@
 // CLAUSE: Ports: a port reports index, name, direction, size and type, its high and low connections carry the live value, and an unconnected port has a NULL vpiHighConn
 // XFAIL: *
-// On ports vpiExplicitName and vpiConnByName return vpiUndefined, and an unconnected "input logic" reads x as a variable where 23.2.2.3 makes it a net that reads z.
+// On ports vpiExplicitName and vpiConnByName return vpiUndefined. An unconnected "input logic" reads x where 23.2.2.3 makes it a net that reads z: Slang deliberately types such a port as a variable, as major simulators do, so that part is frontend-blocked.
 // RUN: %clang -c -fPIC %S/Inputs/37.14/probe.c -I%resource_dir/include -o %t.helper0.o
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top --vpi=full -O3 --execution-tier=%tier %s %t.helper0.o -o %t.exe
 // RUN: %t.exe
