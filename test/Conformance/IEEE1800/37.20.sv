@@ -1,6 +1,5 @@
 // CLAUSE: Memory: vpiMemory and vpiMemoryWord return reg array and reg objects, and a word reports its bounds, index and value
-// XFAIL: *
-// vpi_put_value on a memory word reports "indexed VPI writes require selected-state scheduling support".
+// SINCE: 0.3.0
 // RUN: %clang -c -fPIC %S/Inputs/37.20/probe.c -I%resource_dir/include -o %t.helper0.o
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top --vpi=full -O3 --execution-tier=%tier %s %t.helper0.o -o %t.exe
 // RUN: %t.exe

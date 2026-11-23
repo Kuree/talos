@@ -8102,6 +8102,88 @@ vpiHandle namedEventWaitingProcesses(__vpiHandle *source) {
   return makeThreadIterator(source, vpiWaitingProcesses, std::move(processes));
 }
 
+// Whether a selection passes through a member of a tagged union, whose tag
+// a member write would bypass (IEEE 1800-2023 7.3.2).
+bool selectsTaggedUnionMember(__vpiHandle *handle) {
+  talos_rt_design_info_v1 root{};
+  if (talos_rt_cached_design_info(handle->owner->context, handle->cursor,
+                                  &root) != TALOS_RT_OK)
+    return false;
+  talos_rt_design_cursor_v1 parent{root.type_offset};
+  for (const VPISelectionStep &step : handle->selectionSteps) {
+    talos_rt_design_type_info_v1 type{};
+    if (step.memberSelection &&
+        talos_rt_cached_design_type_info(handle->owner->context, parent,
+                                         &type) == TALOS_RT_OK &&
+        type.kind == TALOS_RT_DESIGN_TYPE_UNION &&
+        (type.flags & TALOS_RT_DESIGN_TYPE_TAGGED) != 0)
+      return true;
+    parent = step.physicalType;
+  }
+  return false;
+}
+
+// Copies the low `width` bits of `from` into `to` starting at bit `offset`.
+void depositBits(std::vector<uint64_t> &to, uint64_t offset,
+                 const uint64_t *from, uint64_t width) {
+  for (uint64_t done = 0; done < width; done += 64) {
+    const uint64_t chunk = std::min<uint64_t>(64, width - done);
+    const uint64_t mask =
+        chunk == 64 ? ~uint64_t{0} : (uint64_t{1} << chunk) - 1;
+    const uint64_t bits = from[done / 64] & mask;
+    const uint64_t position = offset + done;
+    const size_t word = static_cast<size_t>(position / 64);
+    const unsigned shift = static_cast<unsigned>(position % 64);
+    to[word] = (to[word] & ~(mask << shift)) | (bits << shift);
+    if (shift != 0 && shift + chunk > 64)
+      to[word + 1] =
+          (to[word + 1] & ~(mask >> (64 - shift))) | (bits >> (64 - shift));
+  }
+}
+
+// Writes a selected element, member or bit by rewriting its whole root
+// variable. Every observer of a write (waits, edges, value-change callbacks,
+// force masks, two/four-state switching) compares old and new bits, so only
+// the selection's bits change, but each write costs the root's full width.
+void writeSelection(__vpiHandle *handle, const uint64_t *value,
+                    const uint64_t *unknown, uint64_t width) {
+  talos_rt_context *context = handle->owner->context;
+  talos_rt_design_info_v1 root{};
+  const uint64_t offset = handle->selectionBitOffset;
+  if (talos_rt_cached_design_info(context, handle->cursor, &root) !=
+          TALOS_RT_OK ||
+      root.bit_width == 0 || offset > root.bit_width ||
+      width > root.bit_width - offset) {
+    setError(handle->owner, "selected VPI write has an invalid layout",
+             vpiInternal);
+    return;
+  }
+  TALOS_RT_TRY {
+    const size_t limbs = static_cast<size_t>((root.bit_width + 63) / 64);
+    std::vector<uint64_t> rootValue(limbs), rootUnknown(limbs);
+    // Keep the read and the write one transaction so no other write lands
+    // between them.
+    ContextTransaction transaction(context);
+    if (talos_rt_v1_design_read(context, handle->cursor, rootValue.data(),
+                                rootUnknown.data(),
+                                root.bit_width) != TALOS_RT_OK) {
+      setError(handle->owner, "VPI write failed");
+      return;
+    }
+    depositBits(rootValue, offset, value, width);
+    depositBits(rootUnknown, offset, unknown, width);
+    if (talos_rt_v1_design_write(context, handle->cursor, rootValue.data(),
+                                 rootUnknown.data(),
+                                 root.bit_width) != TALOS_RT_OK) {
+      setError(handle->owner, "VPI write failed");
+      return;
+    }
+  }
+  TALOS_RT_CATCH_ALL {
+    setError(handle->owner, "VPI write buffer is out of memory", vpiSystem);
+  }
+}
+
 // IEEE 1800-2023 38.34: a put to a named event toggles it like `->`; the
 // value is ignored and value_p may be NULL.
 vpiHandle triggerNamedEvent(__vpiHandle *handle, PLI_INT32 flags) {
@@ -15326,9 +15408,30 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_put_value(vpiHandle opaque,
              vpiNotice);
     return nullptr;
   }
-  if (handle->form == VPIObjectForm::Indexed) {
+  // A string variable's storage holds a managed reference; storing a new
+  // string through VPI is not implemented, and decoding any value format into
+  // that slot would corrupt it.
+  if (writtenType == vpiStringVar) {
+    setError(handle->owner, "writes to string variables are not supported",
+             vpiNotice);
+    return nullptr;
+  }
+  const bool selection = handle->form == VPIObjectForm::Indexed;
+  if (selection && (classMember || handle->dynamicObject)) {
     setError(handle->owner,
-             "indexed VPI writes require selected-state scheduling support");
+             "writes to a selection of a class member are not supported",
+             vpiNotice);
+    return nullptr;
+  }
+  if (selection && selectsTaggedUnionMember(handle)) {
+    setError(handle->owner, "writes to a tagged union member are not supported",
+             vpiNotice);
+    return nullptr;
+  }
+  if (selection && (flags == vpiForceFlag || flags == vpiReleaseFlag)) {
+    setError(handle->owner,
+             "force and release of a selected element are not supported",
+             vpiNotice);
     return nullptr;
   }
   talos_rt_design_info_v1 info{};
@@ -15337,10 +15440,11 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_put_value(vpiHandle opaque,
     return nullptr;
   }
   talos_rt_design_type_info_v1 writtenShape{};
-  if (info.type_offset != 0 &&
+  const bool hasWrittenShape =
+      info.type_offset != 0 &&
       talos_rt_cached_design_type_info(context, {info.type_offset},
-                                       &writtenShape) == TALOS_RT_OK &&
-      isWholeUnpackedAggregate(writtenShape)) {
+                                       &writtenShape) == TALOS_RT_OK;
+  if (hasWrittenShape && isWholeUnpackedAggregate(writtenShape)) {
     setError(handle->owner,
              "vpi_put_value is not defined for a whole unpacked aggregate",
              vpiNotice);
@@ -15387,9 +15491,14 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_put_value(vpiHandle opaque,
       writer->writeValueScratch[scratchLease.index].second;
   if (!decodeValue(handle, source, info.bit_width, writtenType, value, unknown))
     return nullptr;
-  // Declared VPI types retain their four-state identity in --two-state, but
-  // foreign values enter value-only storage after X/Z-to-zero conversion.
-  if (context->twoState())
+  // IEEE 1800-2023 6.11.2: a value converted to 2-state has its unknown and
+  // high-impedance bits converted to 0. That holds for a 2-state object (or a
+  // 2-state element or member inside a 4-state variable) and, since declared
+  // VPI types keep their four-state identity in --two-state, for every write
+  // into a two-state run's value-only storage.
+  if (context->twoState() ||
+      (hasWrittenShape &&
+       (writtenShape.flags & TALOS_RT_DESIGN_TYPE_FOUR_STATE) == 0))
     for (size_t word = 0; word != value.size(); ++word) {
       value[word] &= ~unknown[word];
       unknown[word] = 0;
@@ -15432,6 +15541,10 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_put_value(vpiHandle opaque,
                                        value.data(), bytes);
     if (status != TALOS_RT_OK)
       setError(handle->owner, "VPI class member write failed");
+    return nullptr;
+  }
+  if (selection) {
+    writeSelection(handle, value.data(), unknown.data(), info.bit_width);
     return nullptr;
   }
   talos_rt_status status =
