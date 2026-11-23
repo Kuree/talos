@@ -565,6 +565,7 @@ enum FastKind : uint8_t {
   kFastConstantBytes,
   kFastLoadFrameBytes,
   kFastStoreFrameBytes,
+  kFastPublishingStoreState,
 };
 
 /// The largest register or transfer the byte-copy fast ops handle.
@@ -1112,6 +1113,107 @@ inline bool fastCanonicalView(const FastOp &op, talos_rt_context *context,
   return true;
 }
 
+// Private interpreter control result, consumed at the activation boundary.
+static constexpr talos_rt_status kFinishedPublication = -1;
+
+static bool canPublishToVPI(const talos_rt_context *context) {
+  if (!context || !context->execution)
+    return false;
+  auto flags = context->execution->flags;
+  return (flags & TALOS_RT_EXECUTION_VPI_PUBLISHING_WRITERS) ||
+         ((flags & TALOS_RT_EXECUTION_REQUIRE_BYTECODE) &&
+          (flags & TALOS_RT_EXECUTION_VPI_READ) &&
+          !(flags & TALOS_RT_EXECUTION_DPI_EXPORTS));
+}
+
+inline bool fastStoreState(const FastOp &op, uint8_t *data,
+                           talos_rt_context *context, talos_rt_status &status) {
+  FastHandle handle = fastHandle(data, op.source0);
+  if (!context || handle.kind != TALOS_RT_DESCRIPTOR_STORAGE ||
+      context->activeExecRegion == TALOS_RT_REGION_POSTPONED)
+    return false;
+  uint64_t newValue, newUnknown;
+  fastRead(data, op.source1, (op.fourState & kFastSource1FourState) != 0,
+           op.width, newValue, newUnknown);
+  std::lock_guard<TalosContextMutex> lock(context->mutex);
+  uint64_t at = 0, published = 0;
+  if (talos_rt_has_conditional_signal_waiters(context) ||
+      !fastCanonicalView(op, context, handle, op.width, at, published))
+    return false;
+  // A force or procedural assign owning any stored bit takes the general
+  // path, which skips those bits.
+  for (const std::vector<uint64_t> *mask :
+       {&context->forceMask, &context->assignMask})
+    if (!mask->empty() && (mask->size() * 64 < at + op.width ||
+                           loadPackedBits(*mask, at, op.width) != 0))
+      return false;
+  uint64_t oldValue = loadPackedBits(context->stateValue, at, op.width);
+  uint64_t oldUnknown = loadPackedBits(context->stateUnknown, at, op.width);
+  if (op.flags & TALOS_RT_DB_STORE_STATE_CONTINUOUS) {
+    if (context->continuousMask.empty()) {
+      size_t limbs = context->stateValue.size();
+      context->continuousMask.assign(limbs, 0);
+      context->continuousValue.assign(limbs, 0);
+      if (context->twoState())
+        context->continuousUnknown.assignZero(limbs);
+      else
+        context->continuousUnknown.assign(limbs, 0);
+    }
+    storePackedBits(context->continuousValue, at, op.width, newValue);
+    storePackedBits(context->continuousUnknown, at, op.width, newUnknown);
+    storePackedBits(context->continuousMask, at, op.width, UINT64_MAX);
+  }
+  storePackedBits(context->stateValue, at, op.width, newValue);
+  storePackedBits(context->stateUnknown, at, op.width, newUnknown);
+  talos_rt_sync_native_state_range_unlocked(context, at, op.width);
+  uint64_t differs = (oldValue ^ newValue) | (oldUnknown ^ newUnknown);
+  // A change nothing consumes is only its new value, already stored (IEEE
+  // 1800-2023 4.3; two-tier B2 Q4). The masks were checked above.
+  // Signal diagnostics count publications, so they keep the full path.
+  if (differs != 0 && !context->nativeSchedulePlan &&
+      !context->signalDiagnosticsEnabled &&
+      talos_rt_transition_unconsumed_unlocked(context, published)) {
+    if (++context->schedulerEpoch == 0)
+      context->schedulerEpoch = 1;
+  } else if (differs != 0) {
+    // transitionEdges, a word at a time.
+    uint64_t oldZero = ~oldUnknown & ~oldValue;
+    uint64_t oldOne = ~oldUnknown & oldValue;
+    uint64_t newZero = ~newUnknown & ~newValue;
+    uint64_t newOne = ~newUnknown & newValue;
+    PackedSignalTransitionBuffer edges(op.width);
+    storePackedBytes(edges.changed(), 0, op.width, differs);
+    storePackedBytes(edges.posedge(), 0, op.width,
+                     differs & ((oldZero & ~newZero) | (oldUnknown & newOne)));
+    storePackedBytes(edges.negedge(), 0, op.width,
+                     differs & ((oldOne & ~newOne) | (oldUnknown & newZero)));
+    uint64_t sequence = 0;
+    if (!talos_rt_publish_signal_transition_batch_unlocked(
+            context, published, op.width, edges.changed(), edges.posedge(),
+            edges.negedge(), 0, &sequence)) {
+      status = context->schedulerStatus;
+      return true;
+    }
+    talos_rt_invalidate_signal_snapshots_unlocked(context, published, op.width);
+    if (!talos_rt_notify_observer_signal_unlocked(context, published,
+                                                  op.width)) {
+      status = context->schedulerStatus;
+      return true;
+    }
+    if (++context->schedulerEpoch == 0)
+      context->schedulerEpoch = 1;
+  }
+  if (op.flags & TALOS_RT_DB_STORE_STATE_CHANGED) {
+    FastOp changedOp = op;
+    changedOp.width = op.sourceWidth;
+    bool reported =
+        differs != 0 &&
+        (op.flags & TALOS_RT_DB_STORE_STATE_DEFER_NET_RESOLUTION) == 0;
+    fastWrite(data, changedOp, reported, 0);
+  }
+  return true;
+}
+
 /// Runs a decoded instruction. Returns false, with nothing changed, when its
 /// dynamic precondition fails; the caller then runs the general path. A
 /// failure after an instruction took effect returns true and sets `status`.
@@ -1588,94 +1690,17 @@ inline bool executeFastOp(const FastOp &op, uint8_t *data,
               loadPackedBits(context->stateUnknown, storageBit, op.width));
     break;
   }
-  case kFastStoreState: {
-    FastHandle handle = fastHandle(data, op.source0);
-    if (!context || handle.kind != TALOS_RT_DESCRIPTOR_STORAGE ||
-        context->activeExecRegion == TALOS_RT_REGION_POSTPONED)
+  case kFastStoreState:
+    if (!fastStoreState(op, data, context, status))
       return false;
-    uint64_t newValue, newUnknown;
-    fastRead(data, op.source1, source1FourState, op.width, newValue,
-             newUnknown);
-    std::lock_guard<TalosContextMutex> lock(context->mutex);
-    uint64_t at = 0, published = 0;
-    if (talos_rt_has_conditional_signal_waiters(context) ||
-        !fastCanonicalView(op, context, handle, op.width, at, published))
-      return false;
-    // A force or procedural assign owning any stored bit takes the general
-    // path, which skips those bits.
-    for (const std::vector<uint64_t> *mask :
-         {&context->forceMask, &context->assignMask})
-      if (!mask->empty() && (mask->size() * 64 < at + op.width ||
-                             loadPackedBits(*mask, at, op.width) != 0))
-        return false;
-    uint64_t oldValue = loadPackedBits(context->stateValue, at, op.width);
-    uint64_t oldUnknown = loadPackedBits(context->stateUnknown, at, op.width);
-    if (op.flags & TALOS_RT_DB_STORE_STATE_CONTINUOUS) {
-      if (context->continuousMask.empty()) {
-        size_t limbs = context->stateValue.size();
-        context->continuousMask.assign(limbs, 0);
-        context->continuousValue.assign(limbs, 0);
-        if (context->twoState())
-          context->continuousUnknown.assignZero(limbs);
-        else
-          context->continuousUnknown.assign(limbs, 0);
-      }
-      storePackedBits(context->continuousValue, at, op.width, newValue);
-      storePackedBits(context->continuousUnknown, at, op.width, newUnknown);
-      storePackedBits(context->continuousMask, at, op.width, UINT64_MAX);
-    }
-    storePackedBits(context->stateValue, at, op.width, newValue);
-    storePackedBits(context->stateUnknown, at, op.width, newUnknown);
-    talos_rt_sync_native_state_range_unlocked(context, at, op.width);
-    uint64_t differs = (oldValue ^ newValue) | (oldUnknown ^ newUnknown);
-    // A change nothing consumes is only its new value, already stored (IEEE
-    // 1800-2023 4.3; two-tier B2 Q4). The masks were checked above.
-    // Signal diagnostics count publications, so they keep the full path.
-    if (differs != 0 && !context->nativeSchedulePlan &&
-        !context->signalDiagnosticsEnabled &&
-        talos_rt_transition_unconsumed_unlocked(context, published)) {
-      if (++context->schedulerEpoch == 0)
-        context->schedulerEpoch = 1;
-    } else if (differs != 0) {
-      // transitionEdges, a word at a time.
-      uint64_t oldZero = ~oldUnknown & ~oldValue;
-      uint64_t oldOne = ~oldUnknown & oldValue;
-      uint64_t newZero = ~newUnknown & ~newValue;
-      uint64_t newOne = ~newUnknown & newValue;
-      PackedSignalTransitionBuffer edges(op.width);
-      storePackedBytes(edges.changed(), 0, op.width, differs);
-      storePackedBytes(edges.posedge(), 0, op.width,
-                       differs &
-                           ((oldZero & ~newZero) | (oldUnknown & newOne)));
-      storePackedBytes(edges.negedge(), 0, op.width,
-                       differs & ((oldOne & ~newOne) | (oldUnknown & newZero)));
-      uint64_t sequence = 0;
-      if (!talos_rt_publish_signal_transition_batch_unlocked(
-              context, published, op.width, edges.changed(), edges.posedge(),
-              edges.negedge(), 0, &sequence)) {
-        status = context->schedulerStatus;
-        return true;
-      }
-      talos_rt_invalidate_signal_snapshots_unlocked(context, published,
-                                                    op.width);
-      if (!talos_rt_notify_observer_signal_unlocked(context, published,
-                                                    op.width)) {
-        status = context->schedulerStatus;
-        return true;
-      }
-      if (++context->schedulerEpoch == 0)
-        context->schedulerEpoch = 1;
-    }
-    if (op.flags & TALOS_RT_DB_STORE_STATE_CHANGED) {
-      FastOp changedOp = op;
-      changedOp.width = op.sourceWidth;
-      bool reported =
-          differs != 0 &&
-          (op.flags & TALOS_RT_DB_STORE_STATE_DEFER_NET_RESOLUTION) == 0;
-      fastWrite(data, changedOp, reported, 0);
-    }
     break;
-  }
+  case kFastPublishingStoreState:
+    if (!fastStoreState(op, data, context, status))
+      return false;
+    if (status == TALOS_RT_OK &&
+        talos_rt_v1_scheduler_termination_requested(context))
+      status = kFinishedPublication;
+    break;
   case kFastConstantBytes:
     fastCopyBytes(data + op.destination,
                   reinterpret_cast<const uint8_t *>(op.immediate),
@@ -1820,8 +1845,13 @@ const FastOp *fastPlan(const Image &image, const Frame &frame,
       decodedCode.push_back(
           instructionAt(image, frame.function.firstInstruction + index));
     plan.reserve(static_cast<size_t>(frame.function.instructionCount));
-    for (const Instruction &instruction : decodedCode)
-      plan.push_back(decodeFastOp(image, frame.function, instruction));
+    const bool publicationFences = canPublishToVPI(context);
+    for (const Instruction &instruction : decodedCode) {
+      FastOp decoded = decodeFastOp(image, frame.function, instruction);
+      if (decoded.kind == kFastStoreState && publicationFences)
+        decoded.kind = kFastPublishingStoreState;
+      plan.push_back(decoded);
+    }
     auto &copyRuns = context->designBytecodeCopyRuns;
     if (copyRuns.size() != image.functionCount)
       copyRuns.assign(static_cast<size_t>(image.functionCount), {});
@@ -1922,6 +1952,11 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
   uint64_t begin = frame.function.firstInstruction;
   uint64_t end = begin + frame.function.instructionCount;
   uint64_t pc = startPC;
+  const bool publicationFences = canPublishToVPI(context);
+  auto finishPublication = [&]() {
+    *action = {TALOS_RT_FRAGMENT_TERMINATE, TALOS_RT_SUSPEND_NONE, 0, 0, 0, 0};
+    return TALOS_RT_OK;
+  };
   if (invalidCode)
     return TALOS_RT_INVALID_BYTECODE;
   while (pc >= begin && pc < end) {
@@ -1947,6 +1982,8 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
         }
         if (fastStatus != TALOS_RT_OK) {
           budget.used = used;
+          if (fastStatus == kFinishedPublication)
+            return finishPublication();
           return fastStatus;
         }
         if (fastTransfersControl(op.kind) && (pc < begin || pc >= end))
@@ -4564,11 +4601,10 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
       return TALOS_RT_OK;
     }
     case TALOS_RT_DB_VPI_PUBLICATION_FENCE:
-      if (!talos_rt_v1_scheduler_termination_requested(context))
-        break;
-      // A non-CONTINUE action also unwinds ordinary bytecode calls.
-      *action = {TALOS_RT_FRAGMENT_TERMINATE, TALOS_RT_SUSPEND_NONE, 0, 0, 0, 0};
-      return TALOS_RT_OK;
+      // Images emitted before these checks moved onto publishing operations.
+      if (talos_rt_v1_scheduler_termination_requested(context))
+        return finishPublication();
+      break;
     case TALOS_RT_DB_TERMINATE:
       *action = {TALOS_RT_FRAGMENT_TERMINATE,
                  TALOS_RT_SUSPEND_NONE,
@@ -4599,6 +4635,17 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
     default:
       return TALOS_RT_INVALID_BYTECODE;
     }
+    // A callback can return from a packed write, force/release, or an
+    // intrinsic implementing a managed write. Finish before fetching the
+    // next instruction. The outer callers propagate this normal TERMINATE
+    // action through nested HDL calls (IEEE 1800-2023 38.4).
+    if (publicationFences &&
+        (instruction.opcode == TALOS_RT_DB_STORE_STATE ||
+         instruction.opcode == TALOS_RT_DB_OVERRIDE_STATE ||
+         instruction.opcode == TALOS_RT_DB_RELEASE_STATE ||
+         instruction.opcode == TALOS_RT_DB_INTRINSIC) &&
+        talos_rt_v1_scheduler_termination_requested(context))
+      return finishPublication();
   }
   return TALOS_RT_INVALID_BYTECODE;
 }

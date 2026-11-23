@@ -2,6 +2,7 @@
 // RUN: talos-opt %s --encode-talos-sim-to-bytecode='vpi=off' \
 // RUN:   --test-talos-print-bytecode -o /dev/null 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=PRINT
+// RUN: talos-opt %s --encode-talos-sim-to-bytecode='vpi=read require-bytecode=true' --test-talos-print-bytecode -o /dev/null 2>&1 | FileCheck %s --check-prefix=PRINT --implicit-check-not='opcode=69 '
 // RUN: talos-opt %s --convert-talos-sim-processes-to-llvm-coroutines | FileCheck %s --check-prefix=NATIVE
 
 module attributes {
@@ -29,7 +30,8 @@ module attributes {
 }
 
 // StoreState is opcode 28. Event-handle publication uses flags 0, not the
-// packed continuous-driver flag 2.
+// packed continuous-driver flag 2. A read client can finish at the store
+// without a separate publication-fence instruction (opcode 69).
 // CHECK: runtime.bytecode_image = array<i8:
 // PRINT: opcode=28 flags=0 dst=0 src0=2 src1=1
 // NATIVE: llvm.call @talos_rt_v1_native_state_store_plane
