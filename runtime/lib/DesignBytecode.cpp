@@ -125,13 +125,13 @@ talos_rt_status releaseCapturedAutomaticStates(const Image &image,
   Function function = functionAt(image, functionIndex);
   if ((function.flags & TALOS_RT_DESIGN_FUNCTION_PROCESS) == 0)
     return TALOS_RT_OK;
+  const auto [firstCapture, endCapture] =
+      processCaptures(image, functionIndex, function);
   auto stableAt = [&](uint64_t index, uint64_t &stable,
                       bool &hasHandle) -> talos_rt_status {
     hasHandle = false;
     stable = UINT64_MAX;
     CaptureRecord capture = captureAt(image, index);
-    if (capture.function != functionIndex)
-      return TALOS_RT_OK;
     Layout layout = layoutAt(image, function, capture.argument);
     if (layout.kind != TALOS_RT_DBREG_HANDLE ||
         capture.valueOffset == UINT64_MAX)
@@ -145,7 +145,7 @@ talos_rt_status releaseCapturedAutomaticStates(const Image &image,
   };
 
   // Validate every captured handle before changing any reference count.
-  for (uint64_t index = 0; index != image.stateDescriptorCount; ++index) {
+  for (uint64_t index = firstCapture; index != endCapture; ++index) {
     uint64_t stable = UINT64_MAX;
     bool hasHandle = false;
     talos_rt_status status = stableAt(index, stable, hasHandle);
@@ -169,7 +169,7 @@ talos_rt_status releaseCapturedAutomaticStates(const Image &image,
   // the available count, restore all earlier decrements before failing.
   std::lock_guard<TalosContextMutex> lock(context->mutex);
   auto rollback = [&](uint64_t end) {
-    for (uint64_t index = 0; index != end; ++index) {
+    for (uint64_t index = firstCapture; index != end; ++index) {
       uint64_t stable = UINT64_MAX;
       bool hasHandle = false;
       if (stableAt(index, stable, hasHandle) != TALOS_RT_OK || !hasHandle)
@@ -183,7 +183,7 @@ talos_rt_status releaseCapturedAutomaticStates(const Image &image,
         ++found->second.referenceCount;
     }
   };
-  for (uint64_t index = 0; index != image.stateDescriptorCount; ++index) {
+  for (uint64_t index = firstCapture; index != endCapture; ++index) {
     uint64_t stable = UINT64_MAX;
     bool hasHandle = false;
     (void)stableAt(index, stable, hasHandle);
@@ -203,7 +203,7 @@ talos_rt_status releaseCapturedAutomaticStates(const Image &image,
   }
   // Only the states decremented above can have reached zero: every other
   // release erases at zero itself.
-  for (uint64_t index = 0; index != image.stateDescriptorCount; ++index) {
+  for (uint64_t index = firstCapture; index != endCapture; ++index) {
     uint64_t stable = UINT64_MAX;
     bool hasHandle = false;
     (void)stableAt(index, stable, hasHandle);
@@ -465,10 +465,10 @@ talos_rt_status prepareTaskActivation(
       static_cast<size_t>(scratchOffset + callee.scratchSize));
   uint32_t copied = 0;
   std::unordered_map<uint32_t, uint64_t> retainedAutomaticStates;
-  for (uint64_t index = 0; index != image.stateDescriptorCount; ++index) {
+  const auto [firstCapture, endCapture] =
+      processCaptures(image, calleeIndex, callee);
+  for (uint64_t index = firstCapture; index != endCapture; ++index) {
     CaptureRecord capture = captureAt(image, index);
-    if (capture.function != calleeIndex)
-      continue;
     ++copied;
     if (capture.argument >= operandCount)
       return TALOS_RT_INVALID_BYTECODE;
@@ -549,6 +549,8 @@ enum FastKind : uint8_t {
   kFastLshr,
   kFastAshr,
   kFastExtract,
+  kFastExtractWindow,
+  kFastReduce,
   kFastConcat,
   kFastCompare,
   kFastSelect,
@@ -786,6 +788,14 @@ FastOp decodeFastOp(const Image &image, const Function &function,
       op.reserved = static_cast<uint16_t>(source1.width);
     }
     break;
+  case TALOS_RT_DB_REDUCE:
+    if (destination.valid && destination.width == 1 && source0.valid &&
+        instruction.flags <= TALOS_RT_DB_REDUCE_LOGICAL_VALUE) {
+      op.kind = kFastReduce;
+      use(destination, op.destination, kFastDestinationFourState);
+      use(source0, op.source0, kFastSource0FourState);
+    }
+    break;
   case TALOS_RT_DB_EXTRACT:
     if (destination.valid && source0.valid &&
         instruction.source1 == kInvalidRegister &&
@@ -794,6 +804,30 @@ FastOp decodeFastOp(const Image &image, const Function &function,
       use(destination, op.destination, kFastDestinationFourState);
       use(source0, op.source0, kFastSource0FourState);
       op.immediate = instruction.immediate;
+    } else if (destination.valid &&
+               validRegister(function, instruction.source0) &&
+               instruction.flags != TALOS_RT_DB_AGGREGATE_MANAGED &&
+               (instruction.source1 == kInvalidRegister || source1.valid)) {
+      Layout input = layoutAt(image, function, instruction.source0);
+      bool fourState = input.kind == TALOS_RT_DBREG_LOGIC;
+      uint64_t planeBytes = limbCount(input.width) * sizeof(uint64_t);
+      if ((fourState || input.kind == TALOS_RT_DBREG_BITS) && input.width &&
+          input.size == planeBytes * (fourState ? 2 : 1) &&
+          input.size <= UINT32_MAX && input.offset <= UINT32_MAX - input.size) {
+        op.kind = kFastExtractWindow;
+        use(destination, op.destination, kFastDestinationFourState);
+        if (fourState)
+          op.fourState |= kFastSource0FourState;
+        op.source0 = static_cast<uint32_t>(input.offset);
+        op.source2 = static_cast<uint32_t>(planeBytes);
+        op.immediate = instruction.immediate;
+        op.immediate2 = input.width;
+        op.reserved = 0;
+        if (source1.valid) {
+          use(source1, op.source1, kFastSource1FourState);
+          op.reserved = source1.width;
+        }
+      }
     }
     break;
   case TALOS_RT_DB_CONCAT:
@@ -1205,6 +1239,68 @@ inline bool executeFastOp(const FastOp &op, uint8_t *data,
     uint64_t shiftedValue = count ? (value >> low) & kept : 0;
     uint64_t shiftedUnknown = count ? (unknown >> low) & kept : 0;
     fastWrite(data, op, shiftedValue | padValue, shiftedUnknown | padUnknown);
+    break;
+  }
+  case kFastExtractWindow: {
+    // Extract directly from the register's limb planes. A dynamic packed
+    // element read should not construct and copy two whole aggregate vectors.
+    uint64_t low = op.immediate;
+    if (op.reserved) {
+      uint64_t indexUnknown;
+      fastRead(data, op.source1, source1FourState, op.reserved, low,
+               indexUnknown);
+      if (indexUnknown || (low >> (op.reserved - 1)))
+        return false;
+    }
+    if (low >= op.immediate2 || op.width > op.immediate2 - low)
+      return false; // The general operation pads clipped or sign-extended
+                    // results.
+    const uint32_t first = op.source0 + static_cast<uint32_t>(low / 64 * 8);
+    const unsigned shift = low % 64;
+    auto window = [&](uint32_t offset) {
+      uint64_t bits = fastLoad(data, offset) >> shift;
+      if (shift && op.width > 64 - shift)
+        bits |= fastLoad(data, offset + 8) << (64 - shift);
+      return bits;
+    };
+    uint64_t value = window(first);
+    uint64_t unknown = source0FourState ? window(first + op.source2) : 0;
+    fastWrite(data, op, value, unknown);
+    break;
+  }
+  case kFastReduce: {
+    uint64_t bits, unknown;
+    fastRead(data, op.source0, source0FourState, op.sourceWidth, bits, unknown);
+    bool one = (bits & ~unknown) != 0;
+    bool zero = (~bits & ~unknown & fastMask(op.sourceWidth)) != 0;
+    bool value = false, x = false;
+    switch (op.flags) {
+    case TALOS_RT_DB_REDUCE_AND:
+    case TALOS_RT_DB_REDUCE_NAND:
+      x = !zero && unknown;
+      value = !x && (zero == (op.flags == TALOS_RT_DB_REDUCE_NAND));
+      break;
+    case TALOS_RT_DB_REDUCE_OR:
+    case TALOS_RT_DB_REDUCE_LOGICAL_VALUE:
+    case TALOS_RT_DB_REDUCE_NOR:
+    case TALOS_RT_DB_REDUCE_LOGICAL_NOT:
+      x = !one && unknown;
+      value = !x && (one != (op.flags == TALOS_RT_DB_REDUCE_NOR ||
+                             op.flags == TALOS_RT_DB_REDUCE_LOGICAL_NOT));
+      break;
+    case TALOS_RT_DB_REDUCE_XOR:
+    case TALOS_RT_DB_REDUCE_XNOR:
+      x = unknown != 0;
+      value = !x && (bool(__builtin_parityll(bits)) !=
+                     (op.flags == TALOS_RT_DB_REDUCE_XNOR));
+      break;
+    case TALOS_RT_DB_REDUCE_IS_TRUE:
+      value = one;
+      break;
+    default:
+      return false;
+    }
+    fastWrite(data, op, value, x);
     break;
   }
   case kFastConcat: {
@@ -4556,10 +4652,20 @@ TALOS_RT_FEATURE_HELPER bool classifyDirectDesignReadyCohortMember(
     const ScheduledDesignTask &task, uint32_t activePhase,
     uint32_t unstartedActorRegion, DesignReadyCohortEntry &entry) {
   if (task.id == 0 || task.terminated || task.explicitlySuspended ||
-      !task.started || task.phase != activePhase || task.urgent ||
-      task.prioritySignal ||
-      (task.suspendKind != TALOS_RT_SUSPEND_CHANGE &&
-       task.suspendKind != TALOS_RT_SUSPEND_EDGE))
+      task.phase != activePhase || task.urgent || task.prioritySignal)
+    return false;
+  // Ordinary first activations are already runnable. Cache the same rank as
+  // the exact selector during root startup, when thousands of them coexist.
+  // Restrict this case to Active, which precedes every other home region.
+  if (!task.started && task.suspendKind == TALOS_RT_SUSPEND_NONE &&
+      task.queuedRegion == TALOS_RT_REGION_ACTIVE && !task.signalTriggered &&
+      !task.signalLatch) {
+    entry = {task.id, TALOS_RT_REGION_ACTIVE, talos_rt_scheduler_rank(task),
+             task.insertionSequence};
+    return true;
+  }
+  if (!task.started || (task.suspendKind != TALOS_RT_SUSPEND_CHANGE &&
+                        task.suspendKind != TALOS_RT_SUSPEND_EDGE))
     return false;
   bool signalTriggered =
       task.signalTriggered || (task.signalLatch && task.signalLatch->triggered);
@@ -5086,10 +5192,10 @@ talos_rt_status talos_rt_execute_design_export_task(
     };
     std::vector<CaptureRecord> captures(function.argumentCount);
     std::vector<uint8_t> hasCapture(function.argumentCount, 0);
-    for (uint64_t index = 0; index != image.stateDescriptorCount; ++index) {
+    const auto [firstCapture, endCapture] =
+        processCaptures(image, functionIndex, function);
+    for (uint64_t index = firstCapture; index != endCapture; ++index) {
       CaptureRecord capture = captureAt(image, index);
-      if (capture.function != functionIndex)
-        continue;
       if (capture.argument >= function.argumentCount ||
           hasCapture[capture.argument])
         return TALOS_RT_INVALID_BYTECODE;
@@ -6994,14 +7100,9 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
       }
       bool directExactScan = !selectedFromReadyCohort && !collectReadyCohort;
       auto scanExactDesignCandidates =
-          [&]() __attribute__((always_inline)) -> talos_rt_status {
-        // Keep the ordinary and negative-admission path in the original scan
-        // body. This is the dominant generic-scheduler path and must not pay
-        // an outlined feature-scanner call or its altered register layout.
-        for (uint64_t candidateID : context->designPollCandidates) {
-          if (context->nativeScheduleDesignTaskFilterActive &&
-              candidateID != context->nativeScheduleForcedDesignTask)
-            continue;
+          [&](const auto &candidates)
+              __attribute__((always_inline)) -> talos_rt_status {
+        for (uint64_t candidateID : candidates) {
           auto indexed = context->scheduledDesignTaskIndices.find(candidateID);
           if (indexed == context->scheduledDesignTaskIndices.end() ||
               indexed->second >= context->scheduledDesignTasks.size())
@@ -7051,8 +7152,19 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
         }
         return TALOS_RT_OK;
       };
+      auto scanExact = [&]() __attribute__((always_inline)) {
+        // SPAWN priming selects one child while its parent is suspended in
+        // the intrinsic. Its ID is already indexed, even in a large cohort.
+        if (context->nativeScheduleDesignTaskFilterActive) {
+          uint64_t id = context->nativeScheduleForcedDesignTask;
+          if (!context->designPollCandidates.count(id))
+            return TALOS_RT_OK;
+          return scanExactDesignCandidates(std::array<uint64_t, 1>{id});
+        }
+        return scanExactDesignCandidates(context->designPollCandidates);
+      };
       if (directExactScan) {
-        talos_rt_status status = scanExactDesignCandidates();
+        talos_rt_status status = scanExact();
         if (status != TALOS_RT_OK)
           return status;
       }
@@ -7161,7 +7273,7 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
         selectedRegion = UINT32_MAX;
         selectedRank = UINT32_MAX;
         selectedInsertionSequence = UINT64_MAX;
-        scanStatus = scanExactDesignCandidates();
+        scanStatus = scanExact();
         if (scanStatus != TALOS_RT_OK)
           return scanStatus;
       }

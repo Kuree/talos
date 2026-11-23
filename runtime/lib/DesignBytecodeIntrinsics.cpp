@@ -3078,10 +3078,10 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
         static_cast<size_t>(scratchOffset + callee.scratchSize));
     uint32_t copied = 0;
     std::unordered_map<uint32_t, uint64_t> retainedAutomaticStates;
-    for (uint64_t index = 0; index != image.stateDescriptorCount; ++index) {
+    const auto [firstCapture, endCapture] =
+        processCaptures(image, function, callee);
+    for (uint64_t index = firstCapture; index != endCapture; ++index) {
       CaptureRecord capture = captureAt(image, index);
-      if (capture.function != function)
-        continue;
       ++copied;
       if (capture.valueOffset == UINT64_MAX)
         continue;

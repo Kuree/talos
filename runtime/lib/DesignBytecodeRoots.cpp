@@ -340,10 +340,11 @@ void talos_rt_enumerate_design_managed_roots(
             return;
           visitManagedWord(frame.data() + offset, visit, visitorEnvironment);
         };
-        for (uint64_t index = 0; index != image.stateDescriptorCount; ++index) {
+        const auto [firstCapture, endCapture] =
+            processCaptures(image, functionIndex, function);
+        for (uint64_t index = firstCapture; index != endCapture; ++index) {
           CaptureRecord capture = captureAt(image, index);
-          if (capture.function != functionIndex ||
-              capture.argument >= function.layoutCount ||
+          if (capture.argument >= function.layoutCount ||
               capture.valueOffset == UINT64_MAX)
             continue;
           uint8_t kind = layoutAt(image, function, capture.argument).kind;

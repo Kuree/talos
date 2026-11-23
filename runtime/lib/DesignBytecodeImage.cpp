@@ -312,6 +312,23 @@ CaptureRecord captureAt(const Image &image, uint64_t index) {
           read64(data + 24)};
 }
 
+std::pair<uint64_t, uint64_t> processCaptures(const Image &image,
+                                              uint32_t functionIndex,
+                                              const Function &function) {
+  if (!function.argumentCount ||
+      !(function.flags & TALOS_RT_DESIGN_FUNCTION_PROCESS))
+    return {0, 0};
+  uint64_t first = 0, last = image.stateDescriptorCount;
+  while (first < last) {
+    const uint64_t mid = first + (last - first) / 2;
+    if (captureAt(image, mid).function < functionIndex)
+      first = mid + 1;
+    else
+      last = mid;
+  }
+  return {first, first + function.argumentCount};
+}
+
 ConnectivityRecord connectivityAt(const Image &image, uint64_t index) {
   const uint8_t *data =
       image.data + image.connectivity + index * kConnectivitySize;

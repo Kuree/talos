@@ -359,6 +359,10 @@ Continuation continuationAt(const Image &image, uint64_t index);
 IntrinsicSignature intrinsicAt(const Image &image, uint32_t index);
 IntrinsicSite siteAt(const Image &image, uint32_t index);
 CaptureRecord captureAt(const Image &image, uint64_t index);
+/// In a validated image, each process has one contiguous row per argument.
+std::pair<uint64_t, uint64_t> processCaptures(const Image &image,
+                                              uint32_t functionIndex,
+                                              const Function &function);
 ConnectivityRecord connectivityAt(const Image &image, uint64_t index);
 std::pair<uint32_t, uint32_t> operandAt(const Image &image, uint64_t index);
 bool compatible(const Layout &left, const Layout &right);
