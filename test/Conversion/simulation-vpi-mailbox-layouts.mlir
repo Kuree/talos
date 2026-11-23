@@ -33,7 +33,7 @@
 #tagged = #simulation.vpi_type<kind = unpacked_union, isSigned = false, isFourState = false,
     name = "tagged_t", range = [], children = [#word, #string], childNames = ["count", "text"],
     isTagged = true, isSoft = false, bitWidth = 0 : i64, selectableWidth = 64 : i64,
-    bitstreamWidth = 64 : i64, tagBits = 2 : i64, childOrdinals = [0, 1], childPackedOffsets = [0, 0]>
+    bitstreamWidth = 64 : i64, tagBits = 0 : i64, childOrdinals = [0, 1], childPackedOffsets = [0, 0]>
 #union = #simulation.vpi_type<kind = unpacked_union, isSigned = false, isFourState = true,
     name = "union_t", range = [], children = [#wide, #real], childNames = ["bits", "number"],
     isTagged = false, isSoft = false, bitWidth = 0 : i64, selectableWidth = 65 : i64,
@@ -81,7 +81,7 @@
 #small_tagged = #simulation.vpi_type<kind = unpacked_union, isSigned = false, isFourState = false,
     name = "small_tagged_t", range = [], children = [#nibble, #nibble], childNames = ["first", "second"],
     isTagged = true, isSoft = false, bitWidth = 0 : i64, selectableWidth = 4 : i64,
-    bitstreamWidth = 4 : i64, tagBits = 2 : i64, childOrdinals = [0, 1], childPackedOffsets = [0, 0]>
+    bitstreamWidth = 4 : i64, tagBits = 0 : i64, childOrdinals = [0, 1], childPackedOffsets = [0, 0]>
 #small_tagged_mailbox = #simulation.vpi_type<kind = mailbox, isSigned = false, isFourState = false,
     range = [], children = [#small_tagged], childNames = []>
 !small_tagged = !simulation.unpacked_union<fields = [

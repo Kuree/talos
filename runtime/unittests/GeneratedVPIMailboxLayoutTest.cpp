@@ -235,6 +235,24 @@ TEST(GeneratedDesignDatabase, MailboxElementLayouts) {
   ValueElementBindingWriter(image.data() + rows)
       .setPhysicalTypeIndex(header.getTypeCount());
   rejected(std::move(image));
+  // IEEE 1800-2023 7.3.2 specifies tag bits only for the packed representation:
+  // an unpacked tagged union's semantic type has none, even the width its
+  // tagged storage uses.
+  image = original();
+  bool taggedUnion = false;
+  for (uint64_t index = 0;
+       !taggedUnion && index != directory.getSemanticTypeCount(); ++index) {
+    uint8_t *record = image.data() + directory.getSemanticTypeOffset() +
+                      index * SemanticTypeLayout.size;
+    uint32_t encoded = SemanticTypeView(record).getKindAndFlags();
+    taggedUnion = (encoded & UINT32_C(0xff)) ==
+                      TALOS_RT_DESIGN_SEMANTIC_UNPACKED_UNION &&
+                  (encoded & TALOS_RT_DESIGN_SEMANTIC_TAGGED) != 0;
+    if (taggedUnion)
+      SemanticTypeWriter(record).setTagBits(2);
+  }
+  ASSERT_TRUE(taggedUnion);
+  rejected(std::move(image));
   image = original();
   // Owner tags are a generated closed namespace, not arbitrary table kinds.
   ValueElementBindingWriter(image.data() + rows).setOwnerKind(UINT32_MAX);

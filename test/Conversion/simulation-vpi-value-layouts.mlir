@@ -18,7 +18,7 @@
 #tagged = #simulation.vpi_type<kind = unpacked_union, isSigned = false, isFourState = false,
     name = "tagged_t", range = [], children = [#string, #semaphore], childNames = ["text", "lock"],
     isTagged = true, isSoft = false, bitWidth = 0 : i64, selectableWidth = 64 : i64,
-    bitstreamWidth = 64 : i64, tagBits = 2 : i64, childOrdinals = [0, 1], childPackedOffsets = [0, 0]>
+    bitstreamWidth = 64 : i64, tagBits = 0 : i64, childOrdinals = [0, 1], childPackedOffsets = [0, 0]>
 #array = #simulation.vpi_type<kind = unpacked_array, isSigned = false, isFourState = true, range = [2, 1], children = [#record], childNames = []>
 #enum = #simulation.vpi_type<kind = enum, isSigned = true, isFourState = false, name = "enum_t", range = [], children = [#int], childNames = []>
 #alias_enum = #simulation.vpi_type<kind = enum, isSigned = true, isFourState = false, name = "enum_t", range = [], children = [#int], childNames = [], typedefAliases = [@alias]>

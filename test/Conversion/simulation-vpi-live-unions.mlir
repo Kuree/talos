@@ -30,7 +30,7 @@
     name = "tagged_t", range = [], children = [#int, #string, #void, #record, #array],
     childNames = ["number", "text", "none", "record", "items"], isTagged = true,
     isSoft = false, bitWidth = 0 : i64, selectableWidth = 64 : i64,
-    bitstreamWidth = 64 : i64, tagBits = 3 : i64,
+    bitstreamWidth = 64 : i64, tagBits = 0 : i64,
     childOrdinals = [0, 1, 2, 3, 4], childPackedOffsets = [0, 0, 0, 0, 0]>
 #union = #simulation.vpi_type<kind = unpacked_union, isSigned = false, isFourState = false,
     name = "union_t", range = [], children = [#long, #real],
@@ -65,7 +65,7 @@
 #small_tagged = #simulation.vpi_type<kind = unpacked_union, isSigned = false, isFourState = false,
     name = "small_tagged_t", range = [], children = [#nibble, #nibble], childNames = ["first", "second"],
     isTagged = true, isSoft = false, bitWidth = 0 : i64, selectableWidth = 4 : i64,
-    bitstreamWidth = 4 : i64, tagBits = 2 : i64, childOrdinals = [0, 1], childPackedOffsets = [0, 0]>
+    bitstreamWidth = 4 : i64, tagBits = 0 : i64, childOrdinals = [0, 1], childPackedOffsets = [0, 0]>
 !small_tagged = !simulation.unpacked_union<fields = [
     #simulation.field<name = "first", type = i4, ordinal = 0, packedOffset = 0>,
     #simulation.field<name = "second", type = i4, ordinal = 1, packedOffset = 0>], isTagged = true>
@@ -73,7 +73,7 @@
 #nested = #simulation.vpi_type<kind = unpacked_union, isSigned = false, isFourState = false,
     name = "nested_t", range = [], children = [#small_tagged, #int], childNames = ["inner", "number"],
     isTagged = true, isSoft = false, bitWidth = 0 : i64, selectableWidth = 32 : i64,
-    bitstreamWidth = 32 : i64, tagBits = 2 : i64, childOrdinals = [0, 1], childPackedOffsets = [0, 0]>
+    bitstreamWidth = 32 : i64, tagBits = 0 : i64, childOrdinals = [0, 1], childPackedOffsets = [0, 0]>
 !nested = !simulation.unpacked_union<fields = [
     #simulation.field<name = "inner", type = !small_tagged, ordinal = 0, packedOffset = 0>,
     #simulation.field<name = "number", type = i32, ordinal = 1, packedOffset = 0>], isTagged = true>
@@ -86,7 +86,7 @@
 #ports = #simulation.vpi_type<kind = unpacked_union, isSigned = false, isFourState = false,
     name = "ports_t", range = [], children = [#queue, #int], childNames = ["ports", "number"],
     isTagged = true, isSoft = false, bitWidth = 0 : i64, selectableWidth = 64 : i64,
-    bitstreamWidth = 64 : i64, tagBits = 2 : i64, childOrdinals = [0, 1], childPackedOffsets = [0, 0]>
+    bitstreamWidth = 64 : i64, tagBits = 0 : i64, childOrdinals = [0, 1], childPackedOffsets = [0, 0]>
 !ports = !simulation.unpacked_union<fields = [
     #simulation.field<name = "ports", type = !queue, ordinal = 0, packedOffset = 0>,
     #simulation.field<name = "number", type = i32, ordinal = 1, packedOffset = 0>], isTagged = true>

@@ -16,7 +16,7 @@
     name = "union_t", range = [], children = [#record, #void],
     childNames = ["record", "none"], isTagged = true, isSoft = false,
     bitWidth = 0 : i64, selectableWidth = 32 : i64, bitstreamWidth = 0 : i64,
-    tagBits = 2 : i64, childOrdinals = [0, 1], childPackedOffsets = [0, 0]>
+    tagBits = 0 : i64, childOrdinals = [0, 1], childPackedOffsets = [0, 0]>
 !record = !simulation.unpacked_struct<[
     #simulation.field<name = "reference", type = !simulation.semaphore, ordinal = 0, packedOffset = 0>,
     #simulation.field<name = "number", type = i32, ordinal = 1, packedOffset = 0>]>

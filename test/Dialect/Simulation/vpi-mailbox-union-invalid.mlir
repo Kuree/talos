@@ -21,7 +21,7 @@ module {
 #union = #simulation.vpi_type<kind = unpacked_union, isSigned = false, isFourState = false,
     range = [], children = [#void], childNames = ["none"], isTagged = true,
     isSoft = false, bitWidth = 0 : i64, selectableWidth = 1 : i64,
-    bitstreamWidth = 1 : i64, tagBits = 1 : i64,
+    bitstreamWidth = 1 : i64, tagBits = 0 : i64,
     childOrdinals = [0], childPackedOffsets = [0]>
 #mailbox = #simulation.vpi_type<kind = mailbox, isSigned = false, isFourState = false,
     range = [], children = [#union], childNames = []>

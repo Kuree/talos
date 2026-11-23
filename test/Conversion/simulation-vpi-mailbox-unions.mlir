@@ -32,7 +32,7 @@
     name = "tagged_t", range = [], children = [#int, #string, #void, #record, #array],
     childNames = ["number", "text", "none", "record", "items"], isTagged = true,
     isSoft = false, bitWidth = 0 : i64, selectableWidth = 64 : i64,
-    bitstreamWidth = 64 : i64, tagBits = 3 : i64,
+    bitstreamWidth = 64 : i64, tagBits = 0 : i64,
     childOrdinals = [0, 1, 2, 3, 4], childPackedOffsets = [0, 0, 0, 0, 0]>
 #union = #simulation.vpi_type<kind = unpacked_union, isSigned = false, isFourState = false,
     name = "union_t", range = [], children = [#long, #real],

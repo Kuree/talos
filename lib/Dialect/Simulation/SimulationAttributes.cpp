@@ -409,8 +409,11 @@ LogicalResult VPITypeSemanticsAttr::verify(
     if (packed && (bitWidth.getValue() != selectableWidth.getValue() ||
                    bitWidth.getValue() != bitstreamWidth.getValue()))
       return emitError() << "packed VPI aggregate widths must agree";
+    // IEEE 1800-2023 7.3.2 specifies a tag's size and position only for the
+    // packed representation; an unpacked tagged union's tag is storage.
     if (!packed &&
-        (!bitWidth.getValue().isZero() || isSigned || isSoft.getValue()))
+        (!bitWidth.getValue().isZero() || !tagBits.getValue().isZero() ||
+         isSigned || isSoft.getValue()))
       return emitError() << "unpacked VPI aggregate has packed-only metadata";
   }
 

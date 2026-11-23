@@ -6,7 +6,7 @@
 #small_tagged = #simulation.vpi_type<kind = unpacked_union, isSigned = false, isFourState = false,
     name = "small_tagged_t", range = [], children = [#nibble, #nibble], childNames = ["first", "second"],
     isTagged = true, isSoft = false, bitWidth = 0 : i64, selectableWidth = 4 : i64,
-    bitstreamWidth = 4 : i64, tagBits = 2 : i64, childOrdinals = [0, 1], childPackedOffsets = [0, 0]>
+    bitstreamWidth = 4 : i64, tagBits = 0 : i64, childOrdinals = [0, 1], childPackedOffsets = [0, 0]>
 !small_tagged = !simulation.unpacked_union<fields = [
     #simulation.field<name = "first", type = i4, ordinal = 0, packedOffset = 0>,
     #simulation.field<name = "second", type = i4, ordinal = 1, packedOffset = 0>], isTagged = true>

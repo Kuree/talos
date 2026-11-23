@@ -5442,8 +5442,11 @@ bool validateDatabaseImpl(const Database &database) {
     if ((tagged && !unionType) ||
         (soft && (kind != TALOS_RT_DESIGN_SEMANTIC_PACKED_UNION || !tagged)) ||
         (!tagged && tagBits != 0) || (packedAggregate && bitWidth == 0) ||
+        // IEEE 1800-2023 7.3.2 specifies a tag's size and position only for
+        // the packed representation; an unpacked tagged union's tag is
+        // physical storage, so its semantic record carries no tag bits.
         (aggregate && !packedAggregate &&
-         (bitWidth != 0 || isSigned || soft)) ||
+         (bitWidth != 0 || tagBits != 0 || isSigned || soft)) ||
         (!aggregate && (tagged || soft || bitWidth != 0 || tagBits != 0)) ||
         (kind != TALOS_RT_DESIGN_SEMANTIC_QUEUE && queueBound != 0))
       return false;
@@ -6512,7 +6515,11 @@ bool validateDatabaseImpl(const Database &database) {
                                      : TALOS_RT_DESIGN_TYPE_STRUCT) ||
             physicalPacked != packed || physicalFourState != fourState ||
             ((physicalFlags & TALOS_RT_DESIGN_TYPE_TAGGED) != 0) != tagged ||
-            read64(physical + 56) != read64(semantic + 56) ||
+            // An unpacked union's semantic record has no tag bits (checked
+            // with the semantic types); its tagged storage keeps its own tag,
+            // including the inactive state.
+            ((packed || !isUnion) &&
+             read64(physical + 56) != read64(semantic + 56)) ||
             read64(physical + 48) != count ||
             (packed && read64(physical + 8) != read64(semantic + 48)))
           return false;

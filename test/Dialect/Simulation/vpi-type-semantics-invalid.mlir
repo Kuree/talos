@@ -101,6 +101,23 @@ module attributes {
 
 // -----
 
+// IEEE 1800-2023 7.3.2 specifies a tag's size and position only for packed
+// tagged unions; an unpacked tagged union's tag is storage, not semantic type
+// metadata.
+// expected-error @+2 {{unpacked VPI aggregate has packed-only metadata}}
+module attributes {
+  test.test = #simulation.vpi_type<kind = unpacked_union,
+    isSigned = false, isFourState = false, name = "tu_t", range = [],
+    children = [#simulation.vpi_type<kind = int, isSigned = true,
+      isFourState = false, range = [31, 0], children = [], childNames = []>],
+    childNames = ["i"], isTagged = true, isSoft = false,
+    bitWidth = 0 : i64, selectableWidth = 32 : i64,
+    bitstreamWidth = 32 : i64, tagBits = 1 : i64,
+    childOrdinals = [0], childPackedOffsets = [0]>
+} {}
+
+// -----
+
 // expected-error @+2 {{two-state VPI semantic type has a four-state flag}}
 module attributes {
   test.test = #simulation.vpi_type<kind = bit, isSigned = false,
