@@ -1675,8 +1675,9 @@ static talos_rt_status nativeStateStorePlane(
     // overridden bits), take whole words (two-tier B5).
     if (globalOffset >= 0 && static_cast<uint64_t>(globalOffset) <= rootWidth &&
         bitWidth <= rootWidth - static_cast<uint64_t>(globalOffset) &&
-        (!canonical || (bitWidth > 64 && context->forceMask.empty() &&
-                        context->assignMask.empty()))) {
+        (!canonical ||
+         (bitWidth > 64 && context->forceMask.empty() &&
+          context->assignMask.empty() && context->netDepositHolds.empty()))) {
       uint64_t destination = rootOffset + static_cast<uint64_t>(globalOffset);
       for (uint64_t bit = 0; bit < bitWidth; bit += 64) {
         uint64_t width = std::min<uint64_t>(64, bitWidth - bit);
@@ -1708,7 +1709,9 @@ static talos_rt_status nativeStateStorePlane(
           (!context->forceMask.empty() &&
            loadPackedBits(context->forceMask, destination, bitWidth) != 0) ||
           (!context->assignMask.empty() &&
-           loadPackedBits(context->assignMask, destination, bitWidth) != 0);
+           loadPackedBits(context->assignMask, destination, bitWidth) != 0) ||
+          (!context->netDepositHolds.empty() &&
+           loadPackedBits(context->netDepositMask, destination, bitWidth) != 0);
       uint64_t next = 0;
       for (uint64_t byte = 0; byte != byteCount; ++byte)
         next |= uint64_t{value[byte]} << (byte * 8);
@@ -1732,6 +1735,13 @@ static talos_rt_status nativeStateStorePlane(
         return TALOS_RT_OK;
       }
     }
+    // The design bits this store writes, clipped to its root.
+    const __int128 storeFirst = std::max<__int128>(globalOffset, 0);
+    const __int128 storeLast = std::min<__int128>(
+        static_cast<__int128>(globalOffset) + bitWidth, rootWidth);
+    const uint64_t storeBegin = rootOffset + static_cast<uint64_t>(storeFirst);
+    const uint64_t storeEnd =
+        rootOffset + static_cast<uint64_t>(std::max(storeLast, storeFirst));
     for (uint64_t bit = 0; bit != bitWidth; ++bit) {
       int64_t coordinate = 0;
       if (!addHandleOffset(globalOffset, bit, coordinate) || coordinate < 0 ||
@@ -1754,7 +1764,11 @@ static talos_rt_status nativeStateStorePlane(
                             : retainedLimb & ~destinationMask;
         context->continuousMask[destination / 64] |= destinationMask;
       }
-      if (canonical && (forced || assigned))
+      // IEEE 1800-2023 38.34: a held put on a net also keeps its bits until
+      // a driver of the net changes.
+      if (canonical && (forced || assigned ||
+                        talos_rt_net_deposit_holds_unlocked(
+                            context, destination, storeBegin, storeEnd)))
         continue;
       bool old =
           canonical

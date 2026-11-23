@@ -8499,9 +8499,32 @@ TEST(DesignBytecode, ResolvesDriversAcrossLogicalNetAliases) {
       TALOS_RT_OK);
   EXPECT_EQ(value[0] & UINT64_C(0xff), UINT64_C(0xa5));
   EXPECT_EQ(unknown[0] & UINT64_C(0xff), UINT64_C(0x04));
-  EXPECT_EQ(talos_rt_v1_design_write(context, alias, value.data(),
-                                     unknown.data(), 65),
-            TALOS_RT_PERMISSION_DENIED);
+  // IEEE 1800-2023 38.34: a write to one alias of a driven net puts the value
+  // on every alias (net one is state bits 65..129) and holds it while the
+  // driver keeps its value: running the driving process again stores the
+  // same contribution and leaves the put in place.
+  std::array<uint64_t, 2> put{UINT64_C(0x3c), 0}, putUnknown{};
+  EXPECT_EQ(talos_rt_v1_design_write(context, alias, put.data(),
+                                     putUnknown.data(), 65),
+            TALOS_RT_OK);
+  auto expectHeld = [&] {
+    ASSERT_EQ(talos_rt_v1_design_read(context, alias, value.data(),
+                                      unknown.data(), 65),
+              TALOS_RT_OK);
+    EXPECT_EQ(value[0] & UINT64_C(0xff), UINT64_C(0x3c));
+    EXPECT_EQ(unknown[0] & UINT64_C(0xff), 0u);
+    EXPECT_EQ((context->stateValue[1] >> 1) & UINT64_C(0xff), UINT64_C(0x3c));
+    EXPECT_EQ((context->stateUnknown[1] >> 1) & UINT64_C(0xff), 0u);
+  };
+  expectHeld();
+  EXPECT_EQ(talos_rt_v1_process_instance_destroy(instance), TALOS_RT_OK);
+  instance = nullptr;
+  ASSERT_EQ(talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_process_instance_execute(
+                instance, context, TALOS_RT_TIER_BYTECODE, &action),
+            TALOS_RT_OK);
+  expectHeld();
   EXPECT_EQ(talos_rt_v1_process_instance_destroy(instance), TALOS_RT_OK);
   talos_rt_v1_context_destroy(context);
 }

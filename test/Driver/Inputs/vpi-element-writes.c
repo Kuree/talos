@@ -33,6 +33,6 @@ void write_elements(void) {
   put("top.whole_int", "1z", vpiNoDelay | vpiReturnEvent);
   put("top.names[0]", "1", vpiNoDelay);
   put("top.name", "1", vpiNoDelay);
-  put("top.driven[3]", "0", vpiNoDelay);
-  put("top.driven", "0", vpiNoDelay);
+  put("top.driven[3]", "1", vpiNoDelay);
+  put("top.vec[1]", "1", vpiNoDelay);
 }

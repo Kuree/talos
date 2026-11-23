@@ -23,7 +23,8 @@ staticSpecializationRootGuard(talos_rt_context *context, uint32_t actorSlot,
   if (!context->nativeSchedulePlan) {
     // The same per-root fallback is usable by generic fragments. Their
     // ordinary publication path keeps canonical state coherent. A force on
-    // one root must not deny direct addressing to unrelated roots.
+    // one root must not deny direct addressing to unrelated roots. A held
+    // VPI put on a net (IEEE 1800-2023 38.34) overrides like a force.
     const NativeStaticState *state =
         findNativeStaticState(context, staticState);
     return context->nativeStateSpecializationFast && state &&
@@ -32,6 +33,8 @@ staticSpecializationRootGuard(talos_rt_context *context, uint32_t actorSlot,
            !nativeMaskIntersectsRange(context->forceMask, state->bitOffset,
                                       state->bitWidth) &&
            !nativeMaskIntersectsRange(context->assignMask, state->bitOffset,
+                                      state->bitWidth) &&
+           !nativeMaskIntersectsRange(context->netDepositMask, state->bitOffset,
                                       state->bitWidth);
   }
   auto dirty = [&](const std::vector<uint64_t> &mask,

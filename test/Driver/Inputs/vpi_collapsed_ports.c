@@ -144,8 +144,9 @@ int collapse_put(int index, int a, int b, int mode, int writable) {
   vpi_put_value(nets[index], &value, 0, flags);
   s_vpi_error_info error;
   int failed = vpi_chk_error(&error) != 0;
-  // Deposits on driven nets remain explicitly unsupported.
-  check(failed == (!writable || mode == 0), "write capability");
+  // IEEE 1800-2023 38.34: a writable build accepts a deposit on a driven
+  // net as well as force and release; a read-only build refuses all three.
+  check(failed == !writable, "write capability");
   if (writable && mode == 2)
     check(value.value.vector && (value.value.vector[0].aval & 255) == a &&
               (value.value.vector[0].bval & 255) == b,

@@ -53,12 +53,15 @@ module collapsed_ports;
     #1;
     if (collapse_setup() || collapse_subscribe(1)) $fatal(1, "setup");
     if (writable) begin
+      // IEEE 1800-2023 38.34: a deposit on one collapsed name reaches every
+      // alias and the load through the leaf, and holds until the driver
+      // changes value. Assigning drive its current value changes nothing.
       if (collapse_put(2, 'h34, 0, 0, 1)) $fatal(1, "deposit");
       #1;
-      if (collapse_check('h12, 0) || result !== 'h12) $fatal(1, "rejected deposit changed state");
+      if (collapse_check('h34, 0) || result !== 'h34) $fatal(1, "deposit");
       drive = 'h12;
       #1;
-      if (collapse_check('h12, 0)) $fatal(1, "unchanged driver");
+      if (collapse_check('h34, 0)) $fatal(1, "unchanged driver");
       drive = 'h56;
       #1;
       if (collapse_check('h56, 0)) $fatal(1, "changed driver");

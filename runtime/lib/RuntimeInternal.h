@@ -3214,6 +3214,20 @@ struct talos_rt_context {
   // every ordinary publication to the corresponding canonical design bit.
   std::vector<uint64_t> forceMask;
   std::vector<uint64_t> assignMask;
+  // IEEE 1800-2023 38.34: a value put on a net with drivers or port aliases
+  // holds until one of the net's drivers changes value; then the whole net is
+  // resolved again. Each held alias root records the put's group (the roots
+  // one put wrote) and its drivers' contributions (value | unknown << 1) at
+  // the put. `netDepositMask` marks held design bits so they stay off the
+  // clean native path while held.
+  struct NetDepositHold {
+    uint64_t group = 0;
+    std::vector<uint8_t> drivers;
+  };
+  std::unordered_map<uint64_t, NetDepositHold> netDepositHolds;
+  std::unordered_map<uint64_t, std::vector<uint64_t>> netDepositGroups;
+  uint64_t nextNetDepositGroup = 0;
+  std::vector<uint64_t> netDepositMask;
   CanonicalPlane assignValue;
   CanonicalPlane assignUnknown;
   // A nonzero entry identifies the detached evaluator that owns a dynamic
@@ -4659,6 +4673,22 @@ talos_rt_status talos_rt_force_design_nets(talos_rt_context *context,
                                            uint64_t begin, uint64_t width,
                                            const uint8_t *value,
                                            const uint8_t *unknown) noexcept;
+// IEEE 1800-2023 38.34: whether a native store of design bits
+// [storeBegin, storeEnd) must leave `bit` at its held put value. The put holds
+// while every driver of its net keeps the value it had at the put. Once one
+// changed, the hold ends and the rest of the net outside the store is
+// resolved from its drivers again; the store then proceeds. Context lock held.
+bool talos_rt_net_deposit_holds_unlocked(talos_rt_context *context,
+                                         uint64_t bit, uint64_t storeBegin,
+                                         uint64_t storeEnd) noexcept;
+// IEEE 1800-2023 38.34: puts a value on every alias of the given net bits and
+// holds it until one of their drivers changes value. Returns
+// TALOS_RT_PERMISSION_DENIED for a net in a switch network, with a delay or
+// with charge storage, which this does not model.
+talos_rt_status talos_rt_deposit_design_nets(talos_rt_context *context,
+                                             uint64_t begin, uint64_t width,
+                                             const uint8_t *value,
+                                             const uint8_t *unknown) noexcept;
 talos_rt_status talos_rt_release_design_nets(talos_rt_context *context,
                                              uint64_t begin,
                                              uint64_t width) noexcept;

@@ -2928,7 +2928,8 @@ bool publishNativeSignalTransitionUnlocked(
       (!context->nativeSchedulePlan || context->stateValue.shared()) &&
       talos_rt_transition_unconsumed_unlocked(context, bitOffset);
   if (unconsumed && context->forceMask.empty() && context->assignMask.empty() &&
-      context->stateValue.shared() && context->stateUnknown.shared()) {
+      context->netDepositHolds.empty() && context->stateValue.shared() &&
+      context->stateUnknown.shared()) {
     // With an outstanding clock handoff, the full walk would ignore every
     // matching direct bit already set by this generated publication. Walk
     // the residual rows alone. An observer, override or a different
@@ -2987,8 +2988,12 @@ bool publishNativeSignalTransitionUnlocked(
   std::vector<uint8_t> overriddenChanged;
   std::vector<uint8_t> overriddenPosedge;
   std::vector<uint8_t> overriddenNegedge;
+  // A held VPI put on a net (IEEE 1800-2023 38.34) overrides its drivers the
+  // same way until one changes; the native store that saw the change has
+  // already ended the hold.
   if (!establishesOverride &&
-      (!context->forceMask.empty() || !context->assignMask.empty())) {
+      (!context->forceMask.empty() || !context->assignMask.empty() ||
+       !context->netDepositHolds.empty())) {
     size_t byteCount = static_cast<size_t>((bitWidth + 7) / 8);
     for (uint64_t bit = 0; bit != bitWidth; ++bit) {
       uint64_t absolute = 0;
@@ -2999,7 +3004,9 @@ bool publishNativeSignalTransitionUnlocked(
       if ((limb >= context->forceMask.size() ||
            (context->forceMask[limb] & mask) == 0) &&
           (limb >= context->assignMask.size() ||
-           (context->assignMask[limb] & mask) == 0))
+           (context->assignMask[limb] & mask) == 0) &&
+          (limb >= context->netDepositMask.size() ||
+           (context->netDepositMask[limb] & mask) == 0))
         continue;
       if (overriddenChanged.empty()) {
         overriddenChanged.assign(changed, changed + byteCount);
@@ -3328,7 +3335,8 @@ bool staticTransitionTakesOrdinaryPath(const talos_rt_context *context) {
 bool publicationBatchCanMerge(const talos_rt_context *context) {
   return context->schedulerStatus == TALOS_RT_OK &&
          context->forceMask.empty() && context->assignMask.empty() &&
-         !context->coverage && !context->saif && !context->clockOccurrences &&
+         context->netDepositHolds.empty() && !context->coverage &&
+         !context->saif && !context->clockOccurrences &&
          !context->exactEvents && !context->vpiObservationDemand &&
          !context->observerDepth && !context->observerForcesCanonicalPlane &&
          context->signalValueSnapshots.empty() &&

@@ -103,7 +103,11 @@ bool nativeAOTTransientBoundaryClean(const talos_rt_context *context) {
     return std::any_of(mask.begin(), mask.end(),
                        [](uint64_t word) { return word != 0; });
   };
-  return !anyOverride(context->forceMask) && !anyOverride(context->assignMask);
+  // A held VPI put on a net (IEEE 1800-2023 38.34) overrides the drivers like
+  // a force until one of them changes.
+  return !anyOverride(context->forceMask) &&
+         !anyOverride(context->assignMask) &&
+         !anyOverride(context->netDepositMask);
 }
 
 bool nativePeriodicAOTEnvironmentClean(const talos_rt_context *context) {
@@ -694,10 +698,13 @@ void refreshNativeStaticSpecializationFastUnlocked(talos_rt_context *context) {
       return std::any_of(mask.begin(), mask.end(),
                          [](uint64_t word) { return word != 0; });
     };
+    // A held VPI put on a net (38.34) likewise keeps its drives on the store
+    // path that can leave the held bits alone.
     *context->nativeStateSpecializationFast =
         !context->observerForcesCanonicalPlane && context->observerDepth == 0 &&
         !context->vpiObservationDemand && !context->observedWriters &&
-        !any(context->forceMask) && !any(context->assignMask);
+        !any(context->forceMask) && !any(context->assignMask) &&
+        !any(context->netDepositMask);
     return;
   }
   const talos_rt_native_schedule_plan *plan =
@@ -4536,6 +4543,8 @@ void talos_rt_aot_release_range_unlocked(talos_rt_context *context,
           nativeMaskIntersectsRange(context->forceMask, state.bitOffset,
                                     state.bitWidth) ||
           nativeMaskIntersectsRange(context->assignMask, state.bitOffset,
+                                    state.bitWidth) ||
+          nativeMaskIntersectsRange(context->netDepositMask, state.bitOffset,
                                     state.bitWidth))
         continue;
       if (context->nativeSchedulePlan && !context->nativeScheduleDeoptimized &&

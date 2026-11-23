@@ -8135,18 +8135,17 @@ vpiHandle namedEventWaitingProcesses(__vpiHandle *source) {
   return makeThreadIterator(source, vpiWaitingProcesses, std::move(processes));
 }
 
-// Reports a design write the runtime refused. A writable net refuses a
-// direct write when it has drivers or shares its storage with other names (a
-// port connection): IEEE 1800-2023 38.34 keeps a value put on such a net
-// until one of its drivers changes, which Talos does not implement yet.
+// Reports a design write the runtime refused. A writable net refuses a put
+// (IEEE 1800-2023 38.34) only when it is in a switch network, has a delay or
+// stores charge, which change how it takes its drivers' value.
 void reportWriteFailure(VPIState *state, const talos_rt_design_info_v1 &root,
                         talos_rt_status status) {
   if (status == TALOS_RT_PERMISSION_DENIED &&
       root.kind == TALOS_RT_DESIGN_RECORD_NET &&
       (root.capabilities & TALOS_RT_DESIGN_CAP_WRITE) != 0)
     setError(state,
-             "writes to a net with drivers or port connections are not "
-             "supported",
+             "writes to a net in a switch network, with a delay or with "
+             "charge storage are not supported",
              vpiNotice);
   else
     setError(state, "VPI write failed");

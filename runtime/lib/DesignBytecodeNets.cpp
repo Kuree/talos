@@ -1110,14 +1110,63 @@ static bool scheduleDelayedMosEdge(talos_rt_context *context,
   return true;
 }
 
-bool resolveNetRoots(const NetAliasCache &cache, talos_rt_context *context,
-                     std::vector<uint64_t> affectedRoots, bool &changed,
-                     bool useNativeState) {
-  if (affectedRoots.empty())
-    return false;
-  // A uniform vector net delay rejects transitions as one vector even when
-  // only one contributing driver bit changed. Expand the worklist to every
-  // bit of each affected vector before computing its replacement target.
+// The contributions of `root`'s drivers, one byte each (value | unknown << 1),
+// read from the planes the resolver reads.
+static std::vector<uint8_t> driverContributions(const NetAliasCache &cache,
+                                                talos_rt_context *context,
+                                                uint64_t root,
+                                                bool useNativeState) {
+  std::vector<uint8_t> contributions;
+  auto drivers = cache.driverBits.find(root);
+  if (drivers == cache.driverBits.end())
+    return contributions;
+  DriverStateReader stateBit(context, useNativeState,
+                             /*useSchedulePlan=*/false);
+  contributions.reserve(drivers->second.size());
+  for (const NetDriverBit &driver : drivers->second)
+    contributions.push_back(
+        static_cast<uint8_t>(stateBit(false, driver.valueOffset) |
+                             stateBit(true, driver.valueOffset) << 1));
+  return contributions;
+}
+
+// Ends the deposit hold (IEEE 1800-2023 38.34) of each root in `roots`, which
+// is about to take its drivers' value again, and appends its design bits to
+// `released`. The rest of its put's group stays held.
+static void endDepositHolds(const NetAliasCache &cache,
+                            talos_rt_context *context,
+                            const std::vector<uint64_t> &roots,
+                            std::vector<uint64_t> &released) {
+  for (uint64_t root : roots) {
+    auto hold = context->netDepositHolds.find(root);
+    if (hold == context->netDepositHolds.end())
+      continue;
+    auto group = context->netDepositGroups.find(hold->second.group);
+    if (group != context->netDepositGroups.end()) {
+      std::vector<uint64_t> &groupRoots = group->second;
+      groupRoots.erase(std::remove(groupRoots.begin(), groupRoots.end(), root),
+                       groupRoots.end());
+      if (groupRoots.empty())
+        context->netDepositGroups.erase(group);
+    }
+    context->netDepositHolds.erase(hold);
+    auto members = cache.members.find(root);
+    if (members == cache.members.end())
+      continue;
+    for (uint64_t member : members->second) {
+      if (member / 64 < context->netDepositMask.size())
+        context->netDepositMask[member / 64] &= ~(uint64_t{1} << (member % 64));
+      released.push_back(member);
+    }
+  }
+}
+
+// Every root resolved together with `affectedRoots`: a switch network is
+// resolved as one component, and a uniform vector net delay rejects
+// transitions as one vector even when only one contributing driver bit
+// changed. Sorted and unique.
+static void expandResolutionRoots(const NetAliasCache &cache,
+                                  std::vector<uint64_t> &affectedRoots) {
   std::unordered_set<uint64_t> affectedSet(affectedRoots.begin(),
                                            affectedRoots.end());
   for (size_t index = 0; index != affectedRoots.size(); ++index) {
@@ -1139,6 +1188,15 @@ bool resolveNetRoots(const NetAliasCache &cache, talos_rt_context *context,
   std::sort(affectedRoots.begin(), affectedRoots.end());
   affectedRoots.erase(std::unique(affectedRoots.begin(), affectedRoots.end()),
                       affectedRoots.end());
+}
+
+static bool resolveNetRootsFromDrivers(const NetAliasCache &cache,
+                                       talos_rt_context *context,
+                                       std::vector<uint64_t> affectedRoots,
+                                       bool &changed, bool useNativeState) {
+  if (affectedRoots.empty())
+    return false;
+  expandResolutionRoots(cache, affectedRoots);
   std::vector<NetPublication> publications;
   struct DelayedNetPublication {
     uint64_t root = 0;
@@ -1374,6 +1432,27 @@ bool resolveNetRoots(const NetAliasCache &cache, talos_rt_context *context,
   return publishNetBits(context, cache, publications, changed);
 }
 
+// Resolving a root from its drivers ends any deposit hold on it.
+bool resolveNetRoots(const NetAliasCache &cache, talos_rt_context *context,
+                     std::vector<uint64_t> affectedRoots, bool &changed,
+                     bool useNativeState) {
+  if (context->netDepositHolds.empty())
+    return resolveNetRootsFromDrivers(cache, context, std::move(affectedRoots),
+                                      changed, useNativeState);
+  if (affectedRoots.empty())
+    return false;
+  expandResolutionRoots(cache, affectedRoots);
+  std::vector<uint64_t> released;
+  endDepositHolds(cache, context, affectedRoots, released);
+  bool resolved = resolveNetRootsFromDrivers(
+      cache, context, std::move(affectedRoots), changed, useNativeState);
+  // As after a release, the bits return to the clean native path only once
+  // their drivers' value is published.
+  for (uint64_t bit : released)
+    talos_rt_aot_release_range_unlocked(context, bit, 1);
+  return resolved;
+}
+
 bool resolveNetRoots(const NetAliasCache &cache, talos_rt_context *context,
                      std::vector<uint64_t> affectedRoots, bool &changed) {
   return resolveNetRoots(cache, context, std::move(affectedRoots), changed,
@@ -1403,6 +1482,37 @@ bool resolveDrivenNets(const Image &image, talos_rt_context *context,
         affectedRoots.push_back(root);
     }
   }
+  auto affect = [&](uint64_t root) {
+    if (std::find(affectedRoots.begin(), affectedRoots.end(), root) ==
+        affectedRoots.end())
+      affectedRoots.push_back(root);
+  };
+  // IEEE 1800-2023 38.34: a put on a net holds while every driver of the net
+  // keeps the value it had at the put; once one changes, the whole net (each
+  // root the put wrote) is resolved again. A driver re-evaluated to the same
+  // value changes nothing. Each put's group is decided once per call.
+  std::unordered_map<uint64_t, bool> heldGroups;
+  bool keptDeposit = false;
+  auto keepsDeposit = [&](uint64_t root) {
+    auto hold = context->netDepositHolds.find(root);
+    if (hold == context->netDepositHolds.end())
+      return false;
+    auto [decision, fresh] = heldGroups.try_emplace(hold->second.group, true);
+    if (!fresh)
+      return decision->second;
+    const std::vector<uint64_t> &groupRoots =
+        context->netDepositGroups.at(hold->second.group);
+    for (uint64_t groupRoot : groupRoots)
+      if (context->netDepositHolds.at(groupRoot).drivers !=
+          driverContributions(*cache, context, groupRoot, useNativeState)) {
+        decision->second = false;
+        break;
+      }
+    if (!decision->second)
+      for (uint64_t groupRoot : groupRoots)
+        affect(groupRoot);
+    return decision->second;
+  };
   for (const NetAliasRange &driver : cache->drivers) {
     uint64_t driverEnd = driver.valueOffset + driver.width;
     uint64_t overlapBegin = std::max<uint64_t>(
@@ -1413,11 +1523,15 @@ bool resolveDrivenNets(const Image &image, talos_rt_context *context,
          ++driverBit) {
       uint64_t root = cache->rootByBit.at(driver.targetOffset + driverBit -
                                           driver.valueOffset);
-      if (std::find(affectedRoots.begin(), affectedRoots.end(), root) ==
-          affectedRoots.end())
-        affectedRoots.push_back(root);
+      if (!context->netDepositHolds.empty() && keepsDeposit(root)) {
+        keptDeposit = true;
+        continue;
+      }
+      affect(root);
     }
   }
+  if (affectedRoots.empty() && keptDeposit)
+    return true;
   return resolveNetRoots(*cache, context, std::move(affectedRoots), changed,
                          useNativeState);
 }
@@ -2398,6 +2512,173 @@ talos_rt_status talos_rt_force_design_nets(talos_rt_context *context,
   }
   TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
   TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_BYTECODE; }
+}
+
+talos_rt_status talos_rt_deposit_design_nets(talos_rt_context *context,
+                                             uint64_t begin, uint64_t width,
+                                             const uint8_t *value,
+                                             const uint8_t *unknown) noexcept {
+  if (!context || !context->execution || !value || width == 0 ||
+      begin > UINT64_MAX - width)
+    return TALOS_RT_INVALID_ARGUMENT;
+  TALOS_RT_TRY {
+    ContextTransaction transaction(context);
+    talos_rt_design_bytecode_entry_v1 entry{context->execution, 0, 0};
+    Image image;
+    if (!loadValidatedImage(entry, context, image, /*inventoryOnly=*/true))
+      return TALOS_RT_INVALID_BYTECODE;
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
+    if (!synchronizeNativeNetOverrideStateUnlocked(context))
+      return TALOS_RT_INVALID_DESIGN;
+    NetAliasCache *cache = getNetAliasCache(image, context);
+    std::map<uint64_t, std::pair<bool, bool>> depositedRoots;
+    for (uint64_t index = 0; index != width; ++index) {
+      auto found = cache->rootByBit.find(begin + index);
+      if (found == cache->rootByBit.end())
+        return TALOS_RT_INVALID_HANDLE;
+      bool nextValue =
+          (value[index / 8] & static_cast<uint8_t>(1u << (index % 8))) != 0;
+      bool nextUnknown =
+          unknown &&
+          (unknown[index / 8] & static_cast<uint8_t>(1u << (index % 8))) != 0;
+      depositedRoots[found->second] = {nextValue, nextUnknown};
+    }
+    // Switch networks, net delays and charge storage change how and when a
+    // net takes its drivers' value; a held put is not modeled for them.
+    std::vector<uint64_t> roots;
+    for (const auto &[root, ignored] : depositedRoots) {
+      auto members = cache->members.find(root);
+      if (members == cache->members.end())
+        return TALOS_RT_INVALID_HANDLE;
+      if (cache->passComponentByRoot.count(root) ||
+          cache->uniformDelayedRootsByRoot.count(root) ||
+          cache->delayedMosBySource.count(root) ||
+          cache->delayedMosByDestination.count(root) ||
+          cache->resolutionByRoot.at(root) == 9 /* trireg */)
+        return TALOS_RT_PERMISSION_DENIED;
+      for (uint64_t member : members->second) {
+        const NetAliasRange *net = cache->netContaining(member);
+        if (net && !net->propagationDelays.empty() &&
+            net->propagationDelays[member - net->valueOffset])
+          return TALOS_RT_PERMISSION_DENIED;
+      }
+      roots.push_back(root);
+    }
+    // A new put replaces any earlier hold on the same roots.
+    std::vector<uint64_t> replaced;
+    endDepositHolds(*cache, context, roots, replaced);
+    if (context->netDepositMask.empty())
+      context->netDepositMask.assign(context->stateValue.size(), 0);
+    const bool useNativeState = context->nativeStateValue != nullptr;
+    const uint64_t group = ++context->nextNetDepositGroup;
+    std::vector<NetPublication> publications;
+    for (const auto &[root, deposited] : depositedRoots) {
+      const auto &members = cache->members.find(root)->second;
+      // IEEE 1800-2023 10.6.2: a forced net ignores the put; its release
+      // resolves the drivers.
+      if (std::any_of(members.begin(), members.end(), [&](uint64_t member) {
+            return member / 64 < context->forceMask.size() &&
+                   (context->forceMask[member / 64] &
+                    (uint64_t{1} << (member % 64))) != 0;
+          }))
+        continue;
+      for (uint64_t destination : members) {
+        const NetAliasRange *net = cache->netContaining(destination);
+        bool fourState = net && net->fourState;
+        bool nextValue = deposited.first;
+        bool nextUnknown = fourState && deposited.second;
+        if (!fourState && deposited.second)
+          nextValue = false;
+        publications.push_back(
+            {destination, bit(context->stateValue, destination),
+             bit(context->stateUnknown, destination), nextValue, nextUnknown});
+        context->netDepositMask[destination / 64] |= uint64_t{1}
+                                                     << (destination % 64);
+        // A held alias leaves the clean native path, whose kernels could
+        // recompute the net without a driver change.
+        talos_rt_aot_external_write_range_unlocked(context, destination, 1,
+                                                   true);
+      }
+      context->netDepositHolds[root] = {
+          group, driverContributions(*cache, context, root, useNativeState)};
+      context->netDepositGroups[group].push_back(root);
+    }
+    bool changed = false;
+    if (!publishNetBits(context, *cache, publications, changed))
+      return context->schedulerStatus;
+    auto *feature = context->exactEvents.get();
+    if (feature && !feature->snapshots.empty()) {
+      auto flush = feature->snapshotFlush;
+      talos_rt_status status = flush ? flush(context) : TALOS_RT_INVALID_DESIGN;
+      if (status != TALOS_RT_OK) {
+        context->schedulerStatus = status;
+        return status;
+      }
+    }
+    if (changed && ++context->schedulerEpoch == 0)
+      context->schedulerEpoch = 1;
+    return TALOS_RT_OK;
+  }
+  TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
+  TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_BYTECODE; }
+}
+
+bool talos_rt_net_deposit_holds_unlocked(talos_rt_context *context,
+                                         uint64_t bit, uint64_t storeBegin,
+                                         uint64_t storeEnd) noexcept {
+  if (!context || context->netDepositHolds.empty() ||
+      bit / 64 >= context->netDepositMask.size() ||
+      (context->netDepositMask[bit / 64] & (uint64_t{1} << (bit % 64))) == 0 ||
+      context->netAliases.execution != context->execution)
+    return false;
+  TALOS_RT_TRY {
+    const NetAliasCache &cache = context->netAliases;
+    auto root = cache.rootByBit.find(bit);
+    if (root == cache.rootByBit.end())
+      return false;
+    auto hold = context->netDepositHolds.find(root->second);
+    if (hold == context->netDepositHolds.end())
+      return false;
+    const bool useNativeState = context->nativeStateValue != nullptr;
+    const std::vector<uint64_t> groupRoots =
+        context->netDepositGroups.at(hold->second.group);
+    bool unchanged = std::all_of(
+        groupRoots.begin(), groupRoots.end(), [&](uint64_t groupRoot) {
+          return context->netDepositHolds.at(groupRoot).drivers ==
+                 driverContributions(cache, context, groupRoot, useNativeState);
+        });
+    if (unchanged)
+      return true;
+    // The store publishes its own roots; resolving them here too would
+    // announce the same transition twice.
+    std::vector<uint64_t> stored, others;
+    for (uint64_t groupRoot : groupRoots) {
+      const auto &members = cache.members.find(groupRoot)->second;
+      bool inStore =
+          std::any_of(members.begin(), members.end(), [&](uint64_t member) {
+            return storeBegin <= member && member < storeEnd;
+          });
+      (inStore ? stored : others).push_back(groupRoot);
+    }
+    std::vector<uint64_t> released;
+    endDepositHolds(cache, context, stored, released);
+    for (uint64_t releasedBit : released)
+      talos_rt_aot_release_range_unlocked(context, releasedBit, 1);
+    bool changed = false;
+    if (!others.empty() &&
+        !resolveNetRoots(cache, context, std::move(others), changed,
+                         useNativeState) &&
+        context->schedulerStatus == TALOS_RT_OK)
+      context->schedulerStatus = TALOS_RT_INVALID_HANDLE;
+    if (changed && ++context->schedulerEpoch == 0)
+      context->schedulerEpoch = 1;
+    return false;
+  }
+  TALOS_RT_CATCH_ALL {
+    if (context->schedulerStatus == TALOS_RT_OK)
+      context->schedulerStatus = TALOS_RT_OUT_OF_MEMORY;
+    return false;
+  }
 }
 
 uint64_t talos_rt_canonical_net_bit_unlocked(const talos_rt_context *context,

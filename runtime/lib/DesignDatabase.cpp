@@ -13934,9 +13934,13 @@ static talos_rt_status accessState(talos_rt_context *context,
         context, stateOffset, stateOffset + width, &connected);
     if (status != TALOS_RT_OK)
       return status;
-    // A direct deposit cannot update one logical alias in isolation.
+    // IEEE 1800-2023 38.34: a direct write to a net with drivers or port
+    // aliases puts the value on every alias and holds it until a driver of
+    // the net changes value.
     if (connected)
-      return TALOS_RT_PERMISSION_DENIED;
+      return talos_rt_deposit_design_nets(
+          context, stateOffset, width, reinterpret_cast<const uint8_t *>(value),
+          reinterpret_cast<const uint8_t *>(unknown));
   }
   std::optional<PackedSignalTransitionBuffer> wideTransitions;
   constexpr size_t inlinePublishedBytes = 32;
