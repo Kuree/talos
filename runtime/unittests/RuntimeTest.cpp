@@ -5454,6 +5454,21 @@ TEST_F(RuntimeTest, SchedulerStatusReportNamesTheFailure) {
   EXPECT_NE(reported.find("status 4"), std::string::npos);
 }
 
+TEST(RuntimeStatusReport, MissingContextSaysTheSimulationCouldNotStart) {
+  // The generated main reports a failed context creation without a context,
+  // so a rejected design does not exit with a bare status. OK and $fatal stay
+  // quiet as they do for a finished run.
+  testing::internal::CaptureStderr();
+  talos_rt_v1_scheduler_report_status(nullptr, TALOS_RT_OK);
+  talos_rt_v1_scheduler_report_status(nullptr, TALOS_RT_FATAL);
+  EXPECT_EQ(testing::internal::GetCapturedStderr(), "");
+  testing::internal::CaptureStderr();
+  talos_rt_v1_scheduler_report_status(nullptr, TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(testing::internal::GetCapturedStderr(),
+            "error: simulation could not start: invalid design metadata "
+            "(status 16)\n");
+}
+
 TEST_F(RuntimeTest, ClosedOutputDescriptorWarnsAndContinues) {
   // IEEE 1800-2017 21.3.4 leaves writing to a channel that is not open
   // undefined. Reporting it and carrying on tells the user what happened;

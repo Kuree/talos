@@ -1558,8 +1558,14 @@ extern "C" void talos_rt_v1_scheduler_report_status(talos_rt_context *context,
   // A standalone simulator returns this status from main and exits, so this is
   // the last chance to say what ended the run. A design-requested end is not a
   // failure to report: $finish is OK and $fatal already printed its message.
-  if (!context || status == TALOS_RT_OK || status == TALOS_RT_FATAL)
+  if (status == TALOS_RT_OK || status == TALOS_RT_FATAL)
     return;
+  // Without a context, the generated main could not create one.
+  if (!context) {
+    std::fprintf(stderr, "error: simulation could not start: %s (status %d)\n",
+                 talos_rt_v1_status_string(status), status);
+    return;
+  }
   TALOS_RT_TRY {
     std::lock_guard<TalosContextMutex> lock(context->mutex);
     auto error = threadErrors.find(context);

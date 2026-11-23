@@ -7,6 +7,9 @@
 // exits. IEEE 1800-2017 says nothing about how a tool reports a run that
 // failed, so `main` says what went wrong before it returns the status, leaving
 // $finish (status 0) and $fatal (which already printed its own message) quiet.
+// A context that cannot be created (for example a design database the runtime
+// rejects) is reported the same way, with no context, before main returns, and
+// so is state that cannot be initialized, before its context is destroyed.
 
 module attributes {
   coverage.metrics = ["toggle"],
@@ -35,6 +38,14 @@ module attributes {
 }
 
 // CHECK-LABEL: llvm.func @main
+// CHECK:      %[[CREATED:.*]] = llvm.call @talos_rt_v1_context_create_for_design
+// CHECK:      llvm.cond_br %{{.*}}, ^bb{{[0-9]+}}, ^[[START_FAILED:bb[0-9]+]](%[[CREATED]] : i32)
+// CHECK:      %[[INITIALIZED:.*]] = llvm.call @talos_rt_v1_native_state_initialize
+// CHECK:      llvm.cond_br %{{.*}}, ^bb{{[0-9]+}}, ^[[INIT_FAILED:bb[0-9]+]]
+// CHECK:      ^[[START_FAILED]](%[[START_STATUS:.*]]: i32):
+// CHECK-NEXT: %[[NO_CONTEXT:.*]] = llvm.mlir.zero : !llvm.ptr
+// CHECK-NEXT: llvm.call @talos_rt_v1_scheduler_report_status(%[[NO_CONTEXT]], %[[START_STATUS]])
+// CHECK-NEXT: llvm.return %[[START_STATUS]] : i32
 // CHECK:      llvm.call @talos_rt_v1_native_state_sync
 // CHECK:      %[[PERSIST:.*]] = llvm.mlir.constant(2 : i32) : i32
 // CHECK-NEXT: %[[FINALIZE:.*]] = llvm.call @talos_rt_v1_coverage_finalize(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[PERSIST]])
@@ -52,3 +63,7 @@ module attributes {
 // CHECK:      llvm.call @talos_rt_v1_scheduler_report_status(%{{.*}}, %[[DUMP]])
 // CHECK-NEXT: llvm.call @talos_rt_v1_context_destroy
 // CHECK-NEXT: llvm.return %[[FINAL_STATUS]]
+// CHECK:      ^[[INIT_FAILED]]:
+// CHECK-NEXT: llvm.call @talos_rt_v1_scheduler_report_status(%[[CONTEXT:.*]], %[[INITIALIZED]])
+// CHECK-NEXT: llvm.call @talos_rt_v1_context_destroy(%[[CONTEXT]])
+// CHECK-NEXT: llvm.return %[[INITIALIZED]]

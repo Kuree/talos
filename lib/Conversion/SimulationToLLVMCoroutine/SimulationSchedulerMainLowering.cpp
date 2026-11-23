@@ -328,6 +328,15 @@ LogicalResult makeSchedulerMain(ModuleOp module,
   }
   failed->addArgument(i32, location);
   builder.setInsertionPointToStart(failed);
+  // No context exists yet, so the runtime reports why the simulation could
+  // not start (for example a design database it rejects) instead of exiting
+  // with a bare status.
+  LLVM::CallOp::create(
+      builder, location, TypeRange{},
+      getNativeRuntimeCallee(context,
+                             NativeRuntimeEntry::SchedulerReportStatus),
+      ValueRange{LLVM::ZeroOp::create(builder, location, pointer),
+                 failed->getArgument(0)});
   LLVM::ReturnOp::create(builder, location, failed->getArgument(0));
 
   builder.setInsertionPointToStart(ready);
@@ -372,6 +381,13 @@ LogicalResult makeSchedulerMain(ModuleOp module,
                             llvmConstant(builder, location, i32, 0)),
       initializedReady, initializeFailed);
   builder.setInsertionPointToStart(initializeFailed);
+  // Say why the state could not be initialized while the context still holds
+  // the error, then end without running the design.
+  LLVM::CallOp::create(
+      builder, location, TypeRange{},
+      getNativeRuntimeCallee(context,
+                             NativeRuntimeEntry::SchedulerReportStatus),
+      ValueRange{runtimeContext, initialized.getResult()});
   LLVM::CallOp::create(
       builder, location, TypeRange{},
       getNativeRuntimeCallee(context, NativeRuntimeEntry::ContextDestroy),

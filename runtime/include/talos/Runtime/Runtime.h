@@ -6284,7 +6284,8 @@ talos_rt_status talos_rt_v1_last_error(talos_rt_context *context,
 // Report a simulation that ended on a runtime error. A standalone simulator's
 // `main` calls this with the scheduler's status before destroying the context,
 // so a run that fails says why instead of exiting on a bare status. A
-// successful run and a design-requested $fatal report nothing.
+// successful run and a design-requested $fatal report nothing. A null context
+// reports that the simulation could not start (context creation failed).
 void talos_rt_v1_scheduler_report_status(talos_rt_context *context,
                                          talos_rt_status status);
 
