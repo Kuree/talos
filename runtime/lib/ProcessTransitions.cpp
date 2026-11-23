@@ -2012,14 +2012,14 @@ transitionEnvelope(uint64_t width, const uint8_t *changed,
 }
 
 template <bool UseClockIngress, bool ProjectedClock = false,
-          bool PackedFIFO = false, bool ProjectedSignal = false>
+          bool UnobservedFanout = false, bool ProjectedSignal = false>
 static bool publishStaticAOTSignalTransitionUnlockedImpl(
     talos_rt_context *context, uint64_t stableID, uint64_t bitWidth,
     const uint8_t *changed, const uint8_t *posedge, const uint8_t *negedge,
     uint64_t *outSequence, bool indexedExternalDeposit) {
   if (outSequence)
     *outSequence = 0;
-  if (!PackedFIFO &&
+  if (!UnobservedFanout &&
       !(indexedExternalDeposit ? canUseIndexedExternalAOTFanout(context)
                                : canUseStaticAOTFanout(context)))
     return false;
@@ -2110,10 +2110,11 @@ static bool publishStaticAOTSignalTransitionUnlockedImpl(
   bool coalescePending =
       UseClockIngress && !ProjectedSignal &&
       context->nativeScheduleClockIngressPending &&
-      (PackedFIFO || (!context->clockOccurrences && !context->exactEvents &&
-                      !context->vpiObservationDemand &&
-                      !talos_rt_has_conditional_signal_waiters(context) &&
-                      !staticSignalObjectWatched(context, staticID)));
+      (UnobservedFanout ||
+       (!context->clockOccurrences && !context->exactEvents &&
+        !context->vpiObservationDemand &&
+        !talos_rt_has_conditional_signal_waiters(context) &&
+        !staticSignalObjectWatched(context, staticID)));
   bool published = false;
   for (uint64_t position = lo; position != hi; ++position) {
     const auto *entry =
@@ -2907,9 +2908,12 @@ bool publishNativeSignalTransitionUnlocked(
   bool unconsumed =
       publishedStatic && !establishesOverride &&
       (!context->nativeSchedulePlan || context->stateValue.shared()) &&
-      talos_rt_transition_unconsumed_unlocked(context, bitOffset);
+      staticOnlyPublicationEnvironment(context) &&
+      !staticSignalObjectWatched(context, publishedStaticID);
   if (unconsumed && context->forceMask.empty() && context->assignMask.empty() &&
-      context->stateValue.shared() && context->stateUnknown.shared()) {
+      context->stateValue.shared() && context->stateUnknown.shared() &&
+      (cleanCalendarOwnsFanout<true>(context) ||
+       canUseStaticAOTFanout(context))) {
     // With an outstanding clock handoff, the full walk would ignore every
     // matching direct bit already set by this generated publication. Walk
     // the residual rows alone. An observer, override or a different
@@ -2920,14 +2924,22 @@ bool publishNativeSignalTransitionUnlocked(
         activeNativeAOTContext == context &&
         lockedNativeAOTContext == context &&
         publishedStaticID < context->nativePeriodicRuntimeFanoutRanges.size();
-    bool delivered =
-        projected ? publishStaticAOTSignalTransitionUnlockedImpl<true, false,
-                                                                 false, true>(
-                        context, bitOffset, bitWidth, changed, posedge, negedge,
-                        nullptr, false)
-                  : publishStaticAOTSignalTransitionUnlocked(
-                        context, bitOffset, bitWidth, changed, posedge, negedge,
-                        nullptr, false);
+    bool delivered;
+    if (projected)
+      delivered =
+          publishStaticAOTSignalTransitionUnlockedImpl<true, false, true, true>(
+              context, bitOffset, bitWidth, changed, posedge, negedge, nullptr,
+              false);
+    else if (context->nativeSchedulePlan->clock_kernel_count)
+      delivered =
+          publishStaticAOTSignalTransitionUnlockedImpl<true, false, true>(
+              context, bitOffset, bitWidth, changed, posedge, negedge, nullptr,
+              false);
+    else
+      delivered =
+          publishStaticAOTSignalTransitionUnlockedImpl<false, false, true>(
+              context, bitOffset, bitWidth, changed, posedge, negedge, nullptr,
+              false);
     if (delivered) {
       // Readiness does not alter the clean-environment specialization proof.
       if (++context->schedulerEpoch == 0)
@@ -3149,6 +3161,15 @@ void schedulerSignalTransition(talos_rt_context *context, uint64_t bitOffset,
   TALOS_RT_TRY {
     ContextMutexLock lock(context);
     if (context->schedulerStatus != TALOS_RT_OK)
+      return;
+    // Equal captured buffers cannot contain a value or X/Z transition.
+    // Different padding or a missing unknown plane falls through to the
+    // bit-accurate comparison (1800-2023 9.4.2, Table 9-2).
+    uint64_t bytes = (bitWidth + 7) / 8;
+    if (bytes <= SIZE_MAX && !std::memcmp(oldValue, newValue, bytes) &&
+        (oldUnknown == newUnknown ||
+         (oldUnknown && newUnknown &&
+          !std::memcmp(oldUnknown, newUnknown, bytes))))
       return;
     // A range inside one static or automatic state has every bit in range,
     // so its edge masks can be built a word at a time.

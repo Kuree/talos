@@ -80,6 +80,42 @@ inline bool vpiQuietBeforeNBA(const talos_rt_context *context) {
          future(context->nextVPISyncCallback);
 }
 
+// A sufficient test for an installed runtime calendar to own static fanout.
+// A publisher that already checked its shared planes, overrides and absence
+// of runtime observers need only validate the remaining calendar state.
+// A general caller also checks the forwarded assertion certificate: its
+// reads at publication time remain valid under that plan (4.5, 9.4.2, 16.12).
+template <bool UnobservedSharedSource>
+inline bool cleanCalendarOwnsFanout(const talos_rt_context *context) {
+  const auto *plan = context->nativeSchedulePlan;
+  if (!plan || !context->execution || context->nativeScheduleDeoptimized ||
+      !(plan->flags & TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL) ||
+      !(plan->flags & (TALOS_RT_NATIVE_SCHEDULE_STATIC_FANOUT |
+                       TALOS_RT_NATIVE_SCHEDULE_GUARDED_FANOUT)))
+    return false;
+  bool forwarded =
+      plan->flags & TALOS_RT_NATIVE_SCHEDULE_FORWARDED_ASSERTION_INPUTS;
+  if constexpr (!UnobservedSharedSource) {
+    if (!forwarded ||
+        !(plan->flags & TALOS_RT_NATIVE_SCHEDULE_ASSERTION_OBSERVERS) ||
+        context->vpiObservationDemand || context->exactEvents ||
+        !context->forceMask.empty() || !context->assignMask.empty() ||
+        !context->nativeConditionalSignalWaiters.empty() ||
+        !context->designConditionalSignalWaiters.empty())
+      return false;
+  }
+  return !context->nativeScheduleStopAtCleanBoundary &&
+         !context->nativeScheduleExternalWritePending &&
+         !context->nativeScheduleDirtyRootsPresent &&
+         !(context->observedWriters &&
+           context->observedWriters->clockHandoff) &&
+         context->scheduledDesignTasks.empty() &&
+         ((!context->activeComputedObserverWaiterCount &&
+           !context->nativeDynamicSignalSubscriptions) ||
+          (forwarded && context->nativeDynamicSignalSubscriptions ==
+                            context->nativeComputedSignalSubscriptions));
+}
+
 inline bool isStaticControlAOT(const talos_rt_context *context) {
   return activeNativeAOTContext == context && context->nativeSchedulePlan &&
          (context->nativeSchedulePlan->flags &

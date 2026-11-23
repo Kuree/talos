@@ -176,6 +176,8 @@ bool canUseStaticAOTFanout(const talos_rt_context *context) {
       ((plan->flags & TALOS_RT_NATIVE_SCHEDULE_STATIC_EVAL_ISLAND) &&
        !context->nativeStaticEvalIslandCertified);
   if (needsCalendar) {
+    if (cleanCalendarOwnsFanout<false>(context))
+      return true;
     // Calendar admission includes a clean boundary or a scoped write proof.
     // One check supplies both the fanout and the island certificate.
     if (!canUseRuntimeCalendarEval(context))

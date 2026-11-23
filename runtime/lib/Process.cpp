@@ -4807,11 +4807,10 @@ idleCurrentSlotResult(talos_rt_context *context,
       context->nativeStaticEvalIslandCertified)
     return std::nullopt;
   ContextMutexLock lock(context);
-  if (otherRuntimeSlotWorkPending(context,
-                                  options.stopBeforeNBA &&
-                                      !options.stopBeforeUnscopedActors) ||
-      (!complete && !context->nativePollCandidates.empty() &&
-       (!options.stopBeforeNBA || !nativeSignalWaitsAfterNBACut(context))))
+  if ((!complete && !context->nativePollCandidates.empty() &&
+       (!options.stopBeforeNBA || !nativeSignalWaitsAfterNBACut(context))) ||
+      otherRuntimeSlotWorkPending(
+          context, options.stopBeforeNBA && !options.stopBeforeUnscopedActors))
     return std::nullopt;
   if (context->schedulerCompactionPending && !context->activeNativeProcess &&
       !context->designTaskExecuting) {
@@ -5045,7 +5044,11 @@ selectBeforeNBACutUnlocked(talos_rt_context *context) {
          process.suspendKind != TALOS_RT_SUSPEND_NONE &&
          process.suspendKind != TALOS_RT_SUSPEND_DELAY))
       return std::nullopt;
-    if (!nativeProcessReadyImpl<false>(*context, process))
+    // Only Active and Inactive candidates participate in this selection.
+    // The ordering adjustment for a timing-check waiter can only move it
+    // later. Its latched edge remains available after the NBA cut (4.5).
+    if (process.queuedRegion >= TALOS_RT_REGION_NBA ||
+        !nativeProcessReadyImpl<false>(*context, process))
       continue;
     bool signal = process.signalTriggered ||
                   (process.signalLatch && process.signalLatch->triggered);
