@@ -2629,10 +2629,42 @@ struct PlusargIndexEdge {
   uint8_t character = 0;
 };
 
+struct NativeObservedWriters {
+  std::unordered_map<uint32_t, uint32_t> rootUsers;
+  std::vector<uint32_t> actorUsers;
+  // Distinct subscribed writers. XOR recovers the sole slot after an alias
+  // or another subscription is removed, without rescanning the actor table.
+  uint32_t activeActorCount = 0;
+  uint32_t activeActorXor = 0;
+  // The epoch belongs to the generated executable. Zero is never issued;
+  // after saturation every read falls through to the exact writer guard.
+  uint64_t *modelGuardEpoch = nullptr;
+  void revokeOwnerGuard() {
+    if (modelGuardEpoch && *modelGuardEpoch != UINT64_MAX)
+      ++*modelGuardEpoch;
+    modelGuardEpoch = nullptr;
+  }
+  ~NativeObservedWriters() { revokeOwnerGuard(); }
+  bool clockHandoff = false;
+  uint64_t nativeOwnerChecks = 0;
+};
+
 struct NativeScopedWriteState {
   std::unordered_map<uint32_t, std::vector<uint32_t>> rootDependentActors;
   std::vector<uint32_t> unscopedActors;
   bool unscopedWritePending = false;
+  bool readAliasLease = false;
+  bool sourceClockPublishing = false;
+  bool aliasReprepare = false;
+  bool triedSettledClockViews = false;
+  uint64_t recheckClockViewsAfter = UINT64_MAX;
+  const talos_rt_native_periodic_alias_v1 *indexedClockViews = nullptr;
+  uint32_t indexedViewCount = 0;
+  bool reportedViewSelection = false;
+  const talos_rt_native_periodic_clock_v1 *clocks = nullptr;
+  uint32_t clockCount = 0;
+  const talos_rt_native_periodic_alias_v1 *aliases = nullptr;
+  uint32_t aliasCount = 0;
 };
 
 // schedulerFinishRequested after the Final phase consumed a pending request.
@@ -3339,6 +3371,7 @@ struct talos_rt_context {
   // The ordered callback records remain in the lazily allocated VPI state.
   std::optional<uint64_t> nextVPITimeCallback;
   bool vpiTimeCallbackActive = false;
+
   // Earliest due time of a VPI synchronization callback; its region decides
   // where in that time slot it runs.
   std::optional<uint64_t> nextVPISyncCallback;
@@ -3373,6 +3406,7 @@ struct talos_rt_context {
   std::unique_ptr<PackedNBAChangeMap> packedNBAChanges;
   uint64_t orderedSharedPackets = 0;
   uint64_t wholeChangeBankCommits = 0, wholeChangeBankRewrites = 0;
+  std::unique_ptr<NativeObservedWriters> observedWriters;
   // Immutable compiler-owned triples (destination bit, source bit, width).
   const uint64_t *vcdAliasRows = nullptr;
   uint64_t vcdAliasCount = 0;
@@ -4200,6 +4234,16 @@ void talos_rt_detach_managed_frame_roots_unlocked(
 void talos_rt_aot_external_write_unlocked(talos_rt_context *context);
 void talos_rt_aot_observation_demand_changed_unlocked(talos_rt_context *context,
                                                       bool active);
+// Physical overlap includes aliased storage. The lists belong to one watched
+// root and let removal release exactly the routes registration acquired.
+talos_rt_status
+talos_rt_observe_writers_unlocked(talos_rt_context *context, uint64_t offset,
+                                  uint64_t width, std::vector<uint32_t> &roots,
+                                  std::vector<uint32_t> &actors);
+void talos_rt_unobserve_writers_unlocked(talos_rt_context *context,
+                                         std::vector<uint32_t> &roots,
+                                         std::vector<uint32_t> &actors);
+
 void talos_rt_aot_external_write_range_unlocked(talos_rt_context *context,
                                                 uint64_t bitOffset,
                                                 uint64_t bitWidth,
@@ -4820,6 +4864,8 @@ talos_rt_status talos_rt_vpi_enter_time_slot_unlocked(talos_rt_context *);
 inline constexpr uint8_t kDumpSlotHook = 1;
 // talos_rt_context::postponedSlotHooks: a $monitor waits on its arguments.
 inline constexpr uint8_t kMonitorSlotHook = 2;
+// A watched writer queued work outside the generated periodic NBA barrier.
+inline constexpr uint8_t kVPIWriterSlotHook = 4;
 // End of the current time slot (IEEE 1800-2023 4.4.2.9, 21.2.3): evaluate every
 // postponed observer wait and wake the waiters whose observed value changed.
 // `triggered` reports whether any woke; they run in the Postponed region.

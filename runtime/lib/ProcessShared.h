@@ -56,6 +56,30 @@ private:
   talos_rt_context *previous;
 };
 
+// An attached reader can register a future boundary without introducing
+// work before this slot's NBA cut (4.4, 38.36.2). A scoped writer posts a
+// current-time deadline when it actually publishes a value change. Check
+// that deadline after each activation and before reusing a cut (38.36.1).
+inline bool vpiQuietBeforeNBA(const talos_rt_context *context) {
+  if (!context->vpiState)
+    return true;
+  if (!context->execution ||
+      (context->execution->flags &
+       (TALOS_RT_EXECUTION_VPI_READ | TALOS_RT_EXECUTION_VPI_WRITE)) !=
+          TALOS_RT_EXECUTION_VPI_READ ||
+      context->vpiObservationDemand ||
+      (context->observedWriters && context->observedWriters->clockHandoff) ||
+      context->vpiTimeCallbackActive ||
+      (context->preponedSlotHooks &
+       (kVPISignalSlotHook | kVPINextTimeSlotHook)))
+    return false;
+  auto future = [&](std::optional<uint64_t> deadline) {
+    return !deadline || *deadline > context->schedulerTime;
+  };
+  return future(context->nextVPITimeCallback) &&
+         future(context->nextVPISyncCallback);
+}
+
 inline bool isStaticControlAOT(const talos_rt_context *context) {
   return activeNativeAOTContext == context && context->nativeSchedulePlan &&
          (context->nativeSchedulePlan->flags &

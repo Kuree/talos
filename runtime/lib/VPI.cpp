@@ -413,6 +413,8 @@ struct VPIValueChangeRoot {
   uint64_t offset = 0, width = 0;
   uint64_t value = 0, unknown = 0;
   uint32_t registrations = 0;
+  std::vector<uint32_t> watchedRoots, watchedActors;
+  uint64_t ownerChecksAtAttach = 0;
   std::vector<std::unique_ptr<SignalSubscription>> subscriptions;
 };
 
@@ -17369,8 +17371,9 @@ bool readValueChangeRoot(VPIState *state, VPIValueChangeRoot &root,
       out &= (uint64_t{1} << root.width) - 1;
     return true;
   };
+  unknown = 0;
   return read(context->stateValue, value) &&
-         read(context->stateUnknown, unknown);
+         (context->twoState() || read(context->stateUnknown, unknown));
 }
 
 vpiHandle valueChangeObject(VPIState *state, VPIValueChangeBinding &binding) {
@@ -17418,18 +17421,18 @@ vpiHandle registerValueChangeCallback(VPIState *state, p_cb_data data) {
   }
   const auto *execution = state->context->execution;
   talos_rt_design_info_v1 info{};
-  // Admission is deliberately independent of VPI write permissions. The
-  // ordinary bytecode store and ordered NBA paths retain every publication.
-  // Native owners need V0/V1 certificates; exported SV calls need V11's
-  // application-return barrier. Neither is silently forced to bytecode here.
-  if (!execution || !(execution->flags & TALOS_RT_EXECUTION_REQUIRE_BYTECODE) ||
-      (execution->flags & TALOS_RT_EXECUTION_DPI_EXPORTS) ||
+  const bool sourceRun =
+      execution && (execution->flags & TALOS_RT_EXECUTION_REQUIRE_BYTECODE) &&
+      !(execution->flags & TALOS_RT_EXECUTION_DPI_EXPORTS);
+  const bool observedRun =
+      execution &&
+      (execution->flags & TALOS_RT_EXECUTION_VPI_PUBLISHING_WRITERS);
+  if ((!sourceRun && !observedRun) ||
       talos_rt_cached_design_info(state->context, target.object, &info) !=
           TALOS_RT_OK ||
       info.kind != TALOS_RT_DESIGN_RECORD_STORAGE) {
-    setError(state,
-             "value-change callback needs a certified writer path; "
-             "static variables in require-bytecode designs are supported");
+    setError(state, "value-change callback needs a certified writer path; "
+                    "use a static variable with a publishing writer");
     return nullptr;
   }
   auto *source = findHandle(data->obj);
@@ -17520,7 +17523,14 @@ vpiHandle registerValueChangeCallback(VPIState *state, p_cb_data data) {
       return nullptr;
     }
     if (!root.registrations) {
-      if (!readValueChangeRoot(state, root, root.value, root.unknown)) {
+      if (observedRun && state->phase == VPIPhase::Running &&
+          !state->context->vpiTimeCallbackActive) {
+        setError(state, "register a new native value-change watch at a "
+                        "simulation boundary");
+        return nullptr;
+      }
+      if (talos_rt_v1_design_read(state->context, target.object, &root.value,
+                                  &root.unknown, root.width) != TALOS_RT_OK) {
         setError(state, "callback root state is unavailable");
         return nullptr;
       }
@@ -17554,6 +17564,20 @@ vpiHandle registerValueChangeCallback(VPIState *state, p_cb_data data) {
     if (!result)
       return nullptr;
     rollback.token = stored->publicToken = reinterpret_cast<uintptr_t>(result);
+    if (observedRun && root.registrations == 1) {
+      std::vector<uint32_t> roots, actors;
+      auto status = talos_rt_observe_writers_unlocked(
+          state->context, root.offset, root.width, roots, actors);
+      if (status != TALOS_RT_OK) {
+        setError(state,
+                 "value-change callback has no scoped publishing writer");
+        return nullptr;
+      }
+      root.ownerChecksAtAttach =
+          state->context->observedWriters->nativeOwnerChecks;
+      root.watchedRoots = std::move(roots);
+      root.watchedActors = std::move(actors);
+    }
     rollback.demand = true;
     acquireObservationDemand(state, cbValueChange);
     rollback.committed = true;
@@ -17591,9 +17615,23 @@ PLI_INT32 removeValueChangeCallback(VPIState *state, __vpiHandle *handle) {
     state->handles.recycleCallback(alias);
   state->valueChanges.remove(id);
   auto &root = *found->second;
-  if (!--root.registrations)
+  if (!--root.registrations) {
     talos_rt_unregister_signal_wait_unlocked(state->context,
                                              root.subscriptions);
+    if (!root.watchedRoots.empty()) {
+      if (state->context->signalDiagnosticsReport)
+        std::fprintf(
+            stderr,
+            "talos-vpi-watch writers=%zu actors=%zu native_owner_checks=%llu\n",
+            root.watchedActors.size(),
+            state->context->nativeScheduleActors.size(),
+            static_cast<unsigned long long>(
+                state->context->observedWriters->nativeOwnerChecks -
+                root.ownerChecksAtAttach));
+      talos_rt_unobserve_writers_unlocked(state->context, root.watchedRoots,
+                                          root.watchedActors);
+    }
+  }
   state->handles.recycleCallback(primary);
   releaseObservationDemand(state, cbValueChange);
   return 1;
@@ -17682,9 +17720,13 @@ bool deliverValueChanges(VPIState *state, bool applicationReturned) {
 void shutdownValueChangeCallbacks(VPIState *state) {
   ContextMutexLock lock(state->context);
   for (auto &[offset, root] : state->valueChangeRoots)
-    if (root)
+    if (root) {
       talos_rt_unregister_signal_wait_unlocked(state->context,
                                                root->subscriptions);
+      if (!root->watchedRoots.empty())
+        talos_rt_unobserve_writers_unlocked(state->context, root->watchedRoots,
+                                            root->watchedActors);
+    }
   auto &pending = state->context->pendingDesignComputedWaiters;
   pending.erase(std::remove(pending.begin(), pending.end(), 0), pending.end());
 }

@@ -2143,8 +2143,6 @@ static bool publishStaticAOTSignalTransitionUnlockedImpl(
       return true;
     }
     if (context->nativePeriodicPublicationHandle == stableID &&
-        (entry->reserved & TALOS_RT_FANOUT_ROUTE_MASK) ==
-            TALOS_RT_FANOUT_PERIODIC_ALIAS &&
         slot < context->nativePeriodicAliasContinuations.size() &&
         context->nativePeriodicAliasContinuations[slot] == entry->continuation)
       continue;
@@ -2331,9 +2329,11 @@ bool talos_rt_publish_signal_transition_batch_unlocked(
       bool runtimeWatched =
           !decodeNativeStatic(stableID, staticID, staticOffset) ||
           staticSignalObjectWatched(context, staticID);
-      if (((context->nativeSchedulePlan->flags &
-            TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL) != 0 &&
-           runtimeWatched) ||
+      if ((runtimeWatched &&
+           ((context->nativeSchedulePlan->flags &
+             TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL) ||
+            (context->observedWriters &&
+             context->observedWriters->rootUsers.count(staticID)))) ||
           (feature && !feature->waits.empty()) || context->exactEvents)
         return publishSignalTransitionBatchImpl(
             context, stableID, bitWidth, changed, posedge, negedge,
@@ -3618,6 +3618,35 @@ static void publishAsNativeActor(talos_rt_context *context, uint32_t actorSlot,
   context->activeLogicalProcessParent =
       context->scheduledProcesses[index].parent;
   publish();
+}
+
+// A prepared primary clock is a pure one-bit source process. Publish a
+// subscribed edge under that process's identity before the implicit port
+// assignments run (4.9.1, 4.10, 38.36.1). Other clock domains stay compiled.
+extern "C" talos_rt_status
+talos_rt_v1_publish_read_clock(talos_rt_context *context, uint32_t actor,
+                               uint32_t state, uint64_t low, uint64_t oldValue,
+                               uint64_t newValue, uint32_t staticPublication) {
+  if (!context || activeNativeAOTContext != context ||
+      lockedNativeAOTContext != context)
+    return TALOS_RT_INVALID_LIFECYCLE;
+  if (context->observedWriters &&
+      context->observedWriters->rootUsers.count(state)) {
+    uint8_t previous = oldValue & 1, current = newValue & 1;
+    uint64_t handle = talos_rt_stable_handle_encode(
+        TALOS_RT_STABLE_HANDLE_STATIC, state, low);
+    publishAsNativeActor(context, actor, [&] {
+      talos_rt_v1_scheduler_signal_transition(context, handle, 1, &previous,
+                                              nullptr, &current, nullptr);
+    });
+  } else if (staticPublication) {
+    talos_rt_v1_scheduler_static_transition(context, state, low, 1, oldValue, 0,
+                                            newValue, 0);
+  }
+  if (context->schedulerStatus == TALOS_RT_OK &&
+      context->schedulerFinishRequested.load(std::memory_order_relaxed))
+    return TALOS_RT_TIER_UNAVAILABLE;
+  return context->schedulerStatus;
 }
 
 extern "C" void talos_rt_v1_scheduler_static_transition_owned(

@@ -2562,9 +2562,10 @@ talos_rt_v1_table_process_execute(talos_rt_process_instance_v1 *instance);
 // With STARTED: a virtual generated owner (two-tier P1c). The generated
 // coordinator runs its activations, so the runtime keeps only a frameless
 // record (identity, slot, continuation, wait, a copy of the captures) and
-// creates the frame of its bytecode body only when it must run the owner
-// outside the coordinator (whole-plan deopt, an uncertified static eval
-// island). `descriptor` offers only the bytecode tier.
+// materializes its frame when it executes outside the coordinator. A closed
+// publishing read model can retain a native entry for an admitted continuous
+// assignment, including for explicit frame access. Other virtual owners use
+// their retained bytecode entry.
 #define TALOS_RT_SPAWN_VIRTUAL UINT32_C(8)
 // A started process whose first activation is its continuation's activation
 // (always_comb, always_latch, continuous assignment): the runtime activates it

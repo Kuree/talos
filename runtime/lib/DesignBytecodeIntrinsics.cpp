@@ -3961,17 +3961,29 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       update.driver = driver;
       update.rootedString = rootedString;
       update.rootedManaged = rootedManaged;
-      uint64_t bytes = (update.bitWidth + 7) / 8;
-      update.value.assign(static_cast<size_t>(bytes), 0);
-      if (value.fourState)
-        update.unknown.assign(static_cast<size_t>(bytes), 0);
-      for (uint64_t bitIndex = 0; bitIndex != update.bitWidth; ++bitIndex) {
-        uint64_t source = static_cast<uint64_t>(first) + bitIndex;
-        uint8_t mask = static_cast<uint8_t>(1u << (bitIndex % 8));
-        if (bit(value.value, source))
-          update.value[bitIndex / 8] |= mask;
-        if (value.fourState && bit(value.unknown, source))
-          update.unknown[bitIndex / 8] |= mask;
+      // Use the scheduler's scalar NBA payload for ordinary packed state.
+      // Each enqueue keeps its own sequence and both captured planes.
+      if (boundedStatic && !driver && !stringValue && !managedValue &&
+          selectedWidth <= 64) {
+        update.inlinePacked = true;
+        update.inlineValue =
+            extractScalarBits(value.value, first, selectedWidth);
+        if (value.fourState)
+          update.inlineUnknown =
+              extractScalarBits(value.unknown, first, selectedWidth);
+      } else {
+        uint64_t bytes = (update.bitWidth + 7) / 8;
+        update.value.assign(static_cast<size_t>(bytes), 0);
+        if (value.fourState)
+          update.unknown.assign(static_cast<size_t>(bytes), 0);
+        for (uint64_t bitIndex = 0; bitIndex != update.bitWidth; ++bitIndex) {
+          uint64_t source = static_cast<uint64_t>(first) + bitIndex;
+          uint8_t mask = static_cast<uint8_t>(1u << (bitIndex % 8));
+          if (bit(value.value, source))
+            update.value[bitIndex / 8] |= mask;
+          if (value.fourState && bit(value.unknown, source))
+            update.unknown[bitIndex / 8] |= mask;
+        }
       }
       if (!driver && staticSiteID != UINT64_MAX && !stringValue &&
           !managedValue && boundedStatic && context->nativeSchedulePlan &&
@@ -4011,6 +4023,9 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
                            : context->schedulerTime + delay;
       if (context->saif)
         talos_rt_saif_event_issued_unlocked(context, update);
+      if (!delay && boundedStatic && context->observedWriters &&
+          context->observedWriters->rootUsers.count(objectID))
+        context->postponedSlotHooks |= kVPIWriterSlotHook;
       context->enqueueNBA(std::move(update));
       if (automatic)
         ++context->nativeAutomaticStates.find(objectID)->second.referenceCount;

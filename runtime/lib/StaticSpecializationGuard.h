@@ -17,6 +17,9 @@ staticSpecializationRootGuard(talos_rt_context *context, uint32_t actorSlot,
       staticState == 0 || flags == 0 ||
       (flags & ~(TALOS_RT_STATIC_ROOT_READ | TALOS_RT_STATIC_ROOT_WRITE)) != 0)
     return 0;
+  if (context->observedWriters &&
+      context->observedWriters->rootUsers.count(staticState))
+    return 0;
   if (!context->nativeSchedulePlan) {
     // The same per-root fallback is usable by generic fragments. Their
     // ordinary publication path keeps canonical state coherent. A force on

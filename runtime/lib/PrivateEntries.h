@@ -43,8 +43,31 @@ talos_rt_status talos_rt_v1_dump_bind_aliases(talos_rt_context *context,
                                               const uint64_t *rows,
                                               uint64_t count);
 
-// Compiler-private ABI. Empty root sets are clean; every nonempty root is
-// queried even after rejection so diagnostic accounting remains exact.
+// Select the prepared clock's forwarding table. An observed alias keeps
+// its original source writer and ordinary fanout on that run.
+talos_rt_status talos_rt_v1_prepare_read_periodic(
+    talos_rt_context *context, const talos_rt_native_schedule_node *nodes,
+    uint32_t nodeCount, const talos_rt_native_periodic_clock_v1 *clocks,
+    uint32_t clockCount, const talos_rt_native_periodic_alias_v1 *aliases,
+    uint32_t aliasCount, uint64_t *nextEdges,
+    talos_rt_native_periodic_control_v1 *control, uint32_t *useViews);
+talos_rt_status talos_rt_v1_publish_read_clock(talos_rt_context *context,
+                                               uint32_t actor, uint32_t state,
+                                               uint64_t low, uint64_t oldValue,
+                                               uint64_t newValue,
+                                               uint32_t staticPublication);
+
+// Compiler-generated immutable, sorted source actor IDs.
+uint32_t talos_rt_v1_observed_writer_guard(talos_rt_context *context,
+                                           const uint32_t *actors,
+                                           uint64_t count);
+uint32_t talos_rt_v1_observed_writer_guard_cached(talos_rt_context *context,
+                                                  const uint32_t *actors,
+                                                  uint64_t count,
+                                                  uint64_t *cacheEntry,
+                                                  uint64_t *epoch);
+// Empty root sets are clean. Every nonempty root is queried even after
+// rejection so diagnostic accounting remains exact.
 uint32_t talos_rt_v1_static_specialization_guard_roots(
     talos_rt_context *context, const uint32_t *roots, uint64_t count);
 

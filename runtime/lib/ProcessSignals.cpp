@@ -473,6 +473,9 @@ bool talos_rt_register_vpi_signal_subscription_unlocked(
   // A callback is a runtime consumer outside the generated fanout. Keep its
   // accounting in this cold adapter so ordinary SV registration is unchanged;
   // the existing outsideStaticFanout cleanup releases the same count.
+  if (context->execution &&
+      (context->execution->flags & TALOS_RT_EXECUTION_VPI_PUBLISHING_WRITERS))
+    return true; // The scoped writer route publishes this subscription.
   subscriptions.back()->outsideStaticFanout = true;
   ++context->nativeDynamicSignalSubscriptions;
   if (context->nativeSchedulePlan &&

@@ -389,6 +389,11 @@ static talos_rt_status schedulerNBA(
       context->schedulerStatus = TALOS_RT_OUT_OF_RESOURCES;
       return TALOS_RT_OUT_OF_RESOURCES;
     }
+    const bool watched = boundedStatic && context->observedWriters &&
+                         context->observedWriters->rootUsers.count(staticID);
+    if (watched)
+      staticSite =
+          UINT64_MAX; // Keep a separate ordered event for each source NBA.
     // LRM 4.6(b), 10.4.2: capture runtime initializer/fallback writes in the
     // generated batch at their execution point, preserving order even when
     // they share a root with clocked work. The barrier still masks forces and
@@ -628,8 +633,8 @@ static talos_rt_status schedulerNBA(
       if (unknownPlane)
         update.inlineUnknown =
             loadPackedBytes(unknown, sourceBitOffset, bitWidth);
-      if (!automatic && boundedStatic && !stringValue && delay == 0 &&
-          bitWidth <= 64 && offset >= 0 && staticState &&
+      if (!watched && !automatic && boundedStatic && !stringValue &&
+          delay == 0 && bitWidth <= 64 && offset >= 0 && staticState &&
           static_cast<uint64_t>(offset) <= staticState->bitWidth &&
           bitWidth <= staticState->bitWidth - static_cast<uint64_t>(offset) &&
           context->nativeSchedulePlan && !context->nativeScheduleDeoptimized &&
@@ -669,6 +674,8 @@ static talos_rt_status schedulerNBA(
                          : context->schedulerTime + delay;
     if (context->saif)
       talos_rt_saif_event_issued_unlocked(context, update);
+    if (watched && context->nativeSchedulePlan && !delay)
+      context->postponedSlotHooks |= kVPIWriterSlotHook;
     context->enqueueNBA(std::move(update));
     if (automatic)
       ++context->nativeAutomaticStates.find(automaticID)->second.referenceCount;
@@ -4779,8 +4786,7 @@ commitQuietOrderedPacket(talos_rt_context *context,
                          const OrderedNBAPlanes &planes) {
   if (activeNativeAOTContext != context || lockedNativeAOTContext != context ||
       context->schedulerStatus != TALOS_RT_OK ||
-      context->activeLogicalProcessToken || context->vpiState ||
-      context->schedulerCohortEnabled ||
+      context->activeLogicalProcessToken || context->schedulerCohortEnabled ||
       !talos_rt_transition_unconsumed_unlocked(context, handle) ||
       !canUseStaticAOTFanout(context))
     return std::nullopt;

@@ -94,6 +94,7 @@ static bool nativeFanoutEnvironmentClean(const talos_rt_context *context) {
 
 bool nativeAOTTransientBoundaryClean(const talos_rt_context *context) {
   if (!context || context->nativeScheduleExternalWritePending ||
+      (context->observedWriters && context->observedWriters->clockHandoff) ||
       context->nativeScheduleDirtyRootsPresent ||
       talos_rt_covergroup_strobes_pending_unlocked(context) ||
       context->vpiObservationDemand)
@@ -253,11 +254,13 @@ bool nativeStaticRootDirty(const talos_rt_context *context,
                ? (mask[word] & (uint64_t{1} << (staticState % 64))) != 0
                : sparse.find(staticState) != sparse.end();
   };
-  return context->nativeScheduleDirtyRootsPresent &&
-         (dirty(context->nativeScheduleTransientDirtyMask,
-                context->nativeScheduleTransientDirtyRoots) ||
-          dirty(context->nativeSchedulePersistentDirtyMask,
-                context->nativeSchedulePersistentDirtyRoots));
+  return (context->observedWriters &&
+          context->observedWriters->rootUsers.count(staticState)) ||
+         (context->nativeScheduleDirtyRootsPresent &&
+          (dirty(context->nativeScheduleTransientDirtyMask,
+                 context->nativeScheduleTransientDirtyRoots) ||
+           dirty(context->nativeSchedulePersistentDirtyMask,
+                 context->nativeSchedulePersistentDirtyRoots)));
 }
 
 static void restoreNativeRootSubscriptionsUnlocked(talos_rt_context *,
@@ -280,6 +283,8 @@ void markNativeDirtyRootUnlocked(talos_rt_context *context, uint32_t id,
       summary[summaryWord] |= uint64_t{1} << (word % 64);
   }
   context->nativeScheduleDirtyRootsPresent = true;
+  if (context->observedWriters)
+    context->observedWriters->revokeOwnerGuard();
   if (canUseScopedGeneratedEval(context))
     restoreNativeRootSubscriptionsUnlocked(context, id);
 }
@@ -304,6 +309,8 @@ void clearNativeDirtyRootUnlocked(talos_rt_context *context, uint32_t id,
 
 void invalidateNativeStaticSpecializationFastUnlocked(
     talos_rt_context *context) {
+  if (context && context->observedWriters)
+    context->observedWriters->revokeOwnerGuard();
   if (context && context->nativeStateSpecializationFast)
     *context->nativeStateSpecializationFast = 0;
   const talos_rt_native_schedule_plan *plan =
@@ -689,8 +696,8 @@ void refreshNativeStaticSpecializationFastUnlocked(talos_rt_context *context) {
     };
     *context->nativeStateSpecializationFast =
         !context->observerForcesCanonicalPlane && context->observerDepth == 0 &&
-        !context->vpiObservationDemand && !any(context->forceMask) &&
-        !any(context->assignMask);
+        !context->vpiObservationDemand && !context->observedWriters &&
+        !any(context->forceMask) && !any(context->assignMask);
     return;
   }
   const talos_rt_native_schedule_plan *plan =
@@ -700,8 +707,8 @@ void refreshNativeStaticSpecializationFastUnlocked(talos_rt_context *context) {
     // addressing of the current publication image. Keep this proof separate
     // from the NBA accumulator lease; VPI intervention invalidates both.
     *context->nativeStateSpecializationFast =
-        context->nativeStateSharingAllowed && context->stateValue.shared() &&
-        !context->nativeScheduleDeoptimized &&
+        !context->observedWriters && context->nativeStateSharingAllowed &&
+        context->stateValue.shared() && !context->nativeScheduleDeoptimized &&
         !context->observerForcesCanonicalPlane && !context->observerDepth &&
         nativeAOTTransientBoundaryClean(context) &&
         nativeStaticSpecializationEnvironmentClean(context) &&
@@ -719,7 +726,8 @@ void refreshNativeStaticSpecializationFastUnlocked(talos_rt_context *context) {
                         context->stateValue.shared() &&
                         canUseRuntimeCalendarEval(context);
   *plan->specialization_fast =
-      (context->nativeScheduleRunning || sharedCalendar) &&
+      !context->observedWriters &&
+              (context->nativeScheduleRunning || sharedCalendar) &&
               !context->nativeScheduleDeoptimized &&
               !context->vpiObservationDemand &&
               !context->nativeScheduleExternalWritePending &&
@@ -1999,12 +2007,62 @@ talos_rt_status executeNativeAOTNodeUnlocked(talos_rt_context *context,
   return executeAOTNode(context, actorSlot, /*sharedDriver=*/true);
 }
 
-extern "C" talos_rt_status talos_rt_v1_scheduler_prepare_periodic_aot(
+// The generated clock loop writes its primary and projected aliases without
+// executing their source frames. Only watches on those exact outputs need
+// the runtime clock. Other watched writers have individual owner guards.
+static bool watchesPeriodicOutput(talos_rt_context *context) {
+  if (!context->observedWriters || !context->nativeScopedWrite)
+    return false;
+  const auto &watched = context->observedWriters->rootUsers;
+  auto &scope = *context->nativeScopedWrite;
+  auto observed = [&](uint32_t root) {
+    if (!watched.count(root))
+      return false;
+    if (!scope.readAliasLease)
+      return true;
+    if (!scope.sourceClockPublishing)
+      scope.aliasReprepare = true;
+    return false;
+  };
+  for (uint32_t i = 0; i < scope.clockCount; ++i)
+    if (observed(scope.clocks[i].static_state))
+      return true;
+  for (uint32_t i = 0; i < scope.aliasCount; ++i)
+    if (observed(scope.aliases[i].target_static_state))
+      return true;
+  return false;
+}
+
+static bool mayProjectReadClocks(
+    talos_rt_context *context, const talos_rt_native_periodic_clock_v1 *clocks,
+    uint32_t clockCount, const talos_rt_native_periodic_alias_v1 *aliases,
+    uint32_t aliasCount) {
+  if (!context || !context->nativeScopedWrite || !clocks ||
+      (aliasCount && !aliases))
+    return 0;
+  auto &scope = *context->nativeScopedWrite;
+  scope.readAliasLease = true;
+  scope.aliasReprepare = false;
+  scope.sourceClockPublishing = false;
+  if (auto *observed = context->observedWriters.get()) {
+    for (uint32_t i = 0; i < clockCount; ++i)
+      scope.sourceClockPublishing |=
+          observed->rootUsers.count(clocks[i].static_state) != 0;
+    for (uint32_t i = 0; !scope.sourceClockPublishing && i < aliasCount; ++i)
+      scope.sourceClockPublishing |=
+          observed->rootUsers.count(aliases[i].target_static_state) != 0;
+  }
+  return !scope.sourceClockPublishing;
+}
+
+static talos_rt_status preparePeriodicClock(
     talos_rt_context *context, const talos_rt_native_schedule_node *nodes,
     uint32_t nodeCount, const talos_rt_native_periodic_clock_v1 *clocks,
     uint32_t clockCount, const talos_rt_native_periodic_alias_v1 *aliases,
     uint32_t aliasCount, uint64_t *nextEdges,
-    talos_rt_native_periodic_control_v1 *outControl) {
+    talos_rt_native_periodic_control_v1 *outControl, uint32_t *useViews) {
+  if (useViews)
+    *useViews = 0;
   if (!context || !nodes || nodeCount == 0 || !clocks || clockCount == 0 ||
       (aliasCount != 0 && !aliases) || !nextEdges || !outControl ||
       activeNativeAOTContext != context || lockedNativeAOTContext != context)
@@ -2046,6 +2104,94 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_prepare_periodic_aot(
       return status;
     if (context->schedulerFinishRequested.load(std::memory_order_relaxed))
       return TALOS_RT_TIER_UNAVAILABLE;
+    if (useViews) {
+      if (!sharedCalendar || !context->nativeScopedWrite)
+        return TALOS_RT_INVALID_LIFECYCLE;
+      // Only a prepared loop can project a clock. Establish the value proof
+      // after the startup or checkpoint actors have actually settled. If a
+      // copy is pending, keep primary clock ownership and run its real writer.
+      bool project = mayProjectReadClocks(context, clocks, clockCount, aliases,
+                                          aliasCount);
+      const auto *plan = context->nativeSchedulePlan;
+      uint32_t mismatch = UINT32_MAX;
+      for (uint32_t i = 0; project && i < aliasCount; ++i) {
+        const auto &view = aliases[i];
+        if (view.source_bit_offset >= plan->state_bit_count ||
+            view.target_bit_offset >= plan->state_bit_count ||
+            view.driver_bit_offset >= plan->state_bit_count)
+          return TALOS_RT_LAYOUT_MISMATCH;
+        const bool level = byteBit(plan->state_value, view.source_bit_offset);
+        if (byteBit(plan->state_unknown, view.source_bit_offset) ||
+            byteBit(plan->state_unknown, view.target_bit_offset) ||
+            byteBit(plan->state_value, view.target_bit_offset) != level) {
+          mismatch = i;
+          project = false;
+        }
+      }
+      auto &scope = *context->nativeScopedWrite;
+      if (context->signalDiagnosticsEnabled && !scope.reportedViewSelection) {
+        std::fprintf(stderr,
+                     "talos-read-clock-views selected=%u candidates=%u "
+                     "first_mismatch=%u\n",
+                     project ? aliasCount : 0u, aliasCount, mismatch);
+        scope.reportedViewSelection = true;
+      }
+      if (project) {
+        // The copy plan proves an undelayed sole contributor to each
+        // resolved bit (6.6.1, 23.3.3.7). Direct evaluation can leave its
+        // private contribution unmaterialized. Reconstruct it from the
+        // resolved net before the loop maintains both images on each edge.
+        // The net itself and its observable transition history stay intact.
+        for (uint32_t i = 0; i < aliasCount; ++i) {
+          const auto &view = aliases[i];
+          if (view.driver_bit_offset == view.target_bit_offset)
+            continue;
+          bool unknown = byteBit(plan->state_unknown, view.driver_bit_offset);
+          bool level = byteBit(plan->state_value, view.target_bit_offset);
+          setByteBit(plan->state_value, view.driver_bit_offset, level);
+          if (unknown) {
+            setByteBit(plan->state_unknown, view.driver_bit_offset, false);
+            publishNativeKnownnessChangeUnlocked(plan, view.driver_bit_offset,
+                                                 1, 1, 0);
+          }
+        }
+      }
+      // A source copy may still hold its time-zero X/Z value. Give every
+      // primary its first real edge before reconsidering the projection.
+      // A permanently different value keeps its original source actor.
+      if (mismatch != UINT32_MAX && !scope.triedSettledClockViews) {
+        scope.triedSettledClockViews = true;
+        scope.recheckClockViewsAfter = 0;
+        for (uint32_t i = 0; i < clockCount; ++i) {
+          const auto &clock = clocks[i];
+          if (clock.actor_slot >= context->nativeScheduleActorIndices.size())
+            return TALOS_RT_INVALID_ARGUMENT;
+          size_t index = context->nativeScheduleActorIndices[clock.actor_slot];
+          if (index >= context->scheduledProcesses.size())
+            return TALOS_RT_INVALID_LIFECYCLE;
+          scope.recheckClockViewsAfter =
+              std::max(scope.recheckClockViewsAfter,
+                       context->scheduledProcesses[index].wakeTime);
+        }
+      }
+      scope.sourceClockPublishing = !project;
+      if (!project)
+        aliasCount = 0;
+      *useViews = project;
+    }
+    if (context->nativeScopedWrite) {
+      auto &scope = *context->nativeScopedWrite;
+      scope.clocks = clocks;
+      scope.clockCount = clockCount;
+      scope.aliases = aliases;
+      scope.aliasCount = aliasCount;
+      scope.aliasReprepare = false;
+      bool watched = watchesPeriodicOutput(context);
+      if (context->observedWriters)
+        context->observedWriters->clockHandoff = watched;
+      if (watched || scope.aliasReprepare)
+        return TALOS_RT_TIER_UNAVAILABLE;
+    }
     // Startup actors can enable waveform collection during the drain above.
     // Recheck before the periodic loop takes ownership of the clock.
     if (dumpBlocksLoop())
@@ -2070,11 +2216,13 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_prepare_periodic_aot(
     // Index immutable clock copies by root and bit so subscriptions to
     // runtime-only roots do not need to scan the complete alias inventory.
     std::vector<std::pair<uint32_t, uint64_t>> aliasBits;
-    aliasBits.reserve(aliasCount);
-    for (uint32_t index = 0; index != aliasCount; ++index)
-      aliasBits.emplace_back(aliases[index].target_static_state,
-                             aliases[index].target_bit_offset);
-    std::sort(aliasBits.begin(), aliasBits.end());
+    if (!sharedCalendar) {
+      aliasBits.reserve(aliasCount);
+      for (uint32_t i = 0; i < aliasCount; ++i)
+        aliasBits.emplace_back(aliases[i].target_static_state,
+                               aliases[i].target_bit_offset);
+      std::sort(aliasBits.begin(), aliasBits.end());
+    }
     auto subscriptionTouchesClock =
         [&](const SignalSubscription &subscription) {
           uint32_t staticID = 0;
@@ -2617,14 +2765,24 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_prepare_periodic_aot(
       }
     }
 
-    std::vector<uint8_t> claimed(context->nativeScheduleActors.size(), 0);
+    // Most designs have a handful of clocks among many thousands of actors.
+    // A bounded scan avoids clearing an actor-sized table at every checkpoint.
+    std::vector<uint8_t> claimed;
+    if (clockCount > 8)
+      claimed.resize(context->nativeScheduleActors.size());
     for (uint32_t index = 0; index != clockCount; ++index) {
       const auto &clock = clocks[index];
       if (clock.reserved != 0 || clock.half_period == 0 ||
-          clock.actor_slot >= context->nativeScheduleActors.size() ||
-          claimed[clock.actor_slot])
+          clock.actor_slot >= context->nativeScheduleActors.size())
         return TALOS_RT_INVALID_ARGUMENT;
-      claimed[clock.actor_slot] = 1;
+      if (claimed.empty()) {
+        if (std::any_of(clocks, clocks + index, [&](const auto &prior) {
+              return prior.actor_slot == clock.actor_slot;
+            }))
+          return TALOS_RT_INVALID_ARGUMENT;
+      } else if (claimed[clock.actor_slot]++) {
+        return TALOS_RT_INVALID_ARGUMENT;
+      }
       size_t processIndex =
           context->nativeScheduleActorIndices[clock.actor_slot];
       if (processIndex >= context->scheduledProcesses.size())
@@ -2649,10 +2807,37 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_prepare_periodic_aot(
         return TALOS_RT_INVALID_CONTINUATION;
       nextEdges[index] = scheduled.wakeTime;
     }
+    // A read client can distinguish every variable port and its driver.
+    // Start projecting only after their source events have established the
+    // same known bit on all planes; a pending copy keeps its original actor.
+    if (!useViews && sharedCalendar && aliasCount && context->execution &&
+        (context->execution->flags &
+         TALOS_RT_EXECUTION_VPI_PUBLISHING_WRITERS)) {
+      const auto *plan = context->nativeSchedulePlan;
+      for (uint32_t index = 0; index < aliasCount; ++index) {
+        const auto &alias = aliases[index];
+        if (alias.source_bit_offset >= plan->state_bit_count ||
+            alias.target_bit_offset >= plan->state_bit_count ||
+            alias.driver_bit_offset >= plan->state_bit_count)
+          return TALOS_RT_LAYOUT_MISMATCH;
+        const bool source = byteBit(plan->state_value, alias.source_bit_offset);
+        if (byteBit(plan->state_unknown, alias.source_bit_offset) ||
+            byteBit(plan->state_unknown, alias.target_bit_offset) ||
+            byteBit(plan->state_unknown, alias.driver_bit_offset) ||
+            byteBit(plan->state_value, alias.target_bit_offset) != source ||
+            byteBit(plan->state_value, alias.driver_bit_offset) != source)
+          return TALOS_RT_TIER_UNAVAILABLE;
+      }
+    }
     // Validate the entire cohort and allocate its bookkeeping before detaching
     // any source, so an invalid later clock cannot partially claim the plan.
-    context->nativePeriodicAliasContinuations.clear();
-    if (sharedCalendar && aliasCount) {
+    auto *scope = context->nativeScopedWrite.get();
+    bool reuseViews = useViews && scope &&
+                      scope->indexedClockViews == aliases &&
+                      scope->indexedViewCount == aliasCount;
+    if (!sharedCalendar || !aliasCount) {
+      context->nativePeriodicAliasContinuations.clear();
+    } else if (!reuseViews) {
       context->nativePeriodicAliasContinuations.assign(
           context->nativeScheduleActors.size(), UINT32_MAX);
       for (uint32_t i = 0; i != aliasCount; ++i) {
@@ -2663,6 +2848,10 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_prepare_periodic_aot(
         context->nativePeriodicAliasContinuations[alias.forwarding_actor_slot] =
             alias.forwarding_continuation;
       }
+    }
+    if (scope) {
+      scope->indexedClockViews = useViews ? aliases : nullptr;
+      scope->indexedViewCount = useViews ? aliasCount : 0;
     }
     context->nativePeriodicClockActorSlots.clear();
     context->nativePeriodicClockActorSlots.reserve(clockCount);
@@ -2704,6 +2893,30 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_prepare_periodic_aot(
   }
   TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
   TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_DESIGN; }
+}
+
+extern "C" talos_rt_status talos_rt_v1_scheduler_prepare_periodic_aot(
+    talos_rt_context *context, const talos_rt_native_schedule_node *nodes,
+    uint32_t nodeCount, const talos_rt_native_periodic_clock_v1 *clocks,
+    uint32_t clockCount, const talos_rt_native_periodic_alias_v1 *aliases,
+    uint32_t aliasCount, uint64_t *nextEdges,
+    talos_rt_native_periodic_control_v1 *outControl) {
+  return preparePeriodicClock(context, nodes, nodeCount, clocks, clockCount,
+                              aliases, aliasCount, nextEdges, outControl,
+                              nullptr);
+}
+
+extern "C" talos_rt_status talos_rt_v1_prepare_read_periodic(
+    talos_rt_context *context, const talos_rt_native_schedule_node *nodes,
+    uint32_t nodeCount, const talos_rt_native_periodic_clock_v1 *clocks,
+    uint32_t clockCount, const talos_rt_native_periodic_alias_v1 *aliases,
+    uint32_t aliasCount, uint64_t *nextEdges,
+    talos_rt_native_periodic_control_v1 *outControl, uint32_t *useViews) {
+  if (!useViews)
+    return TALOS_RT_INVALID_ARGUMENT;
+  return preparePeriodicClock(context, nodes, nodeCount, clocks, clockCount,
+                              aliases, aliasCount, nextEdges, outControl,
+                              useViews);
 }
 
 extern "C" talos_rt_status
@@ -2794,7 +3007,7 @@ static talos_rt_status prepareQuietEvalNBA(talos_rt_context *context,
       cut[2] == context->schedulerSlotProgress &&
       cut[3] == context->schedulerEpoch &&
       cut[4] == context->nextSchedulerSequence &&
-      context->schedulerStatus == TALOS_RT_OK &&
+      context->schedulerStatus == TALOS_RT_OK && vpiQuietBeforeNBA(context) &&
       !context->schedulerFinishRequested.load(std::memory_order_relaxed)) {
     const uint32_t region =
         selectBarrier ? nextDueNBABarrierRegionUnlocked(context) : UINT32_MAX;
@@ -2816,7 +3029,7 @@ static talos_rt_status prepareQuietEvalNBA(talos_rt_context *context,
       !context->nativeStaticEvalIslandCertified &&
       !context->activeNativeProcess && !context->designTaskExecuting &&
       !context->activeLogicalProcessToken && !context->coverage &&
-      !context->saif && !context->vpiState && !context->powerNBAs &&
+      !context->saif && vpiQuietBeforeNBA(context) && !context->powerNBAs &&
       !context->clockOccurrences && !context->exactEvents &&
       !context->prioritySignalPending && context->forceMask.empty() &&
       context->assignMask.empty() && context->stateValue.shared() &&
@@ -2898,6 +3111,15 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_drain_periodic_aot(
   auto status = drainNativeAOTCurrentSlotUnlocked(context);
   if (status != TALOS_RT_OK)
     return status;
+  if (auto *scope = context->nativeScopedWrite.get()) {
+    if (scope->recheckClockViewsAfter != UINT64_MAX &&
+        context->schedulerTime >= scope->recheckClockViewsAfter) {
+      scope->recheckClockViewsAfter = UINT64_MAX;
+      scope->aliasReprepare = true;
+    }
+    if (scope->aliasReprepare)
+      return TALOS_RT_TIER_UNAVAILABLE;
+  }
   if (context->signalDiagnosticsEnabled)
     ++context->signalDiagnostics.periodicSlotDrains;
   if (context->schedulerFinishRequested.load(std::memory_order_relaxed))
@@ -2935,12 +3157,22 @@ talos_rt_v1_scheduler_postponed_slot_aot(talos_rt_context *context) {
       !(context->nativeSchedulePlan->flags &
         TALOS_RT_NATIVE_SCHEDULE_POSTPONED_HOOKS))
     return TALOS_RT_INVALID_LIFECYCLE;
-  // The generated loop closed this slot: no runtime work of it remains
-  // (talos_rt_v1_scheduler_handoff_pending), so its values are final and the
-  // dump records them at the slot's own time (IEEE 1800-2023 4.4.2.9, 21.7).
+  // A watched writer can queue ordinary NBAs inside the compiled loop.
+  // Settle them before Postponed reads and dumps (1800-2023 4.4, 21.7).
   // As at every runtime slot end, a waveform the dump cannot write (an
   // untraceable selection) is reported once and never ends the run.
   TALOS_RT_TRY {
+    if (context->postponedSlotHooks & kVPIWriterSlotHook) {
+      context->postponedSlotHooks &= ~kVPIWriterSlotHook;
+      if (auto status = drainNativeAOTCurrentSlotUnlocked(context);
+          status != TALOS_RT_OK)
+        return status;
+      // A value callback in this drain can request $finish (38.4). Return
+      // the current slot to the scheduler before the exclusive clock loop
+      // consumes another deadline.
+      if (context->schedulerFinishRequested.load(std::memory_order_relaxed))
+        return TALOS_RT_AOT_CHECKPOINT;
+    }
     (void)talos_rt_dump_slot_unlocked(context);
     // IEEE 1800-2023 21.2.3: a $monitor argument changed in this slot. The
     // monitor runs in the runtime's Postponed region: hand the slot over once
@@ -3018,7 +3250,14 @@ talos_rt_v1_scheduler_execute_aot_actor(talos_rt_context *context,
   // certified bytecode-only. Execute through the ordinary per-actor tier
   // selector so the activation can create its transport child without
   // admitting allocation or scheduler mutation to the generated hot closure.
-  return executeAOTNode(context, actorSlot);
+  auto status = executeAOTNode(context, actorSlot);
+  // A source store can synchronously invoke cbValueChange. If its client
+  // finishes, return the coordinator to the scheduler before another owner
+  // executes; final callbacks must see that publication point (4.10, 38.4).
+  if (status == TALOS_RT_OK && context->vpiState &&
+      context->schedulerFinishRequested.load(std::memory_order_relaxed))
+    return TALOS_RT_TIER_UNAVAILABLE;
+  return status;
 }
 
 extern "C" talos_rt_status talos_rt_v1_scheduler_queue_aot_checkpoint(
@@ -3238,6 +3477,7 @@ talos_rt_v1_scheduler_run_aot(talos_rt_context *context) {
         !context->nativeScheduleDirtyRootsPresent &&
         nativeStaticSpecializationEnvironmentClean(context);
     specializationFast = plan->specialization_fast &&
+                         !context->observedWriters &&
                          !context->vpiObservationDemand &&
                          !context->nativeScheduleExternalWritePending &&
                          !context->nativeScheduleDirtyRootsPresent &&
@@ -3256,6 +3496,10 @@ talos_rt_v1_scheduler_run_aot(talos_rt_context *context) {
                          [](uint64_t word) { return word != 0; });
     };
     return context->nativeScheduleExternalWritePending ||
+           (context->nativeScopedWrite &&
+            context->nativeScopedWrite->aliasReprepare) ||
+           (context->observedWriters &&
+            context->observedWriters->clockHandoff) ||
            context->nativeScheduleDirtyRootsPresent ||
            talos_rt_covergroup_strobes_pending_unlocked(context) ||
            talos_rt_generated_deferred_reports_pending(context) ||
@@ -3271,6 +3515,8 @@ talos_rt_v1_scheduler_run_aot(talos_rt_context *context) {
       ContextMutexLock lock(context);
       context->postponedHooksDisarmed = false;
       context->postponedObserversPending = false;
+      if (context->nativeScopedWrite)
+        context->nativeScopedWrite->aliasReprepare = false;
       if (plan->state_bit_count != 0 &&
           (!reconcileNativeDirtyRootsToPlanesUnlocked(context, plan) ||
            !importNativeStatePlanesUnlocked(context, plan->state_value,
@@ -3365,6 +3611,7 @@ retryNativeSchedule:;
           !context->nativeScheduleDirtyRootsPresent &&
           nativeStaticSpecializationEnvironmentClean(context);
       specializationFast = plan->specialization_fast &&
+                           !context->observedWriters &&
                            !context->vpiObservationDemand &&
                            nativeStaticSpecializationEnvironmentClean(context);
       if (plan->specialization_fast)
@@ -3658,6 +3905,7 @@ nativeCheckpoint:
           !context->nativeScheduleDirtyRootsPresent &&
           nativeStaticSpecializationEnvironmentClean(context);
       specializationFast = plan->specialization_fast &&
+                           !context->observedWriters &&
                            !context->vpiObservationDemand &&
                            !context->nativeScheduleExternalWritePending &&
                            !context->nativeScheduleDirtyRootsPresent &&
@@ -3996,6 +4244,154 @@ static void disturbNativeScheduleUnlocked(talos_rt_context *context,
       restoreNativeSubscriptionUnlocked(context, scheduled);
 }
 
+talos_rt_status
+talos_rt_observe_writers_unlocked(talos_rt_context *context, uint64_t offset,
+                                  uint64_t width, std::vector<uint32_t> &roots,
+                                  std::vector<uint32_t> &actors) {
+  if (!context || !width || offset > UINT64_MAX - width)
+    return TALOS_RT_INVALID_ARGUMENT;
+  const auto *plan = context->nativeSchedulePlan;
+  if (plan && plan->timeslot_coordinator &&
+      (plan->flags & TALOS_RT_NATIVE_SCHEDULE_EVAL) &&
+      !context->nativeScopedWrite)
+    return TALOS_RT_TIER_UNAVAILABLE;
+  // A watched declaration can overlap several static handles (port aliases
+  // and packed views). Use the interval index already built by the scheduler.
+  if (context->nativeStaticStateRangesValid) {
+    const auto &ranges = context->nativeStaticStateRanges;
+    auto end = std::lower_bound(ranges.begin(), ranges.end(), offset + width,
+                                [](const NativeStaticStateRange &r,
+                                   uint64_t bit) { return r.bitOffset < bit; });
+    while (end != ranges.begin()) {
+      const auto &range = *--end;
+      if (range.prefixEnd <= offset)
+        break;
+      if (range.bitEnd > offset)
+        roots.push_back(range.id);
+    }
+  } else {
+    for (const auto &[id, storage] : context->nativeStaticStates)
+      if (storage.bitOffset < offset + width &&
+          offset < storage.bitOffset + storage.bitWidth)
+        roots.push_back(id);
+  }
+  if (roots.empty())
+    return TALOS_RT_TIER_UNAVAILABLE;
+  std::sort(roots.begin(), roots.end());
+  if (plan) {
+    const auto *scope = context->nativeScopedWrite.get();
+    if (scope) {
+      actors = scope->unscopedActors;
+      for (uint32_t root : roots) {
+        auto found = scope->rootDependentActors.find(root);
+        if (found == scope->rootDependentActors.end())
+          continue;
+        for (uint32_t slot : found->second) {
+          const auto [first, end] =
+              context->nativeScheduleActorRootRanges[slot];
+          const auto *rows = context->nativeScheduleActorRoots;
+          auto row =
+              std::lower_bound(rows + first, rows + end, root,
+                               [](const talos_rt_static_actor_root &r,
+                                  uint32_t id) { return r.static_state < id; });
+          for (; row != rows + end && row->static_state == root; ++row)
+            if (row->flags & TALOS_RT_STATIC_ROOT_WRITE) {
+              actors.push_back(slot);
+              break;
+            }
+        }
+      }
+      std::sort(actors.begin(), actors.end());
+      actors.erase(std::unique(actors.begin(), actors.end()), actors.end());
+    }
+  }
+  if (!context->observedWriters)
+    context->observedWriters = std::make_unique<NativeObservedWriters>();
+  auto &observed = *context->observedWriters;
+  size_t acquired = 0;
+  TALOS_RT_TRY {
+    if (plan)
+      observed.actorUsers.resize(plan->actor_capacity);
+    for (uint32_t root : roots) {
+      ++observed.rootUsers[root];
+      ++acquired;
+      if (!context->nativeScopedWrite)
+        markNativeDirtyRootUnlocked(context, root, true);
+    }
+    invalidateNativeStaticSpecializationFastUnlocked(context);
+    if (!context->nativeScopedWrite)
+      disturbNativeScheduleUnlocked(context);
+    else {
+      for (uint32_t slot : actors)
+        restoreNativeActorSubscriptionUnlocked(context, slot);
+      bool clockHandoff = watchesPeriodicOutput(context);
+      if (clockHandoff && !observed.clockHandoff)
+        context->postponedHooksDisarmed = true;
+      observed.clockHandoff = clockHandoff;
+    }
+    for (uint32_t slot : actors)
+      if (!observed.actorUsers[slot]++) {
+        ++observed.activeActorCount;
+        observed.activeActorXor ^= slot;
+      }
+  }
+  TALOS_RT_CATCH_ALL {
+    roots.resize(acquired);
+    actors.clear();
+    talos_rt_unobserve_writers_unlocked(context, roots, actors);
+    TALOS_RT_RETHROW;
+  }
+  return TALOS_RT_OK;
+}
+
+void talos_rt_unobserve_writers_unlocked(talos_rt_context *context,
+                                         std::vector<uint32_t> &roots,
+                                         std::vector<uint32_t> &actors) {
+  auto &observed = *context->observedWriters;
+  observed.revokeOwnerGuard();
+  for (uint32_t actor : actors)
+    if (!--observed.actorUsers[actor]) {
+      --observed.activeActorCount;
+      observed.activeActorXor ^= actor;
+    }
+  for (uint32_t root : roots) {
+    auto it = observed.rootUsers.find(root);
+    if (--it->second != 0)
+      continue;
+    observed.rootUsers.erase(it);
+    if (context->nativeScopedWrite)
+      continue;
+    const auto *state = findNativeStaticState(context, root);
+    if (!state ||
+        nativeMaskIntersectsRange(context->forceMask, state->bitOffset,
+                                  state->bitWidth) ||
+        nativeMaskIntersectsRange(context->assignMask, state->bitOffset,
+                                  state->bitWidth))
+      continue;
+    if (context->nativeSchedulePlan && !context->nativeScheduleDeoptimized &&
+        !context->stateValue.shared() &&
+        !reconcileNativeRootToPlanesUnlocked(
+            context, context->nativeSchedulePlan, root)) {
+      context->schedulerStatus = TALOS_RT_LAYOUT_MISMATCH;
+      continue;
+    }
+    clearNativeDirtyRootUnlocked(context, root, true);
+  }
+  roots.clear();
+  actors.clear();
+  if (observed.rootUsers.empty()) {
+    if (auto *scope = context->nativeScopedWrite.get())
+      if (scope->readAliasLease && scope->sourceClockPublishing)
+        scope->aliasReprepare = true;
+    context->observedWriters.reset();
+  } else if (context->nativeScopedWrite)
+    observed.clockHandoff = watchesPeriodicOutput(context);
+  context->nativeScheduleDirtyRootsPresent =
+      !context->nativeScheduleTransientDirtyRoots.empty() ||
+      !context->nativeSchedulePersistentDirtyRoots.empty();
+  refreshNativeStaticSpecializationFastUnlocked(context);
+}
+
 void talos_rt_aot_external_write_unlocked(talos_rt_context *context) {
   // The write's footprint is unknown: any root may now hold X/Z.
   markNativeUnknownAllUnlocked(context);
@@ -4135,7 +4531,9 @@ void talos_rt_aot_release_range_unlocked(talos_rt_context *context,
     if (static_cast<__int128>(state.bitOffset) < releasedEnd &&
         static_cast<__int128>(bitOffset) <
             static_cast<__int128>(state.bitOffset) + state.bitWidth) {
-      if (nativeMaskIntersectsRange(context->forceMask, state.bitOffset,
+      if ((!context->nativeScopedWrite && context->observedWriters &&
+           context->observedWriters->rootUsers.count(id)) ||
+          nativeMaskIntersectsRange(context->forceMask, state.bitOffset,
                                     state.bitWidth) ||
           nativeMaskIntersectsRange(context->assignMask, state.bitOffset,
                                     state.bitWidth))
