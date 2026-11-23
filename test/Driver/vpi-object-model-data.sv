@@ -20,9 +20,8 @@
 // assignment's lhs/rhs are empty (IEEE 1800-2023 37.19, 37.28, 37.58-37.59).
 
 // IEEE 1800-2023 37.17-37.26, 37.28, 37.58-37.59: variables of every kind,
-// typespecs, aggregates, fixed arrays and selects, and parameters. Module-level
-// dynamic arrays, queues and associative arrays are left out: VPI builds
-// reject them today.
+// typespecs, aggregates, fixed and dynamic arrays, queues, associative arrays,
+// selects, and parameters.
 module child;
   parameter int Q = 1;
 endmodule
@@ -64,6 +63,9 @@ module top;
   T typed;
   logic [7:0] mem [3:0];
   logic [1:0][3:0] pa;
+  int dyn [];
+  int q [$];
+  int aa [string];
   logic [7:0] sel;
   child sub();
   defparam sub.Q = 12;
@@ -71,6 +73,9 @@ module top;
     specparam sp = 3;
   endspecify
   initial begin
+    dyn = new[2];
+    q.push_back(1);
+    aa["k"] = 2;
     mem[1] = 8'h5;
     sel = lv[3:0] + lv[2] + lv[1 +: 2] + mem[1][2] + pa[1] + p.lo;
   end
@@ -79,9 +84,9 @@ module top;
 endmodule
 
 // CHECK: null objects=1 properties=3/5 relations=3/12 answers=6
-// CHECK-NEXT: vpiAssignment objects=2 properties=7/8 relations=3/8 answers=18
+// CHECK-NEXT: vpiAssignment objects=4 properties=7/8 relations=3/8 answers=36
 // CHECK-NEXT: vpiBegin objects=1 properties=5/7 relations=3/21 answers=8
-// CHECK-NEXT: vpiConstant objects=112 properties=8/10 relations=3/5 answers=783
+// CHECK-NEXT: vpiConstant objects=119 properties=8/10 relations=3/5 answers=835
 // CHECK-NEXT: vpiDelayControl objects=1 properties=5/6 relations=2/5 answers=7
 // CHECK-NEXT: vpiFuncCall objects=1 properties=6/11 relations=2/8 answers=8
 // CHECK-NEXT: vpiFunction objects=1 properties=17/19 relations=2/26 answers=19
@@ -94,8 +99,8 @@ endmodule
 // CHECK-NEXT: vpiRegBit objects=53 properties=21/24 relations=8/20 answers=1492
 // CHECK-NEXT: vpiTimeVar objects=2 properties=21/24 relations=4/19 answers=50
 // CHECK-NEXT: vpiTimeQueue objects=1 properties=3/3 relations=0/1 answers=3
-// CHECK-NEXT: vpiRange objects=20 properties=6/6 relations=2/2 answers=158
-// CHECK-NEXT: vpiRegArray objects=2 properties=23/26 relations=7/25 answers=60
+// CHECK-NEXT: vpiRange objects=23 properties=6/6 relations=2/2 answers=176
+// CHECK-NEXT: vpiRegArray objects=5 properties=23/26 relations=8/25 answers=151
 // CHECK-NEXT: vpiPackage objects=1 properties=18/23 relations=0/27 answers=18
 // CHECK-NEXT: vpiTypeParameter objects=1 properties=8/8 relations=5/6 answers=13
 // CHECK-NEXT: vpiLongIntVar objects=1 properties=21/24 relations=4/19 answers=25
@@ -113,8 +118,8 @@ endmodule
 // CHECK-NEXT: vpiShortRealTypespec objects=1 properties=5/6 relations=1/2 answers=6
 // CHECK-NEXT: vpiByteTypespec objects=3 properties=5/6 relations=1/2 answers=18
 // CHECK-NEXT: vpiShortIntTypespec objects=1 properties=5/6 relations=1/2 answers=6
-// CHECK-NEXT: vpiIntTypespec objects=8 properties=5/6 relations=1/2 answers=48
-// CHECK-NEXT: vpiStringTypespec objects=1 properties=5/6 relations=1/2 answers=6
+// CHECK-NEXT: vpiIntTypespec objects=12 properties=5/6 relations=1/2 answers=70
+// CHECK-NEXT: vpiStringTypespec objects=2 properties=5/6 relations=1/2 answers=12
 // CHECK-NEXT: vpiChandleTypespec objects=1 properties=5/6 relations=1/2 answers=6
 // CHECK-NEXT: vpiEnumTypespec objects=2 properties=6/6 relations=4/4 answers=18
 // CHECK-NEXT: vpiEnumConst objects=3 properties=6/6 relations=1/1 answers=21
@@ -125,6 +130,7 @@ endmodule
 // CHECK-NEXT: vpiUnionTypespec objects=2 properties=8/8 relations=2/3 answers=20
 // CHECK-NEXT: vpiBitTypespec objects=5 properties=6/7 relations=5/6 answers=39
 // CHECK-NEXT: vpiLogicTypespec objects=35 properties=6/7 relations=5/6 answers=309
-// CHECK-NEXT: vpiArrayTypespec objects=3 properties=7/7 relations=6/7 answers=35
+// CHECK-NEXT: vpiArrayTypespec objects=6 properties=7/7 relations=7/7 answers=63
 // CHECK-NEXT: vpiTypespecMember objects=8 properties=7/7 relations=1/2 answers=64
+// CHECK-NEXT: vpiMethodFuncCall objects=1 properties=6/11 relations=1/9 answers=7
 // CHECK-NEXT: audit end

@@ -12183,12 +12183,14 @@ TEST(VPI, IndexedAndMultiIndexedQueriesPreserveDeclaredIndicesAndValues) {
   EXPECT_EQ(integerValue(rootRight), 1);
   release(rootLeft);
   release(rootRight);
+  // IEEE 1800-2023 37.17 detail 11: a whole unpacked array has no value
+  // property, so vpi_put_value refuses it like vpi_get_value does.
   s_vpi_vecval vector[]{{0, 0}};
   s_vpi_value write{};
   write.format = vpiVectorVal;
   write.value.vector = vector;
   EXPECT_EQ(vpi_put_value(root, &write, nullptr, vpiNoDelay), nullptr);
-  EXPECT_EQ(vpi_chk_error(nullptr), 0);
+  EXPECT_EQ(vpi_chk_error(nullptr), vpiNotice);
 
   // Read-only indexed inspection must stay on the generated tier-1 state
   // planes and must not mark the schedule deoptimized.
@@ -12326,12 +12328,21 @@ TEST(VPI, IndexedQueriesHandleCrossLimbWindowsAndPortBitContracts) {
     char name[] = "top.value";
     vpiHandle root = vpi_handle_by_name(name, nullptr);
     ASSERT_NE(root, nullptr);
-    std::string bits = "1010101010101" + std::string(52, '0');
-    s_vpi_value write{};
-    write.format = vpiBinStrVal;
-    write.value.str = reinterpret_cast<PLI_BYTE8 *>(bits.data());
-    EXPECT_EQ(vpi_put_value(root, &write, nullptr, vpiNoDelay), nullptr);
-    EXPECT_EQ(vpi_chk_error(nullptr), 0);
+    // A whole unpacked array has no VPI value property (IEEE 1800-2023 37.17
+    // detail 11), so the runtime seeds element 4, which spans flattened bits
+    // 52..64 across the limb boundary.
+    talos_rt_design_cursor_v1 cursor{};
+    ASSERT_EQ(talos_rt_v1_design_lookup(&fixture.execution,
+                                        reinterpret_cast<const uint8_t *>(name),
+                                        sizeof(name) - 1, &cursor),
+              TALOS_RT_OK);
+    auto seedWindow = [&](uint64_t value, uint64_t unknown) {
+      std::array<uint64_t, 2> valuePlane{{value << 52, value >> 12}};
+      std::array<uint64_t, 2> unknownPlane{{unknown << 52, unknown >> 12}};
+      return talos_rt_v1_design_write(context, cursor, valuePlane.data(),
+                                      unknownPlane.data(), 65);
+    };
+    ASSERT_EQ(seedWindow(0x1555, 0), TALOS_RT_OK);
 
     vpiHandle window = vpi_handle_by_index(root, 4);
     ASSERT_NE(window, nullptr);
@@ -12340,10 +12351,8 @@ TEST(VPI, IndexedQueriesHandleCrossLimbWindowsAndPortBitContracts) {
     read.format = vpiIntVal;
     vpi_get_value(window, &read);
     EXPECT_EQ(read.value.integer, 0x1555);
-    std::string fourStateBits = "10xz101010101" + std::string(52, '0');
-    write.value.str = reinterpret_cast<PLI_BYTE8 *>(fourStateBits.data());
-    EXPECT_EQ(vpi_put_value(root, &write, nullptr, vpiNoDelay), nullptr);
-    EXPECT_EQ(vpi_chk_error(nullptr), 0);
+    // 10xz101010101: x is unknown with value 0, z unknown with value 1.
+    ASSERT_EQ(seedWindow(0x1355, 0x600), TALOS_RT_OK);
     read = {};
     read.format = vpiBinStrVal;
     vpi_get_value(window, &read);
@@ -12456,11 +12465,16 @@ TEST(VPI, IndexedQueriesPreserveNegativeAscendingAndDescendingBounds) {
   char name[] = "top.value";
   vpiHandle root = vpi_handle_by_name(name, nullptr);
   ASSERT_NE(root, nullptr);
-  s_vpi_vecval vector[]{{1, 0}};
-  s_vpi_value write{};
-  write.format = vpiVectorVal;
-  write.value.vector = vector;
-  EXPECT_EQ(vpi_put_value(root, &write, nullptr, vpiNoDelay), nullptr);
+  // A whole unpacked array has no VPI value property (IEEE 1800-2023 37.17
+  // detail 11), so the runtime seeds flattened bit 0, value[-2][-6].
+  talos_rt_design_cursor_v1 cursor{};
+  ASSERT_EQ(talos_rt_v1_design_lookup(&fixture.execution,
+                                      reinterpret_cast<const uint8_t *>(name),
+                                      sizeof(name) - 1, &cursor),
+            TALOS_RT_OK);
+  uint64_t value = 1, unknown = 0;
+  ASSERT_EQ(talos_rt_v1_design_write(context, cursor, &value, &unknown, 8),
+            TALOS_RT_OK);
   PLI_INT32 indices[]{-2, -6};
   vpiHandle bit = vpi_handle_by_multi_index(root, 2, indices);
   ASSERT_NE(bit, nullptr);

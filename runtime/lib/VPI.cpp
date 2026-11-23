@@ -2309,6 +2309,16 @@ bool valueSourceFor(
   return true;
 }
 
+// IEEE 1800-2023 37.17 detail 11 and 37.26 detail 1: whole unpacked arrays,
+// structures and unions have no value property. Inspect the physical root
+// shape independently of the exact VPI kind.
+bool isWholeUnpackedAggregate(const talos_rt_design_type_info_v1 &type) {
+  return (type.flags & TALOS_RT_DESIGN_TYPE_PACKED) == 0 &&
+         (type.kind == TALOS_RT_DESIGN_TYPE_ARRAY ||
+          type.kind == TALOS_RT_DESIGN_TYPE_STRUCT ||
+          type.kind == TALOS_RT_DESIGN_TYPE_UNION);
+}
+
 bool valueRequirementsSatisfied(
     __vpiHandle *handle, const VPIValueSource &source,
     const talos::reflection::VPIValuePolicyDescriptor &policy) {
@@ -2346,14 +2356,10 @@ bool valueRequirementsSatisfied(
     setError(handle->owner, "design type metadata lookup failed", vpiInternal);
     return false;
   }
-  // Inspect the physical root shape independently of its exact VPI kind.
   // Compiler-emitted databases predating semantic-kind preservation label
   // storage/net records generically as vpiReg/vpiNet; they must not thereby
   // make a whole unpacked aggregate readable.
-  if ((type.flags & TALOS_RT_DESIGN_TYPE_PACKED) == 0 &&
-      (type.kind == TALOS_RT_DESIGN_TYPE_ARRAY ||
-       type.kind == TALOS_RT_DESIGN_TYPE_STRUCT ||
-       type.kind == TALOS_RT_DESIGN_TYPE_UNION)) {
+  if (isWholeUnpackedAggregate(type)) {
     setError(handle->owner,
              "vpi_get_value is not defined for a whole unpacked aggregate",
              vpiNotice);
@@ -3468,6 +3474,34 @@ vpiHandle makeIndexedPrefix(__vpiHandle *source, size_t count) {
   }
 }
 
+// Dynamic arrays, queues and associative arrays: their storage holds a
+// managed container reference, not element values.
+bool isManagedArrayKind(uint32_t kind) {
+  return kind == TALOS_RT_DESIGN_SEMANTIC_DYNAMIC_ARRAY ||
+         kind == TALOS_RT_DESIGN_SEMANTIC_QUEUE ||
+         kind == TALOS_RT_DESIGN_SEMANTIC_ASSOC_ARRAY;
+}
+
+// Whether a fixed unpacked array has a dynamic, queue or associative dimension
+// below its own, as int fa[2][] does. Physical layout stops at that
+// dimension's managed reference, so only the semantic type shows it.
+bool hasManagedArrayDimensionBelow(__vpiHandle *handle,
+                                   talos_rt_design_cursor_v1 semantic) {
+  talos_rt_design_semantic_type_info_v1 type{};
+  if (!semanticTypeInfo(handle, semantic, type))
+    return false;
+  while (type.kind == TALOS_RT_DESIGN_SEMANTIC_UNPACKED_ARRAY) {
+    talos_rt_design_cursor_v1 child{};
+    if (!semanticElement(handle, semantic, child) ||
+        !semanticTypeInfo(handle, child, type))
+      return false;
+    if (isManagedArrayKind(type.kind))
+      return true;
+    semantic = child;
+  }
+  return false;
+}
+
 bool isVirtualInterfaceSequence(__vpiHandle *source,
                                 talos_rt_design_cursor_v1 semantic) {
   for (;;) {
@@ -3876,6 +3910,16 @@ bool appendIndexedSelection(__vpiHandle *source,
     step.arrayDimension = step.managedContainer = true;
     steps.push_back(step);
     return true;
+  }
+  // Other dynamic arrays, queues and associative arrays keep their elements
+  // in the managed container their storage references.
+  if (semantic.offset && semanticTypeInfo(source, semantic, semanticInfo) &&
+      isManagedArrayKind(semanticInfo.kind)) {
+    setError(source->owner,
+             "elements of a dynamic array, queue or associative array are not "
+             "available through VPI",
+             vpiNotice);
+    return false;
   }
   const bool isArray = type.kind == TALOS_RT_DESIGN_TYPE_ARRAY;
   const bool packed = (type.flags & TALOS_RT_DESIGN_TYPE_PACKED) != 0;
@@ -5578,6 +5622,15 @@ vpiHandle makeSemanticIterator(__vpiHandle *source, PLI_INT32 selector) {
       return nullptr;
     }
   }
+  if ((selector == vpiReg || selector == vpiMemoryWord ||
+       selector == vpiVarSelect) &&
+      isManagedArrayKind(info.kind)) {
+    setError(source->owner,
+             "elements of a dynamic array, queue or associative array are not "
+             "available through VPI",
+             vpiNotice);
+    return nullptr;
+  }
   uint32_t relationSelector = 0;
   VPIFixedArrayShape shape;
   if (isStoredClassEventArray(source) &&
@@ -6650,6 +6703,51 @@ bool readManagedStateWord(__vpiHandle *handle, uint64_t &word) {
     return false;
   return readManagedStateWord(handle, info, handle->form, handle->cursor,
                               handle->selectionBitOffset, word);
+}
+
+// IEEE 1800-2023 37.17 detail 9: the number of variables in a dynamic array,
+// queue or associative array is its current element count, read from the
+// managed container its storage references. A multidimensional array with such
+// a dimension (int q[$][2], int fa[2][]) is reported as unavailable.
+bool managedArrayElementCount(__vpiHandle *handle,
+                              talos_rt_design_cursor_v1 semantic,
+                              uint64_t &count) {
+  talos_rt_design_cursor_v1 child{};
+  talos_rt_design_semantic_type_info_v1 childType{};
+  if (!semanticElement(handle, semantic, child) ||
+      !semanticTypeInfo(handle, child, childType))
+    return false;
+  if (childType.kind == TALOS_RT_DESIGN_SEMANTIC_UNPACKED_ARRAY ||
+      isManagedArrayKind(childType.kind)) {
+    setError(handle->owner,
+             "vpiSize of a multidimensional array with a dynamic, queue or "
+             "associative dimension is not available",
+             vpiNotice);
+    return false;
+  }
+  talos_rt_context *context = handle->owner->context;
+  ContextTransaction transaction(context);
+  ManagedExecutionScope managed(context);
+  if (managed.getStatus() != TALOS_RT_OK || !managed.getLane()) {
+    setError(handle->owner, "dynamic array VPI query cannot enter GC scope",
+             vpiInternal);
+    return false;
+  }
+  uint64_t word = 0;
+  if (!readManagedStateWord(handle, word))
+    return false;
+  count = 0;
+  if (!word)
+    return true;
+  auto *object =
+      reinterpret_cast<talos_rt_object_v1 *>(static_cast<uintptr_t>(word));
+  if (static_cast<uint64_t>(reinterpret_cast<uintptr_t>(object)) != word ||
+      !talos_rt_managed_object_belongs_to(context, object)) {
+    setError(handle->owner, "invalid dynamic array reference", vpiInternal);
+    return false;
+  }
+  count = talos_rt_v1_container_size(object);
+  return true;
 }
 
 bool readManagedStateWord(__vpiHandle *handle, const VPIValueSource &source,
@@ -10808,6 +10906,9 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_handle_by_name(PLI_BYTE8 *name,
       if (member)
         return member;
     }
+    // A selection that the named object refuses, such as an element of a
+    // dynamic array, reports why; any other failure is a name not found.
+    state->errorLevel = 0;
     if (vpiHandle indexed = handleSyntheticSelectionByName(
             state, requested, sourceClassDefinitionOrigin))
       return indexed;
@@ -10815,7 +10916,8 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_handle_by_name(PLI_BYTE8 *name,
       if (vpiHandle indexed = handleSyntheticSelectionByName(
               state, compatibilityName, sourceClassDefinitionOrigin))
         return indexed;
-    setError(state, "hierarchical VPI name was not found", vpiNotice);
+    if (state->errorLevel == 0)
+      setError(state, "hierarchical VPI name was not found", vpiNotice);
     return nullptr;
   }
   if (protectedNameIntermediate(state, resolvedName))
@@ -13123,12 +13225,16 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_get(PLI_INT32 property,
       return isIndexedArrayMember(handle);
 
     if (property == vpiIsMemory || property == vpiArrayType) {
+      // Arrays of virtual interfaces and arrays with a dynamic, queue or
+      // associative dimension have no complete physical unpacked-array type:
+      // their shape is semantic (a managed container reference in storage).
       talos_rt_design_cursor_v1 semantic{};
+      talos_rt_design_semantic_type_info_v1 type{};
       if (semanticCursorFor(handle, semantic) &&
-          isVirtualInterfaceSequence(handle, semantic)) {
-        talos_rt_design_semantic_type_info_v1 type{};
-        if (!semanticTypeInfo(handle, semantic, type))
-          return vpiUndefined;
+          semanticTypeInfo(handle, semantic, type) &&
+          (isManagedArrayKind(type.kind) ||
+           isVirtualInterfaceSequence(handle, semantic) ||
+           hasManagedArrayDimensionBelow(handle, semantic))) {
         if (property == vpiArrayType) {
           if (type.kind == TALOS_RT_DESIGN_SEMANTIC_UNPACKED_ARRAY)
             return vpiStaticArray;
@@ -13139,11 +13245,15 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_get(PLI_INT32 property,
           if (type.kind == TALOS_RT_DESIGN_SEMANTIC_ASSOC_ARRAY)
             return vpiAssocArray;
         } else {
+          // IEEE 1800-2023 Annex K (vpi_user.h): vpiIsMemory is TRUE for a
+          // one-dimensional array; an array whose element is an array has
+          // more dimensions.
           talos_rt_design_cursor_v1 child{};
           talos_rt_design_semantic_type_info_v1 childType{};
           return semanticElement(handle, semantic, child) &&
                  semanticTypeInfo(handle, child, childType) &&
-                 childType.kind == TALOS_RT_DESIGN_SEMANTIC_VIRTUAL_INTERFACE;
+                 childType.kind != TALOS_RT_DESIGN_SEMANTIC_UNPACKED_ARRAY &&
+                 !isManagedArrayKind(childType.kind);
         }
       }
     }
@@ -13240,6 +13350,16 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_get(PLI_INT32 property,
         return vpiUndefined;
       return static_cast<PLI_INT32>(
           std::min<size_t>(selections.size(), INT32_MAX));
+    }
+    talos_rt_design_semantic_type_info_v1 container{};
+    if (exactType == vpiRegArray && semanticCursorFor(handle, semantic) &&
+        semanticTypeInfo(handle, semantic, container) &&
+        (isManagedArrayKind(container.kind) ||
+         hasManagedArrayDimensionBelow(handle, semantic))) {
+      uint64_t count = 0;
+      if (!managedArrayElementCount(handle, semantic, count))
+        return vpiUndefined;
+      return static_cast<PLI_INT32>(std::min<uint64_t>(count, INT32_MAX));
     }
     if ((exactType == vpiRegArray || exactType == vpiNetArray ||
          exactType == vpiInterconnectArray) &&
@@ -15158,8 +15278,19 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_put_value(vpiHandle opaque,
     setError(handle->owner, "class member has no writable actual", vpiNotice);
     return nullptr;
   }
-  if (vpiTypeForHandle(handle) == vpiNamedEvent)
+  const PLI_INT32 writtenType = vpiTypeForHandle(handle);
+  if (writtenType == vpiNamedEvent)
     return triggerNamedEvent(handle, flags);
+  // IEEE 1800-2023 37.17 detail 11, 37.26 detail 1: an object without a value
+  // property cannot be written any more than read. Whole dynamic arrays,
+  // queues, associative arrays and class variables are such objects; their
+  // storage holds a managed reference that a value must never overwrite.
+  if (writtenType == vpiUndefined || !talos::reflection::findVPIValuePolicy(
+                                         static_cast<uint32_t>(writtenType))) {
+    setError(handle->owner, "vpi_put_value is not defined for this VPI object",
+             vpiNotice);
+    return nullptr;
+  }
   if (handle->form == VPIObjectForm::Indexed) {
     setError(handle->owner,
              "indexed VPI writes require selected-state scheduling support");
@@ -15168,6 +15299,16 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_put_value(vpiHandle opaque,
   talos_rt_design_info_v1 info{};
   if (!infoFor(handle, info) || info.kind == TALOS_RT_DESIGN_RECORD_DRIVER) {
     setError(handle->owner, "VPI driver writes are not supported");
+    return nullptr;
+  }
+  talos_rt_design_type_info_v1 writtenShape{};
+  if (info.type_offset != 0 &&
+      talos_rt_cached_design_type_info(context, {info.type_offset},
+                                       &writtenShape) == TALOS_RT_OK &&
+      isWholeUnpackedAggregate(writtenShape)) {
+    setError(handle->owner,
+             "vpi_put_value is not defined for a whole unpacked aggregate",
+             vpiNotice);
     return nullptr;
   }
   const auto storage =
@@ -15209,8 +15350,7 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_put_value(vpiHandle opaque,
       writer->writeValueScratch[scratchLease.index].first;
   std::vector<uint64_t> &unknown =
       writer->writeValueScratch[scratchLease.index].second;
-  if (!decodeValue(handle, source, info.bit_width, vpiTypeForHandle(handle),
-                   value, unknown))
+  if (!decodeValue(handle, source, info.bit_width, writtenType, value, unknown))
     return nullptr;
   // Declared VPI types retain their four-state identity in --two-state, but
   // foreign values enter value-only storage after X/Z-to-zero conversion.

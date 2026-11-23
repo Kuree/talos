@@ -12,7 +12,6 @@
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
 
 #include "talos/Analysis/DPIEffectAnalysis.h"
-#include "talos/Analysis/SimulationVPIAnalysis.h"
 #include "talos/Conversion/SimulationToSchedule.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 
@@ -220,27 +219,6 @@ void TalosSimBuildComputeGraphPass::runOnOperation() {
       return;
     }
   }
-  if (analysis::SimulationVPIAnalysis::forMode(*vpiMode).allowsRead()) {
-    bool unsupportedContainer = false;
-    for (sim::SimStorageDeclOp storage :
-         design.getBody().front().getOps<sim::SimStorageDeclOp>()) {
-      bool dynamic = false;
-      storage.getType().walk([&](Type type) {
-        dynamic |=
-            isa<sim::DynamicArrayType, sim::QueueType, sim::AssocArrayType>(
-                type);
-      });
-      if (!dynamic)
-        continue;
-      storage.emitOpError(
-          "VPI dynamic-array, queue, and associative-array marshalling is "
-          "unsupported");
-      unsupportedContainer = true;
-    }
-    if (unsupportedContainer)
-      return signalPassFailure();
-  }
-
   FailureOr<simlowering::ComputeGraphResult> derived =
       simlowering::deriveComputeGraph(design, options);
   if (failed(derived))
