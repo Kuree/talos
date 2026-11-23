@@ -17,6 +17,7 @@
 #include "talos/Analysis/SimulationScheduleAnalysis.h"
 #include "talos/Analysis/SourceMemoryAnalysis.h"
 #include "talos/Analysis/StorageWriteAnalysis.h"
+#include "talos/Analysis/ThreadObservationAnalysis.h"
 #include "talos/Conversion/SimulationToSchedule/ComputeGraph.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/EvalRoles.h"
@@ -443,7 +444,7 @@ LogicalResult
 materializeStandaloneEvalBody(sim::SimDesignOp design, SymbolTable &symbols,
                               CodeUnitIndex &codeUnits, sim::SimFuncOp function,
                               const DenseSet<uint64_t> &controlTargets,
-                              bool foreignControl) {
+                              bool foreignControl, bool guardedReadControls) {
   if (function.isExternal() ||
       ::talos::schedule::has<::talos::schedule::Field::EvalBody>(function) ||
       ::talos::schedule::has<::talos::schedule::Field::EvalBorrowedCaptures>(
@@ -731,37 +732,58 @@ materializeStandaloneEvalBody(sim::SimDesignOp design, SymbolTable &symbols,
     }
     operand->set(mapped);
   }
-  // The canonical actor keeps its named-block activations for runtime
-  // execution. In a zero-time eval body, an enter/leave-only activation is
-  // unobservable when no language disable names it and no foreign code can
-  // target it. Do not bring these scheduler calls into the closed evaluator.
-  // Boundaries, escaping tokens, and targeted scopes retain their identity.
-  if (!foreignControl) {
-    SmallVector<sim::SimControlEnterOp> unusedControls;
-    evalBody.walk([&](sim::SimControlEnterOp enter) {
-      if (!controlTargets.contains(enter.getTargetId()) &&
-          llvm::all_of(enter.getControl().getUsers(), [](Operation *user) {
-            return isa<sim::SimControlLeaveOp>(user);
-          }))
-        unusedControls.push_back(enter);
-    });
-    for (sim::SimControlEnterOp enter : unusedControls) {
-      for (Operation *leave :
-           llvm::make_early_inc_range(enter.getControl().getUsers()))
-        leave->erase();
-      enter.erase();
+  // The source frame keeps its named-block activations at any observable
+  // cut. On the guarded read path, a call-free arithmetic always_comb has
+  // no point of foreign reentry: a subscribed store executes in the original
+  // actor with its controls intact (4.7, 4.10, 9.6.2, 38.36.1).
+  SmallVector<sim::SimControlEnterOp> privateControls;
+  bool retainedControl = false;
+  evalBody.walk([&](sim::SimControlEnterOp enter) {
+    if (!controlTargets.contains(enter.getTargetId()) &&
+        llvm::all_of(enter.getControl().getUsers(), [](Operation *user) {
+          return isa<sim::SimControlLeaveOp>(user);
+        }))
+      privateControls.push_back(enter);
+    else
+      retainedControl = true;
+  });
+  if (!privateControls.empty()) {
+    bool canElide = !foreignControl;
+    if (!canElide && guardedReadControls &&
+        function.getEntryKind() == sim::EntryKind::AlwaysComb) {
+      auto reentry = evalBody.walk([&](Operation *op) {
+        if (op == evalBody.getOperation() ||
+            isa<sim::SimControlEnterOp, sim::SimControlLeaveOp>(op))
+          return WalkResult::advance();
+        if (analysis::observesExecutingThread(op) ||
+            isa<sim::SimCallOp, sim::SimDPICallOp>(op))
+          return WalkResult::interrupt();
+        return (isMemoryEffectFree(op) ||
+                isa<sim::SimRefLoadOp, sim::SimRefStoreOp, sim::SimNetReadOp,
+                    sim::SimTerminationRequestedOp, sim::SimReturnOp>(op))
+                   ? WalkResult::advance()
+                   : WalkResult::interrupt();
+      });
+      canElide = !reentry.wasInterrupted();
+      if (canElide &&
+          native::has<native::DebugTiming>(design->getParentOfType<ModuleOp>()))
+        llvm::errs() << "talos read eval private controls: body="
+                     << evalBody.getSymName()
+                     << " count=" << privateControls.size() << '\n';
     }
+    if (canElide)
+      for (auto enter : privateControls) {
+        for (Operation *leave :
+             llvm::make_early_inc_range(enter.getControl().getUsers()))
+          leave->erase();
+        enter.erase();
+      }
+    else
+      retainedControl = true;
   }
-  // A retained activation needs the canonical process identity and control
-  // stack (IEEE 1800-2023 9.6.2). Preserve the exact continuation as a runtime
-  // checkpoint, so its complete activation runs canonically while unrelated
-  // owners remain in the generated eval loop.
-  if (evalBody
-          .walk([](sim::SimControlEnterOp) { return WalkResult::interrupt(); })
-          .wasInterrupted()) {
+  if (retainedControl)
     schedule::set<schedule::Field::EvalCheckpointOnly>(evalBody,
                                                        builder.getUnitAttr());
-  }
   analysis::propagateActivationValueRoots(evalBody);
   analysis::LocalStorageAnalysis locals(evalBody);
   if (!locals.areResetBeforeReads(recreated)) {
@@ -5206,7 +5228,7 @@ void TalosSimMaterializeComputeFusionPass::runOnOperation() {
   auto originalGraph = design.getComputeGraphAttr();
   bool rearm = interleaveRearms && originalGraph &&
                originalGraph.getWorkers() == 1 &&
-               originalGraph.getVpi() == schedule::ComputeVPIMode::Off;
+               originalGraph.getVpi() != schedule::ComputeVPIMode::Full;
   // Fusion analyses below are destroyed first. The new query then sees the
   // final original owners; materialized evaluators are never preempted.
   llvm::scope_exit finishRearms([&] {
@@ -5227,14 +5249,24 @@ void TalosSimMaterializeComputeFusionPass::runOnOperation() {
   DenseSet<uint64_t> controlTargets;
   // Foreign code can reach a named block only through a context export
   // (IEEE 1800-2023 35.5.3); a transparent export closure disables nothing.
-  bool foreignControl =
-      analysis::DPIEffectAnalysis(design).anyCallMayAccessDesign();
+  analysis::DPIEffectAnalysis dpi(design);
+  bool foreignControl = dpi.anyCallMayAccessDesign();
+  auto module = design->getParentOfType<ModuleOp>();
+  bool guardedReadControls =
+      module && native::has<native::ReadableEvalState>(module) &&
+      originalGraph &&
+      originalGraph.getVpi() == schedule::ComputeVPIMode::Read &&
+      dpi.exportsAreTransparent() &&
+      !sim::has<sim::metadata::SnapshotPublications>(module);
   design.walk([&](Operation *operation) {
     if (auto disable = dyn_cast<sim::SimControlDisableOp>(operation))
       controlTargets.insert(disable.getTargetId());
-    // Export capability is not a foreign call. An external invocation enters
-    // at a runtime boundary, where canonical actors retain these scopes; it
-    // cannot interleave with a closed zero-time evaluator activation.
+    if (isa<sim::SimControlDisableSelectedOp, sim::SimObserverBindOp>(
+            operation))
+      guardedReadControls = false;
+    if (auto observer = dyn_cast<sim::SimFuncOp>(operation))
+      if (observer.getEntryKind() == sim::EntryKind::Observer)
+        guardedReadControls = false;
   });
   bool forgedDiscardableStore = false;
   design.walk([&](sim::SimRefStoreOp store) {
@@ -5294,17 +5326,7 @@ void TalosSimMaterializeComputeFusionPass::runOnOperation() {
           design, sorted(observers->observable));
       ::talos::schedule::set<schedule::metadata::nbaChangeWatched>(
           design, sorted(observers->changeWatched));
-      if (observers->immediateWriters)
-        schedule::set<schedule::Field::NbaImmediateWriters>(
-            design, sorted(*observers->immediateWriters));
-      if (!observers->holdRanges.empty()) {
-        SmallVector<int64_t> ranges;
-        for (const auto &range : observers->holdRanges)
-          ranges.append(
-              {int64_t(range.root), int64_t(range.low), int64_t(range.width)});
-        schedule::set<schedule::Field::NbaHoldRanges>(
-            design, DenseI64ArrayAttr::get(design.getContext(), ranges));
-      }
+      recordNBAWriterFacts(design, *observers);
       // Keep original activation dependencies: a fused summary would connect
       // unrelated reads and writes. Sparse backward dataflow closes observer
       // influence through immediate state updates and aliases before fusion.
@@ -5336,6 +5358,8 @@ void TalosSimMaterializeComputeFusionPass::runOnOperation() {
       preserveEvalNBASiteOrigins(function);
   analysis::SimulationVPIAnalysis vpi =
       analysis::SimulationVPIAnalysis::compute(design);
+  if (vpi.getMode() == schedule::ComputeVPIMode::Read && evalScheduler)
+    recordReadOnlyNBAWriters(design);
   if (vpi.allowsWrite() &&
       !schedule::has<schedule::Field::NbaGuardedPrivateInfluence>(design))
     if (auto observers = computeNBATransientObservers(design, true)) {
@@ -5373,8 +5397,10 @@ void TalosSimMaterializeComputeFusionPass::runOnOperation() {
   bool prepareTier1Promotion =
       evalScheduler && !vpi.allowsWrite() &&
       (cloneEvaluators || vpi.getMode() == schedule::ComputeVPIMode::Off);
-  bool prepareDormantTier1 =
-      prepareTier1Promotion && vpi.getMode() == schedule::ComputeVPIMode::Read;
+  bool prepareDormantTier1 = prepareTier1Promotion &&
+                             vpi.getMode() == schedule::ComputeVPIMode::Read &&
+                             !native::has<native::ReadableEvalState>(
+                                 design->getParentOfType<ModuleOp>());
   uint64_t preparedPrivateStores = 0;
   bool changed = false;
   auto invalidateGraph = llvm::scope_exit([&] {
@@ -5429,9 +5455,9 @@ void TalosSimMaterializeComputeFusionPass::runOnOperation() {
          design.getBody().front().getOps<sim::SimFuncOp>())
       actors.push_back(function);
     for (sim::SimFuncOp function : actors)
-      if (failed(materializeStandaloneEvalBody(design, symbols, codeUnits,
-                                               function, controlTargets,
-                                               foreignControl))) {
+      if (failed(materializeStandaloneEvalBody(
+              design, symbols, codeUnits, function, controlTargets,
+              foreignControl, guardedReadControls))) {
         if (prepareDormantTier1)
           finalizeDormantTier1Stores(design);
         signalPassFailure();
@@ -5448,7 +5474,7 @@ void TalosSimMaterializeComputeFusionPass::runOnOperation() {
   // publication boundary. A fused evaluator can write multiple inputs before
   // publishing the first one (1800-2023 9.4.2, 16.12).
   DenseSet<uint64_t> assertionInputs;
-  if (evalScheduler && graph.getVpi() == schedule::ComputeVPIMode::Off)
+  if (evalScheduler && !vpi.allowsWrite())
     design.walk([&](sim::SimFuncOp function) {
       if (!schedule::has<schedule::Field::ConcurrentCancelObserver>(function))
         return;
@@ -5635,9 +5661,9 @@ void TalosSimMaterializeComputeFusionPass::runOnOperation() {
       // Eligibility is entirely structural. Symbol spelling is an identity
       // and debugging concern; generated bodies must not depend on the
       // frontend's current `unit_N` naming convention.
-      if (failed(materializeStandaloneEvalBody(design, symbols, codeUnits,
-                                               function, controlTargets,
-                                               foreignControl))) {
+      if (failed(materializeStandaloneEvalBody(
+              design, symbols, codeUnits, function, controlTargets,
+              foreignControl, guardedReadControls))) {
         if (prepareDormantTier1)
           finalizeDormantTier1Stores(design);
         signalPassFailure();

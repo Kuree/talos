@@ -39,12 +39,17 @@ namespace talos::schedule {
 /// exactly one spawn in the root initializer entry.
 /// The caller must retain the source revision and exclude foreign mutation.
 /// `record` may copy the already-certified memory facts from this revision;
-/// it must not mutate the IR or retain a reference after collection returns.
+/// `recordComplete` receives complete memory footprints already computed
+/// for owners that failed repeatability. Both callbacks are read-only and
+/// their references are valid only during collection.
 llvm::DenseSet<mlir::StringAttr> collectRepeatableCombinationalActivations(
     sim::SimDesignOp design, const analysis::HandleDataflowAnalysis &handles,
     llvm::function_ref<void(mlir::StringAttr,
                             const analysis::ActivationMemoryAnalysis &)>
-        record = {});
+        record = {},
+    llvm::function_ref<void(mlir::StringAttr,
+                            const analysis::ActivationMemoryAnalysis &)>
+        recordComplete = {});
 
 /// Resolves the module global an address-of names, like
 /// `AddressOfOp::getGlobal`; an alias or a function is no global. Serial

@@ -13,6 +13,7 @@
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "talos/Analysis/DPIEffectAnalysis.h"
 #include "talos/Analysis/HandleDataflowAnalysis.h"
 #include "talos/Analysis/ParallelWalk.h"
 #include "talos/Analysis/StorageWriteAnalysis.h"
@@ -96,7 +97,11 @@ struct TalosSimRefineContinuousSensitivityPass
       design.emitError("invalid VPI sensitivity contract");
       return signalPassFailure();
     }
-    if (vpi != "off")
+    if (vpi == "full" ||
+        (vpi == "read" &&
+         (!native::has<native::ReadableEvalState>(
+              design->getParentOfType<ModuleOp>()) ||
+          !analysis::DPIEffectAnalysis(design).exportsAreTransparent())))
       return;
     // External mutation can restore a destination independently of its RHS.
     // Overrides also invalidate the ordinary continuous-assignment contract.

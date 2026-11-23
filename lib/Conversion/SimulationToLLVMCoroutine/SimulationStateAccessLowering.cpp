@@ -209,11 +209,15 @@ public:
     bool fourState = containsLogic(valueType) && !twoState;
     sim::SimFuncOp function = op->getParentOfType<sim::SimFuncOp>();
     sim::EntryKind entryKind = function.getEntryKind();
-    bool continuous = sim::has<sim::metadata::ContinuousStore>(op) ||
-                      entryKind == sim::EntryKind::Continuous ||
-                      entryKind == sim::EntryKind::PortInput ||
-                      entryKind == sim::EntryKind::PortOutput;
-    bool sourceAssumeClean = native::has<native::BulkCopySourceAssumeClean>(op);
+    bool continuous =
+        (!directLayout || directLayout->retainContinuousHistory) &&
+        (sim::has<sim::metadata::ContinuousStore>(op) ||
+         entryKind == sim::EntryKind::Continuous ||
+         entryKind == sim::EntryKind::PortInput ||
+         entryKind == sim::EntryKind::PortOutput);
+    bool sourceAssumeClean =
+        native::has<native::BulkCopySourceAssumeClean>(op) ||
+        (directLayout && directLayout->directSubscriberReads);
 
     Value sourceValue = loadBulkStatePlane(
         rewriter, location, source, *width, schedule::StatePlane::Value,
@@ -594,6 +598,12 @@ public:
     IntegerType plane = rewriter.getIntegerType(*width);
     bool assumeClean =
         ::talos::schedule::has<assumeCleanSpecializationAttr>(op);
+    if (directLayout && directLayout->directSubscriberReads &&
+        !isa<LLVM::LLVMPointerType>(adaptor.getReference().front().getType()))
+      // The address/extent proof is checked separately for each candidate
+      // view by loadStatePlane. A subscriber adds no HDL writer regardless
+      // of the width of the read or which bounded index it selects.
+      assumeClean = true;
     if (locals && locals->isMemoryValue(op.getResult())) {
       auto range = resolveDirectStaticStateRange(adaptor.getReference().front(),
                                                  *width, directLayout);
@@ -742,11 +752,13 @@ public:
     sim::EntryKind entryKind = function.getEntryKind();
     bool runtimePublication =
         native::has<native::RuntimePublicationCertified>(function);
-    bool continuous = !isa<sim::EventType>(valueType) &&
-                      (sim::has<sim::metadata::ContinuousStore>(op) ||
-                       entryKind == sim::EntryKind::Continuous ||
-                       entryKind == sim::EntryKind::PortInput ||
-                       entryKind == sim::EntryKind::PortOutput);
+    bool continuous =
+        (!directLayout || directLayout->retainContinuousHistory) &&
+        !isa<sim::EventType>(valueType) &&
+        (sim::has<sim::metadata::ContinuousStore>(op) ||
+         entryKind == sim::EntryKind::Continuous ||
+         entryKind == sim::EntryKind::PortInput ||
+         entryKind == sim::EntryKind::PortOutput);
     std::optional<DirectStaticStateRange> directRange =
         resolveDirectStaticStateRange(adaptor.getReference().front(), *width,
                                       directLayout);

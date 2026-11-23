@@ -5,6 +5,7 @@
 #include "talos/Dialect/Schedule/ScheduleEnums.h"
 
 #include "talos/Analysis/ClassBitstreamPlan.h"
+#include "talos/Analysis/DPIEffectAnalysis.h"
 #include "talos/Analysis/NativeStorageLayout.h"
 
 #include "BytecodeEncoder.h"
@@ -250,6 +251,8 @@ FailureOr<EncodedSimulationDesign> Encoder::encode() {
   bool hasClassBitstream =
       module && runtime::has<runtime::ClassBitstreamBlob>(module);
   vpiProfile = getVPIProfile();
+  retainContinuousHistory =
+      analysis::needsContinuousContributionHistory(design);
   if (vpiProfile == UINT32_MAX)
     return failure();
   if (failed(prepareClassLayouts()))
@@ -270,6 +273,12 @@ FailureOr<EncodedSimulationDesign> Encoder::encode() {
     return failure();
   if (failed(planTwoStateRegisters()))
     return failure();
+  // A read-side subscriber may select the publishing path of a writer.
+  // The application-return fence of an impure export is a separate contract.
+  const bool publishingWriters =
+      !options.requireBytecode && vpiProfile == TALOS_RT_DESIGN_PROFILE_READ &&
+      !hasClassBitstream && native::has<native::ReadableEvalState>(module) &&
+      analysis::DPIEffectAnalysis(design).exportsAreTransparent();
   if (failed(planFunctions()))
     return failure();
   if (failed(planScheduleRanks()))
@@ -304,6 +313,9 @@ FailureOr<EncodedSimulationDesign> Encoder::encode() {
     result.executionFlags |= TALOS_RT_EXECUTION_TWO_STATE;
   if (!result.sampledRanges.empty())
     result.executionFlags |= kExecutionPreponedSnapshot;
+  if (publishingWriters && nativeMethodCallees.empty() &&
+      nativeTaskCallees.empty())
+    result.executionFlags |= TALOS_RT_EXECUTION_VPI_PUBLISHING_WRITERS;
   if (options.requireBytecode)
     result.executionFlags |= kExecutionRequireBytecode;
   if (profile != 0) {

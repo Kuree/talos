@@ -67,7 +67,7 @@ LogicalResult makeNativeAOTPlanLegacy(
   bool guardedFanoutEnabled = !staticFanoutEnabled && staticFanoutPlan.exact &&
                               fullyStatic && vpi.hasComputeGraph();
   bool guardedSpecializationEnabled =
-      vpi.allowsWrite() && (enableDirectState || enableStaticNBA);
+      vpi.requiresPublicationGuards() && (enableDirectState || enableStaticNBA);
   bool cleanSuperstepEnabled = enableCleanSuperstep && staticControlEnabled &&
                                staticFanoutPlan.exact && fullyStatic;
   uint64_t graphLayoutChecksum = 0;

@@ -32,6 +32,11 @@ public:
   schedule::ComputeObservabilityKind getObservability() const;
   bool allowsRead() const;
   bool allowsWrite() const;
+  /// Generated owner guards permit a foreign write or an exact read subscriber
+  /// to route just the affected state through its publishing executor.
+  bool requiresPublicationGuards() const {
+    return allowsWrite() || subscriberGuards;
+  }
 
   /// Whether external access preserves the compiler's closed-world dependency
   /// inventory. Read-only observation does; external writes do not.
@@ -42,7 +47,13 @@ public:
 private:
   schedule::ComputeVPIMode mode = schedule::ComputeVPIMode::Off;
   bool computeGraph = false;
+  bool subscriberGuards = false;
 };
+
+/// A variable's continuous driver saves a hidden contribution for procedural
+/// assign/force and release (10.6). A closed reader with no such operation
+/// can keep its current four-state value alone.
+bool needsContinuousContributionHistory(sim::SimDesignOp design);
 
 } // namespace talos::analysis
 

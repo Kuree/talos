@@ -1,0 +1,57 @@
+// REQUIRES: native-elf
+// RUN: %split-file %S/vpi-read-clock-projection.sv %t/design
+// RUN: %split-file %s %t/probe
+// RUN: %target_clang -shared -fPIC -nostdlib -I%resource_dir/include %t/probe/client.c -o %t/client.so
+// RUN: talos -O3 --vpi=read +define+NATIVE_QUERY %t/design/top.sv %t/client.so -o %t/native && %t/native >%t/native.log && FileCheck %s < %t/native.log
+// RUN: talos -O0 --execution-tier=bytecode --vpi=read %t/design/top.sv %t/client.so -o %t/vm && %t/vm | diff -u %t/native.log -
+//
+// The first posedge is at t5. At t15 Pre-Active still sees the preceding
+// negedge, Pre-NBA sees the new clock, and Postponed sees its NBA (4.5,
+// 4.10 and 38.36.2). Repeat each handle read to exercise the cached path.
+// CHECK: start 6 clk=1 cp=1 q=1
+// CHECK-NEXT: start 15 clk=0 cp=0 q=1
+// CHECK-NEXT: nba 15 clk=1 cp=1 q=1
+// CHECK-NEXT: read 15 clk=1 cp=1 q=2
+
+//--- client.c
+#include "sv_vpi_user.h"
+#include <assert.h>
+#include <stdio.h>
+
+static vpiHandle clk, cp, q;
+static int read_int(vpiHandle h) {
+  s_vpi_value v = {.format = vpiIntVal};
+  vpi_get_value(h, &v);
+  int first = v.value.integer;
+  vpi_get_value(h, &v);
+  assert(v.value.integer == first);
+  return first;
+}
+static PLI_INT32 sample(p_cb_data cb) {
+  const char *region = cb->reason == cbAtStartOfSimTime ? "start" :
+                       cb->reason == cbNBASynch ? "nba" : "read";
+  printf("%s %u clk=%d cp=%d q=%d\n", region, cb->time->low,
+         read_int(clk), read_int(cp), read_int(q));
+  return 0;
+}
+static void schedule(int reason, unsigned delay) {
+  s_vpi_time t = {.type = vpiSimTime, .low = delay};
+  s_cb_data cb = {.reason = reason, .cb_rtn = sample, .time = &t};
+  assert(vpi_register_cb(&cb));
+}
+static PLI_INT32 start(p_cb_data cb) {
+  clk = vpi_handle_by_name((PLI_BYTE8 *)"top.clk", 0);
+  cp = vpi_handle_by_name((PLI_BYTE8 *)"top.a.cp", 0);
+  q = vpi_handle_by_name((PLI_BYTE8 *)"top.a.q", 0);
+  assert(clk && cp && q);
+  schedule(cbAtStartOfSimTime, 6);
+  schedule(cbAtStartOfSimTime, 15);
+  schedule(cbNBASynch, 15);
+  schedule(cbReadOnlySynch, 15);
+  return 0;
+}
+static void init(void) {
+  s_cb_data cb = {.reason = cbStartOfSimulation, .cb_rtn = start};
+  assert(vpi_register_cb(&cb));
+}
+void (*vlog_startup_routines[])(void) = {init, 0};

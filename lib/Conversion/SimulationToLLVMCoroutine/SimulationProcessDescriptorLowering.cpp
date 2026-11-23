@@ -108,7 +108,7 @@ makeProcessDescriptor(ModuleOp module, SymbolTable &embeddedSymbols,
                       Location location, StringRef baseName, uint64_t stableID,
                       const SimulationProcessFrameAnalysis &analysis,
                       bool unmanagedNative, bool usesCoroutine,
-                      bool tableProcess, bool virtualOwner) {
+                      bool tableProcess, bool bytecodeFallbackOnly) {
   MLIRContext *context = module.getContext();
   Type pointer = LLVM::LLVMPointerType::get(context);
   Type i32 = IntegerType::get(context, 32);
@@ -144,12 +144,12 @@ makeProcessDescriptor(ModuleOp module, SymbolTable &embeddedSymbols,
   if (bytecodeOnly && !hasDesignBytecode)
     return module.emitError(
         "bytecode-only process descriptor has no encoded entry");
-  // A virtual owner (TALOS_RT_SPAWN_VIRTUAL) runs outside the generated
-  // coordinator only in its bytecode body: its descriptor names no native
-  // executor, so nothing keeps its native body alive (two-tier P1c, P1d).
-  if (virtualOwner && !hasDesignBytecode)
-    return module.emitError("virtual owner descriptor has no encoded entry");
-  bytecodeOnly |= virtualOwner;
+  // An eval owner whose canonical executor is bytecode needs no second
+  // native descriptor entry. It may have an ordinary or a virtual frame.
+  if (bytecodeFallbackOnly && !hasDesignBytecode)
+    return module.emitError(
+        "bytecode fallback descriptor has no encoded entry");
+  bytecodeOnly |= bytecodeFallbackOnly;
 
   // Frame field tables depend only on the frame shape, so processes with
   // equal shapes share one. The runtime reads them only through

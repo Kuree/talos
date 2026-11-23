@@ -49,9 +49,10 @@ LogicalResult NativePipelineAnalysis::specializeEval() {
                           kind == sim::EntryKind::PortOutput;
   });
   cleanWritableEval =
-      evalScheduler && vpi.allowsWrite() && !hasLanguageOverride;
+      evalScheduler && vpi.requiresPublicationGuards() && !hasLanguageOverride;
   stateLayout->directContinuous =
-      directStaticState && vpi.allowsWrite() && hasContinuousStore;
+      stateLayout->retainContinuousHistory && directStaticState &&
+      vpi.requiresPublicationGuards() && hasContinuousStore;
   if (cleanWritableEval)
     materializeCleanEvalBodies(metadataDesign);
   auto evalStateLayout = cleanWritableEval

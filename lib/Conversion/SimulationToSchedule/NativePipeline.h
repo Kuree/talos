@@ -100,6 +100,9 @@ struct NativePipelineAnalysis {
       aotBytecodeContinuations;
   llvm::DenseSet<std::pair<uint64_t, uint32_t>> runtimeCheckpointContinuations;
   llvm::DenseSet<uint64_t> checkpointOnlyActors;
+  // Readable actors with a direct evaluator and a bytecode implementation
+  // for their ordinary time-zero activation and any observation handoff.
+  llvm::DenseSet<mlir::Operation *> bytecodeFallbackOwners;
   // These frames resume at the compiler-selected Active handoff ranks.
   llvm::DenseSet<mlir::Operation *> rankedActiveActors;
   llvm::MapVector<mlir::Operation *,
@@ -131,6 +134,13 @@ struct NativePipelineAnalysis {
   NativeStaticFanoutPlan staticFanoutPlan;
   llvm::SmallVector<NativePeriodicClock> periodicClocks;
   llvm::SmallVector<NativePeriodicAlias> periodicAliases;
+  // A read watch may take a clock back before its first edge. Ordinary
+  // execution and NBA proofs must still include all original copy actors.
+  llvm::ArrayRef<NativePeriodicAlias> sourceCalendarAliases() const {
+    return vpi.requiresPublicationGuards() && !vpi.allowsWrite()
+               ? llvm::ArrayRef<NativePeriodicAlias>{}
+               : llvm::ArrayRef<NativePeriodicAlias>(periodicAliases);
+  }
   NativeThreeTierPlan threeTierPlan;
   llvm::SmallVector<talos_rt_static_actor_root> staticActorRoots;
   llvm::SmallVector<uint32_t> writableVPIUnscopedActors;

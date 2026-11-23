@@ -25,7 +25,10 @@ using Pipeline = detail::NativePipelineAnalysis;
 // planState. Index it once: checking each transfer must not rescan all roots.
 class TransferBindingPolicy {
 public:
-  explicit TransferBindingPolicy(const Pipeline &state) {
+  explicit TransferBindingPolicy(const Pipeline &state)
+      : publishingReadFrame(
+            native::has<native::ReadableEvalState>(state.module) &&
+            !state.vpi.allowsWrite() && !state.hasLanguageOverride) {
     if (state.staticSpecialization)
       for (Attribute attribute : state.staticSpecialization.getRoots()) {
         auto root = cast<schedule::StaticStateRootAttr>(attribute);
@@ -36,6 +39,20 @@ public:
 
   bool canShare(sim::SimFuncOp function,
                 analysis::CaptureCopyProcess copy) const {
+    // For a bounded packed value the generated read-only frame uses one
+    // publishing store with the destination handle from the running instance.
+    // Its source activation and wait are still distinct. Keep the eval body's
+    // separately certified direct accesses (4.9.1, 9.4.2, 38.36.1).
+    if (publishingReadFrame) {
+      auto ref =
+          dyn_cast<sim::RefType>(function.getArgumentTypes()[copy.destination]);
+      if (ref) {
+        auto width = sim::getPackedWidth(ref.getElementType());
+        if (width && *width <= 256 &&
+            sim::getPackedScalarType(ref.getElementType()))
+          return true;
+      }
+    }
     // IEEE 1800-2023 4.9.1, 4.9.6 and 9.4.2: sharing must preserve
     // publication as well as the copied value. A descriptor-free kernel
     // cannot retain a capture's static access/publication certificate.
@@ -52,6 +69,7 @@ public:
   }
 
 private:
+  bool publishingReadFrame;
   llvm::SmallDenseSet<uint64_t, 16> specializedRoots;
 };
 

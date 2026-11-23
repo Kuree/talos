@@ -798,7 +798,11 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
   ModuleOp module = design->getParentOfType<ModuleOp>();
   bool report = module && native::has<native::DebugTiming>(module);
   schedule::ComputeGraphAttr graph = design.getComputeGraphAttr();
-  if (!graph || graph.getVpi() != schedule::ComputeVPIMode::Off ||
+  const bool readable =
+      graph && graph.getVpi() == schedule::ComputeVPIMode::Read && module &&
+      native::has<native::ReadableEvalState>(module);
+  if (!graph ||
+      (graph.getVpi() != schedule::ComputeVPIMode::Off && !readable) ||
       graph.getWorkers() != 1) {
     if (report)
       llvm::errs() << "talos clocked kernel: skipped design: graph\n";
@@ -811,8 +815,12 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
   // observe any root outside the scheduler regions modeled below. Foreign
   // code reaches the design only through context exports (IEEE 1800-2023
   // 35.5.1.3, 35.5.3).
-  bool unsupportedDesign =
-      analysis::DPIEffectAnalysis(design).anyCallMayAccessDesign();
+  analysis::DPIEffectAnalysis dpi(design);
+  // Read kernels keep the source NBA events and have no call sites. A context
+  // import elsewhere may inspect the design between activations. It cannot
+  // modify it via a read handle or a transparent HDL export (35.5, 38.34).
+  bool unsupportedDesign = dpi.anyCallMayAccessDesign() &&
+                           !(readable && dpi.exportsAreTransparent());
   design.walk([&](Operation *operation) {
     unsupportedDesign |= isa<sim::SimOverrideOp, sim::SimDynamicOverrideOp,
                              sim::SimReleaseOverrideOp>(operation);
@@ -822,6 +830,17 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
       llvm::errs() << "talos clocked kernel: skipped design: " << reason
                    << '\n';
   };
+  if (readable &&
+      design
+          .walk([](Operation *op) {
+            return isa<sim::SimProcessControlOp, sim::SimControlDisableOp,
+                       sim::SimControlDisableSelectedOp,
+                       sim::SimDisableChildrenOp>(op)
+                       ? WalkResult::interrupt()
+                       : WalkResult::advance();
+          })
+          .wasInterrupted())
+    return bail("external process control");
   if (unsupportedDesign)
     return bail("override or foreign call");
 
@@ -1101,6 +1120,7 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
     return static_cast<sim::EdgeKind>(key.second & 0xff);
   };
   llvm::MapVector<GroupKey, std::vector<Member>> groups;
+  DenseMap<GroupKey, unsigned> readGroupSizes;
   // Multi-edge signatures get variants beyond the single-edge startup
   // variants (0..3); their low edge byte remains Change, so opposite-edge
   // exclusion is never applied to a control with independent inputs.
@@ -1325,6 +1345,31 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
           member.clockReads.push_back(operation);
       });
     collectPreamble(member);
+    if (readable) {
+      // Group one actual edge in Active (4.7). Preserve all source NBA
+      // captures and commit order (4.6, 10.4.2, 38.36.1). The body may only
+      // read operands and enqueue NBAs, so a client cannot reenter halfway
+      // through it or distinguish a removed process's local activation.
+      if (member.eventSignature || member.nbaWrites.empty() ||
+          !member.writes.empty() || member.unresolvedUpdate ||
+          llvm::any_of(member.bodyBlocks, [](Block *block) {
+            return llvm::any_of(*block, [](Operation &op) {
+              return !isMemoryEffectFree(&op) &&
+                     !isa<sim::SimRefLoadOp, sim::SimNetReadOp,
+                          sim::SimNBAEnqueueOp, sim::SimTerminationRequestedOp,
+                          sim::SimReturnOp>(&op);
+            });
+          }))
+        continue;
+      GroupKey key{member.clock, static_cast<unsigned>(member.edge)};
+      // Bound the number of source writers a single subscription can send
+      // through a publishing executor. The low byte encodes the edge.
+      constexpr unsigned membersPerReadKernel = 32;
+      unsigned partition = readGroupSizes[key]++ / membersPerReadKernel;
+      key.second |= partition << 8;
+      groups[key].push_back(std::move(member));
+      continue;
+    }
     if (member.eventSignature) {
       auto group =
           multiEventGroups
@@ -2712,10 +2757,12 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
     llvm::StringMap<uint64_t> immediateReasons, deferredReasons;
     DenseSet<StringAttr> immediateTrailing, deferredTrailing;
     std::optional<DenseSet<uint64_t>> immediate, deferred;
-    if (singleClockSource)
+    if (readable)
+      immediate.emplace();
+    else if (singleClockSource)
       immediate =
           planRoots(Mode::Immediate, immediateReasons, immediateTrailing);
-    if (defer && deferrable.contains(&members) &&
+    if (!readable && defer && deferrable.contains(&members) &&
         (!immediate ||
          immediateReasons.count("root accessed by event activation") ||
          immediateReasons.count("root writers"))) {
@@ -2839,7 +2886,7 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
         waitMember = index;
     // The kernel exists to store NBAs directly; without an eligible root the
     // existing per-instance process fusion is left in place.
-    if (eligibleRoots.empty())
+    if (eligibleRoots.empty() && (!readable || members.size() < 2))
       continue;
 
     // The kernel's captures: the union of the members' spawn operands.
@@ -2893,8 +2940,12 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
     Location location = first.function.getLoc();
     OpBuilder builder = OpBuilder::atBlockEnd(&design.getBody().front());
     SmallVector<NamedAttribute> attributes;
-    if (IntegerAttr codeUnit = first.function.getCodeUnitIdAttr())
-      attributes.emplace_back(first.function.getCodeUnitIdAttrName(), codeUnit);
+    sim::SimFuncOp anchor =
+        readable
+            ? symbols.lookup<sim::SimFuncOp>(plan.insertionSpawn.getCallee())
+            : first.function;
+    if (IntegerAttr codeUnit = anchor.getCodeUnitIdAttr())
+      attributes.emplace_back(anchor.getCodeUnitIdAttrName(), codeUnit);
     unsigned symbolCounter = 0;
     SmallString<48> base;
     ("__talos_clocked_" + Twine(classRoot) + "_" + Twine(plan.key.second))
@@ -2908,7 +2959,7 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
     sim::SimFuncOp kernel = sim::SimFuncOp::create(
         builder, location, name,
         FunctionType::get(design.getContext(), plan.inputTypes, TypeRange{}),
-        first.function.getEntryKind(), attributes, plan.argumentAttrs);
+        anchor.getEntryKind(), attributes, plan.argumentAttrs);
     symbols.insert(kernel);
     SymbolTable::setSymbolVisibility(kernel, SymbolTable::Visibility::Private);
     schedule::addEvalRoles(kernel, schedule::EvalRole::ClockedKernel);
@@ -3035,12 +3086,37 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
     sim::SimSpawnOp::create(builder, location, kernel.getSymNameAttr(),
                             plan.operands, ArrayAttr{}, ArrayAttr{});
     for (Member &member : members) {
+      if (readable && member.spawn != plan.insertionSpawn) {
+        // Keep its source thread, parent, origin, and RNG split in the
+        // original spawn order. This member has no blocking side effects or
+        // foreign calls. Only its captured NBAs run, in the shared body.
+        Region &body = member.function.getBody();
+        body.dropAllReferences();
+        body.getBlocks().clear();
+        Block *entry = member.function.addEntryBlock();
+        auto *exit = new Block;
+        body.push_back(exit);
+        builder.setInsertionPointToEnd(entry);
+        sim::SimSuspendForeverOp::create(builder, location, ValueRange{},
+                                         schedule::ContinuationSiteAttr{},
+                                         sim::EventRegionAttr{}, exit);
+        builder.setInsertionPointToEnd(exit);
+        sim::SimReturnOp::create(builder, location, ValueRange{});
+        continue;
+      }
       member.spawn.erase();
       symbols.erase(member.function);
     }
     changed = true;
     ++kernels;
     fusedMembers += count;
+
+    if (readable) {
+      if (report)
+        llvm::errs() << "talos read clocked kernel: " << kernel.getSymName()
+                     << " members=" << count << " source NBAs retained\n";
+      continue;
+    }
 
     // 5. Late reads. A read executed after an NBA site of its root must see
     // the incoming value (4.9.4); find them with a forward may-dataflow over

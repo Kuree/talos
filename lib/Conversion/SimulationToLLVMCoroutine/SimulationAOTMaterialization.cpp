@@ -173,6 +173,73 @@ static FailureOr<LLVM::LLVMFuncOp> makePeriodicSampleCopy(ModuleOp module,
   return copy;
 }
 
+// Publish a run of equal one-bit port values with no intervening observer.
+// The caller flushes a run before each runtime transition. All names and the
+// physical driver bits remain available to an arbitrary VPI lookup (4.10).
+static void emitClockViewRun(OpBuilder &b, ModuleOp module, Location loc,
+                             const Twine &name, Value level,
+                             const llvm::MapVector<uint64_t, uint8_t> &bytes) {
+  if (bytes.empty())
+    return;
+  Type i8 = b.getI8Type(), i64 = b.getI64Type();
+  Type pointer = LLVM::LLVMPointerType::get(b.getContext());
+  Value ones = llvmConstant(b, loc, i8, 255);
+  Value fill =
+      arith::SelectOp::create(b, loc, level, ones, llvmConstant(b, loc, i8, 0));
+  auto store = [&](Value offset, uint64_t fixed, Value mask) {
+    auto plane = schedule::StatePlane::Value;
+    Value old = schedule::NativeStateLoadOp::create(b, loc, i8, plane, offset,
+                                                    fixed, 1);
+    Value changed = arith::AndIOp::create(
+        b, loc, mask, arith::XOrIOp::create(b, loc, old, fill));
+    schedule::NativeStateStoreOp::create(
+        b, loc, arith::XOrIOp::create(b, loc, old, changed), plane, offset,
+        fixed, 1);
+  };
+  // Small runs fit inline. A long run reuses one loop over byte offsets and
+  // bit masks. Very large offsets keep their full, unencoded representation.
+  if (bytes.size() < 8 || llvm::any_of(bytes, [](const auto &entry) {
+        return entry.first > (UINT64_MAX >> 8);
+      })) {
+    for (auto [offset, mask] : bytes)
+      store(Value{}, offset, llvmConstant(b, loc, i8, mask));
+    return;
+  }
+  if (native::has<native::DebugTiming>(module))
+    llvm::errs() << "talos periodic alias byte run: bytes=" << bytes.size()
+                 << '\n';
+  SmallVector<uint64_t> rows;
+  for (auto [offset, mask] : bytes)
+    rows.push_back((offset << 8) | mask);
+  auto table = makeConstantGlobal(
+      module, loc, LLVM::LLVMArrayType::get(i64, rows.size()), name.str(),
+      LLVM::Linkage::Internal, 8,
+      DenseElementsAttr::get(
+          RankedTensorType::get({static_cast<int64_t>(rows.size())}, i64),
+          ArrayRef(rows)));
+  Value base = LLVM::AddressOfOp::create(b, loc, pointer, table.getSymName());
+  Region *region = b.getInsertionBlock()->getParent();
+  Block *loop = new Block, *done = new Block;
+  region->push_back(loop);
+  region->push_back(done);
+  Value cursor = loop->addArgument(i64, loc);
+  cf::BranchOp::create(b, loc, loop, ValueRange{llvmConstant(b, loc, i64, 0)});
+  b.setInsertionPointToStart(loop);
+  Value ptr =
+      LLVM::GEPOp::create(b, loc, pointer, i64, base, ValueRange{cursor});
+  Value row = LLVM::LoadOp::create(b, loc, i64, ptr, 8);
+  Value offset =
+      arith::ShRUIOp::create(b, loc, row, llvmConstant(b, loc, i64, 8));
+  store(offset, 0, LLVM::TruncOp::create(b, loc, i8, row));
+  Value next =
+      arith::AddIOp::create(b, loc, cursor, llvmConstant(b, loc, i64, 1));
+  Value more = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::ult, next,
+                                     llvmConstant(b, loc, i64, rows.size()));
+  cf::CondBranchOp::create(b, loc, more, loop, ValueRange{next}, done,
+                           ValueRange{});
+  b.setInsertionPointToStart(done);
+}
+
 static constexpr StringLiteral nbaDirtyRootsName =
     "__talos_aot_nba_dirty_roots_v1";
 static constexpr StringLiteral nbaDirtySummaryName =
@@ -1328,19 +1395,22 @@ FailureOr<bool> makeNativeEvalPlan(
                 {design, function.getCodeUnitIdAttr().getUInt()},
                 getRuntimeEventRegion(function.getHomeRegion()));
         });
-    DynamicEvalNBAProofContext proofContext{stateLayout,
-                                            staticNBAPlan,
-                                            resolved->fanoutEntries,
-                                            directFragments,
-                                            resolved->mergedExecutors,
-                                            resolved->periodicEntryRecords,
-                                            resolved->periodicOwnerBits,
-                                            periodicClocks,
-                                            periodicAliases,
-                                            generatedTransitionRanges,
-                                            computeGraph,
-                                            orderedRootClosed,
-                                            sourceRegions};
+    DynamicEvalNBAProofContext proofContext{
+        stateLayout,
+        staticNBAPlan,
+        resolved->fanoutEntries,
+        directFragments,
+        resolved->mergedExecutors,
+        resolved->periodicEntryRecords,
+        resolved->periodicOwnerBits,
+        periodicClocks,
+        vpi.requiresPublicationGuards() && !vpi.allowsWrite()
+            ? ArrayRef<NativePeriodicAlias>{}
+            : periodicAliases,
+        generatedTransitionRanges,
+        computeGraph,
+        orderedRootClosed,
+        sourceRegions};
     const DynamicEvalNBAProofAnalysis proofAnalysis(proofContext, evalClosure);
     llvm::SmallPtrSet<Operation *, 16> evalClosureSet;
     for (sim::SimFuncOp function : evalClosure)
@@ -1741,7 +1811,7 @@ FailureOr<bool> makeNativeEvalPlan(
   bool guardedFanoutEnabled = !staticFanoutEnabled && staticFanoutPlan.exact &&
                               closedEvalSchedule && vpi.hasComputeGraph();
   bool guardedSpecializationEnabled =
-      vpi.allowsWrite() && (enableDirectState || enableStaticNBA);
+      vpi.requiresPublicationGuards() && (enableDirectState || enableStaticNBA);
   bool cleanSuperstepEnabled = enableCleanSuperstep && staticControlEnabled &&
                                staticFanoutPlan.exact && closedEvalSchedule;
   // Retain direct kernels only for a certified complete schedule or a closed
@@ -4395,14 +4465,35 @@ FailureOr<bool> makeNativeEvalPlan(
     // NBA barrier. Every kernel publishes into the same ingress under the
     // same clock condition, so each clock keeps one (rising, falling) owner
     // pair; per-kernel masks would only replicate the same ingress updates.
+    DenseMap<uint32_t, uint32_t> projectedWaits;
+    for (const auto &alias : periodicAliases)
+      projectedWaits.try_emplace(alias.getForwardingActorSlot(),
+                                 alias.getForwardingContinuation());
+    auto projectsActivation = [&](const talos_rt_static_fanout_entry &entry) {
+      auto found = projectedWaits.find(entry.actor_slot);
+      return found != projectedWaits.end() &&
+             found->second == entry.continuation;
+    };
     SmallVector<std::pair<APInt, APInt>> clockMasks(
         periodicClocks.size(), {APInt(ownerCount, 0), APInt(ownerCount, 0)});
+    const bool conditionalViews = sharedPeriodic &&
+                                  stateLayout.directSubscriberReads &&
+                                  !stateLayout.retainContinuousHistory;
+    SmallVector<std::pair<APInt, APInt>> sourceClockMasks;
+    if (conditionalViews)
+      sourceClockMasks.assign(periodicClocks.size(),
+                              {APInt(ownerCount, 0), APInt(ownerCount, 0)});
     SmallVector<std::pair<APInt, APInt>> clockDirectMasks(
         periodicClocks.size(), {APInt(ownerCount, 0), APInt(ownerCount, 0)});
     // The first merged record of each owner bit.
     DenseMap<uint32_t, size_t> mergedIndexByBit;
     for (auto [index, record] : llvm::enumerate(mergedFragments))
       mergedIndexByBit.try_emplace(record.bit, index);
+    llvm::StringSet<> readCaptureWrappers;
+    if (conditionalViews)
+      for (const auto &fragment : directFragments)
+        if (fragment.readClockCaptureOnly)
+          readCaptureWrappers.insert(fragment.wrapper);
     auto canDispatchClockOwnerDirectly = [&](uint32_t bit) {
       auto record = mergedIndexByBit.find(bit);
       if (record == mergedIndexByBit.end())
@@ -4412,6 +4503,9 @@ FailureOr<bool> makeNativeEvalPlan(
       // dispatcher selects it once nothing else is pending.
       if (mergedExecutors[index].empty() || bit >= firstDeferredBit)
         return false;
+      if (vpi.requiresPublicationGuards() && !vpi.allowsWrite())
+        return conditionalViews && ownerSubsumptionMasks[index].isZero() &&
+               readCaptureWrappers.contains(mergedExecutors[index]);
       LLVM::LLVMFuncOp executor =
           executorSymbols.lookup<LLVM::LLVMFuncOp>(mergedExecutors[index]);
       // A fractured checkpoint owner can share the direct prefix with an
@@ -4454,21 +4548,22 @@ FailureOr<bool> makeNativeEvalPlan(
             !periodicBitTouchesFanout(localBit, fanout) ||
             fanout.kernel >= clockKernels.size())
           continue;
-        if (llvm::any_of(periodicAliases,
-                         [&, &clock = clock](const NativePeriodicAlias &alias) {
-                           return alias.getSourceStaticState() ==
-                                      clock.getStaticState() &&
-                                  alias.getSourceBitOffset() ==
-                                      clock.getBitOffset() &&
-                                  alias.getForwardingActorSlot() ==
-                                      fanout.actor_slot &&
-                                  alias.getForwardingContinuation() ==
-                                      fanout.continuation;
-                         }))
-          continue;
         uint32_t owner = periodicOwnerBits[fanoutIndex] == UINT32_MAX
                              ? fanout.merged_bit
                              : periodicOwnerBits[fanoutIndex];
+        if (conditionalViews) {
+          auto &[rising, falling] = sourceClockMasks[clockIndex];
+          if (fanout.edge == TALOS_RT_WAIT_EDGE_CHANGE ||
+              fanout.edge == TALOS_RT_WAIT_EDGE_BOTH ||
+              fanout.edge == TALOS_RT_WAIT_EDGE_POSEDGE)
+            rising.setBit(owner);
+          if (fanout.edge == TALOS_RT_WAIT_EDGE_CHANGE ||
+              fanout.edge == TALOS_RT_WAIT_EDGE_BOTH ||
+              fanout.edge == TALOS_RT_WAIT_EDGE_NEGEDGE)
+            falling.setBit(owner);
+        }
+        if (projectsActivation(fanout))
+          continue;
         auto &masks = canDispatchClockOwnerDirectly(owner)
                           ? clockDirectMasks[clockIndex]
                           : clockMasks[clockIndex];
@@ -4504,8 +4599,7 @@ FailureOr<bool> makeNativeEvalPlan(
         const talos_rt_static_fanout_entry &fanout = fanoutEntries[fanoutIndex];
         if (fanoutRoute(fanout) == TALOS_RT_FANOUT_RUNTIME ||
             fanoutRoute(fanout) == TALOS_RT_FANOUT_PERIODIC_ALIAS ||
-            (fanout.actor_slot == alias.getForwardingActorSlot() &&
-             fanout.continuation == alias.getForwardingContinuation()) ||
+            projectsActivation(fanout) ||
             !periodicBitTouchesFanout(targetLocalBit, fanout) ||
             fanout.kernel >= clockKernels.size())
           continue;
@@ -4547,20 +4641,38 @@ FailureOr<bool> makeNativeEvalPlan(
             : LLVM::AddressOfOp::create(builder, location, pointer,
                                         periodicAliasesName)
                   .getResult();
+    SmallVector<Value> prepareArgs{
+        runEntry->getArgument(1),
+        nodes,
+        llvmConstant(builder, location, i32, executableNodes.size()),
+        clocks,
+        llvmConstant(builder, location, i32, periodicClocks.size()),
+        aliases,
+        llvmConstant(builder, location, i32, periodicAliases.size()),
+        nextEdges,
+        control};
+    Value viewFlag, useViews;
+    auto entry = NativeRuntimeEntry::SchedulerPreparePeriodicAot;
+    if (conditionalViews) {
+      entry = NativeRuntimeEntry::PrepareReadPeriodic;
+      declareNativeRuntime(module, entry);
+      declareNativeRuntime(module, NativeRuntimeEntry::PublishReadClock);
+      viewFlag = entryAlloca(builder, location, i32, 1, 4);
+      prepareArgs.push_back(viewFlag);
+    }
     Value prepareStatus =
-        LLVM::CallOp::create(
-            builder, location, TypeRange{i32},
-            getNativeRuntimeCallee(
-                context, NativeRuntimeEntry::SchedulerPreparePeriodicAot),
-            ValueRange{
-                runEntry->getArgument(1), nodes,
-                llvmConstant(builder, location, i32, executableNodes.size()),
-                clocks,
-                llvmConstant(builder, location, i32, periodicClocks.size()),
-                aliases,
-                llvmConstant(builder, location, i32, periodicAliases.size()),
-                nextEdges, control})
+        LLVM::CallOp::create(builder, location, TypeRange{i32},
+                             getNativeRuntimeCallee(context, entry),
+                             prepareArgs)
             .getResult();
+    if (viewFlag) {
+      Value selected =
+          LLVM::LoadOp::create(builder, location, i32, viewFlag, 4);
+      useViews = arith::CmpIOp::create(builder, location,
+                                       arith::CmpIPredicate::ne, selected,
+                                       llvmConstant(builder, location, i32, 0));
+    }
+
     Value prepared = arith::CmpIOp::create(
         builder, location, arith::CmpIPredicate::eq, prepareStatus,
         llvmConstant(builder, location, i32, TALOS_RT_OK));
@@ -4706,12 +4818,19 @@ FailureOr<bool> makeNativeEvalPlan(
     // then leaves, and the runtime re-enters it with a transient handoff. The
     // shared loop drains runtime work, which may arm or clear it, every slot.
     Value entryPostponedHooks;
-    if (postponedHooks && !sharedPeriodic)
+    // A guarded read owner can enqueue a source NBA inside the clock loop.
+    // Its same-slot drain can arm and clear the byte without leaving run_until.
+    if (postponedHooks && !sharedPeriodic &&
+        !(vpi.requiresPublicationGuards() && !vpi.allowsWrite()))
       entryPostponedHooks = loadPostponedHooks();
     // Direct periodic forwarding elides checkpoint-only driver writes in the
     // hot loop. Reconstruct both canonical planes before runtime callbacks,
     // the end-of-slot dump or asynchronous Tier-2 intervention observe them.
     auto reconstructAliasDrivers = [&] {
+      // Shared read execution maintains both the physical contribution and
+      // resolved value. An unprojected edge may have stopped before its copy.
+      if (conditionalViews)
+        return;
       constexpr auto stateUnknown = schedule::StatePlane::Unknown;
       constexpr auto handoffState = schedule::StatePlane::Value;
       for (const NativePeriodicAlias &alias : periodicAliases) {
@@ -4797,7 +4916,7 @@ FailureOr<bool> makeNativeEvalPlan(
       Value ok = arith::CmpIOp::create(
           builder, location, arith::CmpIPredicate::eq, status,
           llvmConstant(builder, location, i32, TALOS_RT_OK));
-      if (sharedPeriodic) {
+      if (!entryPostponedHooks) {
         cf::CondBranchOp::create(builder, location, ok, next, ValueRange{},
                                  afterStep, ValueRange{status});
         return;
@@ -5135,10 +5254,63 @@ FailureOr<bool> makeNativeEvalPlan(
       emitEdgeCollection(arith::AndIOp::create(builder, location, due, oldSet),
                          clockIndex, period, /*posedge=*/false);
       recordClockCoverage(clock, due);
+      Block *afterViews = nullptr;
+      if (conditionalViews) {
+        Block *project = new Block, *original = new Block;
+        afterViews = new Block;
+        run.getBody().push_back(project);
+        run.getBody().push_back(original);
+        run.getBody().push_back(afterViews);
+        cf::CondBranchOp::create(builder, location, useViews, project,
+                                 original);
+        builder.setInsertionPointToStart(original);
+        const auto *bound = stateLayout.findBound(clock.getStaticState());
+        if (!bound || clock.getBitOffset() < bound->offset ||
+            clock.getBitOffset() - bound->offset >= bound->width)
+          return module.emitError("invalid readable primary clock range");
+        Value status =
+            LLVM::CallOp::create(
+                builder, location, TypeRange{i32},
+                getNativeRuntimeSymbol(NativeRuntimeEntry::PublishReadClock),
+                ValueRange{
+                    runEntry->getArgument(1),
+                    llvmConstant(builder, location, i32, clock.getActorSlot()),
+                    llvmConstant(builder, location, i32,
+                                 clock.getStaticState()),
+                    llvmConstant(builder, location, i64,
+                                 clock.getBitOffset() - bound->offset),
+                    arith::ExtUIOp::create(builder, location, i64, oldSet),
+                    arith::ExtUIOp::create(builder, location, i64, newSet),
+                    llvmConstant(builder, location, i32,
+                                 staticFanoutPlan.runtimeTransitionStates
+                                     .contains(clock.getStaticState()))})
+                .getResult();
+        Value ok = arith::CmpIOp::create(
+            builder, location, arith::CmpIPredicate::eq, status,
+            llvmConstant(builder, location, i32, TALOS_RT_OK));
+        cf::CondBranchOp::create(builder, location, ok, afterViews,
+                                 ValueRange{}, afterStep, ValueRange{status});
+        builder.setInsertionPointToStart(project);
+      }
       if (mlir::failed(publishRuntimeClockBit(
               clock.getStaticState(), clock.getBitOffset(), oldSet, newSet)))
         return failure();
 
+      bool compactViews = sharedPeriodic && stateLayout.directSubscriberReads &&
+                          !stateLayout.retainContinuousHistory &&
+                          periodicAliases.size() >= 16;
+      llvm::MapVector<uint64_t, uint8_t> viewBytes;
+      unsigned viewRun = 0;
+      size_t domainIndex = clockIndex;
+      auto flushViews = [&] {
+        if (!viewBytes.empty()) {
+          emitClockViewRun(builder, module, location,
+                           Twine("__talos_clock_view_bytes_") +
+                               Twine(domainIndex) + "_" + Twine(viewRun++),
+                           newSet, viewBytes);
+          viewBytes.clear();
+        }
+      };
       for (const NativePeriodicAlias &alias : periodicAliases) {
         if (alias.getSourceStaticState() != clock.getStaticState() ||
             alias.getSourceBitOffset() != clock.getBitOffset())
@@ -5152,6 +5324,13 @@ FailureOr<bool> makeNativeEvalPlan(
         if (sharedPeriodic &&
             alias.getDriverBitOffset() != alias.getTargetBitOffset())
           aliasBits.push_back(alias.getDriverBitOffset());
+        if (compactViews && !staticFanoutPlan.runtimeTransitionStates.contains(
+                                alias.getTargetStaticState())) {
+          for (uint64_t bit : aliasBits)
+            viewBytes[bit / 8] |= uint8_t{1} << (bit % 8);
+          continue;
+        }
+        flushViews();
         for (uint64_t bitOffset : aliasBits) {
           Value aliasOld = schedule::NativeStateLoadOp::create(
                                builder, location, builder.getI8Type(),
@@ -5193,16 +5372,36 @@ FailureOr<bool> makeNativeEvalPlan(
         }
       }
 
+      flushViews();
+      if (afterViews) {
+        cf::BranchOp::create(builder, location, afterViews);
+        builder.setInsertionPointToStart(afterViews);
+      }
       const auto &[riseOwners, fallOwners] = clockMasks[clockIndex];
       for (unsigned word = 0; word != allOwners.getNumWords(); ++word) {
         uint64_t riseMask = ownerMaskWord(riseOwners, word);
         uint64_t fallMask = ownerMaskWord(fallOwners, word);
-        if (riseMask == 0 && fallMask == 0)
+        uint64_t sourceRise =
+            conditionalViews
+                ? ownerMaskWord(sourceClockMasks[clockIndex].first, word)
+                : riseMask;
+        uint64_t sourceFall =
+            conditionalViews
+                ? ownerMaskWord(sourceClockMasks[clockIndex].second, word)
+                : fallMask;
+        if (!(riseMask | fallMask | sourceRise | sourceFall))
           continue;
-        Value fall = llvmConstant(builder, location, i64, fallMask);
-        Value edgeMask = arith::SelectOp::create(
-            builder, location, oldSet, fall,
-            llvmConstant(builder, location, i64, riseMask));
+        auto maskForEdge = [&](uint64_t rise, uint64_t fall) -> Value {
+          Value falling = llvmConstant(builder, location, i64, fall);
+          return arith::SelectOp::create(
+              builder, location, oldSet, falling,
+              llvmConstant(builder, location, i64, rise));
+        };
+        Value edgeMask = maskForEdge(riseMask, fallMask);
+        if (riseMask != sourceRise || fallMask != sourceFall)
+          edgeMask =
+              arith::SelectOp::create(builder, location, useViews, edgeMask,
+                                      maskForEdge(sourceRise, sourceFall));
         Value selected =
             arith::SelectOp::create(builder, location, due, edgeMask,
                                     llvmConstant(builder, location, i64, 0));
@@ -5228,6 +5427,10 @@ FailureOr<bool> makeNativeEvalPlan(
         Value selected =
             arith::SelectOp::create(builder, location, due, edgeMask,
                                     llvmConstant(builder, location, i64, 0));
+        if (conditionalViews)
+          selected =
+              arith::SelectOp::create(builder, location, useViews, selected,
+                                      llvmConstant(builder, location, i64, 0));
         directReady[word] = arith::OrIOp::create(builder, location,
                                                  directReady[word], selected);
         // The straight-line prefix can stop at a cold checkpoint before its
@@ -5309,6 +5512,50 @@ FailureOr<bool> makeNativeEvalPlan(
     // coordinator entry, so retain its common initialization here.
     if (!canCompressSilentFall || directOwnerRecords.empty())
       resetStepFourStateTracking();
+    if (conditionalViews && !directOwnerRecords.empty()) {
+      // A source-only clock capture cannot enter a client before the NBA
+      // cut. Only a clean model takes this fixed Active prefix. Otherwise
+      // the original ingress bits route each actor through its writer guard.
+      if (native::has<native::DebugTiming>(module))
+        llvm::errs() << "talos read clock capture prefix: owners="
+                     << directOwnerRecords.size() << '\n';
+      // A shared calendar can owe the runtime an Active or Postponed event
+      // even when none of its generated owners woke. Drain that slot without
+      // scanning a capture prefix or entering an empty eval coordinator.
+      if (!canSkipSilentSlot) {
+        auto *active = new Block;
+        run.getBody().push_back(active);
+        cf::CondBranchOp::create(builder, location, hasIngress, active,
+                                 drainSlot);
+        builder.setInsertionPointToStart(active);
+      }
+      // A different clock can wake other generated work while all of the
+      // captures in this prefix remain idle.
+      Value directBits = llvmConstant(builder, location, i64, 0);
+      for (unsigned word = 0; word != directOwnerMask.getNumWords(); ++word)
+        if (ownerMaskWord(directOwnerMask, word))
+          directBits = arith::OrIOp::create(builder, location, directBits,
+                                            directReady[word]);
+      Value directPending = arith::CmpIOp::create(
+          builder, location, arith::CmpIPredicate::ne, directBits,
+          llvmConstant(builder, location, i64, 0));
+      Value fast = LLVM::LoadOp::create(
+          builder, location, i32,
+          LLVM::AddressOfOp::create(builder, location, pointer,
+                                    "__talos_static_specialization_fast_v1"),
+          4);
+      Value clean =
+          arith::CmpIOp::create(builder, location, arith::CmpIPredicate::ne,
+                                fast, llvmConstant(builder, location, i32, 0));
+      Block *prefix = new Block;
+      run.getBody().push_back(prefix);
+      cf::CondBranchOp::create(
+          builder, location,
+          arith::AndIOp::create(builder, location, clean, directPending),
+          prefix, executeStep);
+      builder.setInsertionPointToStart(prefix);
+    }
+
     auto handoffPrioritySignal = [&] {
       if (!prioritySignalHandoff)
         return;
@@ -6078,17 +6325,21 @@ FailureOr<bool> makeNativeEvalPlan(
       nbaTaintWordCount,     prioritySignalHandoff,
       hasDynamicNBASlots,    hasOrderedNBA};
   coordinatorPlan.firstDeferredBit = firstDeferredBit;
-  SmallVector<SmallVector<uint32_t>> ownerStaticStates;
+  SmallVector<SmallVector<uint32_t>> ownerGuardInputs;
   SmallVector<APInt> ownerFineIngress;
-  if (vpi.allowsWrite()) {
-    ownerStaticStates.resize(mergedFragments.size());
+  if (vpi.requiresPublicationGuards()) {
+    coordinatorPlan.guardSubscriberActors = !vpi.allowsWrite();
+    coordinatorPlan.cacheReadOwnerGuard =
+        coordinatorPlan.guardSubscriberActors &&
+        !stateLayout.retainContinuousHistory;
+    ownerGuardInputs.resize(mergedFragments.size());
     ownerFineIngress.assign(mergedFragments.size(), APInt(ownerCount, 0));
     // Index certificates once. Full VPI needs the same exact dependency
     // sets as read-only VPI, but scanning the entire design for every owner
     // makes preparation quadratic even when no foreign write ever occurs.
     llvm::DenseMap<uint32_t, SmallVector<uint32_t, 1>> staticStatesByActor;
     for (const auto &dependency : actorRoots)
-      if (dependency.static_state)
+      if (!coordinatorPlan.guardSubscriberActors && dependency.static_state)
         staticStatesByActor[dependency.actor_slot].push_back(
             dependency.static_state);
     SmallVector<SmallVector<uint32_t, 1>> actorsByBit(ownerCount);
@@ -6117,23 +6368,26 @@ FailureOr<bool> makeNativeEvalPlan(
             actors.insert(actor);
       bool unscoped = false;
       for (uint32_t actor : actors) {
+        if (coordinatorPlan.guardSubscriberActors) {
+          ownerGuardInputs[owner].push_back(actor);
+          continue;
+        }
         auto states = staticStatesByActor.find(actor);
         if (states != staticStatesByActor.end())
-          llvm::append_range(ownerStaticStates[owner], states->second);
+          llvm::append_range(ownerGuardInputs[owner], states->second);
         unscoped |= unscopedActors.contains(actor);
       }
       if (unscoped)
         // The dirty-path query on an unmapped root rejects this owner;
         // no whole-model root scan is needed for an incomplete certificate.
-        ownerStaticStates[owner].push_back(UINT32_MAX);
-      llvm::sort(ownerStaticStates[owner]);
-      ownerStaticStates[owner].erase(
-          std::unique(ownerStaticStates[owner].begin(),
-                      ownerStaticStates[owner].end()),
-          ownerStaticStates[owner].end());
+        ownerGuardInputs[owner].push_back(UINT32_MAX);
+      llvm::sort(ownerGuardInputs[owner]);
+      ownerGuardInputs[owner].erase(std::unique(ownerGuardInputs[owner].begin(),
+                                                ownerGuardInputs[owner].end()),
+                                    ownerGuardInputs[owner].end());
     }
     coordinatorPlan.writableVPI = true;
-    coordinatorPlan.ownerStaticStates = ownerStaticStates;
+    coordinatorPlan.ownerGuardInputs = ownerGuardInputs;
     coordinatorPlan.ownerFineIngress = ownerFineIngress;
   }
   // Body rewriting is complete: retain the existing ranked cost decisions,
@@ -7665,7 +7919,8 @@ FailureOr<bool> makeNativeEvalPlan(
   publicationPlan.hasOrdered = hasOrderedNBA;
   llvm::DenseSet<uint32_t> publicationOwners;
   if (generateScalarCommits && staticNBAPlan.completeSourceWriters &&
-      resolved->transaction.sourceGraph == computeGraph && !vpi.allowsWrite() &&
+      resolved->transaction.sourceGraph == computeGraph &&
+      !vpi.requiresPublicationGuards() &&
       !schedule::has<schedule::Field::EvalRuntimeCalendar>(module))
     publicationOwners.insert(resolved->transaction.publicationRoots.begin(),
                              resolved->transaction.publicationRoots.end());

@@ -130,6 +130,8 @@ struct NativeDirectFragment {
   /// 4.4.2.3), so the coordinator runs this body only after every Active
   /// event of its pass.
   bool deferred = false;
+  // Exact source clock kernel consisting only of reads and NBA captures.
+  bool readClockCaptureOnly = false;
 };
 
 enum class NativeEvalFanoutOwnerKind : uint8_t {
@@ -381,7 +383,9 @@ struct NativeEvalCoordinatorPlan {
   // independent. These exact source actor dependencies and clock ingress bits
   // retain the original fine activations when a whole owner is fractured.
   bool writableVPI = false;
-  mlir::ArrayRef<llvm::SmallVector<uint32_t>> ownerStaticStates{};
+  bool guardSubscriberActors = false;
+  bool cacheReadOwnerGuard = false;
+  mlir::ArrayRef<llvm::SmallVector<uint32_t>> ownerGuardInputs{};
   mlir::ArrayRef<llvm::APInt> ownerFineIngress{};
   /// Owners at or above this bit resume in the Inactive region. The lowest
   /// pending bit is one of them only when every other owner is idle.
@@ -438,7 +442,8 @@ mlir::FailureOr<llvm::SmallVector<talos_rt_static_actor_root>>
 buildNativeStaticActorRootPlan(
     mlir::ModuleOp module, const NativeStateLayout &stateLayout,
     const llvm::DenseMap<mlir::Operation *, uint32_t> &actorSlots,
-    const llvm::DenseSet<uint64_t> &checkpointOnlyActors, bool writableVPI,
+    const llvm::DenseSet<uint64_t> &checkpointOnlyActors,
+    const analysis::SimulationVPIAnalysis &vpi,
     llvm::SmallVectorImpl<uint32_t> &unscopedActors);
 mlir::FailureOr<NativeStaticFanoutPlan> buildNativeStaticFanoutPlan(
     mlir::ModuleOp module, const NativeStateLayout &stateLayout,

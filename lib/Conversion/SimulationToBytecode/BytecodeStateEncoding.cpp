@@ -93,7 +93,7 @@ Encoder::encodeStateOperation(FunctionPlan &plan, Operation *operation) {
                                    valueKind == String || valueKind == Real32 ||
                                    valueKind == Real64;
     sim::EntryKind entryKind = plan.function.getEntryKind();
-    bool continuous = supportsContinuousStore &&
+    bool continuous = retainContinuousHistory && supportsContinuousStore &&
                       (sim::has<sim::metadata::ContinuousStore>(op) ||
                        entryKind == sim::EntryKind::Continuous ||
                        entryKind == sim::EntryKind::PortInput ||

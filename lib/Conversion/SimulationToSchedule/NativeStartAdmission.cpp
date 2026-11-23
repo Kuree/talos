@@ -13,18 +13,17 @@
 // initial and always procedures have been started"; 4.9.1 for continuous
 // assignments and the implicit ones of port connections).
 //
-// The process instance and its Tier-2 body remain for now. A fallback that
-// runs the instance later first replays the entry, which for an admitted
-// owner only arms the same wait.
+// A read-capable owner keeps its source frame. A certified initial activation
+// uses the same guarded ready bit as a subsequent wake. A publishing owner
+// executes the original continuation, including any observable first write.
 //
 // Owners that are observed as threads keep their first activation: process
 // identity and control (9.7), per-process random state (18.14.1), named
 // blocks a disable can target (9.6.2), fork,
 // suspending task calls, checkpoints that resume through the instance,
 // bytecode continuations, and non-Active home regions (programs and checkers
-// run in the Reactive set). Until the VPI and force/assign hand-offs stop
-// running owners through their instances, VPI-capable builds and designs with
-// procedural overrides admit no owner.
+// run in the Reactive set). Writable VPI and procedural overrides keep the
+// ordinary activation path.
 //
 //===----------------------------------------------------------------------===//
 
@@ -36,6 +35,7 @@
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "talos/Analysis/ThreadObservationAnalysis.h"
+#include "talos/Dialect/Runtime/RuntimeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleOps.h"
 
@@ -149,16 +149,17 @@ LogicalResult NativePipelineAnalysis::admitStartedOwners() {
       return;
     llvm::errs() << "talos started owners: admitted=" << admitted
                  << " time_zero=" << timeZero;
+    if (!bytecodeFallbackOwners.empty())
+      llvm::errs() << " bytecode-fallback=" << bytecodeFallbackOwners.size();
     auto reasons = rejected.takeVector();
     llvm::sort(reasons, llvm::less_first());
     for (const auto &[reason, count] : reasons)
       llvm::errs() << ' ' << reason << '=' << count;
     llvm::errs() << '\n';
   };
-  // VPI hand-offs (writes, 38.34; callbacks, 38.36) and procedural
-  // force/assign (10.6) run owners through their instances; keep every first
-  // activation there.
-  if (vpi.getMode() != schedule::ComputeVPIMode::Off) {
+  // External writers and procedural force/assign can change the wait route
+  // during startup. Keep the ordinary first activation in those designs.
+  if (vpi.allowsWrite()) {
     rejected["vpi"] = analyses.size();
     report();
     return success();
@@ -185,8 +186,15 @@ LogicalResult NativePipelineAnalysis::admitStartedOwners() {
   // and how many there are.
   struct NodeOwners {
     bool clean = true;
+    bool independent = true;
     unsigned records = 0;
   };
+  APInt subsumed;
+  if (vpi.requiresPublicationGuards()) {
+    subsumed = APInt(std::max<size_t>(64, plan.mergedFragments.size()), 0);
+    for (const APInt &mask : plan.ownerSubsumptionMasks)
+      subsumed |= mask;
+  }
   DenseMap<uint64_t, NodeOwners> cleanOwners;
   for (auto [index, fragment] : llvm::enumerate(plan.mergedFragments)) {
     NodeOwners &owners =
@@ -194,6 +202,10 @@ LogicalResult NativePipelineAnalysis::admitStartedOwners() {
     owners.clean &= (fragment.flags & TALOS_RT_MERGED_FRAGMENT_FALLBACK) == 0 &&
                     index < plan.mergedExecutors.size() &&
                     !plan.mergedExecutors[index].empty();
+    if (vpi.requiresPublicationGuards())
+      owners.independent &= index < plan.ownerSubsumptionMasks.size() &&
+                            plan.ownerSubsumptionMasks[index].isZero() &&
+                            !subsumed[fragment.bit];
     ++owners.records;
   }
   DenseSet<uint64_t> handoffExecutors;
@@ -236,7 +248,7 @@ LogicalResult NativePipelineAnalysis::admitStartedOwners() {
       return reject("checkpoint");
     if (!aotBytecodeContinuations.lookup(actor).empty())
       return reject("bytecode");
-    if (copyActivations.contains(actor))
+    if (!vpi.allowsRead() && copyActivations.contains(actor))
       return reject("copy-activation");
     if (std::optional<StringRef> reason = findSingleSignalWait(actor, wait))
       return reject(*reason);
@@ -266,6 +278,19 @@ LogicalResult NativePipelineAnalysis::admitStartedOwners() {
       return reject("fallback-owner");
     if (initial && owner->second.records != 1)
       return reject("time-zero-owners");
+    if (initial && vpi.requiresPublicationGuards()) {
+      // A fractured owner reactivates its children rather than executing an
+      // individual source body. Its entry must still run on its own frame.
+      // Only a single, independent, publishable actor can share its first
+      // activation's bit with the original wait (4.9.1, 9.2.2.2, 38.36).
+      auto kind = actor.getEntryKind();
+      if (!owner->second.independent || (kind != sim::EntryKind::AlwaysComb &&
+                                         kind != sim::EntryKind::AlwaysLatch &&
+                                         kind != sim::EntryKind::Continuous &&
+                                         kind != sim::EntryKind::PortInput &&
+                                         kind != sim::EntryKind::PortOutput))
+        return reject("observable-start");
+    }
     if (handoffExecutors.contains(nodeKey(slot, continuation)))
       return reject("executor");
     // Every wake must reach that generated owner, so that an input change
@@ -306,6 +331,15 @@ LogicalResult NativePipelineAnalysis::admitStartedOwners() {
     bool initial = false;
     if (!admit(actor, *slot, *entry.second, wait, initial))
       continue;
+    if (vpi.allowsRead() && !vpi.requiresPublicationGuards()) {
+      // A reader may register before the root spawns, or arrive through DPI.
+      // Keep the ordinary process, entry and wait for those observation
+      // points (IEEE 1800-2023 9.2, 38.15, 38.36). Only its implementation
+      // outside the generated coordinator changes.
+      if (runtime::has<runtime::BytecodeFunction>(actor))
+        bytecodeFallbackOwners.insert(actor);
+      continue;
+    }
     schedule::set<schedule::Field::NativeStartedAt>(
         actor, builder.getI32IntegerAttr(wait.record.continuation));
     if (initial)

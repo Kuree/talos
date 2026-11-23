@@ -52,11 +52,13 @@ add_mlir_library(TalosSimulationAnalysis
 
   DEPENDS
   TalosSimulationOpsIncGen
+  TalosNativeDialectIncGen
   TalosScheduleOpsIncGen
 
   LINK_LIBS PUBLIC
   TalosSimulationIR
   TalosScheduleIR
+  TalosNativeIR
   MLIRAnalysis
   MLIRArithDialect
   MLIRControlFlowDialect

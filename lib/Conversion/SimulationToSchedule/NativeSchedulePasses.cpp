@@ -21,6 +21,7 @@
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
 #include "talos/Dialect/SAIF/SAIFDialect.h"
+#include "talos/Dialect/Schedule/EvalRoles.h"
 #include "talos/Dialect/Schedule/ScheduleDialect.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
@@ -273,6 +274,8 @@ LogicalResult NativePipelineAnalysis::planState() {
   if (bytecodeOnly)
     return success();
   vpi = analysis::SimulationVPIAnalysis::compute(metadataDesign);
+  stateLayout->retainContinuousHistory =
+      analysis::needsContinuousContributionHistory(metadataDesign);
   // Resolved nets and driver contributions occupy the same canonical native
   // planes as storage.  With no external writer their fixed handles are
   // always safe to address directly; publication and resolution still flow
@@ -297,10 +300,16 @@ LogicalResult NativePipelineAnalysis::planState() {
   // A dump file is opened (IEEE 1800-2023 21.7, 21.7.3) and a $monitor started
   // (21.2.3) only by these tasks, so a generated periodic loop needs
   // end-of-slot postponed hooks only in a design that contains one.
-  if (hasPostponedObservers)
+  if (hasPostponedObservers ||
+      (vpi.requiresPublicationGuards() && !vpi.allowsWrite()))
     ::talos::schedule::set<::talos::schedule::Field::EvalPostponedObservers>(
         module, UnitAttr::get(module.getContext()));
-  if (!hasLanguageOverride && (!vpi.allowsWrite() || !hasLanguageObserver)) {
+  stateLayout->directSubscriberReads =
+      !vpi.allowsWrite() && vpi.requiresPublicationGuards() &&
+      !hasLanguageOverride && !hasLanguageObserver &&
+      !sim::has<sim::metadata::SnapshotPublications>(module);
+  if (!hasLanguageOverride &&
+      (!vpi.requiresPublicationGuards() || !hasLanguageObserver)) {
     auto authorizeFixedHandles = [&](const auto &descriptors) {
       for (const auto &[descriptor, handle] : descriptors) {
         (void)descriptor;
@@ -308,13 +317,13 @@ LogicalResult NativePipelineAnalysis::planState() {
         if (talos_rt_stable_handle_decode(handle, &decoded) &&
             decoded.kind == TALOS_RT_STABLE_HANDLE_STATIC &&
             decoded.offset == 0)
-          (vpi.allowsWrite() ? stateLayout->guardedHandles
-                             : stateLayout->directHandles)
+          (vpi.requiresPublicationGuards() ? stateLayout->guardedHandles
+                                           : stateLayout->directHandles)
               .insert(decoded.id);
       }
     };
     authorizeFixedHandles(stateLayout->nets);
-    if (!vpi.allowsWrite())
+    if (!vpi.requiresPublicationGuards())
       authorizeFixedHandles(stateLayout->drivers);
   }
   if (staticSuperstep &&
@@ -389,8 +398,8 @@ LogicalResult NativePipelineAnalysis::planActors() {
     native::remove<native::RankedSignalWriter>(function);
   });
   aotEligibility = analysis::NativeAOTAnalysis::compute(module);
-  if (vpi.getMode() == schedule::ComputeVPIMode::Off &&
-      !hasLanguageOverride && !hasDynamicLanguageOverride &&
+  if (!vpi.allowsWrite() && !hasLanguageOverride &&
+      !hasDynamicLanguageOverride &&
       !sim::has<sim::metadata::SnapshotPublications>(module))
     for (auto &[actor, cause] : aotEligibility.getRuntimeCheckpointCauses())
       if (auto cut = dyn_cast_if_present<sim::SimSuspendDelayOp>(cause.blocker);
@@ -480,7 +489,7 @@ LogicalResult NativePipelineAnalysis::planActors() {
     // specialization keep the generated
     // coordinator's readiness coherent with that. Lower levels leave those
     // plans off, so there the generic scheduler runs the design.
-    if (useAOT && vpi.allowsWrite() && !staticSpecialization) {
+    if (useAOT && vpi.requiresPublicationGuards() && !staticSpecialization) {
       if (forcedAOT)
         return module.emitError("native AOT scheduling with a writable VPI "
                                 "requires static specialization");
@@ -553,11 +562,22 @@ LogicalResult NativePipelineAnalysis::planActors() {
   // conversion pipeline did not run the optional superstep planner.
   // An interleaved frame still needs shared Active arbitration when every
   // actor has a native executor (1800-2023 4.6(a), 4.7).
+  // Even when every HDL actor compiles, a foreign caller can enter the
+  // design at runtime. The shared calendar can arbitrate those boundaries
+  // while the closed native actors retain their individual executors.
+  bool readForeignCalendar =
+      certifiedStaticSuperstep &&
+      native::has<native::ReadableEvalState>(module) && !vpi.allowsWrite() &&
+      native::has<native::ClosedExecutable>(module) &&
+      runtime::bitEnumContainsAny(runtime::getExecutionFlags(module),
+                                  runtime::ExecutionFlags::DPIExports) &&
+      hasOnlyConstantDPIQueryExports(module);
+  constantDPIQueryExports = readForeignCalendar;
   staticEvalIsland = certifiedStaticSuperstep &&
                      (evalScheduler ||
                       nativeScheduler == schedule::NativeSchedulerMode::Auto) &&
                      (!aotEligibility.isFullyEligible() ||
-                      !rankedActiveActors.empty() ||
+                      readForeignCalendar || !rankedActiveActors.empty() ||
                       schedule::has<schedule::Field::ForceGenericNBA>(module));
   closedStaticIsland = aotEligibility.isFullyEligible() || staticEvalIsland;
   cleanSuperstep = certifiedStaticSuperstep && closedStaticIsland;
@@ -775,8 +795,8 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
     runtime::ExecutionFlags flags = runtime::getExecutionFlags(module);
     const bool hasDPIExports = runtime::bitEnumContainsAny(
         flags, runtime::ExecutionFlags::DPIExports);
-    constantDPIQueryExports =
-        hasDPIExports && hasOnlyConstantDPIQueryExports(module);
+    if (hasDPIExports && !constantDPIQueryExports)
+      constantDPIQueryExports = hasOnlyConstantDPIQueryExports(module);
     // IEEE 1800-2023 4.4, 4.6, 9.4.2: a runtime clock consumer prevents
     // exclusive calendar ownership, not execution of an independent closure.
     // The writer checkpoints below retain every required runtime publication;
@@ -878,7 +898,10 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
             return handle != stateLayout->storage.end() &&
                    talos_rt_stable_handle_decode(handle->second, &decoded) &&
                    decoded.kind == TALOS_RT_STABLE_HANDLE_STATIC &&
-                   stateLayout->directHandles.contains(decoded.id);
+                   (stateLayout->directHandles.contains(decoded.id) ||
+                    (vpi.requiresPublicationGuards() && !vpi.allowsWrite() &&
+                     !hasLanguageOverride &&
+                     stateLayout->guardedHandles.contains(decoded.id)));
           };
           auto runtimeStore = [&](Value destination,
                                   bool requireStaticAccess = true,
@@ -1093,8 +1116,10 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
       ::talos::schedule::set<::talos::schedule::Field::EvalRuntimeCalendar>(
           module, UnitAttr::get(module.getContext()));
     if (runtimeCalendar && hasObserver) {
-      bool copies = metadataDesign.getComputeGraphAttr().getVpi() ==
-                        schedule::ComputeVPIMode::Off &&
+      // A read-only client cannot add a writer. Read callbacks revoke plane
+      // sharing before dispatch (38.15, 38.36), so the same per-input
+      // publication proof can serve the dormant and lifecycle-only cases.
+      bool copies = !vpi.allowsWrite() &&
                     !saif::has<saif::Output>(module) &&
                     assertionInputsAreCopies(
                         metadataDesign, assertionInputs, provenanceAnalysis,
@@ -1168,10 +1193,6 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
       auto clocks = buildNativePeriodicClockPlan(
           module, *stateLayout, aotEligibility.getActorSlots());
       if (failed(clocks))
-        return failure();
-      auto aliases = buildNativePeriodicAliasPlan(
-          module, *stateLayout, aotEligibility.getActorSlots(), *clocks);
-      if (failed(aliases))
         return failure();
       stateLayout->clockFacts = buildNativeClockInferencePlan(
           module, *stateLayout, aotEligibility.getActorSlots(), *clocks);
@@ -1605,12 +1626,12 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
       return kind == InitialBootstrap::Loop ||
              (kind == InitialBootstrap::Once &&
               watchesPeriodicSource(*stateLayout, periodicClocks,
-                                    periodicAliases, entry));
+                                    sourceCalendarAliases(), entry));
     };
     for (const talos_rt_static_fanout_entry &entry : staticFanoutPlan.entries) {
       // The periodic loop forwards an alias entry itself (see
       // isNativePeriodicAliasEntry).
-      if (isNativePeriodicAliasEntry(periodicAliases, entry))
+      if (isNativePeriodicAliasEntry(sourceCalendarAliases(), entry))
         continue;
       sim::SimFuncOp actor = actorsBySlot.lookup(entry.actor_slot);
       if (!actor) {
@@ -1719,11 +1740,11 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
   // and still use generated event-driven coordinators.
   if (nativeScheduler == schedule::NativeSchedulerMode::Auto)
     evalScheduler = cleanSuperstep && staticFanoutPlan.exact;
-  if (staticSpecialization && useAOT) {
+  if ((staticSpecialization || vpi.requiresPublicationGuards()) && useAOT) {
     FailureOr<SmallVector<talos_rt_static_actor_root>> dependencies =
         buildNativeStaticActorRootPlan(
             module, *stateLayout, aotEligibility.getActorSlots(),
-            checkpointOnlyActors, vpi.allowsWrite(), writableVPIUnscopedActors);
+            checkpointOnlyActors, vpi, writableVPIUnscopedActors);
     if (failed(dependencies))
       return failure();
     staticActorRoots = std::move(*dependencies);
@@ -1813,6 +1834,12 @@ LogicalResult NativePipelineAnalysis::planOwnership() {
             "physical fanout owner disagrees with its fusion certificate");
     }
   }
+  // Source provenance refers to (actor slot, continuation). Count its exact
+  // implementations once; an executor does not count as its own sibling.
+  DenseMap<std::pair<uint32_t, uint32_t>, unsigned> exactBodyCounts;
+  for (const NativeDirectFragment &body : *directFragments)
+    if (!body.instanceCoordinator)
+      ++exactBodyCounts[{body.actorSlot, body.continuation}];
   // Expand a fused executor through typed physical owners, then attach only
   // current-generation graph fragments for ownership and SCC analysis.
   for (NativeDirectFragment &direct : *directFragments) {
@@ -1848,10 +1875,6 @@ LogicalResult NativePipelineAnalysis::planOwnership() {
     // certificate provides that coverage; a fusion group ID is provenance.
     // Rebuilt graph groups can contain other preserved physical activations,
     // including consumers made ready by a VPI deposit (38.34).
-    llvm::sort(direct.sourceOwners);
-    direct.sourceOwners.erase(
-        std::unique(direct.sourceOwners.begin(), direct.sourceOwners.end()),
-        direct.sourceOwners.end());
     for (auto sourceOwner : direct.sourceOwners) {
       // Stable source-owner metadata on an ordinary generated body records
       // provenance, not whole-group execution. It may recover coverage for a
@@ -1859,13 +1882,10 @@ LogicalResult NativePipelineAnalysis::planOwnership() {
       // ownership of its own physical fragment. An explicit instance
       // coordinator is different: it replaces every certified source
       // activation in the group and therefore retains complete coverage.
+      unsigned self = direct.actorSlot == sourceOwner.first &&
+                      direct.continuation == sourceOwner.second;
       bool preservedExactBody =
-          !direct.instanceCoordinator &&
-          llvm::any_of(*directFragments, [&](const auto &body) {
-            return &body != &direct && !body.instanceCoordinator &&
-                   body.actorSlot == sourceOwner.first &&
-                   body.continuation == sourceOwner.second;
-          });
+          !direct.instanceCoordinator && exactBodyCounts.lookup(sourceOwner) > self;
       if (preservedExactBody)
         continue;
       if (auto fragments = staticFanoutPlan.fragments.find(sourceOwner);
@@ -1878,10 +1898,24 @@ LogicalResult NativePipelineAnalysis::planOwnership() {
         direct.fragmentIDs.end());
   }
 
+  if (evalScheduler && native::has<native::ReadableEvalState>(module) &&
+      metadataDesign) {
+    DenseSet<uint32_t> captureSlots;
+    for (auto actor : metadataDesign.getOps<sim::SimFuncOp>())
+      if (schedule::hasEvalRoles(actor, schedule::EvalRole::ClockedKernel))
+        if (auto slot = aotActorSlotFor(actor))
+          captureSlots.insert(*slot);
+    for (auto &direct : *directFragments)
+      direct.readClockCaptureOnly =
+          captureSlots.contains(direct.actorSlot) &&
+          !direct.instanceCoordinator && !direct.initialActivation &&
+          !direct.deferred && !direct.runtimeCheckpoint &&
+          !direct.tier2Convergence;
+  }
   if (evalScheduler) {
     FailureOr<NativeEvalOwnershipPlan> ownership =
         buildNativeEvalOwnershipPlan(module, *stateLayout, staticFanoutPlan,
-                                     *directFragments, periodicAliases);
+                                     *directFragments, sourceCalendarAliases());
     if (failed(ownership))
       return failure();
     evalOwnership = std::move(*ownership);
@@ -2001,21 +2035,26 @@ LogicalResult NativePipelineAnalysis::planOwnership() {
             metadataDesign.getComputeGraphAttr()) {
       SmallVector<SmallVector<uint32_t>> proceduralSuccessors(
           graph.getNodes().size());
-      SmallVector<schedule::ComputeEdgeAttr> sensitivityEdges;
+      SmallVector<SmallVector<schedule::ComputeEdgeAttr, 0>> sensitivityBySource(
+          graph.getNodes().size());
       for (Attribute attribute : graph.getEdges()) {
         auto edge = cast<schedule::ComputeEdgeAttr>(attribute);
         if (edge.getKind() == schedule::ComputeEdgeKind::ProcessOrder ||
             edge.getKind() == schedule::ComputeEdgeKind::Resume)
           proceduralSuccessors[edge.getSource()].push_back(edge.getTarget());
         else if (edge.getKind() == schedule::ComputeEdgeKind::Sensitivity)
-          sensitivityEdges.push_back(edge);
+          sensitivityBySource[edge.getSource()].push_back(edge);
       }
       for (NativeDirectFragment &direct : *directFragments) {
         llvm::SmallDenseSet<uint32_t, 16> members(direct.fragmentIDs.begin(),
                                                   direct.fragmentIDs.end());
-        for (schedule::ComputeEdgeAttr sensitivity : sensitivityEdges) {
-          if (!members.contains(sensitivity.getSource()) ||
-              !members.contains(sensitivity.getTarget()))
+        // Only an edge whose endpoints both belong to this activation can
+        // close a local feedback path. Do not rescan the design for each owner.
+        SmallVector<schedule::ComputeEdgeAttr, 4> localEdges;
+        for (uint32_t source : direct.fragmentIDs)
+          llvm::append_range(localEdges, sensitivityBySource[source]);
+        for (schedule::ComputeEdgeAttr sensitivity : localEdges) {
+          if (!members.contains(sensitivity.getTarget()))
             continue;
           SmallVector<uint32_t> pending{sensitivity.getTarget()};
           llvm::SmallDenseSet<uint32_t, 16> visited;
@@ -2046,33 +2085,69 @@ LogicalResult NativePipelineAnalysis::planOwnership() {
       }
     }
 
-    bool refineCalendar =
-        staticEvalIsland && staticFanoutPlan.exact &&
-        schedule::has<schedule::Field::EvalRuntimeCalendar>(module) &&
-        native::has<native::ClosedExecutable>(module) &&
-        vpi.getMode() == schedule::ComputeVPIMode::Off && !hasLanguageOverride;
+    bool refineConvergence =
+        ((staticEvalIsland &&
+          schedule::has<schedule::Field::EvalRuntimeCalendar>(module)) ||
+         (native::has<native::ReadableEvalState>(module) && cleanSuperstep &&
+          aotEligibility.isFullyEligible())) &&
+        staticFanoutPlan.exact &&
+        native::has<native::ClosedExecutable>(module) && !vpi.allowsWrite() &&
+        !hasLanguageOverride;
+    llvm::DenseSet<StringAttr> rankedFrameFunctions;
+    if (vpi.requiresPublicationGuards() && !vpi.allowsWrite() &&
+        staticFanoutPlan.exact) {
+      llvm::DenseSet<uint32_t> framedSlots;
+      for (const auto &row : staticFanoutPlan.entries)
+        if (row.reserved & TALOS_RT_FANOUT_RANKED_WAIT)
+          framedSlots.insert(row.actor_slot);
+      for (Operation *op : rankedActiveActors) {
+        auto function = cast<sim::SimFuncOp>(op);
+        if (auto slot = aotActorSlotFor(function);
+            slot && framedSlots.contains(*slot))
+          rankedFrameFunctions.insert(function.getSymNameAttr());
+      }
+    }
+    DenseMap<uint32_t, SmallVector<unsigned, 1>> ownersOfFragment;
+    for (auto [index, direct] : llvm::enumerate(*directFragments))
+      for (uint32_t member : direct.fragmentIDs)
+        ownersOfFragment[member].push_back(index);
     for (auto [groupIndex, kernel] : llvm::enumerate(threeTierPlan.kernels)) {
       if (kernel.tier != schedule::SchedulerTierKind::Tier2 ||
           kernel.schedule != schedule::ComputeScheduleKind::Convergence)
         continue;
-      bool hasDirectOwner = false;
-      for (auto [ownerIndex, direct] : llvm::enumerate(*directFragments)) {
-        auto ownsFragment = [&](uint32_t fragment) {
-          return llvm::is_contained(direct.fragmentIDs, fragment);
-        };
-        if (llvm::any_of(kernel.memberIDs, ownsFragment)) {
-          if (refineCalendar && !direct.tier2Convergence)
-            sourceConvergenceGroups.insert({ownerIndex, groupIndex});
-          else if (reportTier2 && !direct.tier2Convergence)
-            reportTier2(direct, "process-scc",
-                        "kernel=" + std::to_string(kernel.id) +
-                            " members=" +
-                            std::to_string(kernel.memberIDs.size()));
-          direct.tier2Convergence = true;
-          hasDirectOwner = true;
-        }
+      SmallVector<unsigned, 4> owners;
+      for (uint32_t member : kernel.memberIDs) {
+        auto found = ownersOfFragment.find(member);
+        if (found != ownersOfFragment.end())
+          llvm::append_range(owners, found->second);
       }
-      if (!hasDirectOwner) {
+      llvm::sort(owners);
+      owners.erase(std::unique(owners.begin(), owners.end()), owners.end());
+      for (unsigned owner : owners) {
+        auto &direct = (*directFragments)[owner];
+        if (refineConvergence && !direct.tier2Convergence)
+          sourceConvergenceGroups.insert({owner, groupIndex});
+        else if (reportTier2 && !direct.tier2Convergence)
+          reportTier2(direct, "process-scc",
+                      "kernel=" + std::to_string(kernel.id) + " members=" +
+                          std::to_string(kernel.memberIDs.size()));
+        direct.tier2Convergence = true;
+      }
+      if (owners.empty()) {
+        // Ranked Active frames rearm their original event controls between
+        // statements. Their exact fanout drives this entire convergence SCC
+        // at Tier 2 even when none of its members owns a direct eval body.
+        if (!rankedFrameFunctions.empty() && !kernel.memberIDs.empty() &&
+            llvm::all_of(kernel.memberIDs, [&](uint32_t member) {
+              auto nodes = threeTierPlan.sourceGraph.getNodes();
+              if (member >= nodes.size())
+                return false;
+              auto node =
+                  dyn_cast<schedule::ComputeFragmentAttr>(nodes[member]);
+              return node && rankedFrameFunctions.contains(
+                                 node.getFunction().getAttr());
+            }))
+          continue;
         std::string memberSummary;
         for (uint32_t member : kernel.memberIDs) {
           if (!memberSummary.empty())
@@ -2148,7 +2223,7 @@ LogicalResult NativePipelineAnalysis::planOwnership() {
       return kind == InitialBootstrap::Loop ||
              (kind == InitialBootstrap::Once &&
               watchesPeriodicSource(*stateLayout, periodicClocks,
-                                    periodicAliases, entry));
+                                    sourceCalendarAliases(), entry));
     };
     llvm::SmallDenseSet<StringRef, 16> executors;
     for (auto [entryIndex, entry] : llvm::enumerate(staticFanoutPlan.entries)) {
@@ -2388,10 +2463,14 @@ LogicalResult NativePipelineAnalysis::resolveEval() {
           module, executableNodes, *stateLayout, staticNBAPlan,
           staticFanoutPlan, *directFragments, evalOwnership,
           threeTierPlan.sourceGraph, activationInputs, periodicClocks,
-          periodicAliases);
+          sourceCalendarAliases());
       if (failed(resolvedEval))
         return failure();
-      if (!sourceConvergenceGroups.empty()) {
+      const bool refineReadPublications =
+          native::has<native::ReadableEvalState>(module) &&
+          native::has<native::ClosedExecutable>(module) &&
+          staticFanoutPlan.exact && !vpi.allowsWrite() && !hasLanguageOverride;
+      if (!sourceConvergenceGroups.empty() || refineReadPublications) {
         // A broad source wait can close a process SCC through a lane this
         // activation never consumes. The ranked graph includes runtime
         // boundary paths and the actual physical fanout. A repeatable owner
@@ -2399,11 +2478,15 @@ LogicalResult NativePipelineAnalysis::resolveEval() {
         // can use the ordinary Tier-1 wake on each pass (4.3, 4.6, 9.4.2).
         // Nonrepeatable interiors keep their original ready predicate.
         llvm::StringSet<> singlePass;
+        llvm::StringSet<> forwardOnly;
         for (const auto &node : resolvedEval->rankedNodes)
           if (node.owner < resolvedEval->mergedExecutors.size() &&
               ((node.repeatable && !node.cyclic) || node.forwardPublications) &&
-              !node.clocked && !node.boundary)
+              !node.clocked && !node.boundary) {
             singlePass.insert(resolvedEval->mergedExecutors[node.owner]);
+            if (refineReadPublications && node.forwardPublications)
+              forwardOnly.insert(resolvedEval->mergedExecutors[node.owner]);
+          }
         SymbolTable symbols(metadataDesign);
         unsigned promoted = 0;
         for (auto [ownerIndex, groupIndex] : sourceConvergenceGroups) {
@@ -2423,6 +2506,16 @@ LogicalResult NativePipelineAnalysis::resolveEval() {
                      " members=" + std::to_string(kernel.memberIDs.size())});
           }
         }
+        // A broad source self-edge is also conservative when every physical
+        // publication of this activation has a strictly later recipient.
+        // No external reader can add an HDL writer. A publishing frame still
+        // uses its exact source wait when a callback observes the activation.
+        for (auto &owner : *directFragments)
+          if (owner.tier2Convergence && !owner.runtimeCheckpoint &&
+              forwardOnly.contains(owner.wrapper)) {
+            owner.tier2Convergence = false;
+            ++promoted;
+          }
         if (detailedTiming) {
           llvm::errs() << "talos eval refined convergence: owners=" << promoted
                        << '\n';

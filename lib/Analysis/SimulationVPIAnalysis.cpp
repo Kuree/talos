@@ -1,6 +1,7 @@
 //===- SimulationVPIAnalysis.cpp - VPI capability policy ----------------===//
 
 #include "talos/Analysis/SimulationVPIAnalysis.h"
+#include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 
@@ -15,8 +16,28 @@ SimulationVPIAnalysis SimulationVPIAnalysis::compute(sim::SimDesignOp design) {
   if (graph) {
     result.mode = graph.getVpi();
     result.computeGraph = true;
+    if (result.mode == schedule::ComputeVPIMode::Read)
+      if (auto module = design->getParentOfType<mlir::ModuleOp>())
+        result.subscriberGuards =
+            native::has<native::ReadableEvalState>(module);
   }
   return result;
+}
+
+bool needsContinuousContributionHistory(sim::SimDesignOp design) {
+  auto vpi = SimulationVPIAnalysis::compute(design);
+  if (!vpi.requiresPublicationGuards() || vpi.allowsWrite() ||
+      !native::has<native::ClosedExecutable>(
+          design->getParentOfType<mlir::ModuleOp>()))
+    return true;
+  return design
+      .walk([](mlir::Operation *op) {
+        return mlir::isa<sim::SimOverrideOp, sim::SimDynamicOverrideOp,
+                         sim::SimReleaseOverrideOp>(op)
+                   ? mlir::WalkResult::interrupt()
+                   : mlir::WalkResult::advance();
+      })
+      .wasInterrupted();
 }
 
 SimulationVPIAnalysis

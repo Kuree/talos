@@ -26,6 +26,7 @@ void declareNativeRuntimeABI(ModuleOp module) {
        Entry::SchedulerStaticTransitionProjected,
        Entry::SchedulerHandoffPending, Entry::SchedulerRealTransition,
        Entry::StaticSpecializationGuard, Entry::StaticSpecializationGuardRoots,
+       Entry::ObservedWriterGuard, Entry::ObservedWriterGuardCached,
        Entry::StaticNbaSpecializationGuard});
   bool guardedVisibility = false;
   module.walk([&](Operation *op) {

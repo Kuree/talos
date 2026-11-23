@@ -466,7 +466,7 @@ CombinationalFusionAnalysis::CombinationalFusionAnalysis(
     sim::SimDesignOp design,
     const analysis::HandleDataflowAnalysis &provenanceAnalysis,
     analysis::ActivationMemoryAnalysis::DependencyMode mode,
-    ObservationContext observations)
+    ObservationContext observations, bool schedulingReadOnlyActivations)
     : observationContext(observations), design(design),
       provenance(&provenanceAnalysis), dependencyMode(mode) {
   auto graph = design.getComputeGraphAttr();
@@ -478,7 +478,9 @@ CombinationalFusionAnalysis::CombinationalFusionAnalysis(
     return;
   // A DPI call reaches the design only through context exports (IEEE
   // 1800-2023 35.5.1.3, 35.5.3).
-  unsupported |= analysis::DPIEffectAnalysis(design).anyCallMayAccessDesign();
+  analysis::DPIEffectAnalysis dpi(design);
+  unsupported |= dpi.anyCallMayAccessDesign() &&
+                 !(schedulingReadOnlyActivations && dpi.exportsAreTransparent());
   design.walk([&](Operation *op) {
     unsupported |= isa<sim::SimOverrideOp, sim::SimReleaseOverrideOp,
                        sim::SimDynamicOverrideOp, sim::SimProcessControlOp,
@@ -1105,21 +1107,44 @@ CombinationalFusionAnalysis::getRepeatableInputs(bool explainRejections) const {
   return result;
 }
 
+const analysis::ActivationMemoryAnalysis *
+CombinationalFusionAnalysis::getCompleteFootprint(
+    sim::SimFuncOp function) const {
+  auto found = activations.find(function);
+  if (found == activations.end() || !found->second || !found->second->isValid())
+    return nullptr;
+  const auto &memory = found->second->getMemory();
+  return memory.hasCompleteWrites() ? &memory : nullptr;
+}
+
 llvm::DenseSet<StringAttr> schedule::collectRepeatableCombinationalActivations(
     sim::SimDesignOp design, const analysis::HandleDataflowAnalysis &handles,
     llvm::function_ref<void(StringAttr,
                             const analysis::ActivationMemoryAnalysis &)>
-        record) {
+        record,
+    llvm::function_ref<void(StringAttr,
+                            const analysis::ActivationMemoryAnalysis &)>
+        recordComplete) {
   CombinationalFusionAnalysis combinational(
       design, handles,
-      analysis::ActivationMemoryAnalysis::DependencyMode::ReachingValues);
+      analysis::ActivationMemoryAnalysis::DependencyMode::ReachingValues,
+      CombinationalFusionAnalysis::ObservationContext::RegionBoundary,
+      native::has<native::ReadableEvalState>(
+          design->getParentOfType<ModuleOp>()) &&
+          design.getComputeGraphAttr() &&
+          design.getComputeGraphAttr().getVpi() ==
+              schedule::ComputeVPIMode::Read);
   llvm::DenseSet<StringAttr> result;
   const auto &certified =
       combinational.getRepeatableInputs(/*explainRejections=*/true);
   design.walk([&](sim::SimFuncOp function) {
     StringAttr owner = function.getSymNameAttr();
-    if (!certified.contains(owner))
+    if (!certified.contains(owner)) {
+      if (recordComplete)
+        if (const auto *memory = combinational.getCompleteFootprint(function))
+          recordComplete(owner, *memory);
       return;
+    }
     result.insert(owner);
     if (record) {
       auto body =
@@ -1865,6 +1890,136 @@ Operation *singleSuspension(sim::SimFuncOp function) {
 
 } // namespace
 
+static void collectNBAWriterFacts(sim::SimDesignOp design,
+                                  ArrayRef<sim::SimFuncOp> functions,
+                                  analysis::FormalEffectResolver &formals,
+                                  NBATransientObservers &result) {
+  // IEEE 1800-2023 4.9.3, 4.9.4, 6.8: declaration initialization cannot
+  // intervene between an NBA capture and its commit. Task-call scheduling
+  // does not instantiate the callee's effects into the caller summary, so
+  // inventory task bodies and resolve their reference actuals too (13.5).
+  // Preserve this before fusion introduces private references.
+  llvm::DenseSet<uint64_t> immediateWriters;
+  llvm::DenseSet<uint64_t> unboundedWriters;
+  analysis::Ranges nbaRanges, writtenRanges;
+  auto bounded = [](schedule::ComputeEffectAttr effect) {
+    return !effect.getDynamic() && effect.getWidth() != 0 &&
+           effect.getWidth() <= uint64_t(INT64_MAX) &&
+           effect.getLow() <= uint64_t(INT64_MAX) - effect.getWidth();
+  };
+  auto recordWriter = [&](uint64_t descriptor,
+                          schedule::ComputeEffectAttr effect) {
+    immediateWriters.insert(descriptor);
+    if (bounded(effect))
+      writtenRanges.push_back({descriptor, effect.getLow(), effect.getWidth()});
+    else
+      unboundedWriters.insert(descriptor);
+  };
+  bool immediateComplete = true;
+  for (sim::SimFuncOp function : functions) {
+    if (function.getEntryKind() == sim::EntryKind::RootInitializer ||
+        function.getEntryKind() == sim::EntryKind::Function)
+      continue;
+    auto summary = function.getEffectSummaryAttr();
+    if (!summary) {
+      immediateComplete = false;
+      continue;
+    }
+    for (auto effect : summary.getAsRange<schedule::ComputeEffectAttr>()) {
+      if (effect.getEffect() == schedule::ComputeEffectKind::NBA &&
+          effect.getResource() == schedule::ComputeResourceKind::Storage &&
+          effect.getTarget() == schedule::ComputeTargetKind::Descriptor &&
+          bounded(effect))
+        nbaRanges.push_back(
+            {effect.getDescriptor(), effect.getLow(), effect.getWidth()});
+      if (effect.getEffect() != schedule::ComputeEffectKind::Write &&
+          effect.getEffect() != schedule::ComputeEffectKind::Drive)
+        continue;
+      if (effect.getResource() == schedule::ComputeResourceKind::Unknown)
+        immediateComplete = false;
+      else if (effect.getResource() == schedule::ComputeResourceKind::Storage) {
+        if (effect.getTarget() == schedule::ComputeTargetKind::Formal)
+          immediateComplete &=
+              formals.resolve(function.getSymNameAttr(), effect, recordWriter,
+                              /*ignorePrivate=*/true);
+        else if (effect.getTarget() != schedule::ComputeTargetKind::Descriptor)
+          immediateComplete = false;
+        else
+          recordWriter(effect.getDescriptor(), effect);
+      }
+    }
+  }
+  // Inspect callees too: instantiated summaries may omit an opaque mutation
+  // in a task body. Such a mutation invalidates the whole writer certificate.
+  design.walk([&](sim::SimFuncOp function) {
+    if (function.getEntryKind() == sim::EntryKind::RootInitializer)
+      return;
+    function.walk([&](Operation *operation) {
+      if (isa<sim::SimCallOp, sim::SimTaskCallOp, sim::SimRefStoreOp,
+              sim::SimRefAllocOp, sim::SimNBAEnqueueOp>(operation))
+        return;
+      if (auto effects = dyn_cast<MemoryEffectOpInterface>(operation)) {
+        SmallVector<MemoryEffects::EffectInstance> instances;
+        effects.getEffects(instances);
+        for (const auto &effect : instances)
+          if (isa<MemoryEffects::Write>(effect.getEffect()) &&
+              isa<sim::StorageResource>(effect.getResource()))
+            immediateComplete = false;
+      }
+    });
+  });
+  if (immediateComplete) {
+    // For a pipeline array, combinational wiring may drive stage zero while
+    // nonblocking assignments target other stages. Keep only bits disjoint
+    // from every immediate writer. A dynamic or formal writer covers its
+    // entire root. The native planner still validates the physical layout.
+    llvm::erase_if(nbaRanges, [&](const analysis::Range &range) {
+      return !immediateWriters.contains(range.root) ||
+             unboundedWriters.contains(range.root);
+    });
+    analysis::normalize(nbaRanges);
+    analysis::normalize(writtenRanges);
+    result.holdRanges = analysis::subtract(nbaRanges, writtenRanges);
+    result.immediateWriters = std::move(immediateWriters);
+  }
+}
+
+void recordNBAWriterFacts(sim::SimDesignOp design,
+                          const NBATransientObservers &facts) {
+  if (!facts.immediateWriters)
+    return;
+  SmallVector<int64_t> writers(facts.immediateWriters->begin(),
+                               facts.immediateWriters->end());
+  llvm::sort(writers);
+  schedule::set<schedule::Field::NbaImmediateWriters>(
+      design, DenseI64ArrayAttr::get(design.getContext(), writers));
+  if (!facts.holdRanges.empty()) {
+    SmallVector<int64_t> ranges;
+    for (const auto &range : facts.holdRanges)
+      ranges.append(
+          {int64_t(range.root), int64_t(range.low), int64_t(range.width)});
+    schedule::set<schedule::Field::NbaHoldRanges>(
+        design, DenseI64ArrayAttr::get(design.getContext(), ranges));
+  }
+}
+
+void recordReadOnlyNBAWriters(sim::SimDesignOp design) {
+  if (schedule::has<schedule::Field::NbaImmediateWriters>(design))
+    return;
+  // Reads and callbacks can inspect a register between updates (38.15,
+  // 38.36). They cannot write it through read-only VPI. An exported HDL
+  // routine, however, could be called by foreign code at such a boundary.
+  analysis::DPIEffectAnalysis dpi(design);
+  if (!dpi.exportsAreTransparent())
+    return;
+  analysis::HandleDataflowAnalysis provenance(design);
+  analysis::FormalEffectResolver formals(design, provenance);
+  SmallVector<sim::SimFuncOp> functions(design.getOps<sim::SimFuncOp>());
+  NBATransientObservers facts;
+  collectNBAWriterFacts(design, functions, formals, facts);
+  recordNBAWriterFacts(design, facts);
+}
+
 std::optional<NBATransientObservers>
 computeNBATransientObservers(sim::SimDesignOp design, bool guardedVPI) {
   schedule::ComputeGraphAttr graph = design.getComputeGraphAttr();
@@ -1960,94 +2115,7 @@ computeNBATransientObservers(sim::SimDesignOp design, bool guardedVPI) {
     return std::nullopt;
 
   NBATransientObservers result;
-  // IEEE 1800-2023 4.9.3, 4.9.4, 6.8: declaration initialization cannot
-  // intervene between an NBA capture and its commit. Task-call scheduling
-  // does not instantiate the callee's effects into the caller summary, so
-  // inventory task bodies and resolve their reference actuals too (13.5).
-  // Preserve this before fusion introduces private references.
-  llvm::DenseSet<uint64_t> immediateWriters;
-  llvm::DenseSet<uint64_t> unboundedWriters;
-  analysis::Ranges nbaRanges, writtenRanges;
-  auto bounded = [](schedule::ComputeEffectAttr effect) {
-    return !effect.getDynamic() && effect.getWidth() != 0 &&
-           effect.getWidth() <= uint64_t(INT64_MAX) &&
-           effect.getLow() <= uint64_t(INT64_MAX) - effect.getWidth();
-  };
-  auto recordWriter = [&](uint64_t descriptor,
-                          schedule::ComputeEffectAttr effect) {
-    immediateWriters.insert(descriptor);
-    if (bounded(effect))
-      writtenRanges.push_back({descriptor, effect.getLow(), effect.getWidth()});
-    else
-      unboundedWriters.insert(descriptor);
-  };
-  bool immediateComplete = true;
-  for (sim::SimFuncOp function : functions) {
-    if (function.getEntryKind() == sim::EntryKind::RootInitializer ||
-        function.getEntryKind() == sim::EntryKind::Function)
-      continue;
-    auto summary = function.getEffectSummaryAttr();
-    if (!summary) {
-      immediateComplete = false;
-      continue;
-    }
-    for (auto effect : summary.getAsRange<schedule::ComputeEffectAttr>()) {
-      if (effect.getEffect() == schedule::ComputeEffectKind::NBA &&
-          effect.getResource() == schedule::ComputeResourceKind::Storage &&
-          effect.getTarget() == schedule::ComputeTargetKind::Descriptor &&
-          bounded(effect))
-        nbaRanges.push_back(
-            {effect.getDescriptor(), effect.getLow(), effect.getWidth()});
-      if (effect.getEffect() != schedule::ComputeEffectKind::Write &&
-          effect.getEffect() != schedule::ComputeEffectKind::Drive)
-        continue;
-      if (effect.getResource() == schedule::ComputeResourceKind::Unknown)
-        immediateComplete = false;
-      else if (effect.getResource() == schedule::ComputeResourceKind::Storage) {
-        if (effect.getTarget() == schedule::ComputeTargetKind::Formal)
-          immediateComplete &=
-              formals.resolve(function.getSymNameAttr(), effect, recordWriter,
-                              /*ignorePrivate=*/true);
-        else if (effect.getTarget() != schedule::ComputeTargetKind::Descriptor)
-          immediateComplete = false;
-        else
-          recordWriter(effect.getDescriptor(), effect);
-      }
-    }
-  }
-  // Inspect callees too: instantiated summaries may omit an opaque mutation
-  // in a task body. Such a mutation invalidates the whole writer certificate.
-  design.walk([&](sim::SimFuncOp function) {
-    if (function.getEntryKind() == sim::EntryKind::RootInitializer)
-      return;
-    function.walk([&](Operation *operation) {
-      if (isa<sim::SimCallOp, sim::SimTaskCallOp, sim::SimRefStoreOp,
-              sim::SimRefAllocOp, sim::SimNBAEnqueueOp>(operation))
-        return;
-      if (auto effects = dyn_cast<MemoryEffectOpInterface>(operation)) {
-        SmallVector<MemoryEffects::EffectInstance> instances;
-        effects.getEffects(instances);
-        for (const auto &effect : instances)
-          if (isa<MemoryEffects::Write>(effect.getEffect()) &&
-              isa<sim::StorageResource>(effect.getResource()))
-            immediateComplete = false;
-      }
-    });
-  });
-  if (immediateComplete) {
-    // For a pipeline array, combinational wiring may drive stage zero while
-    // nonblocking assignments target other stages. Keep only bits disjoint
-    // from every immediate writer. A dynamic or formal writer covers its
-    // entire root. The native planner still validates the physical layout.
-    llvm::erase_if(nbaRanges, [&](const analysis::Range &range) {
-      return !immediateWriters.contains(range.root) ||
-             unboundedWriters.contains(range.root);
-    });
-    analysis::normalize(nbaRanges);
-    analysis::normalize(writtenRanges);
-    result.holdRanges = analysis::subtract(nbaRanges, writtenRanges);
-    result.immediateWriters = std::move(immediateWriters);
-  }
+  collectNBAWriterFacts(design, functions, formals, result);
   llvm::DenseSet<uint64_t> &observable = result.observable;
   design.walk([&](sim::SimStorageDeclOp storage) {
     if (sim::hasTransitionObservers(storage))

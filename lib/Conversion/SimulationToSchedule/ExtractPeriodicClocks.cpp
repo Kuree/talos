@@ -1,7 +1,9 @@
 //===- ExtractPeriodicClocks.cpp - Normalize uniform delay processes
 //-------===//
 
+#include "talos/Analysis/ThreadObservationAnalysis.h"
 #include "talos/Conversion/Passes.h"
+#include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
@@ -111,7 +113,9 @@ bool hasUniformCadence(sim::SimFuncOp function,
 
 void TalosSimExtractPeriodicClocksPass::runOnOperation() {
   sim::SimDesignOp design = getOperation();
-  if (vpi != "off" || design.getComputeGraphAttr())
+  bool readable = vpi == "read" && native::has<native::ReadableEvalState>(
+                                       design->getParentOfType<ModuleOp>());
+  if ((!readable && vpi != "off") || design.getComputeGraphAttr())
     return;
   // IEEE 1800-2023 9.6.2, 9.7: an extra timer must not survive a source
   // killed/suspended by another process. Exclude process control and disable.
@@ -123,6 +127,11 @@ void TalosSimExtractPeriodicClocksPass::runOnOperation() {
     if (auto spawn = dyn_cast<sim::SimSpawnOp>(operation))
       spawns[spawn.getCalleeAttr().getAttr()].push_back(spawn);
   });
+  // A private cadence process has no source handle. Keep the original
+  // delay topology when source threads can escape through a process object,
+  // a waiting-process query, or a VPI call frame.
+  if (readable && analysis::observesStartupWorkers(design))
+    return;
   if (controlled)
     return;
   uint64_t nextStorage = 0, nextCodeUnit = 1;
@@ -238,9 +247,19 @@ void TalosSimExtractPeriodicClocksPass::runOnOperation() {
         builder, loc, referenceType, spawn.getOperands().front(), storage);
     Value zero = arith::ConstantIntOp::create(builder, loc, 0, 1);
     sim::SimRefStoreOp::create(builder, loc, zero, ref);
+    // Splitting the timing helper's RNG must not change the subsequent
+    // source processes' initialization seeds (18.14.1).
+    sim::SimRandomStateOp saved;
+    if (readable)
+      saved = sim::SimRandomStateOp::create(builder, loc,
+                                            spawn.getOperands().front());
     sim::SimSpawnOp::create(builder, loc, tick.getSymNameAttr(),
                             ValueRange{spawn.getOperands().front(), ref},
                             ArrayAttr{}, ArrayAttr{});
+    if (saved)
+      sim::SimRandomSetStateOp::create(builder, loc,
+                                       spawn.getOperands().front(),
+                                       saved.getState(), saved.getIncrement());
     if (failed(function.insertArgument(entry.getNumArguments(), referenceType,
                                        refAttrs, loc))) {
       signalPassFailure();

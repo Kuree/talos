@@ -194,7 +194,7 @@ void TalosSimSpecializeStaticStateNBAPass::runOnOperation() {
     bool stateSpecialized = stateEligible.contains(storage.getId());
     auto width = storageRootWidths.find(storage.getId());
     bool guarded =
-        stateSpecialized && (vpi.allowsWrite() || guardAllRoots ||
+        stateSpecialized && (vpi.requiresPublicationGuards() || guardAllRoots ||
                              overrideRoots.contains(storage.getId()));
     roots.push_back(schedule::StaticStateRootAttr::get(
         design.getContext(), storage.getId(),

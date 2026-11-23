@@ -220,6 +220,7 @@ private:
   uint32_t getVPIProfile();
   /// The design database profile (TALOS_RT_DESIGN_PROFILE_*) of this design.
   uint32_t vpiProfile = 0;
+  bool retainContinuousHistory = true;
   llvm::SmallVector<uint8_t> serializeBytecode();
   llvm::SmallVector<uint8_t> serializeDatabase(uint32_t profile,
                                                bool includeStatements);

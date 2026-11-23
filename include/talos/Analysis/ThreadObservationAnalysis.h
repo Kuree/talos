@@ -24,6 +24,11 @@ private:
   llvm::DenseMap<mlir::Operation *, bool> observing;
 };
 
+/// Can changing the number of private startup workers be observed through
+/// source thread handles, VPI waiting-process/frame queries, or a context DPI
+/// entry?
+bool observesStartupWorkers(mlir::Operation *root);
+
 /// Whether one operation, ignoring its callees, observes the executing thread.
 bool observesExecutingThread(mlir::Operation *operation);
 

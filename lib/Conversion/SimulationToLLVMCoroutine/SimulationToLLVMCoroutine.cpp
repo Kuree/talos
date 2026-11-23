@@ -253,10 +253,10 @@ bool isEvalClosureRuntimeCall(LLVM::CallOp call, LLVM::LLVMFuncOp function,
   using Entry = NativeRuntimeEntry;
   switch (*entry) {
   case Entry::StaticSpecializationGuard:
+  case Entry::ObservedWriterGuardCached:
+  case Entry::ObservedWriterGuard:
   case Entry::StaticSpecializationGuardRoots:
-    // Only full VPI emits these scheduling guards, and only the coordinator's
-    // write guard calls them; off/read retain their original generated
-    // execution paths.
+    // Only a coordinator guard may query a scoped write or observation route.
     return schedule::hasEvalRoles(function, schedule::EvalRole::WriteGuard);
   case Entry::DeferredEnqueue:
   case Entry::DeferredEnqueueForAssertion:
@@ -1761,7 +1761,7 @@ LogicalResult NativePipelineAnalysis::prepareRoots(
     return failure();
   guardedAOTSpecialization =
       staticSpecialization && useAOT && aotEligibility.isFullyEligible() &&
-      vpi.allowsWrite() && (directStaticState || staticNBA);
+      vpi.requiresPublicationGuards() && (directStaticState || staticNBA);
   // Writable VPI can invalidate specialization between activations. Keep the
   // original coroutine bodies guarded: they are also the transactional
   // fallback bodies, so marking them permanently clean would suppress the
@@ -1965,7 +1965,7 @@ LogicalResult NativePipelineAnalysis::prepareFragments(
   if (failed(lowerPackedSimulationOperations(
           module, dataLayout, *stateLayout, enableDirectStaticState,
           directDriverStores, staticNBA ? &staticNBAPlan : nullptr,
-          vpi.allowsWrite(),
+          vpi.requiresPublicationGuards(),
           /*experimentalTwoState=*/false, threadStatuses)))
     return failure();
   // Constructor edges were consumed when class allocation was lowered.
@@ -2319,14 +2319,20 @@ LogicalResult NativePipelineAnalysis::materialize() {
   SmallVector<PreparedPlainNativeProcess> plainProcesses;
   SmallVector<PreparedSuspendableProcess> suspendableProcesses;
   SmallVector<PreparedSuspendableProcess> transferProcesses;
-  // Two-tier P1d: a virtual owner (native.virtual_owner) runs in the
-  // generated coordinator, and outside it only in its bytecode body, so it
-  // gets no native body: only its bytecode-only descriptor and frame layout.
+  // The coordinator owns these activations. A virtual owner starts at its
+  // wait. A readable owner keeps its ordinary entry and frame for callbacks,
+  // and can run that entry or a fallback activation through retained bytecode.
+  // A shared native transfer kernel already supplies a compact Tier-2 body.
   SmallVector<std::pair<sim::SimFuncOp, SimulationProcessFrameAnalysis *>>
-      virtualOwners;
+      bytecodeOwners;
+  unsigned virtualOwnerCount = 0;
   for (auto [function, analysis] : processFunctions) {
-    if (native::has<native::VirtualOwner>(function)) {
-      virtualOwners.emplace_back(function, analysis);
+    bool virtualOwner = native::has<native::VirtualOwner>(function);
+    if (virtualOwner ||
+        (evalScheduler && bytecodeFallbackOwners.contains(function) &&
+         !transferBindings.lookup(function))) {
+      bytecodeOwners.emplace_back(function, analysis);
+      virtualOwnerCount += virtualOwner;
       continue;
     }
     if (analysis->getSuspensions().empty()) {
@@ -2428,7 +2434,7 @@ LogicalResult NativePipelineAnalysis::materialize() {
   for (PreparedSuspendableProcess &process : transferProcesses)
     if (failed(finishPreparedSuspendableProcess(process, embeddedSymbols)))
       return failure();
-  for (auto [function, analysis] : virtualOwners) {
+  for (auto [function, analysis] : bytecodeOwners) {
     std::string baseName = function.getSymName().str();
     uint64_t stableID = function.getCodeUnitId().value_or(
         detail::stableProcessID(baseName) &
@@ -2437,7 +2443,7 @@ LogicalResult NativePipelineAnalysis::materialize() {
             module, embeddedSymbols, function.getLoc(), baseName, stableID,
             *analysis, native::has<native::Unmanaged>(function),
             /*usesCoroutine=*/false, /*tableProcess=*/false,
-            /*virtualOwner=*/true)))
+            /*bytecodeFallbackOnly=*/true)))
       return failure();
     if (embeddedSymbols.lookup(function.getSymName()) == function)
       embeddedSymbols.erase(function);
@@ -2447,7 +2453,7 @@ LogicalResult NativePipelineAnalysis::materialize() {
   markTiming("suspendable process finalization");
   if (detailedTiming)
     llvm::errs() << "talos virtual owners without native bodies: "
-                 << virtualOwners.size() << '\n';
+                 << virtualOwnerCount << '\n';
 
   SmallVector<sim::SimDesignOp> designs =
       analysis::collectInWalkOrder<sim::SimDesignOp>(module);

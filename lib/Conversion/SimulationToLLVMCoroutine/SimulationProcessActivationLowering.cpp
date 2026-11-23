@@ -379,16 +379,24 @@ FailureOr<LLVM::LLVMFuncOp> makeProcessSpawnHelper(
     copyNativePartition(function, start);
     indexModuleSymbol(module, symbols, start);
     options |= TALOS_RT_SPAWN_STARTED;
-    // Two-tier P1c: an admitted owner with a retained bytecode body (B4a) and
-    // no managed frame roots needs no native instance. The coordinator runs
-    // its activations; the runtime keeps a frameless record and creates the
-    // frame of its bytecode body only to run it outside the coordinator.
+    // Keep managed captures visible to the collector from the spawn onward.
+    // Other admitted owners can keep their wait and captures in a small record.
     bool managedRoots =
         llvm::any_of(analysis.getFields(), [](const auto &field) {
           return field.flags == ProcessFrameFieldFlags::ManagedRoot ||
                  field.flags == ProcessFrameFieldFlags::CandidateRoot;
         });
-    if (runtime::has<runtime::BytecodeFunction>(function) && !managedRoots) {
+    bool readable = native::has<native::ReadableEvalState>(module);
+    if (readable && !managedRoots &&
+        (entryKind == sim::EntryKind::Continuous ||
+         entryKind == sim::EntryKind::PortInput ||
+         entryKind == sim::EntryKind::PortOutput)) {
+      // An admitted continuous assignment has no live continuation locals.
+      // Keep its native publishing entry; materialize its captured frame on
+      // the first source execution or explicit frame request (4.9.1, 9.4.2).
+      options |= TALOS_RT_SPAWN_VIRTUAL;
+    } else if (!readable && !managedRoots &&
+               runtime::has<runtime::BytecodeFunction>(function)) {
       options |= TALOS_RT_SPAWN_VIRTUAL;
       native::set<native::VirtualOwner>(function, builder.getUnitAttr());
     }

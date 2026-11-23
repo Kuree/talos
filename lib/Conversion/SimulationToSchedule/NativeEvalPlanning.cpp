@@ -118,6 +118,20 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
                    const NativeActivationInputs &activationInputs) {
   if (!graph)
     return {};
+  // A read subscriber routes a watched writer through its individual
+  // publishing executor. The ranked clean variant can use the same exclusive
+  // drive-range proof as direct storage when the HDL has no override.
+  const bool guardedReadNets =
+      graph.getVpi() == schedule::ComputeVPIMode::Read &&
+      native::has<native::ReadableEvalState>(module) &&
+      !module
+           .walk([](Operation *op) {
+             return isa<sim::SimOverrideOp, sim::SimDynamicOverrideOp,
+                        sim::SimReleaseOverrideOp>(op)
+                        ? WalkResult::interrupt()
+                        : WalkResult::advance();
+           })
+           .wasInterrupted();
   const auto &sparseWires = stateLayout.isolatedSparseDriverRanges;
   if (native::has<native::DebugTiming>(module))
     llvm::errs() << "talos sparse scheduling nets: " << sparseWires.size()
@@ -375,8 +389,9 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
             !talos_rt_stable_handle_decode(handle->second, &decoded) ||
             decoded.kind != TALOS_RT_STABLE_HANDLE_STATIC || decoded.offset)
           return false;
-        if (net && (!stateLayout.directHandles.contains(decoded.id) ||
-                    stateLayout.guardedHandles.contains(decoded.id)))
+        if (net && (stateLayout.guardedHandles.contains(decoded.id)
+                        ? !guardedReadNets
+                        : !stateLayout.directHandles.contains(decoded.id)))
           return false;
         auto width = widths.find(decoded.id);
         if (width == widths.end() || effect.getLow() >= width->second ||
@@ -979,7 +994,8 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
     return boundaryPhase(a) < boundaryPhase(b);
   });
   if (fanout.exact && native::has<native::ClosedExecutable>(module) &&
-      schedule::has<schedule::Field::EvalRuntimeCalendar>(module)) {
+      (schedule::has<schedule::Field::EvalRuntimeCalendar>(module) ||
+       guardedReadNets)) {
     // Cut the ranked SCC at its feedback edges. A predicated combinational
     // activation can consume its wake at the end if every possible published
     // range wakes only later owners. This proof concerns one real activation,
@@ -1011,8 +1027,17 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
       netStates.insert(net.handleID);
     for (unsigned id = 0; id < realNodeCount; ++id) {
       auto &node = result[id];
-      if (!node.cyclic || node.boundary || node.clocked ||
-          keepConvergence[id] ||
+      // A source-level SCC can split into acyclic actors after exact range
+      // and alias resolution. A nonrepeatable writer may still consume its
+      // wake normally if every actual publication goes strictly forward.
+      const auto *candidate =
+          guardedReadNets && !node.cyclic &&
+                  node.owner < plan.mergedExecutors.size()
+              ? directByWrapper.lookup(plan.mergedExecutors[node.owner])
+              : nullptr;
+      if ((!node.cyclic && (!candidate || !candidate->tier2Convergence ||
+                            candidate->runtimeCheckpoint)) ||
+          node.boundary || node.clocked || keepConvergence[id] ||
           llvm::binary_search(plan.periodicEntryRecords, node.owner) ||
           nodes[id].opaqueWrites || nodes[id].writes.empty())
         continue;
@@ -1079,23 +1104,6 @@ NativeActivationInputs collectNativeActivationInputs(sim::SimDesignOp design,
   // those lanes and reintroduce false native feedback around a fused kernel.
   // This analysis is fresh for the current IR; copy its facts before lowering
   // can mutate any body. Uncertified owners keep their source event controls.
-  result.repeatable = schedule::collectRepeatableCombinationalActivations(
-      design, handles,
-      [&](StringAttr owner, const analysis::ActivationMemoryAnalysis &memory) {
-        llvm::append_range(result.liveIns[owner], memory.hasInputDependencies()
-                                                      ? memory.getValueInputs()
-                                                      : memory.getLiveIns());
-        llvm::append_range(result.mayWrites[owner], memory.getMayWrites());
-        if (explain)
-          llvm::errs() << "talos ranked activation: " << owner.getValue()
-                       << " valid=1 complete=1 inputs="
-                       << memory.hasInputDependencies()
-                       << " input_reason=" << memory.getDependencyFailure()
-                       << " reason=\n";
-      });
-  if (explain)
-    llvm::errs() << "talos repeatable activations: " << result.repeatable.size()
-                 << '\n';
   result.completeNBAWriters = true;
   SymbolTable symbols(design);
   llvm::MapVector<StringAttr, SmallVector<schedule::ComputeEffectAttr>>
@@ -1124,25 +1132,51 @@ NativeActivationInputs collectNativeActivationInputs(sim::SimDesignOp design,
         effectsByOwner[owner],
         fragment.getEffects().getAsRange<schedule::ComputeEffectAttr>());
   }
+  auto needsProof = [&](ArrayRef<schedule::ComputeEffectAttr> effects) {
+    return llvm::any_of(effects, [&](auto effect) {
+      if (effect.getDynamic())
+        return true;
+      if (effect.getEffect() != schedule::ComputeEffectKind::Read)
+        return false;
+      return llvm::any_of(effects, [&](auto write) {
+        return write.getEffect() == schedule::ComputeEffectKind::Write &&
+               rangesOverlap(effect, write);
+      });
+    });
+  };
+  auto record = [&](StringAttr owner,
+                    const analysis::ActivationMemoryAnalysis &memory) {
+    llvm::append_range(result.liveIns[owner], memory.hasInputDependencies()
+                                                  ? memory.getValueInputs()
+                                                  : memory.getLiveIns());
+    llvm::append_range(result.mayWrites[owner], memory.getMayWrites());
+    if (explain)
+      llvm::errs() << "talos ranked activation: " << owner.getValue()
+                   << " valid=1 complete=1 inputs="
+                   << memory.hasInputDependencies()
+                   << " input_reason=" << memory.getDependencyFailure()
+                   << " reason=\n";
+  };
+  result.repeatable = schedule::collectRepeatableCombinationalActivations(
+      design, handles, record,
+      [&](StringAttr owner, const analysis::ActivationMemoryAnalysis &memory) {
+        // This is the same ReachingValues solve on the same canonical actor
+        // used below. Reuse only its ordered accesses. The original watches
+        // and its rejection as a repeatable owner still govern every wake.
+        auto found = effectsByOwner.find(owner);
+        if (changeOwners.contains(owner) && found != effectsByOwner.end() &&
+            needsProof(found->second))
+          record(owner, memory);
+      });
+  if (explain)
+    llvm::errs() << "talos repeatable activations: " << result.repeatable.size()
+                 << '\n';
   SmallVector<sim::SimFuncOp, 0> requests;
   for (const auto &[owner, effects] : effectsByOwner) {
-    if (!changeOwners.contains(owner) || result.repeatable.contains(owner))
+    if (!changeOwners.contains(owner) || result.liveIns.contains(owner) ||
+        !needsProof(effects))
       continue;
-    auto function = symbols.lookup<sim::SimFuncOp>(owner.getValue());
-    if (!function)
-      continue;
-    bool needsProof =
-        llvm::any_of(effects, [&, &effects = effects](auto effect) {
-          if (effect.getDynamic())
-            return true;
-          if (effect.getEffect() != schedule::ComputeEffectKind::Read)
-            return false;
-          return llvm::any_of(effects, [&](auto write) {
-            return write.getEffect() == schedule::ComputeEffectKind::Write &&
-                   rangesOverlap(effect, write);
-          });
-        });
-    if (needsProof)
+    if (auto function = symbols.lookup<sim::SimFuncOp>(owner.getValue()))
       requests.push_back(function);
   }
   struct Facts {
@@ -1406,41 +1440,30 @@ resolveNativeEvalPlan(ModuleOp module,
         return std::nullopt;
       return offset - bound->offset;
     };
-    SmallVector<std::optional<uint64_t>> clockBits, aliasBits;
-    for (const NativePeriodicClock &clock : periodicClocks)
-      clockBits.push_back(
-          localBit(clock.getStaticState(), clock.getBitOffset()));
-    for (const NativePeriodicAlias &alias : periodicAliases)
-      aliasBits.push_back(
-          localBit(alias.getTargetStaticState(), alias.getTargetBitOffset()));
-    auto clockTouches = [&](size_t index,
-                            const talos_rt_static_fanout_entry &entry) {
-      if (entry.static_state != periodicClocks[index].getStaticState() ||
-          entry.bit_width == 0 || !clockBits[index])
-        return false;
-      return periodicBitTouches(*clockBits[index], entry);
+    // Index the physical bits once. A fanout row touches a periodic
+    // source iff its first in-range bit matches its change/edge predicate.
+    DenseMap<uint32_t, SmallVector<uint64_t, 1>> periodicBits;
+    auto indexBit = [&](uint32_t state, uint64_t offset) {
+      if (auto bit = localBit(state, offset))
+        periodicBits[state].push_back(*bit);
     };
-    auto aliasTouches = [&](size_t index,
-                            const talos_rt_static_fanout_entry &entry) {
-      if (entry.static_state != periodicAliases[index].getTargetStaticState() ||
-          entry.bit_width == 0 || !aliasBits[index])
-        return false;
-      return periodicBitTouches(*aliasBits[index], entry);
-    };
+    for (const auto &clock : periodicClocks)
+      indexBit(clock.getStaticState(), clock.getBitOffset());
+    for (const auto &alias : periodicAliases)
+      indexBit(alias.getTargetStaticState(), alias.getTargetBitOffset());
+    for (auto &entry : periodicBits)
+      llvm::sort(entry.second);
     for (auto [entryIndex, entry] : llvm::enumerate(result.fanoutEntries)) {
       uint32_t route = entry.reserved & TALOS_RT_FANOUT_ROUTE_MASK;
       if (route == TALOS_RT_FANOUT_RUNTIME ||
           route == TALOS_RT_FANOUT_PERIODIC_ALIAS ||
           entry.merged_bit >= result.mergedFragments.size())
         continue;
-      bool periodic = false;
-      for (size_t index = 0; index != periodicClocks.size() && !periodic;
-           ++index)
-        periodic = clockTouches(index, entry);
-      for (size_t index = 0; index != periodicAliases.size() && !periodic;
-           ++index)
-        periodic = aliasTouches(index, entry);
-      if (periodic) {
+      auto positions = periodicBits.find(entry.static_state);
+      if (positions == periodicBits.end())
+        continue;
+      auto bit = llvm::lower_bound(positions->second, entry.low_bit);
+      if (bit != positions->second.end() && periodicBitTouches(*bit, entry)) {
         uint32_t owner = result.periodicOwnerBits[entryIndex] == UINT32_MAX
                              ? entry.merged_bit
                              : result.periodicOwnerBits[entryIndex];

@@ -316,6 +316,38 @@ buildNativePeriodicAliasPlan(ModuleOp module,
     return decoded.id;
   };
 
+  // A closed read model retains the original copy actors and distinct
+  // storage. Only the prepared shared clock loop projects these single-bit
+  // copies (4.7, 4.9.1). A watch on the clock or any projected copy restores
+  // the original source schedule before the next edge (4.10, 38.36.1).
+  bool readable = stateLayout.directSubscriberReads &&
+                  !stateLayout.retainContinuousHistory &&
+                  schedule::has<schedule::Field::EvalRuntimeCalendar>(module) &&
+                  native::has<native::ReadableEvalState>(module) &&
+                  native::has<native::ClosedExecutable>(module);
+  auto canProject = [&](uint32_t state) {
+    return stateLayout.guardedHandles.contains(state)
+               ? readable
+               : stateLayout.directHandles.contains(state);
+  };
+  DenseMap<uint64_t, const NativeStateLayout::Driver *> drivers;
+  DenseMap<uint64_t, unsigned> driverCounts;
+  for (const auto &driver : stateLayout.driverLayouts) {
+    drivers.try_emplace(driver.id, &driver);
+    ++driverCounts[driver.netId];
+  }
+  DenseMap<uint64_t, const NativeStateLayout::Net *> nets;
+  for (const auto &net : stateLayout.netLayouts)
+    nets.try_emplace(net.id, &net);
+  auto exclusiveComponentBit = [&](uint64_t net, uint64_t bit) {
+    if (!readable || stateLayout.hasPassSwitch)
+      return false;
+    auto ranges = stateLayout.connectedExclusiveDriverRanges.find(net);
+    return ranges != stateLayout.connectedExclusiveDriverRanges.end() &&
+           llvm::any_of(ranges->second, [&](const auto &range) {
+             return range.first <= bit && bit < range.second;
+           });
+  };
   std::unique_ptr<analysis::ClockInferenceAnalysis> copyProof;
   WalkResult walked = module.walk([&](sim::SimFuncOp function) {
     auto actor = actorSlots.find(function.getOperation());
@@ -457,10 +489,7 @@ buildNativePeriodicAliasPlan(ModuleOp module,
       // contribution needs reconstruction. Do not turn a slice or externally
       // writable variable into a whole-root clock projection.
       if (!target || !bound || bound->width != 1 ||
-          !stateLayout.directHandles.contains(*sourceStatic) ||
-          !stateLayout.directHandles.contains(*target) ||
-          stateLayout.guardedHandles.contains(*sourceStatic) ||
-          stateLayout.guardedHandles.contains(*target) ||
+          !canProject(*sourceStatic) || !canProject(*target) ||
           !isExclusiveCopy({*target, offset->second}))
         return WalkResult::advance();
       aliases.push_back(NativePeriodicAlias::get(
@@ -473,13 +502,10 @@ buildNativePeriodicAliasPlan(ModuleOp module,
     if (!driverDescriptor)
       return WalkResult::advance();
     auto driverOffset = stateLayout.driverOffsets.find(*driverDescriptor);
-    auto driver =
-        llvm::find_if(stateLayout.driverLayouts, [&](const auto &candidate) {
-          return candidate.id == *driverDescriptor;
-        });
-    if (driverOffset == stateLayout.driverOffsets.end() ||
-        driver == stateLayout.driverLayouts.end() || driver->width != 1 ||
-        driver->drivenLow != 0 || driver->drivenWidth != 1)
+    const auto *driver = drivers.lookup(*driverDescriptor);
+    if (driverOffset == stateLayout.driverOffsets.end() || !driver ||
+        driver->width != 1 || driver->drivenLow != 0 ||
+        driver->drivenWidth != 1)
       return WalkResult::advance();
     // The alias copies four-state planes without resolution. That is only an
     // identity when neither known polarity is replaced by high impedance.
@@ -490,18 +516,12 @@ buildNativePeriodicAliasPlan(ModuleOp module,
     // one-bit net with this exact single driver.  This is the semantic fact an
     // effect summary cannot establish: the SSA body above additionally proves
     // that both value and unknown planes are copied unchanged.
-    if (llvm::count_if(stateLayout.driverLayouts, [&](const auto &candidate) {
-          return candidate.netId == driver->netId;
-        }) != 1)
+    if (driverCounts.lookup(driver->netId) != 1)
       return WalkResult::advance();
-    auto net =
-        llvm::find_if(stateLayout.netLayouts, [&](const auto &candidate) {
-          return candidate.id == driver->netId;
-        });
+    const auto *net = nets.lookup(driver->netId);
     auto netHandle = stateLayout.nets.find(driver->netId);
     auto netOffset = stateLayout.netOffsets.find(driver->netId);
-    if (net == stateLayout.netLayouts.end() || net->width != 1 ||
-        netHandle == stateLayout.nets.end() ||
+    if (!net || net->width != 1 || netHandle == stateLayout.nets.end() ||
         netOffset == stateLayout.netOffsets.end())
       return WalkResult::advance();
     std::optional<uint32_t> targetStatic = decodeStaticRoot(netHandle->second);
@@ -511,27 +531,69 @@ buildNativePeriodicAliasPlan(ModuleOp module,
     if (!targetStatic || !isExclusiveCopy({*targetStatic, netOffset->second}))
       return WalkResult::advance();
 
+    bool connectedTarget =
+        stateLayout.connectivityCanonical.count({driver->netId, 0});
+    // A known resolved value reconstructs the private contribution only
+    // on a plain, undelayed wire with one contributor. A pull, charge,
+    // switch or another driver can establish the resolved bit on its own.
+    bool exclusiveTarget =
+        stateLayout.isolatedSingleDriverNets.contains(driver->netId) ||
+        exclusiveComponentBit(driver->netId, 0);
+    if (readable && !exclusiveTarget)
+      return WalkResult::advance();
     if (sourceNet) {
-      // IEEE 1800-2023 4.3, 4.9.1, 6.6.1, 9.4.2: a tree of exclusive,
-      // undelayed wire copies can propagate each periodic edge before its
-      // consumers run. Keep initialization in the ordinary scheduler and
-      // reject overrides, resolution and competing writers. Clock inference
-      // checks physical writer coverage, not just this body's effect summary.
-      if (!stateLayout.isolatedSingleDriverNets.contains(*sourceDescriptor) ||
-          !stateLayout.isolatedSingleDriverNets.contains(driver->netId) ||
-          !stateLayout.directHandles.contains(*sourceStatic) ||
-          !stateLayout.directHandles.contains(*targetStatic) ||
-          !stateLayout.directHandles.contains(driver->handleID) ||
-          stateLayout.guardedHandles.contains(*sourceStatic) ||
-          stateLayout.guardedHandles.contains(*targetStatic) ||
-          stateLayout.guardedHandles.contains(driver->handleID))
+      // A read client cannot override the contribution. A physically bounded
+      // driver on this exclusive, one-bit net is enough for the prepared
+      // projection; ordinary driver accesses retain their existing guards.
+      const auto *contribution = stateLayout.findBound(driver->handleID);
+      bool fixedReadDriver = readable && contribution &&
+                             contribution->width == 1 &&
+                             contribution->offset == driverOffset->second;
+      // The one strong contributor to a plain, undelayed collapsed wire
+      // determines every member (6.6.1, 23.3.3.7). Retain the ordinary
+      // source actor when either contribution is unresolved.
+      if ((!stateLayout.isolatedSingleDriverNets.contains(*sourceDescriptor) &&
+           !exclusiveComponentBit(*sourceDescriptor, sourceLocalBitOffset)) ||
+          !exclusiveTarget || !canProject(*sourceStatic) ||
+          !canProject(*targetStatic) ||
+          (!canProject(driver->handleID) && !fixedReadDriver))
         return WalkResult::advance();
     }
 
-    aliases.push_back(NativePeriodicAlias::get(
-        module.getContext(), *sourceStatic, actor->second, site.getId(),
-        *targetStatic, sourceRootOffset->second + sourceLocalBitOffset,
-        netOffset->second, driverOffset->second));
+    // A single drive updates all declarations in its collapsed component.
+    // Keep their distinct storage, fanout rows, and lookup identities. Bind
+    // the contribution once on the driving declaration.
+    if (readable && connectedTarget) {
+      auto canonical =
+          stateLayout.connectivityCanonical.lookup({driver->netId, 0});
+      auto members = stateLayout.connectivityComponents.find(canonical);
+      if (members == stateLayout.connectivityComponents.end())
+        return WalkResult::advance();
+      size_t before = aliases.size();
+      for (auto member : members->second) {
+        auto handle = stateLayout.nets.find(member.net);
+        auto offset = stateLayout.netOffsets.find(member.net);
+        auto id = handle == stateLayout.nets.end()
+                      ? std::nullopt
+                      : decodeStaticRoot(handle->second);
+        if (!id || !canProject(*id) || offset == stateLayout.netOffsets.end() ||
+            member.offset > UINT64_MAX - offset->second) {
+          aliases.resize(before);
+          return WalkResult::advance();
+        }
+        uint64_t targetBit = offset->second + member.offset;
+        uint64_t contribution =
+            member.net == driver->netId ? driverOffset->second : targetBit;
+        aliases.push_back(NativePeriodicAlias::get(
+            module.getContext(), *sourceStatic, actor->second, site.getId(),
+            *id, sourceBit.second, targetBit, contribution));
+      }
+    } else {
+      aliases.push_back(NativePeriodicAlias::get(
+          module.getContext(), *sourceStatic, actor->second, site.getId(),
+          *targetStatic, sourceBit.second, netOffset->second,
+          driverOffset->second));
+    }
     return WalkResult::advance();
   });
   if (walked.wasInterrupted())
@@ -605,7 +667,8 @@ FailureOr<SmallVector<talos_rt_static_actor_root>>
 buildNativeStaticActorRootPlan(
     ModuleOp module, const NativeStateLayout &stateLayout,
     const DenseMap<Operation *, uint32_t> &actorSlots,
-    const DenseSet<uint64_t> &checkpointOnlyActors, bool writableVPI,
+    const DenseSet<uint64_t> &checkpointOnlyActors,
+    const analysis::SimulationVPIAnalysis &vpi,
     SmallVectorImpl<uint32_t> &unscopedActors) {
   SmallVector<talos_rt_static_actor_root> plan;
   sim::SimDesignOp design;
@@ -614,7 +677,7 @@ buildNativeStaticActorRootPlan(
       design ? ::talos::schedule::get<schedule::metadata::staticSpecialization>(
                    design)
              : schedule::StaticSpecializationAttr{};
-  if (!design || (!specialization && !writableVPI))
+  if (!design || (!specialization && !vpi.requiresPublicationGuards()))
     return plan;
   SymbolTable symbols(design);
   for (Attribute attribute : specialization
@@ -653,68 +716,79 @@ buildNativeStaticActorRootPlan(
     if (flags != 0)
       plan.push_back({actor->second, decoded.id, flags, 0});
   }
-  if (writableVPI) {
+  if (vpi.requiresPublicationGuards()) {
     // IEEE 1800-2023 38.34, 10.6.2: mutation routing depends on the whole
     // logical root, including dynamic selections and net driver state. The
     // constant-access specialization table alone cannot certify that cone.
-    DenseSet<Operation *> opaqueStorageFunctions;
+    // Compute opaque call closures once. Several thousand source actors can
+    // call the same helper. Rewalking each reachable body per actor makes
+    // this proof quadratic even when the generated table is small.
+    const bool writersOnly = !vpi.allowsWrite();
+    DenseMap<Operation *, SmallVector<Operation *, 2>> callers;
+    DenseSet<Operation *> opaque;
+    SmallVector<Operation *> work;
+    auto markOpaque = [&](Operation *function) {
+      if (opaque.insert(function).second)
+        work.push_back(function);
+    };
     design.walk([&](sim::SimFuncOp function) {
-      function.walk([&](Operation *operation) {
-        if (isa<sim::SimRefLoadOp, sim::SimRefStoreOp, sim::SimRefAllocOp,
-                sim::SimNBAEnqueueOp, sim::SimCallOp, sim::SimTaskCallOp>(
-                operation))
+      if (function.isExternal())
+        markOpaque(function);
+      function.walk([&](Operation *op) {
+        StringRef name;
+        if (auto call = dyn_cast<sim::SimCallOp>(op))
+          name = call.getCallee();
+        else if (auto call = dyn_cast<sim::SimTaskCallOp>(op))
+          name = call.getCallee();
+        if (!name.empty()) {
+          if (auto callee = symbols.lookup<sim::SimFuncOp>(name))
+            callers[callee].push_back(function);
+          else
+            markOpaque(function);
           return;
-        if (auto effects = dyn_cast<MemoryEffectOpInterface>(operation)) {
+        }
+        if (isa<sim::SimRefLoadOp, sim::SimRefStoreOp, sim::SimRefAllocOp,
+                sim::SimNBAEnqueueOp>(op))
+          return;
+        if (auto effects = dyn_cast<MemoryEffectOpInterface>(op)) {
           SmallVector<MemoryEffects::EffectInstance> instances;
           effects.getEffects(instances);
-          if (llvm::any_of(instances, [](const auto &effect) {
-                return isa<sim::StorageResource>(effect.getResource()) &&
-                       isa<MemoryEffects::Read, MemoryEffects::Write>(
-                           effect.getEffect());
-              }))
-            opaqueStorageFunctions.insert(function);
+          for (const auto &effect : instances)
+            if (isa<sim::StorageResource>(effect.getResource()) &&
+                (isa<MemoryEffects::Write>(effect.getEffect()) ||
+                 (!writersOnly &&
+                  isa<MemoryEffects::Read>(effect.getEffect())))) {
+              markOpaque(function);
+              break;
+            }
         }
       });
     });
+    while (!work.empty()) {
+      auto found = callers.find(work.pop_back_val());
+      if (found != callers.end())
+        for (Operation *caller : found->second)
+          markOpaque(caller);
+    }
     for (const auto &[operation, slot] : actorSlots) {
       auto function = dyn_cast<sim::SimFuncOp>(operation);
       auto summary = function ? function.getEffectSummaryAttr() : ArrayAttr{};
-      bool complete = bool(summary);
-      SmallVector<sim::SimFuncOp> pending;
-      if (function)
-        pending.push_back(function);
-      llvm::SmallPtrSet<Operation *, 8> visited;
-      while (complete && !pending.empty()) {
-        auto callee = pending.pop_back_val();
-        if (!visited.insert(callee).second)
-          continue;
-        complete &=
-            !callee.isExternal() && !opaqueStorageFunctions.contains(callee);
-        callee.walk([&](Operation *operation) {
-          StringRef name;
-          if (auto call = dyn_cast<sim::SimCallOp>(operation))
-            name = call.getCallee();
-          else if (auto call = dyn_cast<sim::SimTaskCallOp>(operation))
-            name = call.getCallee();
-          else
-            return;
-          if (auto nested = symbols.lookup<sim::SimFuncOp>(name))
-            pending.push_back(nested);
-          else
-            complete = false;
-        });
-      }
+      bool complete = summary && !opaque.contains(operation);
       if (summary)
         for (auto effect : summary.getAsRange<schedule::ComputeEffectAttr>()) {
+          const bool needsTarget =
+              !writersOnly ||
+              (effect.getEffect() != schedule::ComputeEffectKind::Read &&
+               effect.getEffect() != schedule::ComputeEffectKind::Watch);
           if (effect.getResource() == schedule::ComputeResourceKind::Unknown) {
-            complete = false;
+            complete &= !needsTarget;
             continue;
           }
           if (effect.getResource() != schedule::ComputeResourceKind::Storage &&
               effect.getResource() != schedule::ComputeResourceKind::Net)
             continue;
           if (effect.getTarget() != schedule::ComputeTargetKind::Descriptor) {
-            complete = false;
+            complete &= !needsTarget;
             continue;
           }
           const auto &handles =
@@ -727,7 +801,7 @@ buildNativeStaticActorRootPlan(
               !talos_rt_stable_handle_decode(handle->second, &decoded) ||
               decoded.kind != TALOS_RT_STABLE_HANDLE_STATIC ||
               decoded.offset != 0) {
-            complete = false;
+            complete &= !needsTarget;
             continue;
           }
           uint32_t flags = 0;
@@ -1385,13 +1459,19 @@ buildNativeEvalOwnershipPlan(ModuleOp module,
              failure();
   }
 
+  DenseSet<std::pair<uint32_t, uint32_t>> projectedContinuations;
+  for (const auto &alias : periodicAliases)
+    projectedContinuations.insert(
+        {alias.getForwardingActorSlot(), alias.getForwardingContinuation()});
   for (const talos_rt_static_fanout_entry &entry : fanoutPlan.entries) {
     if (entry.reserved & TALOS_RT_FANOUT_RANKED_WAIT) {
       result.fanoutOwners.emplace_back();
       result.periodicFanoutOwners.emplace_back();
       continue;
     }
-    if (isNativePeriodicAliasEntry(periodicAliases, entry)) {
+    bool projectedCopy =
+        projectedContinuations.contains({entry.actor_slot, entry.continuation});
+    if (projectedCopy) {
       NativeEvalFanoutOwner owner{NativeEvalFanoutOwnerKind::PeriodicAlias,
                                   UINT32_MAX};
       result.fanoutOwners.push_back(owner);

@@ -195,6 +195,11 @@ struct NativeStateLayout : analysis::NativeStateLayoutAnalysis {
   }
   bool transitionHandlesExact = false;
   bool directContinuous = false;
+  bool retainContinuousHistory = true;
+  // A read subscriber can change the publication route of a store. With
+  // no language override or sampled observer, proven static-root reads retain
+  // their direct addressing proof on either route.
+  bool directSubscriberReads = false;
   // The roots some schedule.known.roots gate tests, by static handle ID,
   // mapped to their bit of the generated unknown summary, or `twoStateRoot`
   // for a root without an unknown plane. Bits follow the first test of each
@@ -728,13 +733,12 @@ bool isUnmanagedNativeProcess(sim::SimFuncOp function,
 /// The same proof with every call treated as managed. It reads only
 /// `function`, so a function-pass worker may use it.
 bool isCallFreeUnmanagedNativeProcess(sim::SimFuncOp function);
-mlir::LogicalResult
-makeProcessDescriptor(mlir::ModuleOp module, mlir::SymbolTable &embeddedSymbols,
-                      mlir::Location location, llvm::StringRef baseName,
-                      uint64_t stableID,
-                      const SimulationProcessFrameAnalysis &analysis,
-                      bool unmanagedNative = false, bool usesCoroutine = true,
-                      bool tableProcess = false, bool virtualOwner = false);
+mlir::LogicalResult makeProcessDescriptor(
+    mlir::ModuleOp module, mlir::SymbolTable &embeddedSymbols,
+    mlir::Location location, llvm::StringRef baseName, uint64_t stableID,
+    const SimulationProcessFrameAnalysis &analysis,
+    bool unmanagedNative = false, bool usesCoroutine = true,
+    bool tableProcess = false, bool bytecodeFallbackOnly = false);
 mlir::LogicalResult prepareManagedLowering(mlir::ModuleOp module,
                                            const llvm::DataLayout &dataLayout);
 mlir::LogicalResult makeSchedulerMain(mlir::ModuleOp module,

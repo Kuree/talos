@@ -1,0 +1,15 @@
+// REQUIRES: native-elf
+// RUN: %split-file %S/vpi-value-change-bytecode.sv %t
+// RUN: %target_clang -fPIC -shared -nostdlib %t/plugin.c -I%resource_dir/include -o %t/plugin.so
+// RUN: talos -O3 --vpi=read %t/design.sv %t/plugin.so -o %t/native
+// RUN: %t/native | FileCheck %s
+// RUN: talos -O3 --vpi=read --execution-tier=bytecode %t/design.sv %t/plugin.so -o %t/bc
+// RUN: %t/bc > %t/reference && %t/native | diff -u %t/reference -
+// RUN: talos -O3 --vpi=read --native-scheduler=generic %t/design.sv %t/plugin.so -o %t/fine && %t/fine | diff -u %t/reference -
+// CHECK: change t=0 value=0/0
+// CHECK-NEXT: change t=1 value=1/0
+// CHECK-NEXT: change t=1 value=2/0
+// CHECK-NEXT: change t=2 value=ff/ff
+// CHECK-NEXT: change t=2 value=0/ff
+// CHECK-NEXT: SV after foreign
+// CHECK-NEXT: changes=5

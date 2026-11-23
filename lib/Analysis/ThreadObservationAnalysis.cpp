@@ -34,6 +34,23 @@ bool observesExecutingThread(Operation *operation) {
          hasNativeRuntimeEffect(*callee, native_runtime::ObservesThread);
 }
 
+bool observesStartupWorkers(Operation *root) {
+  return root
+      ->walk([](Operation *op) {
+        if (isa<sim::SimProcessCurrentOp, sim::SimProcessControlOp,
+                sim::SimSuspendEventOp, sim::SimSuspendEventOrderOp,
+                sim::SimSuspendMailboxOp, sim::SimSuspendSemaphoreOp,
+                sim::SimVPIFrameEnterOp, sim::SimVPIFrameEnterPreparedOp,
+                sim::SimVPIFrameEnterForeignOp>(op))
+          return WalkResult::interrupt();
+        if (auto call = dyn_cast<sim::SimDPICallOp>(op);
+            call && call.getIsContext())
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      })
+      .wasInterrupted();
+}
+
 namespace {
 
 class ObservationState final : public AnalysisState {

@@ -170,6 +170,13 @@ TALOS_NATIVE_RUNTIME(StaticSpecializationGuardRoots,
                      talos_rt_v1_static_specialization_guard_roots,
                      SIG(I32, Ptr, Ptr, I64), PendingTransparent)
 
+// Cold owner guard for an active read subscriber. The compiler supplies the
+// source actors represented by the fused owner, including subsumed actors.
+TALOS_NATIVE_RUNTIME(ObservedWriterGuard, talos_rt_v1_observed_writer_guard,
+                     SIG(I32, Ptr, Ptr, I64), PendingTransparent)
+TALOS_NATIVE_RUNTIME(ObservedWriterGuardCached, talos_rt_v1_observed_writer_guard_cached,
+                     SIG(I32, Ptr, Ptr, I64, Ptr, Ptr), PendingTransparent)
+
 // An epoch-armed deferred report (12.4.2.1, 12.5.3.1, 16.4.1) only queues its
 // ticket; an eval activation keeps it for a direct generated output. The
 // report is a cold runtime exit of the activation that queues it.
@@ -1133,6 +1140,10 @@ TALOS_NATIVE_RUNTIME(SchedulerPostponedSlotAot,
 TALOS_NATIVE_RUNTIME(SchedulerPrepareEvalNba,
                      talos_rt_v1_scheduler_prepare_eval_nba, SIG(I32, Ptr, Ptr),
                      None)
+TALOS_NATIVE_RUNTIME(PublishReadClock, talos_rt_v1_publish_read_clock,
+                     SIG(I32, Ptr, I32, I32, I64, I64, I64, I32), None)
+TALOS_NATIVE_RUNTIME(PrepareReadPeriodic, talos_rt_v1_prepare_read_periodic,
+                     SIG(I32, Ptr, Ptr, I32, Ptr, I32, Ptr, I32, Ptr, Ptr, Ptr), None)
 TALOS_NATIVE_RUNTIME(SchedulerPreparePeriodicAot,
                      talos_rt_v1_scheduler_prepare_periodic_aot,
                      SIG(I32, Ptr, Ptr, I32, Ptr, I32, Ptr, I32, Ptr, Ptr),

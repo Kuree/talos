@@ -83,7 +83,8 @@ planNativeRankedGroups(ModuleOp module, const NativeEvalCoordinatorPlan &plan,
                        ArrayRef<SmallVector<NativePromotionRange>> ranges,
                        uint64_t stateBits) {
   NativeRankedGroupPlan result;
-  if (plan.clockKernels.empty() || plan.rankedNodes.empty() || plan.writableVPI)
+  if (plan.clockKernels.empty() || plan.rankedNodes.empty() ||
+      (plan.writableVPI && !plan.guardSubscriberActors))
     return result;
   llvm::StringMap<sim::SimFuncOp> functions;
   ::talos::detail::walkNativeFunctions<sim::SimFuncOp>(
@@ -193,6 +194,15 @@ planNativeRankedGroups(ModuleOp module, const NativeEvalCoordinatorPlan &plan,
   auto emit = [&]() {
     if (members.empty())
       return;
+    // A single guarded actor already has a native executor and its own
+    // publication fallback. A second group would repeat the same guard.
+    if (plan.guardSubscriberActors && members.size() == 1) {
+      if (!result.chunks.empty())
+        result.chunks.back().endsSegment = true;
+      members.clear();
+      cost = 0;
+      return;
+    }
     // A value-domain certificate covers every member it may execute. A
     // permanently unknown operand in one independent chain otherwise forces
     // unrelated, ready chains through member-by-member selection. Split at
@@ -234,7 +244,9 @@ planNativeRankedGroups(ModuleOp module, const NativeEvalCoordinatorPlan &plan,
     cost = 0;
     members.clear();
   };
+  unsigned segmentMembers = 0;
   auto finishSegment = [&]() {
+    segmentMembers = 0;
     if (!result.chunks.empty())
       result.chunks.back().endsSegment = true;
   };
@@ -273,13 +285,30 @@ planNativeRankedGroups(ModuleOp module, const NativeEvalCoordinatorPlan &plan,
     }
   };
   std::optional<ActivityKey> currentActivity;
+  // A read subscriber can fracture a subsuming owner. Keep those owners
+  // and their children on the coordinator's existing ingress protocol.
+  llvm::BitVector individuallyGuarded;
+  if (plan.guardSubscriberActors) {
+    individuallyGuarded.resize(plan.fragments.size());
+    for (auto [index, mask] : llvm::enumerate(plan.ownerSubsumptionMasks)) {
+      if (mask.isZero())
+        continue;
+      individuallyGuarded.set(plan.fragments[index].bit);
+      for (unsigned word = 0; word != mask.getNumWords(); ++word)
+        for (uint64_t bits = mask.getRawData()[word]; bits; bits &= bits - 1)
+          individuallyGuarded.set(word * 64 + llvm::countr_zero(bits));
+    }
+  }
   for (const auto &node : ordered) {
     if (currentIsland && node.island != *currentIsland) {
       emit();
       finishSegment();
     }
     currentIsland = node.island;
-    if (node.boundary) {
+    if (node.boundary ||
+        (plan.guardSubscriberActors &&
+         (plan.fragments[node.owner].bit >= plan.firstDeferredBit ||
+          individuallyGuarded.test(plan.fragments[node.owner].bit)))) {
       emit();
       finishSegment();
       currentActivity.reset();
@@ -319,6 +348,12 @@ planNativeRankedGroups(ModuleOp module, const NativeEvalCoordinatorPlan &plan,
       emit();
     members.push_back(node);
     cost += weight;
+    if (plan.guardSubscriberActors && ++segmentMembers == 32) {
+      // A single watched member can select publishing frames for this
+      // segment. Cap that cost independently of the inlining budget.
+      emit();
+      finishSegment();
+    }
     // A large certified body is a direct call in its own bounded helper.
     // The inliner still enforces its budget; code size does not introduce a
     // scheduling boundary or break the surrounding predicated segment.
@@ -350,7 +385,8 @@ materializeNativeRankedGroups(ModuleOp module,
                               const NativeEvalCoordinatorPlan &plan,
                               const NativeRankedGroupPlan &groups) {
   SmallVector<std::string> executors(plan.fragments.size());
-  if (plan.clockKernels.empty() || plan.rankedNodes.empty() || plan.writableVPI)
+  if (plan.clockKernels.empty() || plan.rankedNodes.empty() ||
+      (plan.writableVPI && !plan.guardSubscriberActors))
     return executors;
   const SymbolTable promotionSymbols(module);
   llvm::StringMap<sim::SimFuncOp> functions;

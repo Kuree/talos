@@ -1193,7 +1193,8 @@ static void buildTalosToSimulationPipelineImpl(
         std::move(primitiveGraphOptions)));
   }
   if (optLevel > 0) {
-    if (vpiMode == "off" && clockedKernels != "off") {
+    if ((vpiMode == "off" || (closedModel && vpiMode == "read")) &&
+        clockedKernels != "off") {
       // IEEE 1800-2023 4.3/4.5/4.7: run each clock edge's processes as one
       // activation and store NBAs that nothing can observe early directly.
       TalosSimFuseClockedKernelsPassOptions kernelOptions;

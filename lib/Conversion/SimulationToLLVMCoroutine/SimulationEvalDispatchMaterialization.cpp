@@ -331,41 +331,122 @@ materializeNativeEvalDispatch(ModuleOp module,
   // part of this lookup snapshot, and no executor is added, renamed or erased.
   SymbolTable executorSymbols(module);
   builder.setInsertionPointToEnd(module.getBody());
+  struct GuardTable {
+    StringAttr name;
+    size_t first = 0;
+    size_t cacheIndex = 0;
+  };
+  SmallVector<GuardTable> guardTables;
+  llvm::StringMap<std::pair<GuardTable, size_t>> rankedGuards;
+  constexpr StringLiteral writerEpochName = "__talos_read_guard_epoch";
+  constexpr StringLiteral writerCacheName = "__talos_read_guard_cache";
+  if (plan.cacheReadOwnerGuard)
+    LLVM::GlobalOp::create(builder, location, i64, false,
+                           LLVM::Linkage::Internal, writerEpochName,
+                           builder.getI64IntegerAttr(1), 8);
   if (plan.writableVPI) {
     // IEEE 1800-2023 38.34 and 10.6: a deposit/force invalidates only the
     // affected source dependencies. Keep scheduling and knownness separate;
     // a known forced value still requires override-aware fine execution.
     // One shared cold roots query: native partitions cannot inline
     // thousands of per-owner helpers.
+    SmallVector<Type> guardTypes{pointer, pointer, i64};
+    if (plan.cacheReadOwnerGuard)
+      guardTypes.push_back(pointer);
     auto guard = LLVM::LLVMFuncOp::create(
         builder, location, evalWriteRootsGuardName,
-        LLVM::LLVMFunctionType::get(builder.getI1Type(),
-                                    {pointer, pointer, i64}, false));
+        LLVM::LLVMFunctionType::get(builder.getI1Type(), guardTypes, false));
     schedule::addEvalRoles(guard, schedule::EvalRole::WriteGuard);
     schedule::set<schedule::Field::EvalWritableVpi>(module,
                                                     builder.getUnitAttr());
     Block *entry = guard.addEntryBlock(builder);
     builder.setInsertionPointToStart(entry);
-    Value checked =
-        LLVM::CallOp::create(builder, location, TypeRange{i32},
-                             writeRootsGuardName, entry->getArguments())
-            .getResult();
-    Value allowed = arith::CmpIOp::create(
-        builder, location, arith::CmpIPredicate::ne, checked,
-        llvmConstant(builder, location, i32, 0));
+    SmallVector<Value> guardArgs(entry->getArguments());
+    StringRef runtimeGuard = writeRootsGuardName;
+    if (plan.cacheReadOwnerGuard) {
+      guardArgs.push_back(LLVM::AddressOfOp::create(builder, location, pointer,
+                                                    writerEpochName));
+      runtimeGuard =
+          getNativeRuntimeSymbol(NativeRuntimeEntry::ObservedWriterGuardCached);
+    } else if (plan.guardSubscriberActors) {
+      runtimeGuard =
+          getNativeRuntimeSymbol(NativeRuntimeEntry::ObservedWriterGuard);
+    }
+    Value checked = LLVM::CallOp::create(builder, location, TypeRange{i32},
+                                         runtimeGuard, guardArgs)
+                        .getResult();
+    Value allowed =
+        arith::CmpIOp::create(builder, location, arith::CmpIPredicate::ne,
+                              checked, llvmConstant(builder, location, i32, 0));
     LLVM::ReturnOp::create(builder, location, allowed);
     builder.setInsertionPointAfter(guard);
-    for (auto [owner, states] : llvm::enumerate(plan.ownerStaticStates)) {
-      if (states.empty())
-        continue;
-      std::string rootsName =
-          "__talos_eval_write_guard_states_" + std::to_string(owner) + "_v1";
+    auto emitTable = [&](ArrayRef<uint32_t> states, StringRef name) {
       auto array = LLVM::LLVMArrayType::get(i32, states.size());
       auto values = DenseElementsAttr::get(
           RankedTensorType::get({static_cast<int64_t>(states.size())}, i32),
-          ArrayRef<uint32_t>(states));
-      makeConstantGlobal(module, location, array, rootsName,
-                         LLVM::Linkage::Internal, 4, values);
+          states);
+      makeConstantGlobal(module, location, array, name, LLVM::Linkage::Internal,
+                         4, values);
+      return builder.getStringAttr(name);
+    };
+    // Read guards are immutable slices of actor IDs. Keeping all slices in
+    // one constant avoids an ELF symbol and LLVM global per source writer.
+    SmallVector<uint32_t> readActors;
+    size_t cachedSets = 0;
+    auto bankName = builder.getStringAttr("__talos_eval_read_actor_guards_v1");
+    auto makeGuardTable = [&](ArrayRef<uint32_t> states,
+                              const Twine &name) -> GuardTable {
+      if (!plan.guardSubscriberActors)
+        return {emitTable(states, name.str()), 0};
+      size_t first = readActors.size();
+      llvm::append_range(readActors, states);
+      return {bankName, first, cachedSets++};
+    };
+    guardTables.resize(plan.ownerGuardInputs.size());
+    llvm::DenseMap<ArrayRef<uint32_t>, GuardTable> uniqueTables;
+    for (auto [owner, states] : llvm::enumerate(plan.ownerGuardInputs)) {
+      if (states.empty())
+        continue;
+      auto [entry, inserted] = uniqueTables.try_emplace(states);
+      if (inserted)
+        entry->second =
+            makeGuardTable(states, "__talos_eval_write_guard_states_" +
+                                       std::to_string(owner) + "_v1");
+      guardTables[owner] = entry->second;
+    }
+    if (plan.guardSubscriberActors && sweep) {
+      llvm::MapVector<StringAttr, SmallVector<uint32_t>> members;
+      for (auto [owner, name] : llvm::enumerate(plan.rankedGroupExecutors))
+        if (!name.empty())
+          llvm::append_range(members[builder.getStringAttr(name)],
+                             plan.ownerGuardInputs[owner]);
+      for (auto &[name, states] : members) {
+        llvm::sort(states);
+        states.erase(std::unique(states.begin(), states.end()), states.end());
+        auto &guard = rankedGuards[name.getValue()];
+        if (!states.empty()) {
+          auto same = uniqueTables.find(states);
+          guard = {
+              same != uniqueTables.end()
+                  ? same->second
+                  : makeGuardTable(states,
+                                   (name.getValue() + ".watched_actors").str()),
+              states.size()};
+        }
+      }
+    }
+    if (!readActors.empty())
+      emitTable(readActors, bankName.getValue());
+    if (plan.cacheReadOwnerGuard && cachedSets) {
+      auto type = LLVM::LLVMArrayType::get(i64, cachedSets);
+      auto global = LLVM::GlobalOp::create(builder, location, type, false,
+                                           LLVM::Linkage::Internal,
+                                           writerCacheName, Attribute{}, 8);
+      auto *init = new Block;
+      global.getInitializerRegion().push_back(init);
+      OpBuilder values = OpBuilder::atBlockBegin(init);
+      LLVM::ReturnOp::create(values, location,
+                             LLVM::ZeroOp::create(values, location, type));
     }
   }
   SmallVector<Type> coordinatorArguments{pointer, pointer};
@@ -499,9 +580,10 @@ materializeNativeEvalDispatch(ModuleOp module,
   auto combinedIngress = [&] {
     return maskedReadyWords(builder, location, ingressSet, allOwners);
   };
-  auto ownerWritableClean = [&](unsigned owner, Value context) -> Value {
+  auto guardClean = [&](GuardTable table, size_t count,
+                        Value context) -> Value {
     Value clean = llvmConstant(builder, location, builder.getI1Type(), 1);
-    if (plan.writableVPI && !plan.ownerStaticStates[owner].empty()) {
+    if (table.name) {
       // Recheck at every owner: an intervening runtime/foreign callback can
       // deposit or force a value and invalidate the fast flag mid-dispatch.
       Region *body = builder.getInsertionBlock()->getParent();
@@ -517,26 +599,55 @@ materializeNativeEvalDispatch(ModuleOp module,
       Value isClean =
           arith::CmpIOp::create(builder, location, arith::CmpIPredicate::ne,
                                 fast, llvmConstant(builder, location, i32, 0));
+      Value cacheEntry;
+      if (plan.cacheReadOwnerGuard) {
+        // A stamp certifies this exact sorted actor set. Writers registered
+        // between activations revoke the epoch before more work executes.
+        Block *checkStamp = new Block;
+        body->push_back(checkStamp);
+        cf::CondBranchOp::create(builder, location, isClean, join,
+                                 ValueRange{clean}, checkStamp, ValueRange{});
+        builder.setInsertionPointToStart(checkStamp);
+        Value bank = LLVM::AddressOfOp::create(builder, location, pointer,
+                                               writerCacheName);
+        cacheEntry = byteGEP(builder, location, bank,
+                             table.cacheIndex * sizeof(uint64_t));
+        Value cached =
+            LLVM::LoadOp::create(builder, location, i64, cacheEntry, 8);
+        Value epoch = LLVM::LoadOp::create(
+            builder, location, i64,
+            LLVM::AddressOfOp::create(builder, location, pointer,
+                                      writerEpochName),
+            8);
+        Value hit = arith::CmpIOp::create(
+            builder, location, arith::CmpIPredicate::eq, cached, epoch);
+        isClean = hit;
+      }
       cf::CondBranchOp::create(builder, location, isClean, join,
                                ValueRange{clean}, check, ValueRange{});
       builder.setInsertionPointToStart(check);
-      std::string rootsName =
-          "__talos_eval_write_guard_states_" + std::to_string(owner) + "_v1";
-      Value allowed =
-          LLVM::CallOp::create(
-              builder, location, TypeRange{builder.getI1Type()},
-              evalWriteRootsGuardName,
-              ValueRange{context,
-                         LLVM::AddressOfOp::create(builder, location, pointer,
-                                                   rootsName),
-                         llvmConstant(builder, location, i64,
-                                      plan.ownerStaticStates[owner].size())})
-              .getResult();
+      Value address = LLVM::AddressOfOp::create(builder, location, pointer,
+                                                table.name.getValue());
+      if (table.first)
+        address = byteGEP(builder, location, address,
+                          uint64_t{table.first} * sizeof(uint32_t));
+      SmallVector<Value> guardArgs{context, address,
+                                   llvmConstant(builder, location, i64, count)};
+      if (cacheEntry)
+        guardArgs.push_back(cacheEntry);
+      Value allowed = LLVM::CallOp::create(builder, location,
+                                           TypeRange{builder.getI1Type()},
+                                           evalWriteRootsGuardName, guardArgs)
+                          .getResult();
       cf::BranchOp::create(builder, location, join, ValueRange{allowed});
       builder.setInsertionPointToStart(join);
       clean = join->getArgument(0);
     }
     return clean;
+  };
+  auto ownerWritableClean = [&](unsigned owner, Value context) -> Value {
+    return guardClean(guardTables[owner], plan.ownerGuardInputs[owner].size(),
+                      context);
   };
   auto clearIngressMask = [&](const APInt &mask, Value condition = Value{}) {
     updateReadyMask(builder, location, schedule::ReadySet::Ingress, readyLayout,
@@ -991,9 +1102,10 @@ materializeNativeEvalDispatch(ModuleOp module,
   constexpr unsigned segmentShift = 9;
   unsigned directOwners = 0;
   for (auto [recordIndex, record] : llvm::enumerate(mergedFragments))
-    directOwners += !swept(record.bit) && !executors[recordIndex].empty() &&
-                    allowedOwnerMask[record.bit] &&
-                    rankedExecutor(recordIndex).empty();
+    directOwners +=
+        !swept(record.bit) && !executors[recordIndex].empty() &&
+        allowedOwnerMask[record.bit] &&
+        (plan.guardSubscriberActors || rankedExecutor(recordIndex).empty());
   const bool segmented = directOwners > (1u << segmentShift);
   struct Segment {
     LLVM::LLVMFuncOp function;
@@ -1001,9 +1113,10 @@ materializeNativeEvalDispatch(ModuleOp module,
     SmallVector<APInt> cases;
     SmallVector<Block *> destinations;
   };
-  std::map<uint64_t, Segment> segments;
-  auto segmentFor = [&](uint64_t index) -> Segment & {
-    auto [found, inserted] = segments.try_emplace(index);
+  std::map<uint64_t, Segment> segments, readMemberSegments;
+  auto segmentFor = [&](uint64_t index, bool readMember = false) -> Segment & {
+    auto &table = readMember ? readMemberSegments : segments;
+    auto [found, inserted] = table.try_emplace(index);
     Segment &segment = found->second;
     if (!inserted)
       return segment;
@@ -1011,9 +1124,14 @@ materializeNativeEvalDispatch(ModuleOp module,
     builder.setInsertionPointToEnd(module.getBody());
     segment.function = LLVM::LLVMFuncOp::create(
         builder, location,
-        (Twine(functionName) + ".segment_" + Twine(index)).str(),
+        (Twine(functionName) + (readMember ? ".read_member_" : ".segment_") +
+         Twine(index))
+            .str(),
         LLVM::LLVMFunctionType::get(i32, {pointer, i64, pointer}, false));
     schedule::addEvalRoles(segment.function, schedule::EvalRole::Dispatch);
+    if (readMember)
+      segment.function->setAttr("passthrough",
+                                builder.getStrArrayAttr({"cold", "noinline"}));
     Block *entry = segment.function.addEntryBlock(builder);
     Block *resume = new Block, *segmentFailed = new Block,
           *segmentStopped = new Block;
@@ -1040,15 +1158,10 @@ materializeNativeEvalDispatch(ModuleOp module,
   auto emitOwnerExecution = [&](unsigned recordIndex,
                                 const talos_rt_native_merged_fragment &record,
                                 const OwnerTargets &targets) {
-    if (readyLayout.hasSummaries()) {
-      APInt superseding;
-      if (!supersedingRecords[record.bit].empty()) {
-        superseding = APInt(ownerCount, 0);
-        for (unsigned parent : supersedingRecords[record.bit])
-          superseding.setBit(mergedFragments[parent].bit);
-      }
+    if (readyLayout.hasSummaries() && !supersedingRecords[record.bit].empty()) {
+      Value parents;
       if (plan.writableVPI) {
-        Value parents = llvmConstant(builder, location, i64, 0);
+        parents = llvmConstant(builder, location, i64, 0);
         for (unsigned parent : supersedingRecords[record.bit]) {
           Value pending = maskedReadyWords(
               builder, location, ingressSet,
@@ -1058,43 +1171,25 @@ materializeNativeEvalDispatch(ModuleOp module,
               pending, llvmConstant(builder, location, i64, 0));
           parents = arith::OrIOp::create(builder, location, parents, pending);
         }
-        // The ordinary normalization below must not drop exact work when its
-        // containing Tier-1 owner has lost only its scheduling/override proof.
-        superseding.clearAllBits();
-        Value covered = arith::CmpIOp::create(
-            builder, location, arith::CmpIPredicate::ne, parents,
-            llvmConstant(builder, location, i64, 0));
-        Block *skip = new Block, *uncovered = new Block;
-        targets.body->push_back(skip);
-        targets.body->push_back(uncovered);
-        cf::CondBranchOp::create(builder, location, covered, skip, ValueRange{},
-                                 uncovered, ValueRange{});
-        builder.setInsertionPointToStart(skip);
-        clearIngressMask(APInt::getOneBitSet(ownerCount, record.bit));
-        cf::BranchOp::create(builder, location, targets.dispatch);
-        builder.setInsertionPointToStart(uncovered);
+      } else {
+        APInt superseding(ownerCount, 0);
+        for (unsigned parent : supersedingRecords[record.bit])
+          superseding.setBit(mergedFragments[parent].bit);
+        parents = maskedReadyWords(builder, location, ingressSet, superseding);
       }
-      if (!superseding.isZero()) {
-        // Normalize only the selected exact owner. Eagerly walking every
-        // subsumption relation at every dispatch is quadratic in a large
-        // clock group. Do not jump straight to its parent: unrelated lower
-        // ready owners must retain their deterministic priority.
-        Value parents =
-            maskedReadyWords(builder, location, ingressSet, superseding);
-        Value covered = arith::CmpIOp::create(
-            builder, location, arith::CmpIPredicate::ne, parents,
-            llvmConstant(builder, location, i64, 0));
-        Block *skip = new Block;
-        Block *uncovered = new Block;
-        targets.body->push_back(skip);
-        targets.body->push_back(uncovered);
-        cf::CondBranchOp::create(builder, location, covered, skip, ValueRange{},
-                                 uncovered, ValueRange{});
-        builder.setInsertionPointToStart(skip);
-        clearIngressMask(APInt::getOneBitSet(ownerCount, record.bit));
-        cf::BranchOp::create(builder, location, targets.dispatch);
-        builder.setInsertionPointToStart(uncovered);
-      }
+      // Suppress the child only when a currently ready parent can actually
+      // execute it. The scheduler retains unrelated lower-priority work.
+      Value covered = arith::CmpIOp::create(
+          builder, location, arith::CmpIPredicate::ne, parents,
+          llvmConstant(builder, location, i64, 0));
+      Block *skip = new Block, *uncovered = new Block;
+      targets.body->push_back(skip);
+      targets.body->push_back(uncovered);
+      cf::CondBranchOp::create(builder, location, covered, skip, uncovered);
+      builder.setInsertionPointToStart(skip);
+      clearIngressMask(APInt::getOneBitSet(ownerCount, record.bit));
+      cf::BranchOp::create(builder, location, targets.dispatch);
+      builder.setInsertionPointToStart(uncovered);
     }
     if (plan.writableVPI) {
       Block *clean = new Block, *fine = new Block;
@@ -1339,7 +1434,7 @@ materializeNativeEvalDispatch(ModuleOp module,
     if (!allowedOwnerMask[record.bit])
       continue;
     StringRef ranked = rankedExecutor(recordIndex);
-    if (!ranked.empty()) {
+    if (!ranked.empty() && !plan.guardSubscriberActors) {
       auto [entry, inserted] = rankedEntries.try_emplace(ranked, nullptr);
       if (inserted) {
         Block *execute = new Block, *poll = new Block;
@@ -1372,6 +1467,25 @@ materializeNativeEvalDispatch(ModuleOp module,
     builder.setInsertionPointToStart(execute);
     emitOwnerExecution(recordIndex, record, targets);
   }
+  auto finishSegment = [&](Segment &segment) {
+    // A segment runs one owner and returns: the coordinator selects the
+    // next one (Active owners of a multi-word set are swept by word).
+    builder.setInsertionPointToStart(segment.targets.dispatch);
+    LLVM::ReturnOp::create(builder, location,
+                           llvmConstant(builder, location, i32, TALOS_RT_OK));
+    builder.setInsertionPointToEnd(&segment.function.getBody().front());
+    LLVM::SwitchOp::create(
+        builder, location, segment.function.getArgument(1),
+        segment.targets.stopped, ValueRange{}, segment.cases,
+        segment.destinations,
+        SmallVector<ValueRange>(segment.cases.size(), ValueRange{}),
+        ArrayRef<int32_t>{});
+    // Infallible owners never branch to the failure exit. Do not leave an
+    // unreachable block for later lowering to skip.
+    for (Block *exit : {segment.targets.dispatch, segment.targets.failed})
+      if (exit->hasNoPredecessors())
+        exit->erase();
+  };
   Block *otherOwner = stopped;
   if (segmented) {
     // A segmented owner bit selects its segment; the segment's own switch
@@ -1381,23 +1495,7 @@ materializeNativeEvalDispatch(ModuleOp module,
     SmallVector<APInt> segmentCases;
     SmallVector<Block *> segmentCalls;
     for (auto &[index, segment] : segments) {
-      // A segment runs one owner and returns: the coordinator selects the
-      // next one (Active owners of a multi-word set are swept by word).
-      builder.setInsertionPointToStart(segment.targets.dispatch);
-      LLVM::ReturnOp::create(builder, location,
-                             llvmConstant(builder, location, i32, TALOS_RT_OK));
-      builder.setInsertionPointToEnd(&segment.function.getBody().front());
-      LLVM::SwitchOp::create(
-          builder, location, segment.function.getArgument(1),
-          segment.targets.stopped, ValueRange{}, segment.cases,
-          segment.destinations,
-          SmallVector<ValueRange>(segment.cases.size(), ValueRange{}),
-          ArrayRef<int32_t>{});
-      // Infallible owners never branch to the failure exit. Do not leave an
-      // unreachable block for later lowering to skip.
-      for (Block *exit : {segment.targets.dispatch, segment.targets.failed})
-        if (exit->hasNoPredecessors())
-          exit->erase();
+      finishSegment(segment);
       Block *call = new Block;
       fastCoordinator.getBody().push_back(call);
       builder.setInsertionPointToStart(call);
@@ -1454,6 +1552,7 @@ materializeNativeEvalDispatch(ModuleOp module,
       };
       SmallVector<Item> items;
       llvm::StringMap<size_t> rankedItems;
+      bool consecutiveReadRanks = false;
       for (uint64_t owner = word * 64,
                     end = std::min<uint64_t>(activeBits, word * 64 + 64);
            owner != end; ++owner) {
@@ -1467,8 +1566,17 @@ materializeNativeEvalDispatch(ModuleOp module,
           continue;
         }
         StringRef ranked = rankedExecutor(found->second);
-        if (ranked.empty()) {
-          items.push_back({StringRef{}, mask, found->second});
+        // A call-free ranked executor already examines every member's ready
+        // bit. Adjacent entries for that executor share a single invocation.
+        // Keep their individual ranks available for an observed writer.
+        if (plan.cacheReadOwnerGuard && !ranked.empty() && !items.empty() &&
+            items.back().ranked == ranked) {
+          items.back().mask |= mask;
+          consecutiveReadRanks = true;
+          continue;
+        }
+        if (ranked.empty() || plan.guardSubscriberActors) {
+          items.push_back({ranked, mask, found->second});
           continue;
         }
         auto [item, inserted] = rankedItems.try_emplace(ranked, items.size());
@@ -1502,77 +1610,270 @@ materializeNativeEvalDispatch(ModuleOp module,
           llvmConstant(builder, location, i32, TALOS_RT_TIER_UNAVAILABLE));
       Value wordContext = entry->getArgument(0);
       Block *current = entry;
-      for (auto [index, item] : llvm::enumerate(items)) {
-        builder.setInsertionPointToEnd(current);
-        Block *execute = new Block, *next = new Block;
-        function.getBody().push_back(execute);
-        function.getBody().push_back(next);
-        Value ready = loadReadyWord(builder, location, ingressSet, word);
-        Value pending = arith::AndIOp::create(
-            builder, location, ready,
-            llvmConstant(builder, location, i64, item.mask));
-        cf::CondBranchOp::create(
+      // Read plans retain an individual fallback for each actor. Dispatch a
+      // sparse word by set bit and share the post-execution check. Reload the
+      // word after each activation: later ranks woken by it run in this pass,
+      // and earlier ranks (including its own) wait for the next sweep (4.5).
+      // A word full of individually dispatched owners can see many active
+      // bits on one edge. Skip empty eight-owner groups, then test each
+      // occupied group in source rank order without an indirect branch per
+      // owner. Every test reloads live ingress after its predecessor runs.
+      constexpr unsigned groupSize = 8;
+      bool grouped = plan.guardSubscriberActors &&
+                     llvm::count_if(items, [](const Item &item) {
+                       return item.record && item.ranked.empty();
+                     }) >= 4 * groupSize;
+      bool sparse = plan.guardSubscriberActors && items.size() >= 16 &&
+                    !grouped && !consecutiveReadRanks;
+      Block *groupEnd = nullptr;
+      Block *finished = nullptr, *advance = nullptr, *postExecution = nullptr;
+      SmallVector<Block *> sparseExecutors;
+      if (sparse) {
+        auto makeBlock = [&] {
+          auto *block = new Block;
+          function.getBody().push_back(block);
+          return block;
+        };
+        Block *select = makeBlock();
+        finished = makeBlock();
+        advance = makeBlock();
+        postExecution = (prioritySignalHandoff || plan.hasOrderedNBA)
+                            ? makeBlock()
+                            : advance;
+        select->addArgument(i64, location);
+        builder.setInsertionPointToEnd(entry);
+        cf::BranchOp::create(
+            builder, location, select,
+            ValueRange{llvmConstant(builder, location, i64, UINT64_MAX)});
+        builder.setInsertionPointToStart(select);
+        Value available = arith::AndIOp::create(
+            builder, location, select->getArgument(0),
+            loadReadyWord(builder, location, ingressSet, word));
+        Value first = LLVM::CountTrailingZerosOp::create(builder, location, i64,
+                                                         available, false);
+        // cttz(0) == 64 takes the default exit. Only set-bit cases reach
+        // advance, so its shift count is always in [0, 63].
+        SmallVector<APInt> bits;
+        SmallVector<Block *> actions;
+        for (const auto &item : items) {
+          Block *action = makeBlock();
+          sparseExecutors.push_back(action);
+          for (uint64_t mask = item.mask; mask; mask &= mask - 1) {
+            bits.emplace_back(64, llvm::countr_zero(mask));
+            actions.push_back(action);
+          }
+        }
+        LLVM::SwitchOp::create(
+            builder, location, first, finished, ValueRange{}, bits, actions,
+            SmallVector<ValueRange>(bits.size(), ValueRange{}));
+        builder.setInsertionPointToStart(advance);
+        Value remaining = arith::ShLIOp::create(
             builder, location,
-            arith::CmpIOp::create(builder, location, arith::CmpIPredicate::ne,
-                                  pending,
-                                  llvmConstant(builder, location, i64, 0)),
-            execute, ValueRange{}, next, ValueRange{});
-        // After an owner runs, keep the coordinator's per-selection checks
-        // before the next one: a priority signal hands off (as at dispatch)
-        // and an ordered NBA queue failure ends the call. The coordinator
-        // checks again after the last owner.
-        Block *continuation = next;
-        if (index + 1 != items.size() &&
-            (!item.ranked.empty() || item.record) &&
-            (prioritySignalHandoff || plan.hasOrderedNBA)) {
-          continuation = new Block;
-          function.getBody().push_back(continuation);
-          builder.setInsertionPointToStart(continuation);
-          // The coordinator's order: a queue failure before a handoff.
-          if (plan.hasOrderedNBA) {
-            Value status = LLVM::LoadOp::create(
-                builder, location, i32, evalNBAQueueField(builder, location, 3),
-                4);
-            Block *proceed = next;
-            if (prioritySignalHandoff) {
-              proceed = new Block;
-              function.getBody().push_back(proceed);
-            }
-            cf::CondBranchOp::create(
-                builder, location,
-                arith::CmpIOp::create(
-                    builder, location, arith::CmpIPredicate::eq, status,
-                    llvmConstant(builder, location, i32, TALOS_RT_OK)),
-                proceed, ValueRange{}, wordFailed, ValueRange{status});
-            if (prioritySignalHandoff)
-              builder.setInsertionPointToStart(proceed);
-          }
+            llvmConstant(builder, location, i64, UINT64_MAX - 1), first);
+        cf::BranchOp::create(builder, location, select, ValueRange{remaining});
+      }
+      auto emitInterOwnerCheck = [&](Block *check, Block *next) {
+        builder.setInsertionPointToStart(check);
+        // The coordinator's order: a queue failure before a handoff.
+        if (plan.hasOrderedNBA) {
+          Value status =
+              LLVM::LoadOp::create(builder, location, i32,
+                                   evalNBAQueueField(builder, location, 3), 4);
+          Block *proceed = next;
           if (prioritySignalHandoff) {
-            Value signal =
-                LLVM::CallOp::create(
-                    builder, location, TypeRange{i32},
-                    SymbolRefAttr::get(context,
-                                       getNativeRuntimeSymbol(
-                                           NativeRuntimeEntry::
-                                               SchedulerPrioritySignalPending)),
-                    ValueRange{wordContext})
-                    .getResult();
-            cf::CondBranchOp::create(
-                builder, location,
-                arith::CmpIOp::create(builder, location,
-                                      arith::CmpIPredicate::ne, signal,
-                                      llvmConstant(builder, location, i32, 0)),
-                wordFailed,
-                ValueRange{llvmConstant(builder, location, i32,
-                                        TALOS_RT_AOT_CHECKPOINT)},
-                next, ValueRange{});
+            proceed = new Block;
+            function.getBody().push_back(proceed);
           }
+          cf::CondBranchOp::create(
+              builder, location,
+              arith::CmpIOp::create(
+                  builder, location, arith::CmpIPredicate::eq, status,
+                  llvmConstant(builder, location, i32, TALOS_RT_OK)),
+              proceed, ValueRange{}, wordFailed, ValueRange{status});
+          if (prioritySignalHandoff)
+            builder.setInsertionPointToStart(proceed);
+        }
+        if (prioritySignalHandoff) {
+          Value signal =
+              LLVM::CallOp::create(
+                  builder, location, TypeRange{i32},
+                  SymbolRefAttr::get(
+                      context,
+                      getNativeRuntimeSymbol(
+                          NativeRuntimeEntry::SchedulerPrioritySignalPending)),
+                  ValueRange{wordContext})
+                  .getResult();
+          Value pendingSignal = arith::CmpIOp::create(
+              builder, location, arith::CmpIPredicate::ne, signal,
+              llvmConstant(builder, location, i32, 0));
+          cf::CondBranchOp::create(
+              builder, location, pendingSignal, wordFailed,
+              ValueRange{llvmConstant(builder, location, i32,
+                                      TALOS_RT_AOT_CHECKPOINT)},
+              next, ValueRange{});
+        }
+      };
+      for (auto [index, item] : llvm::enumerate(items)) {
+        Block *execute, *next;
+        if (sparse) {
+          execute = sparseExecutors[index];
+          next = advance;
+        } else {
+          builder.setInsertionPointToEnd(current);
+          if (grouped && index % groupSize == 0) {
+            auto group = ArrayRef(items).slice(
+                index, std::min<size_t>(groupSize, items.size() - index));
+            uint64_t mask = 0;
+            for (const Item &member : group)
+              mask |= member.mask;
+            auto *test = new Block;
+            groupEnd = new Block;
+            function.getBody().push_back(test);
+            function.getBody().push_back(groupEnd);
+            Value readyWord =
+                loadReadyWord(builder, location, ingressSet, word);
+            Value candidates = arith::AndIOp::create(
+                builder, location, readyWord,
+                llvmConstant(builder, location, i64, mask));
+            Value nonempty = arith::CmpIOp::create(
+                builder, location, arith::CmpIPredicate::ne, candidates,
+                llvmConstant(builder, location, i64, 0));
+            cf::CondBranchOp::create(builder, location, nonempty, test,
+                                     groupEnd);
+            builder.setInsertionPointToEnd(test);
+          }
+          execute = new Block;
+          bool lastInGroup = grouped && ((index + 1) % groupSize == 0 ||
+                                         index + 1 == items.size());
+          next = lastInGroup ? groupEnd : new Block;
+          function.getBody().push_back(execute);
+          if (!lastInGroup)
+            function.getBody().push_back(next);
+          Value ready = loadReadyWord(builder, location, ingressSet, word);
+          Value pending = arith::AndIOp::create(
+              builder, location, ready,
+              llvmConstant(builder, location, i64, item.mask));
+          cf::CondBranchOp::create(
+              builder, location,
+              arith::CmpIOp::create(builder, location, arith::CmpIPredicate::ne,
+                                    pending,
+                                    llvmConstant(builder, location, i64, 0)),
+              execute, ValueRange{}, next, ValueRange{});
+        }
+        // A priority signal or a queue failure returns to the coordinator
+        // before executing another owner. It performs the last check itself.
+        Block *continuation =
+            sparse ? (index + 1 == items.size() ? finished : postExecution)
+                   : next;
+        if ((sparse ? index == 0
+                    : (index + 1 != items.size() &&
+                       (!item.ranked.empty() || item.record))) &&
+            (prioritySignalHandoff || plan.hasOrderedNBA)) {
+          if (!sparse) {
+            continuation = new Block;
+            function.getBody().push_back(continuation);
+          }
+          emitInterOwnerCheck(continuation, next);
         }
         builder.setInsertionPointToStart(execute);
         const OwnerTargets targets{
             &function.getBody(), wordContext, entry->getArgument(1),
             continuation,        wordFailed,  wordStopped};
-        if (!item.ranked.empty()) {
+        if (!item.ranked.empty() && plan.guardSubscriberActors) {
+          // A pure group contains no foreign calls and polls its original ready
+          // bits. If any member must publish, process this one ready owner
+          // through its individual guard; the other pending bits retain their
+          // rank.
+          auto guard = rankedGuards.find(item.ranked);
+          assert(guard != rankedGuards.end());
+          Block *fast = new Block, *individual = new Block;
+          function.getBody().push_back(fast);
+          function.getBody().push_back(individual);
+          cf::CondBranchOp::create(builder, location,
+                                   guardClean(guard->second.first,
+                                              guard->second.second,
+                                              wordContext),
+                                   fast, individual);
+          builder.setInsertionPointToStart(fast);
+          LLVM::CallOp::create(builder, location, TypeRange{},
+                               SymbolRefAttr::get(context, item.ranked),
+                               ValueRange{wordContext});
+          cf::BranchOp::create(builder, location, continuation);
+          builder.setInsertionPointToStart(individual);
+          // LRM 4.5, 4.10, 38.36.1. A callback can change the watched
+          // set, wake later ranks, or finish. On the observed path retest
+          // ingress and the individual writer at each original rank.
+          uint64_t pendingRanks = item.mask;
+          bool multiple = !llvm::has_single_bit(pendingRanks);
+          while (pendingRanks) {
+            unsigned bit = llvm::countr_zero(pendingRanks);
+            pendingRanks &= pendingRanks - 1;
+            unsigned record = bitRecords.lookup(word * 64 + bit);
+            Block *resume = continuation;
+            if (pendingRanks) {
+              resume = new Block;
+              function.getBody().push_back(resume);
+            }
+            Block *after = resume;
+            if (multiple) {
+              auto *runMember = new Block;
+              function.getBody().push_back(runMember);
+              Value readyWord =
+                  loadReadyWord(builder, location, ingressSet, word);
+              Value ready = arith::AndIOp::create(
+                  builder, location, readyWord,
+                  llvmConstant(builder, location, i64, uint64_t{1} << bit));
+              Value active = arith::CmpIOp::create(
+                  builder, location, arith::CmpIPredicate::ne, ready,
+                  llvmConstant(builder, location, i64, 0));
+              cf::CondBranchOp::create(builder, location, active, runMember,
+                                       resume);
+              if (pendingRanks &&
+                  (prioritySignalHandoff || plan.hasOrderedNBA)) {
+                after = new Block;
+                function.getBody().push_back(after);
+                emitInterOwnerCheck(after, resume);
+              }
+              builder.setInsertionPointToStart(runMember);
+            }
+            OwnerTargets memberTargets = targets;
+            memberTargets.dispatch = after;
+            if (plan.cacheReadOwnerGuard) {
+              // Share the exact member implementations in a cold segment.
+              // Its switch executes only for a group with a watched writer.
+              auto &segment = segmentFor(word, true);
+              uint64_t owner = mergedFragments[record].bit;
+              Block *action = new Block;
+              segment.targets.body->push_back(action);
+              segment.cases.emplace_back(64, owner);
+              segment.destinations.push_back(action);
+              {
+                OpBuilder::InsertionGuard guard(builder);
+                builder.setInsertionPointToStart(action);
+                emitOwnerExecution(record, mergedFragments[record],
+                                   segment.targets);
+              }
+              Value status =
+                  LLVM::CallOp::create(
+                      builder, location, segment.function,
+                      ValueRange{wordContext,
+                                 llvmConstant(builder, location, i64, owner),
+                                 entry->getArgument(1)})
+                      .getResult();
+              Value ok = arith::CmpIOp::create(
+                  builder, location, arith::CmpIPredicate::eq, status,
+                  llvmConstant(builder, location, i32, TALOS_RT_OK));
+              cf::CondBranchOp::create(builder, location, ok, after,
+                                       ValueRange{}, wordFailed,
+                                       ValueRange{status});
+            } else {
+              emitOwnerExecution(record, mergedFragments[record],
+                                 memberTargets);
+            }
+            if (pendingRanks)
+              builder.setInsertionPointToStart(resume);
+          }
+        } else if (!item.ranked.empty()) {
           // The coordinator polls termination after the word (see afterWord).
           LLVM::CallOp::create(builder, location, TypeRange{},
                                SymbolRefAttr::get(context, item.ranked),
@@ -1586,7 +1887,7 @@ materializeNativeEvalDispatch(ModuleOp module,
         }
         current = next;
       }
-      builder.setInsertionPointToEnd(current);
+      builder.setInsertionPointToEnd(sparse ? finished : current);
       LLVM::ReturnOp::create(builder, location,
                              llvmConstant(builder, location, i32, TALOS_RT_OK));
       for (Block *exit : {wordFailed, wordStopped})
@@ -1604,6 +1905,8 @@ materializeNativeEvalDispatch(ModuleOp module,
       wordCases.push_back(APInt(64, word));
       wordCalls.push_back(call);
     }
+    for (auto &[word, segment] : readMemberSegments)
+      finishSegment(segment);
     builder.setInsertionPointToStart(wordSwitch);
     LLVM::SwitchOp::create(
         builder, location, wordSwitch->getArgument(0), stopped, ValueRange{},

@@ -112,7 +112,8 @@ public:
       const analysis::HandleDataflowAnalysis &provenance,
       analysis::ActivationMemoryAnalysis::DependencyMode mode =
           analysis::ActivationMemoryAnalysis::DependencyMode::Accesses,
-      ObservationContext observations = ObservationContext::RegionBoundary);
+      ObservationContext observations = ObservationContext::RegionBoundary,
+      bool schedulingReadOnlyActivations = false);
   std::optional<CombinationalFusionBody>
   analyze(sim::SimFuncOp function,
           const analysis::HandleDataflowAnalysis &provenance,
@@ -169,6 +170,8 @@ public:
   /// worker per process, so that a serial visit afterwards finds each built.
   /// A no-op off the main thread.
   void prepareActivations() const;
+  const analysis::ActivationMemoryAnalysis *
+  getCompleteFootprint(sim::SimFuncOp function) const;
   using RepeatableInputs =
       llvm::DenseMap<mlir::StringAttr,
                      analysis::ActivationMemoryAnalysis::Ranges>;
@@ -264,6 +267,12 @@ struct NBATransientObservers {
   std::optional<llvm::DenseSet<uint64_t>> immediateWriters;
   analysis::Ranges holdRanges;
 };
+
+void recordNBAWriterFacts(sim::SimDesignOp design,
+                          const NBATransientObservers &facts);
+
+/// Freeze source writers for equal-value NBA suppression in read-only VPI.
+void recordReadOnlyNBAWriters(sim::SimDesignOp design);
 
 /// Classify the design's storage, or std::nullopt when its observers cannot
 /// be inventoried.

@@ -13,6 +13,7 @@
 #include "mlir/Transforms/RegionUtils.h"
 #include "talos/Analysis/ActivationControlFlow.h"
 #include "talos/Analysis/ActivationRegionAnalysis.h"
+#include "talos/Analysis/DPIEffectAnalysis.h"
 #include "talos/Analysis/DemandedBitAnalysis.h"
 #include "talos/Analysis/HandleDataflowAnalysis.h"
 #include "talos/Analysis/LogicBitAnalysis.h"
@@ -22,6 +23,7 @@
 #include "talos/Analysis/SourceMemoryAnalysis.h"
 #include "talos/Analysis/StorageWriteAnalysis.h"
 #include "talos/Conversion/SimulationToSchedule/Utils.h"
+#include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Dialect/Simulation/Transforms/Passes.h"
@@ -695,13 +697,18 @@ struct TalosSimSimplifyBodiesPass
     for (auto function : design.getBody().front().getOps<sim::SimFuncOp>())
       simplifyTerminationPolls(function, effects, provenance,
                                clearEntries.contains(function));
-    bool canonicalWrites = vpi == "off";
+    bool canonicalWrites =
+        vpi == "off" ||
+        (vpi == "read" &&
+         native::has<native::ReadableEvalState>(
+             design->getParentOfType<ModuleOp>()) &&
+         analysis::DPIEffectAnalysis(design).exportsAreTransparent());
     design.walk([&](Operation *op) {
       if (isa<sim::SimOverrideOp, sim::SimDynamicOverrideOp,
               sim::SimReleaseOverrideOp>(op))
         canonicalWrites = false;
     });
-    if (canonicalWrites) {
+    if (canonicalWrites && vpi == "off") {
       promotePrivateReductions(design);
       promotePrivateAggregates(design);
       removeUnusedControlActivations(design);
