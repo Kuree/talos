@@ -765,10 +765,8 @@ uint32_t findNativeAOTNodeUnlocked(const talos_rt_context *context,
 
 bool markNativeAOTActorReadyUnlocked(talos_rt_context *context,
                                      uint32_t actorSlot) {
-  if (context->nativeScheduleNodes.empty())
-    return true;
   if (actorSlot >= context->nativeScheduleActors.size())
-    return false;
+    return context->nativeScheduleNodes.empty();
   talos_rt_process_instance_v1 *actor =
       context->nativeScheduleActors[actorSlot];
   size_t processIndex = context->nativeScheduleActorIndices[actorSlot];
@@ -778,16 +776,21 @@ bool markNativeAOTActorReadyUnlocked(talos_rt_context *context,
   if (scheduled.instance != actor ||
       scheduled.phase != (context->schedulerRunningFinals ? 1u : 0u))
     return true;
-  uint32_t node =
-      findNativeAOTNodeUnlocked(context, actorSlot, actor->continuation);
-  if (node == UINT32_MAX)
-    return false;
-  context->nativeScheduleReadyNodes.set(node);
+  // A startup callback can hand execution to the ordinary scheduler before
+  // the generated calendar has installed its nodes. Its time-zero
+  // activations still belong in the ordinary ready index (4.9.1, 9.2.2.2).
+  if (!context->nativeScheduleNodes.empty()) {
+    uint32_t node =
+        findNativeAOTNodeUnlocked(context, actorSlot, actor->continuation);
+    if (node == UINT32_MAX)
+      return false;
+    context->nativeScheduleReadyNodes.set(node);
+    context->nativeScheduleMinimumActivatedNode =
+        std::min(context->nativeScheduleMinimumActivatedNode, node);
+  }
   context->nativePollCandidates.insert(scheduled.token);
   if (++context->schedulerSelectionGeneration == 0)
     context->schedulerSelectionGeneration = 1;
-  context->nativeScheduleMinimumActivatedNode =
-      std::min(context->nativeScheduleMinimumActivatedNode, node);
   return true;
 }
 

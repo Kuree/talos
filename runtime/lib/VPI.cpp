@@ -384,6 +384,14 @@ struct VPICallback {
   uint64_t dueTime = 0;
 };
 
+struct VPIRegisteredCallback : VPICallback {
+  explicit VPIRegisteredCallback(const VPICallback &callback)
+      : VPICallback(callback) {}
+  uintptr_t primaryToken = 0;
+  std::vector<uintptr_t> aliasTokens;
+  bool ownsObservationDemand = false;
+};
+
 struct VPIValueChangeBinding {
   __vpiHandle object;
   uintptr_t exposedToken = 0;
@@ -629,14 +637,19 @@ struct VPIState {
   std::unordered_map<uint64_t, std::vector<VPIFrameCall>> frameCalls;
 
   uint64_t runtimeObserverCallbacks = 0;
-  std::unordered_map<uint64_t, VPICallback> callbacks;
+  std::unordered_map<uint64_t, VPIRegisteredCallback> callbacks;
   talos::runtime::VPIValueChangeQueue<VPIValueChangeRegistration> valueChanges;
   std::unordered_map<uint64_t, std::unique_ptr<VPIValueChangeRoot>>
       valueChangeRoots;
   bool valueChangeFencePending = false;
   s_vpi_value callbackValueScratch{};
   std::vector<uint64_t> callbackOrder;
-  std::set<std::pair<uint64_t, uint64_t>> timeCallbacks;
+  // Scheduled time, start/next callbacks before after-delay, then registration
+  // order.
+  std::set<std::tuple<uint64_t, bool, uint64_t>> timeCallbacks;
+  // These callbacks wait for the next existing time slot without creating one.
+  std::set<std::pair<uint64_t, uint64_t>> nextTimeCallbacks;
+  PLI_INT32 activeTimeReason = 0;
   // Synchronization callbacks by (due time, stage, callback ID); see
   // syncCallbackStage.
   std::set<std::tuple<uint64_t, uint32_t, uint64_t>> syncCallbacks;
@@ -1284,7 +1297,7 @@ vpiHandle makeSemanticObjectHandle(VPIState *state, VPIObjectForm form,
   }
 }
 
-vpiHandle makeCallbackHandle(VPIState *state, uint64_t callbackId) {
+vpiHandle allocateCallbackHandle(VPIState *state, uint64_t callbackId) {
   TALOS_RT_TRY {
     auto node = state->handles.takeCallbackNode();
     if (node) {
@@ -1319,9 +1332,27 @@ vpiHandle makeCallbackHandle(VPIState *state, uint64_t callbackId) {
   }
 }
 
+vpiHandle makeCallbackHandle(VPIState *state, uint64_t id, bool alias = false) {
+  auto &callback = state->callbacks.at(id);
+  vpiHandle handle = allocateCallbackHandle(state, id);
+  if (!handle)
+    return nullptr;
+  const auto token = reinterpret_cast<uintptr_t>(handle);
+  if (alias) {
+    TALOS_RT_TRY { callback.aliasTokens.push_back(token); }
+    TALOS_RT_CATCH_ALL {
+      state->handles.recycleCallback(token);
+      setError(state, "could not retain callback iterator alias", vpiSystem);
+      return nullptr;
+    }
+  } else
+    callback.primaryToken = token;
+  return handle;
+}
+
 vpiHandle makeValueChangeCallbackHandle(VPIState *state, uint64_t callbackId,
                                         bool alias = false) {
-  auto result = makeCallbackHandle(state, callbackId);
+  auto result = allocateCallbackHandle(state, callbackId);
   if (!result)
     return nullptr;
   const uintptr_t token = reinterpret_cast<uintptr_t>(result);
@@ -1472,7 +1503,16 @@ void noteCountedCallback(VPIState *state, PLI_INT32 reason, bool added) {
     *count = added ? *count + 1 : *count - 1;
 }
 
-bool observesRunningState(PLI_INT32 reason) {
+bool observesRunningState(const VPIState *state, PLI_INT32 reason) {
+  // These end-of-slot reads observe settled state (4.10, 38.36.2). Their
+  // deadlines participate in the ordinary calendar without an observation
+  // lease during earlier slots. A value subscription guards its producers.
+  if (state->context->execution &&
+      (state->context->execution->flags &
+       TALOS_RT_EXECUTION_VPI_PUBLISHING_WRITERS) &&
+      (reason == cbReadOnlySynch || reason == cbAtEndOfSimTime ||
+       reason == cbValueChange))
+    return false;
   // Keep the complete live-observation classification here so enabling
   // statement, value, or synchronization registration cannot accidentally
   // bypass the Tier-1 lease. Lifecycle callbacks run only at cold phase
@@ -1518,7 +1558,7 @@ void refreshTimeCallbackDeadline(VPIState *state) {
   state->context->nextVPITimeCallback =
       state->timeCallbacks.empty()
           ? std::nullopt
-          : std::optional<uint64_t>(state->timeCallbacks.begin()->first);
+          : std::optional<uint64_t>(std::get<0>(*state->timeCallbacks.begin()));
 #if TALOS_RT_VPI_SIGNALS
   // Signals still to deliver keep the current slot's dispatch due.
   if (state->eventCallbackDemand &&
@@ -1674,6 +1714,8 @@ std::optional<uint32_t> syncCallbackStage(PLI_INT32 reason) {
   case cbNBASynch:
   case cbReadWriteSynch:
     return TALOS_RT_VPI_SYNC_PRE_NBA;
+  case cbAtEndOfSimTime:
+    return TALOS_RT_VPI_SYNC_END_TIME;
   case cbReadOnlySynch:
     return TALOS_RT_VPI_SYNC_READ_ONLY;
   default:
@@ -1689,7 +1731,7 @@ void refreshSyncCallbackDeadline(VPIState *state) {
 }
 
 void acquireObservationDemand(VPIState *state, PLI_INT32 reason) {
-  if (!state || !observesRunningState(reason))
+  if (!state || !observesRunningState(state, reason))
     return;
   if (++state->runtimeObserverCallbacks != 1)
     return;
@@ -1698,7 +1740,7 @@ void acquireObservationDemand(VPIState *state, PLI_INT32 reason) {
 }
 
 void releaseObservationDemand(VPIState *state, PLI_INT32 reason) {
-  if (!state || !observesRunningState(reason) ||
+  if (!state || !observesRunningState(state, reason) ||
       state->runtimeObserverCallbacks == 0)
     return;
   if (--state->runtimeObserverCallbacks != 0)
@@ -1867,29 +1909,33 @@ void eraseCallback(VPIState *state, uint64_t id) {
   if (reason == cbSignal)
     unwatchSignal(state, found->second.index);
 #endif
-  if (reason == cbAfterDelay) {
-    state->timeCallbacks.erase({found->second.dueTime, id});
+  if (reason == cbNextSimTime || reason == cbAtStartOfSimTime ||
+      reason == cbAfterDelay) {
+    if (reason == cbNextSimTime) {
+      state->nextTimeCallbacks.erase({found->second.dueTime, id});
+      if (state->nextTimeCallbacks.empty())
+        state->context->preponedSlotHooks &= ~kVPINextTimeSlotHook;
+    }
+    state->timeCallbacks.erase(
+        {found->second.dueTime, reason == cbAfterDelay, id});
     refreshTimeCallbackDeadline(state);
   } else if (std::optional<uint32_t> stage = syncCallbackStage(reason)) {
     state->syncCallbacks.erase({found->second.dueTime, *stage, id});
     refreshSyncCallbackDeadline(state);
   }
+  // Release only this registration's tokens. Clients can keep arbitrarily
+  // many unrelated signal handles across recurring time callbacks.
+  for (uintptr_t alias : found->second.aliasTokens)
+    state->handles.recycleCallback(alias);
+  if (found->second.primaryToken)
+    state->handles.recycleCallback(found->second.primaryToken);
+  if (found->second.ownsObservationDemand)
+    releaseObservationDemand(state, reason);
   state->callbacks.erase(found);
-  state->callbackOrder.erase(
-      std::remove(state->callbackOrder.begin(), state->callbackOrder.end(), id),
-      state->callbackOrder.end());
-  // The callback object no longer exists, so free every equivalent handle,
-  // including handles returned by callback iteration.
-  for (auto entry = state->handles.begin(); entry != state->handles.end();) {
-    if (entry->second->kind == VPIHandleKind::Callback &&
-        entry->second->form != VPIObjectForm::ValueChangeCallback &&
-        entry->second->cursor.offset == id) {
-      const uintptr_t token = entry++->first;
-      state->handles.recycleCallback(token);
-    } else
-      ++entry;
-  }
-  releaseObservationDemand(state, reason);
+  auto order = std::lower_bound(state->callbackOrder.begin(),
+                                state->callbackOrder.end(), id);
+  if (order != state->callbackOrder.end() && *order == id)
+    state->callbackOrder.erase(order);
   noteCountedCallback(state, reason, false);
 }
 
@@ -9425,6 +9471,65 @@ vpiHandle classPathByName(__vpiHandle *source, std::string_view path) {
 
 } // namespace
 
+// IEEE 1800-2023 38.36.2: a next-time subscription follows the calendar.
+// Stage it for Pre-Active dispatch after the new slot's Preponed sample.
+talos_rt_status
+talos_rt_vpi_enter_time_slot_unlocked(talos_rt_context *context) {
+  auto *state = static_cast<VPIState *>(context->vpiState);
+  if (!state || state != currentState())
+    return TALOS_RT_INVALID_LIFECYCLE;
+  TALOS_RT_TRY {
+    auto &waiting = state->nextTimeCallbacks;
+    while (!waiting.empty() &&
+           waiting.begin()->first < context->schedulerTime) {
+      uint64_t id = waiting.begin()->second;
+      state->timeCallbacks.emplace(context->schedulerTime, false, id);
+      state->callbacks.at(id).dueTime = context->schedulerTime;
+      waiting.erase(waiting.begin());
+    }
+    if (waiting.empty())
+      context->preponedSlotHooks &= ~kVPINextTimeSlotHook;
+    refreshTimeCallbackDeadline(state);
+    return TALOS_RT_OK;
+  }
+  TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
+  TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_DESIGN; }
+}
+
+static talos_rt_status invokeTimeCallback(VPIState *state,
+                                          const VPICallback &callback) {
+  talos_rt_context *context = state->context;
+  s_vpi_time time{};
+  time.type = callback.time.type;
+  if (time.type == vpiSimTime) {
+    time.high = static_cast<PLI_UINT32>(context->schedulerTime >> 32);
+    time.low = static_cast<PLI_UINT32>(context->schedulerTime);
+  } else {
+    time.real =
+        static_cast<double>(context->schedulerTime / callback.ticksPerUnit);
+  }
+  s_cb_data invocation{};
+  invocation.reason = callback.reason;
+  invocation.cb_rtn = callback.routine;
+  invocation.user_data = callback.userData;
+  invocation.time = &time;
+  ++state->callbackDepth;
+  context->vpiTimeCallbackActive = true;
+  state->activeTimeReason = callback.reason;
+  talos_rt_status status = TALOS_RT_OK;
+  ManagedRunHoldPause pause;
+  TALOS_RT_TRY { (void)callback.routine(&invocation); }
+  TALOS_RT_CATCH_ALL {
+    setError(state, "VPI callback raised an exception", vpiInternal);
+    status = TALOS_RT_FATAL;
+  }
+  state->activeTimeReason = 0;
+  context->vpiTimeCallbackActive = false;
+  runPendingReset(state);
+  --state->callbackDepth;
+  return status;
+}
+
 talos_rt_status
 talos_rt_vpi_dispatch_time_callbacks_unlocked(talos_rt_context *context) {
   auto *state = static_cast<VPIState *>(context->vpiState);
@@ -9445,40 +9550,15 @@ talos_rt_vpi_dispatch_time_callbacks_unlocked(talos_rt_context *context) {
   // the selected time. This is boundary work owned by the common driver,
   // including timers registered by another timer and canceled peers.
   while (!state->timeCallbacks.empty() &&
-         state->timeCallbacks.begin()->first <= context->schedulerTime) {
+         std::get<0>(*state->timeCallbacks.begin()) <= context->schedulerTime) {
     if (context->schedulerSlotProgress == UINT64_MAX)
       return TALOS_RT_OUT_OF_RESOURCES;
     ++context->schedulerSlotProgress;
-    uint64_t id = state->timeCallbacks.begin()->second;
+    uint64_t id = std::get<2>(*state->timeCallbacks.begin());
     VPICallback callback = state->callbacks.at(id);
     state->timeCallbacks.erase(state->timeCallbacks.begin());
     refreshTimeCallbackDeadline(state);
-    s_vpi_time time{};
-    time.type = callback.time.type;
-    if (time.type == vpiSimTime) {
-      time.high = static_cast<PLI_UINT32>(context->schedulerTime >> 32);
-      time.low = static_cast<PLI_UINT32>(context->schedulerTime);
-    } else {
-      time.real =
-          static_cast<double>(context->schedulerTime / callback.ticksPerUnit);
-    }
-    s_cb_data invocation{};
-    invocation.reason = callback.reason;
-    invocation.cb_rtn = callback.routine;
-    invocation.user_data = callback.userData;
-    invocation.time = &time;
-    ++state->callbackDepth;
-    context->vpiTimeCallbackActive = true;
-    talos_rt_status status = TALOS_RT_OK;
-    ManagedRunHoldPause pause;
-    TALOS_RT_TRY { (void)callback.routine(&invocation); }
-    TALOS_RT_CATCH_ALL {
-      setError(state, "VPI callback raised an exception", vpiInternal);
-      status = TALOS_RT_FATAL;
-    }
-    context->vpiTimeCallbackActive = false;
-    runPendingReset(state);
-    --state->callbackDepth;
+    talos_rt_status status = invokeTimeCallback(state, callback);
     // The callback may remove itself, release its handle, or cancel a peer.
     eraseCallback(state, id);
     if (status != TALOS_RT_OK || context->destroyPending ||
@@ -9495,7 +9575,8 @@ bool talos_rt_vpi_sync_due_unlocked(talos_rt_context *context, uint32_t stage) {
   for (const auto &[dueTime, entryStage, id] : state->syncCallbacks) {
     if (dueTime > context->schedulerTime)
       return false;
-    if (entryStage == stage)
+    if (entryStage == stage || (stage == TALOS_RT_VPI_SYNC_READ_ONLY &&
+                                entryStage == TALOS_RT_VPI_SYNC_END_TIME))
       return true;
   }
   return false;
@@ -9510,6 +9591,11 @@ talos_rt_vpi_dispatch_sync_callbacks_unlocked(talos_rt_context *context,
   // IEEE 1800-2023 38.36.2: each synchronization callback runs once, at its
   // region of the selected time. Snapshot the due set: a callback registered
   // by one of them for this time waits for the next pass over the region.
+  // Pre-Postponed callbacks can schedule more work. Return to region
+  // arbitration before any Postponed read-only callback observes the slot.
+  if (stage == TALOS_RT_VPI_SYNC_READ_ONLY &&
+      talos_rt_vpi_sync_due_unlocked(context, TALOS_RT_VPI_SYNC_END_TIME))
+    stage = TALOS_RT_VPI_SYNC_END_TIME;
   std::vector<uint64_t> due;
   TALOS_RT_TRY {
     for (const auto &[dueTime, entryStage, id] : state->syncCallbacks) {
@@ -9528,32 +9614,7 @@ talos_rt_vpi_dispatch_sync_callbacks_unlocked(talos_rt_context *context,
     if (found == state->callbacks.end())
       continue;
     VPICallback callback = found->second;
-    s_vpi_time time{};
-    time.type = callback.time.type;
-    if (time.type == vpiSimTime) {
-      time.high = static_cast<PLI_UINT32>(context->schedulerTime >> 32);
-      time.low = static_cast<PLI_UINT32>(context->schedulerTime);
-    } else {
-      time.real =
-          static_cast<double>(context->schedulerTime / callback.ticksPerUnit);
-    }
-    s_cb_data invocation{};
-    invocation.reason = callback.reason;
-    invocation.cb_rtn = callback.routine;
-    invocation.user_data = callback.userData;
-    invocation.time = &time;
-    ++state->callbackDepth;
-    context->vpiTimeCallbackActive = true;
-    talos_rt_status status = TALOS_RT_OK;
-    ManagedRunHoldPause pause;
-    TALOS_RT_TRY { (void)callback.routine(&invocation); }
-    TALOS_RT_CATCH_ALL {
-      setError(state, "VPI callback raised an exception", vpiInternal);
-      status = TALOS_RT_FATAL;
-    }
-    context->vpiTimeCallbackActive = false;
-    runPendingReset(state);
-    --state->callbackDepth;
+    talos_rt_status status = invokeTimeCallback(state, callback);
     eraseCallback(state, id);
     if (status != TALOS_RT_OK || context->destroyPending ||
         context->schedulerFinishRequested.load(std::memory_order_relaxed))
@@ -10586,6 +10647,7 @@ talos_rt_v1_vpi_shutdown(talos_rt_context *context) {
       unwatchSignal(state, signal);
 #endif
   context->vpiState = nullptr;
+  context->preponedSlotHooks &= ~kVPINextTimeSlotHook;
   context->nextVPITimeCallback.reset();
   context->nextVPISyncCallback.reset();
   clearActiveState(state);
@@ -11447,7 +11509,7 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_iterate(PLI_INT32 type,
             (state->context->vpiTimeCallbackActive ||
              talos_rt_current_time_queue_pending_unlocked(state->context)))
           times.insert(times.begin(), state->context->schedulerTime);
-        for (const auto &[time, id] : state->timeCallbacks)
+        for (const auto &[time, active, id] : state->timeCallbacks)
           times.push_back(time);
         std::sort(times.begin(), times.end());
         times.erase(std::unique(times.begin(), times.end()), times.end());
@@ -12031,7 +12093,7 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_scan(vpiHandle opaque) {
         const uintptr_t iteratorToken = iterator->token;
         vpiHandle result = valueChange
                                ? makeValueChangeCallbackHandle(state, id, true)
-                               : makeCallbackHandle(state, id);
+                               : makeCallbackHandle(state, id, true);
         if (!result)
           state->handles.erase(iteratorToken);
         return result;
@@ -15030,6 +15092,10 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_put_value(vpiHandle opaque,
     setError(handle->owner, "VPI mutation requires --vpi=full");
     return nullptr;
   }
+  if (handle->owner->activeTimeReason == cbReadOnlySynch) {
+    setError(handle->owner, "VPI writes are forbidden in the Postponed region");
+    return nullptr;
+  }
   VPIClassMemberBinding member{};
   bool classMember = talos_rt_cached_vpi_class_member(context, handle->cursor,
                                                       &member) == TALOS_RT_OK;
@@ -15275,6 +15341,16 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_release_handle(vpiHandle opaque) {
       live = record != nullptr;
       if (record) {
         auto &aliases = record->aliasTokens;
+        aliases.erase(std::remove(aliases.begin(), aliases.end(), token),
+                      aliases.end());
+      }
+    } else if (auto record =
+                   state->callbacks.find(found->second->cursor.offset);
+               record != state->callbacks.end()) {
+      if (record->second.primaryToken == token)
+        record->second.primaryToken = 0;
+      else {
+        auto &aliases = record->second.aliasTokens;
         aliases.erase(std::remove(aliases.begin(), aliases.end(), token),
                       aliases.end());
       }
@@ -15665,7 +15741,10 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_register_cb(p_cb_data callbackData) {
     return nullptr;
   }
   const std::optional<uint32_t> sync = syncCallbackStage(callbackData->reason);
-  const bool timer = callbackData->reason == cbAfterDelay || sync;
+  const bool nextTime = callbackData->reason == cbNextSimTime;
+  const bool startTime = callbackData->reason == cbAtStartOfSimTime;
+  const bool timer =
+      callbackData->reason == cbAfterDelay || startTime || nextTime || sync;
   const bool signal = callbackData->reason == cbSignal;
   if (!isLifecycleReason(callbackData->reason) &&
       !isErrorActionReason(callbackData->reason) &&
@@ -15699,7 +15778,8 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_register_cb(p_cb_data callbackData) {
     callback.time = *callbackData->time;
     uint64_t delay = 0;
     if (callback.time.type == vpiSimTime) {
-      delay = (uint64_t{callback.time.high} << 32) | callback.time.low;
+      if (!nextTime)
+        delay = (uint64_t{callback.time.high} << 32) | callback.time.low;
     } else {
       int32_t precision = 0;
       if (!globalTimeExponent(state, precision))
@@ -15719,11 +15799,11 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_register_cb(p_cb_data callbackData) {
       callback.ticksPerUnit =
           std::pow(10.0L, static_cast<long double>(unit) - precision);
       long double ticks =
-          std::round(callback.time.real * callback.ticksPerUnit);
+          nextTime ? 0 : std::round(callback.time.real * callback.ticksPerUnit);
       // Comparing against 2^64 avoids an overflowing conversion on targets
       // where long double has only double precision (including wasm32).
-      if (!std::isfinite(ticks) || callback.time.real < 0 || ticks < 0 ||
-          ticks >= std::ldexp(1.0L, 64)) {
+      if (!std::isfinite(ticks) || (!nextTime && callback.time.real < 0) ||
+          ticks < 0 || ticks >= std::ldexp(1.0L, 64)) {
         setError(state, "VPI timer delay is outside simulation time range");
         return nullptr;
       }
@@ -15731,6 +15811,21 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_register_cb(p_cb_data callbackData) {
     }
     if (delay > UINT64_MAX - state->context->schedulerTime) {
       setError(state, "VPI timer deadline overflows simulation time");
+      return nullptr;
+    }
+    if (!delay && startTime && state->phase == VPIPhase::Running &&
+        state->activeTimeReason != cbAtStartOfSimTime) {
+      setError(state, "current time slot has already started");
+      return nullptr;
+    }
+    if (!delay && state->activeTimeReason == cbReadOnlySynch &&
+        (callbackData->reason == cbReadWriteSynch ||
+         callbackData->reason == cbAtEndOfSimTime ||
+         callbackData->reason == cbNBASynch ||
+         callbackData->reason == cbAfterDelay)) {
+      setError(
+          state,
+          "cannot schedule earlier regions from read-only synchronization");
       return nullptr;
     }
     callback.dueTime = state->context->schedulerTime + delay;
@@ -15796,8 +15891,11 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_register_cb(p_cb_data callbackData) {
       state->callbackOrder.push_back(id);
       if (sync)
         state->syncCallbacks.emplace(callback.dueTime, *sync, id);
-      else if (timer)
-        state->timeCallbacks.emplace(callback.dueTime, id);
+      else if (nextTime) {
+        state->nextTimeCallbacks.emplace(callback.dueTime, id);
+        state->context->preponedSlotHooks |= kVPINextTimeSlotHook;
+      } else if (timer)
+        state->timeCallbacks.emplace(callback.dueTime, !startTime, id);
     }
     TALOS_RT_CATCH_ALL {
       eraseCallback(state, id);
@@ -15811,7 +15909,21 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_register_cb(p_cb_data callbackData) {
         refreshSyncCallbackDeadline(state);
       else if (timer)
         refreshTimeCallbackDeadline(state);
+      // Shared periodic execution refreshes its calendar after draining the
+      // slot, including rearming from a synchronization callback. Exclusive
+      // run_until takes its bound by value; an intervening foreign call must
+      // return to the calendar if it introduced an earlier deadline.
+      auto *context = state->context;
+      if (timer && !observesRunningState(state, callbackData->reason) &&
+          !context->vpiTimeCallbackActive && context->nativeScheduleRunning &&
+          context->nativeSchedulePlan &&
+          !(context->nativeSchedulePlan->flags &
+            TALOS_RT_NATIVE_SCHEDULE_SHARED_PERIODIC) &&
+          callback.dueTime < context->nativePeriodicRuntimeDeadline)
+        context->postponedHooksDisarmed = true;
       acquireObservationDemand(state, callbackData->reason);
+      inserted.first->second.ownsObservationDemand =
+          observesRunningState(state, callbackData->reason);
     }
     return result;
   }
@@ -15862,7 +15974,9 @@ extern "C" TALOS_VPI_EXPORT void vpi_get_cb_info(vpiHandle opaque,
   destination->user_data = callback->userData;
   if (callback->reason == cbSignal)
     destination->index = callback->index;
-  if (callback->reason == cbAfterDelay) {
+  if (callback->reason == cbAfterDelay || callback->reason == cbNextSimTime ||
+      callback->reason == cbAtStartOfSimTime ||
+      syncCallbackStage(callback->reason)) {
     handle->owner->timeScratch = callback->time;
     destination->time = &handle->owner->timeScratch;
   }

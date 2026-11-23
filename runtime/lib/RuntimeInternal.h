@@ -3388,6 +3388,7 @@ talos_rt_vpi_dispatch_time_callbacks_unlocked(talos_rt_context *context);
 enum : uint32_t {
   TALOS_RT_VPI_SYNC_PRE_NBA = 0,
   TALOS_RT_VPI_SYNC_READ_ONLY = 1,
+  TALOS_RT_VPI_SYNC_END_TIME = 2,
 };
 /// Whether a synchronization callback of `stage` is due in this time slot.
 bool talos_rt_vpi_sync_due_unlocked(talos_rt_context *context, uint32_t stage);
@@ -4812,6 +4813,8 @@ void talos_rt_unindex_static_signal_bucket(
 inline constexpr uint8_t kPreponedObserverSlotHook = 1;
 inline constexpr uint8_t kVPISignalSlotHook = 2;
 inline constexpr uint8_t kPreponedSnapshotSlotHook = 4;
+inline constexpr uint8_t kVPINextTimeSlotHook = 8;
+talos_rt_status talos_rt_vpi_enter_time_slot_unlocked(talos_rt_context *);
 // talos_rt_context::postponedSlotHooks: something is selected for a value
 // change dump whose file is open.
 inline constexpr uint8_t kDumpSlotHook = 1;

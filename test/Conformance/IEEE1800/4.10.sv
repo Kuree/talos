@@ -1,6 +1,5 @@
 // CLAUSE: callback preactive
-// XFAIL: *
-// cbAtEndOfSimTime callback registration is not implemented by this runtime.
+// SINCE: 0.2.0
 // RUN: %clang -c -fPIC %S/Inputs/4.10/callback.c -I%resource_dir/include -o %t.helper0.o
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top --vpi=full -O3 --execution-tier=%tier %s %t.helper0.o -o %t.exe
 // RUN: %t.exe

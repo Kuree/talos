@@ -4148,6 +4148,10 @@ talos_rt_status runPreponedHooks(talos_rt_context *context,
   }
   if (context->preponedSlotHooks & kVPISignalSlotHook)
     talos_rt_vpi_signal_poll_unlocked(context);
+  if (context->preponedSlotHooks & kVPINextTimeSlotHook)
+    if (auto status = talos_rt_vpi_enter_time_slot_unlocked(context);
+        status != TALOS_RT_OK)
+      return status;
   if (!(context->preponedSlotHooks & kPreponedObserverSlotHook))
     return TALOS_RT_OK;
   TALOS_RT_TRY {
