@@ -36,6 +36,7 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "talos/Analysis/ThreadObservationAnalysis.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
+#include "talos/Dialect/Runtime/RuntimeOps.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleOps.h"
 
@@ -54,14 +55,37 @@ struct SingleWait {
   StaticRuntimeWait record;
 };
 
+// The source can exit on vpiFinish and still wait permanently during a live
+// simulation. Prove that every edge to the return tests this actor's own
+// context. Ordinary conditional returns still exclude startup admission.
+static bool isTerminationOnlyExit(sim::SimFuncOp actor, Block *block) {
+  if (!actor.getNumArguments() || block->hasNoPredecessors())
+    return false;
+  return llvm::all_of(block->getPredecessors(), [&](Block *pred) {
+    auto branch = dyn_cast<cf::CondBranchOp>(pred->getTerminator());
+    if (!branch || branch.getTrueDest() != block ||
+        branch.getFalseDest() == block)
+      return false;
+    auto poll = branch.getCondition()
+                    .getDefiningOp<runtime::RTTerminationRequestedOp>();
+    auto projection =
+        poll ? poll.getOperand().getDefiningOp<sim::SimContextRuntimeOp>()
+             : sim::SimContextRuntimeOp{};
+    return projection && projection.getOperand() == actor.getArgument(0);
+  });
+}
+
 /// Why an actor keeps its first activation, or nullopt for a single signal
-/// wait with no other suspension and no return.
+/// wait with no other suspension or live simulation return.
 std::optional<StringRef> findSingleSignalWait(sim::SimFuncOp actor,
-                                              SingleWait &wait) {
+                                              SingleWait &wait,
+                                              bool publishingRead) {
   unsigned waits = 0;
   bool returns = false;
   actor.walk([&](Operation *operation) {
-    returns |= isa<sim::SimReturnOp>(operation);
+    if (isa<sim::SimReturnOp>(operation))
+      returns |= !publishingRead ||
+                 !isTerminationOnlyExit(actor, operation->getBlock());
     if (sim::isSuspensionOp(operation)) {
       ++waits;
       wait.operation = operation;
@@ -250,7 +274,7 @@ LogicalResult NativePipelineAnalysis::admitStartedOwners() {
       return reject("bytecode");
     if (!vpi.allowsRead() && copyActivations.contains(actor))
       return reject("copy-activation");
-    if (std::optional<StringRef> reason = findSingleSignalWait(actor, wait))
+    if (std::optional<StringRef> reason = findSingleSignalWait(actor, wait, vpi.requiresPublicationGuards() && !vpi.allowsWrite()))
       return reject(*reason);
     uint32_t continuation = wait.record.continuation;
     // The frame holds nothing the skipped entry would have stored for the

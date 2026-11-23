@@ -13,6 +13,9 @@
 // port. Finishing at its publication preserves the intermediate state
 // (1800-2023 4.9.1, 4.10, 38.36.1).
 // PLAN: talos periodic forwarding: aliases=36
+// All 69 time-zero copy activations remain admitted when their only return
+// is the true edge of a VPI termination check.
+// PLAN: talos started owners: admitted=102 time_zero=69
 // PLAN: talos periodic alias byte run: bytes=
 // FULL: end clk=0 cp=0 q=3 changes=6
 // IDLE: end clk=0 cp=0 q=3 changes=0
