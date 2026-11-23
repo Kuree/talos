@@ -562,8 +562,11 @@ def VPIEarlyMemoryLeftRange : VPITraversalEdge<RegArrayObjects, LeftRangeRel,
   HandleMode, VPIEarlyOrdinaryExpressions, NoOrder, "37.20">;
 def VPIEarlyMemoryRightRange : VPITraversalEdge<RegArrayObjects,
   RightRangeRel, HandleMode, VPIEarlyOrdinaryExpressions, NoOrder, "37.20">;
+// 36.12.1 Table 36-10 details 2 and 6: vpiMemoryWord survives only as an
+// iterator, replaced by vpiReg, whose iterations on an array include elements
+// of every variable kind. It therefore returns the same elements as vpiReg.
 def VPIEarlyMemoryWords : VPITraversalEdge<RegArrayObjects, MemoryWord,
-  IterateMode, RegObjects, IndexOrder, "37.20">;
+  IterateMode, VPIEarlyVariables, IndexOrder, "37.20; 36.12.1">;
 def VPIEarlyMemoryWordIndex : VPITraversalEdge<RegObjects, IndexRel,
   HandleMode, VPIEarlyOrdinaryExpressions, NoOrder, "37.20">;
 

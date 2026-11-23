@@ -85,7 +85,7 @@ endmodule
 // CHECK-NEXT: vpiTask objects=2 properties=13/16 relations=2/22 answers=30
 // CHECK-NEXT: vpiTimeQueue objects=1 properties=3/3 relations=0/1 answers=3
 // CHECK-NEXT: vpiRange objects=2 properties=6/6 relations=2/2 answers=16
-// CHECK-NEXT: vpiRegArray objects=2 properties=25/26 relations=6/25 answers=61
+// CHECK-NEXT: vpiRegArray objects=2 properties=25/26 relations=7/25 answers=63
 // CHECK-NEXT: vpiPackage objects=2 properties=18/23 relations=3/27 answers=37
 // CHECK-NEXT: vpiTypeParameter objects=2 properties=7/8 relations=3/6 answers=18
 // CHECK-NEXT: vpiIntVar objects=19 properties=23/24 relations=4/19 answers=460

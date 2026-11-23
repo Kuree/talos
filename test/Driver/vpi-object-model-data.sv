@@ -100,7 +100,7 @@ endmodule
 // CHECK-NEXT: vpiTimeVar objects=2 properties=21/24 relations=4/19 answers=50
 // CHECK-NEXT: vpiTimeQueue objects=1 properties=3/3 relations=0/1 answers=3
 // CHECK-NEXT: vpiRange objects=23 properties=6/6 relations=2/2 answers=176
-// CHECK-NEXT: vpiRegArray objects=5 properties=23/26 relations=10/25 answers=154
+// CHECK-NEXT: vpiRegArray objects=5 properties=23/26 relations=10/25 answers=155
 // CHECK-NEXT: vpiPackage objects=1 properties=18/23 relations=0/27 answers=18
 // CHECK-NEXT: vpiTypeParameter objects=1 properties=8/8 relations=5/6 answers=13
 // CHECK-NEXT: vpiLongIntVar objects=1 properties=21/24 relations=4/19 answers=25

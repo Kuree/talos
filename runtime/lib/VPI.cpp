@@ -5599,7 +5599,10 @@ vpiHandle makeSemanticIterator(__vpiHandle *source, PLI_INT32 selector) {
           sourceType, static_cast<uint32_t>(selector),
           talos::reflection::VPITraversalMode::Iterate))
     return nullptr;
-  if (selector == vpiReg && sourceType == vpiRegArray &&
+  // 36.12.1 Table 36-10 details 2 and 6: vpiMemoryWord iterates an array's
+  // elements exactly as vpiReg does.
+  const bool elementIteration = selector == vpiReg || selector == vpiMemoryWord;
+  if (elementIteration && sourceType == vpiRegArray &&
       isVirtualInterfaceSequence(source, semantic)) {
     TALOS_RT_TRY {
       auto iterator = std::make_unique<__vpiHandle>();
@@ -5622,8 +5625,7 @@ vpiHandle makeSemanticIterator(__vpiHandle *source, PLI_INT32 selector) {
       return nullptr;
     }
   }
-  if ((selector == vpiReg || selector == vpiMemoryWord ||
-       selector == vpiVarSelect) &&
+  if ((elementIteration || selector == vpiVarSelect) &&
       isManagedArrayKind(info.kind)) {
     setError(source->owner,
              "elements of a dynamic array, queue or associative array are not "
@@ -5647,15 +5649,12 @@ vpiHandle makeSemanticIterator(__vpiHandle *source, PLI_INT32 selector) {
                                           relationSelector) &&
       fixedArrayShape(source, shape) && !shape.dimensions.empty())
     kind = VPISemanticIteratorKind::FlatElements;
-  else if ((selector == vpiReg || selector == vpiMemoryWord) &&
+  else if (elementIteration &&
            info.kind == TALOS_RT_DESIGN_SEMANTIC_UNPACKED_ARRAY) {
     // IEEE 1800-2023 37.17: vpiReg iterates the variables of an array var.
     // Detail 9 counts every leaf element as one of those variables and
     // detail 26 makes the array their prefix object, so the iteration walks
     // the leaves in the model's index order, leftmost dimension outermost.
-    // 37.20 detail 1 keeps vpiMemoryWord as a method returning those
-    // elements as vpiReg objects, so it is empty when they are of another
-    // kind (an int array has no memory words).
     if (hasManagedArrayDimensionBelow(source, semantic)) {
       // The leaves of int fa[2][] are inside the dynamic arrays.
       setError(source->owner,
@@ -5672,10 +5671,7 @@ vpiHandle makeSemanticIterator(__vpiHandle *source, PLI_INT32 selector) {
     vpiHandle first = makeFlatArrayElement(source, 0, shape);
     if (!first)
       return nullptr;
-    const bool regElements = vpiTypeForHandle(findHandle(first)) == vpiReg;
     source->owner->handles.erase(reinterpret_cast<uintptr_t>(first));
-    if (selector == vpiMemoryWord && !regElements)
-      return nullptr;
     kind = VPISemanticIteratorKind::FlatElements;
   } else if (selector == vpiRange &&
              isDimensionForVPIObject(sourceType, info.kind, info.flags,

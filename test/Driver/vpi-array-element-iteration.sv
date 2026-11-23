@@ -5,10 +5,11 @@
 
 // IEEE 1800-2023 37.17: vpi_iterate(vpiReg) returns the variables of an array
 // var, its leaf elements (details 9 and 26) in index order with the leftmost
-// dimension outermost. 37.20 detail 1: vpiMemoryWord returns them as vpiReg
-// objects, so an int array has none. Talos does not create var select objects
-// (37.19) yet, nor reach the elements of an array with a dynamic dimension, so
-// those iterations give a notice.
+// dimension outermost. vpiMemoryWord survives only as an iterator alias of
+// vpiReg (36.12.1 Table 36-10 details 2 and 6), so an int array's memory words
+// are its int elements. Talos does not create var select objects (37.19) yet,
+// nor reach the elements of an array with a dynamic dimension, so those
+// iterations give a notice.
 module top;
   int ints [3] = '{10, 11, 12};
   logic [7:0] mem [3:1] = '{8'd3, 8'd2, 8'd1};
@@ -23,7 +24,7 @@ endmodule
 
 // CHECK: top.ints
 // CHECK-NEXT:   vpiReg: top.ints[0]=vpiIntVar:10 top.ints[1]=vpiIntVar:11 top.ints[2]=vpiIntVar:12
-// CHECK-NEXT:   vpiMemoryWord: none
+// CHECK-NEXT:   vpiMemoryWord: top.ints[0]=vpiIntVar:10 top.ints[1]=vpiIntVar:11 top.ints[2]=vpiIntVar:12
 // CHECK-NEXT:   vpiVarSelect: var select objects of an array are not available through VPI
 // CHECK-NEXT:   vpiVarSelect: none
 // CHECK-NEXT: top.mem

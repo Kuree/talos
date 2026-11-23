@@ -72,8 +72,13 @@ add("37.12; 37.20; 37.85",
     vpiMemory, Mode::Iterate, S({vpiRegArray}), Order::None);
 add("37.20", S({vpiModule}), vpiMemory, Mode::Iterate, S({vpiRegArray}),
     Order::None);
-add("37.20", S({vpiRegArray}), vpiMemoryWord, Mode::Iterate, S({vpiReg}),
-    Order::Index);
+// 36.12.1 Table 36-10 details 2 and 6: an iterator alias of vpiReg.
+add("37.20; 36.12.1", S({vpiRegArray}), vpiMemoryWord, Mode::Iterate,
+    S({vpiIntegerVar, vpiRealVar, vpiReg, vpiRegBit, vpiTimeVar,
+       vpiRegArray, vpiLongIntVar, vpiShortIntVar, vpiIntVar, vpiShortRealVar,
+       vpiByteVar, vpiClassVar, vpiStringVar, vpiEnumVar, vpiStructVar,
+       vpiUnionVar, vpiBitVar, vpiChandleVar, vpiPackedArrayVar,
+       vpiVirtualInterfaceVar}), Order::Index);
 add("37.39", S({vpiPathTerm}), vpiModPath, Mode::Handle, S({vpiModPath}),
     Order::None);
 add("37.5", S({vpiModule}), vpiModPath, Mode::Iterate, S({vpiModPath}),
