@@ -168,8 +168,8 @@ talos_rt_status releaseCapturedAutomaticStates(const Image &image,
   // Decrement in place without allocating. If a duplicate capture exceeds
   // the available count, restore all earlier decrements before failing.
   std::lock_guard<TalosContextMutex> lock(context->mutex);
-  auto rollback = [&](uint64_t end) {
-    for (uint64_t index = firstCapture; index != end; ++index) {
+  auto rollback = [&, begin = firstCapture](uint64_t end) {
+    for (uint64_t index = begin; index != end; ++index) {
       uint64_t stable = UINT64_MAX;
       bool hasHandle = false;
       if (stableAt(index, stable, hasHandle) != TALOS_RT_OK || !hasHandle)
