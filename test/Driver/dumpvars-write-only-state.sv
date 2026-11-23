@@ -17,8 +17,10 @@ module top;
   end
 endmodule
 
+// CHECK: $var reg 4 [[INIT:[^ ]+]] initialized [3:0] $end
+// CHECK: $var reg 4 [[WRITTEN:[^ ]+]] written [3:0] $end
 // CHECK: #0
-// CHECK-DAG: b10x1 !
-// CHECK-DAG: b101 "
+// CHECK-DAG: b10x1 [[INIT]]
+// CHECK-DAG: b101 [[WRITTEN]]
 // CHECK: #1
-// CHECK: b110 "
+// CHECK: b110 [[WRITTEN]]

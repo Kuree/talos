@@ -33,62 +33,62 @@ endmodule
 // VCD: $enddefinitions $end
 // VCD-NEXT: #0
 // VCD-NEXT: $dumpvars
-// VCD-NEXT: 0[[CLK]]
-// VCD-NEXT: b0 [[A]]
-// VCD-NEXT: b1111 [[B]]
+// VCD-DAG: 0[[CLK]]
+// VCD-DAG: b0 [[A]]
+// VCD-DAG: b1111 [[B]]
 // VCD-NEXT: $end
 // VCD-NEXT: #5
-// VCD-NEXT: 1[[CLK]]
-// VCD-NEXT: b11 [[A]]
-// VCD-NEXT: b1100 [[B]]
+// VCD-DAG: 1[[CLK]]
+// VCD-DAG: b11 [[A]]
+// VCD-DAG: b1100 [[B]]
 // VCD-NEXT: #10
-// VCD-NEXT: 0[[CLK]]
+// VCD-DAG: 0[[CLK]]
 // VCD-NEXT: #15
-// VCD-NEXT: 1[[CLK]]
-// VCD-NEXT: b110 [[A]]
-// VCD-NEXT: b1001 [[B]]
+// VCD-DAG: 1[[CLK]]
+// VCD-DAG: b110 [[A]]
+// VCD-DAG: b1001 [[B]]
 // VCD-NEXT: #20
-// VCD-NEXT: 0[[CLK]]
+// VCD-DAG: 0[[CLK]]
 // VCD-NEXT: #23
 // VCD-NEXT: $dumpoff
-// VCD-NEXT: x[[CLK]]
-// VCD-NEXT: bx [[A]]
-// VCD-NEXT: bx [[B]]
+// VCD-DAG: x[[CLK]]
+// VCD-DAG: bx [[A]]
+// VCD-DAG: bx [[B]]
 // VCD-NEXT: $end
 // VCD-NEXT: #43
 // VCD-NEXT: $dumpon
-// VCD-NEXT: 0[[CLK]]
-// VCD-NEXT: b1100 [[A]]
-// VCD-NEXT: b11 [[B]]
+// VCD-DAG: 0[[CLK]]
+// VCD-DAG: b1100 [[A]]
+// VCD-DAG: b11 [[B]]
 // VCD-NEXT: $end
 // VCD-NEXT: #45
-// VCD-NEXT: 1[[CLK]]
-// VCD-NEXT: b1111 [[A]]
-// VCD-NEXT: b0 [[B]]
+// VCD-DAG: 1[[CLK]]
+// VCD-DAG: b1111 [[A]]
+// VCD-DAG: b0 [[B]]
 // VCD-NEXT: #50
-// VCD-NEXT: 0[[CLK]]
+// VCD-DAG: 0[[CLK]]
 // VCD-NEXT: #55
-// VCD-NEXT: 1[[CLK]]
-// VCD-NEXT: b10010 [[A]]
-// VCD-NEXT: b11101 [[B]]
+// VCD-DAG: 1[[CLK]]
+// VCD-DAG: b10010 [[A]]
+// VCD-DAG: b11101 [[B]]
 // VCD-NEXT: #60
-// VCD-NEXT: 0[[CLK]]
+// VCD-DAG: 0[[CLK]]
 // VCD-NEXT: #63
 // VCD-NEXT: $dumpall
-// VCD-NEXT: 0[[CLK]]
-// VCD-NEXT: b10010 [[A]]
-// VCD-NEXT: b11101 [[B]]
+// VCD-DAG: 0[[CLK]]
+// VCD-DAG: b10010 [[A]]
+// VCD-DAG: b11101 [[B]]
 // VCD-NEXT: $end
 // VCD-NEXT: #65
-// VCD-NEXT: 1[[CLK]]
-// VCD-NEXT: b10101 [[A]]
-// VCD-NEXT: b11010 [[B]]
+// VCD-DAG: 1[[CLK]]
+// VCD-DAG: b10101 [[A]]
+// VCD-DAG: b11010 [[B]]
 // VCD-NEXT: #70
-// VCD-NEXT: 0[[CLK]]
+// VCD-DAG: 0[[CLK]]
 // VCD-NEXT: #75
-// VCD-NEXT: 1[[CLK]]
-// VCD-NEXT: b11000 [[A]]
-// VCD-NEXT: b10111 [[B]]
+// VCD-DAG: 1[[CLK]]
+// VCD-DAG: b11000 [[A]]
+// VCD-DAG: b10111 [[B]]
 // VCD-NOT: #
 
 // The loop kept the clock: it is prepared at time zero and again after each

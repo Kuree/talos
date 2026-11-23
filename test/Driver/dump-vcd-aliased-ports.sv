@@ -21,6 +21,8 @@ module top;
   initial begin
     $dumpfile("s3.vcd");
     $dumpvars(0, top);
+    // Fix the header before the first sample to inspect compiler-proven aliases.
+    $dumpflush;
     #32 $finish;
   end
 endmodule

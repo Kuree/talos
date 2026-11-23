@@ -40,6 +40,8 @@ module top;
   initial begin
     $dumpfile("ports.vcd");
     $dumpvars(0, top);
+    // Fix the header before the first sample to inspect compiler-proven aliases.
+    $dumpflush;
     #12 $finish;
   end
 endmodule

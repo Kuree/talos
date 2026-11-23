@@ -31,6 +31,8 @@ module top;
   initial begin
     $dumpfile("u.vcd");
     $dumpvars(0, top);
+    // Keep the declaration IDs used by this record-by-record packing test.
+    $dumpflush;
     #32 $finish;
   end
 endmodule

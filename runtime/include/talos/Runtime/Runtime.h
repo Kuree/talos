@@ -5250,6 +5250,12 @@ talos_rt_status talos_rt_v1_scheduler_run_aot(talos_rt_context *context);
 //
 // Selecting a nonexistent path reports INVALID_HANDLE; `$dumpvars` with no
 // prior `$dumpfile` opens the IEEE default `dump.vcd`.
+// Ordinary VCD uses compact sampled histories by default. A replaceable POSIX
+// file can share identifiers across matching histories. Pipes and other
+// append-only destinations use fixed identifiers with the same frame encoder.
+// TALOS_RT_VCD_COMPACT_FILE overrides the output path (e.g. /dev/shm/run.vcd
+// for a RAM-backed waveform and journal). Normal completion publishes all
+// samples. An interrupted simulation retains its last published prefix.
 talos_rt_status talos_rt_v1_dump_open(talos_rt_context *context,
                                       const uint8_t *path, uint64_t path_size);
 talos_rt_status talos_rt_v1_dump_open_string(talos_rt_context *context,

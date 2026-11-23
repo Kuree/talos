@@ -12,8 +12,15 @@
 
 #include "gtest/gtest.h"
 
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+#include <linux/fs.h>
+#include <sys/ioctl.h>
+#include <sys/xattr.h>
+#endif
+
 #include <array>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -570,11 +577,263 @@ TEST(VCD, AliasesShareOneIdentifierCode) {
   EXPECT_NE(clk, count);
 }
 
+#if (defined(__unix__) || defined(__APPLE__)) && !defined(__EMSCRIPTEN__)
+// Once $dumpflush returns, a reader holding that file descriptor must also see
+// later samples. The prefix includes values recorded before the signals split.
+TEST(VCD, CompactFlushRestoresIndependentHistories) {
+  Fixture f;
+  ASSERT_EQ(f.create(), TALOS_RT_OK);
+  ASSERT_EQ(f.openDump(), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(f.context, 0, nullptr, 0), TALOS_RT_OK);
+  for (unsigned i = 0; i < 5; ++i) {
+    f.setBits(kDataBit, 8, i, 0);
+    f.setBits(kStructBit, 8, i, 0);
+    f.advanceTo(i + 1);
+  }
+  ASSERT_EQ(talos_rt_v1_dump_flush(f.context), TALOS_RT_OK);
+  std::ifstream reader(f.path);
+  ASSERT_TRUE(reader);
+  f.setBits(kDataBit, 8, 7, 3);
+  f.advanceTo(6);
+  ASSERT_EQ(talos_rt_v1_dump_all(f.context), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_control(f.context, 0), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_control(f.context, 1), TALOS_RT_OK);
+  auto closed = f.read();
+  std::ostringstream observed;
+  observed << reader.rdbuf();
+  EXPECT_EQ(observed.str(), closed);
+  std::string data = identifierFor(closed, "data");
+  EXPECT_EQ(data, identifierFor(closed, "bus"));
+  EXPECT_NE(data, identifierFor(closed, "st"));
+  EXPECT_EQ(valueRecords(closed, data),
+            (std::vector<std::string>{"b0", "b1", "b10", "b11", "b100", "b1zz",
+                                      "b1zz", "bx", "b1zz"}));
+}
+
+TEST(VCD, CompactSplitKeepsBothPreviousValuesAndTimestamps) {
+  Fixture f;
+  ASSERT_EQ(f.create(), TALOS_RT_OK);
+  ASSERT_EQ(f.openDump(), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(f.context, 0, nullptr, 0), TALOS_RT_OK);
+  f.setBits(kDataBit, 8, 0, 0);
+  f.setBits(kStructBit, 8, 0, 0);
+  double real = 1.5;
+  uint64_t bits;
+  std::memcpy(&bits, &real, sizeof(bits));
+  f.setBits(kRealBit, 64, bits, 0);
+  f.advanceTo(130);
+  f.setBits(kDataBit, 8, 2, 3);
+  f.setBits(kStructBit, 8, 2, 3);
+  f.advanceTo(UINT64_MAX - 1);
+  f.setBits(kStructBit, 8, 3, 3);
+  // The runtime can observe a second sample with the same scheduler time.
+  f.advanceTo(UINT64_MAX - 1);
+  f.setBits(kDataBit, 8, 4, 0);
+  auto text = f.read();
+  auto data = identifierFor(text, "data"), other = identifierFor(text, "st");
+  EXPECT_NE(data, other);
+  EXPECT_EQ(valueRecords(text, data),
+            (std::vector<std::string>{"b0", "b0zx", "b100"}));
+  EXPECT_EQ(valueRecords(text, other),
+            (std::vector<std::string>{"b0", "b0zx", "b0zz"}));
+  EXPECT_EQ(valueRecords(text, identifierFor(text, "rv")),
+            (std::vector<std::string>{"r1.5"}));
+  EXPECT_EQ(countOccurrences(text, "#18446744073709551614\n"), 1u);
+  EXPECT_EQ(countOccurrences(text, "#130\n"), 1u);
+}
+
+TEST(VCD, LateLimitDoesNotExpandAnAlreadyPublishedCompactPrefix) {
+  Fixture f;
+  ASSERT_EQ(f.create(), TALOS_RT_OK);
+  ASSERT_EQ(f.openDump(), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(f.context, 0, nullptr, 0), TALOS_RT_OK);
+  f.setBits(kDataBit, 8, 1, 0);
+  f.setBits(kStructBit, 8, 1, 0);
+  f.advanceTo(1);
+  auto size = std::filesystem::file_size(f.path);
+  ASSERT_GT(size, 0u);
+  ASSERT_EQ(talos_rt_v1_dump_limit(f.context, size + 2), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_flush(f.context), TALOS_RT_OK);
+  EXPECT_EQ(std::filesystem::file_size(f.path), size);
+  f.setBits(kDataBit, 8, 9, 0);
+  f.advanceTo(200);
+  auto text = f.read();
+  EXPECT_EQ(text.find("$comment dump limit"), size);
+  EXPECT_EQ(identifierFor(text, "st"), identifierFor(text, "data"));
+}
+
+TEST(VCD, LateLimitKeepsCompleteRecordsFromTheSplittingSample) {
+  Fixture f;
+  ASSERT_EQ(f.create(), TALOS_RT_OK);
+  ASSERT_EQ(f.openDump(), TALOS_RT_OK);
+  for (std::string_view name : {"top.clk", "top.data", "top.st"})
+    ASSERT_EQ(talos_rt_v1_dump_vars(
+                  f.context, 0, reinterpret_cast<const uint8_t *>(name.data()),
+                  name.size()),
+              TALOS_RT_OK);
+  f.setBits(kClkBit, 1, 0, 0);
+  f.setBits(kDataBit, 8, 0, 0);
+  f.setBits(kStructBit, 8, 0, 0);
+  f.advanceTo(2);
+  // Five bytes duplicate the initial vector. The timestamp and the scalar
+  // use another six. The eight-bit vector in this sample cannot fit.
+  auto limit = std::filesystem::file_size(f.path) + 11;
+  ASSERT_EQ(talos_rt_v1_dump_limit(f.context, limit), TALOS_RT_OK);
+  f.setBits(kClkBit, 1, 1, 0);
+  f.setBits(kStructBit, 8, 255, 0);
+  f.advanceTo(3);
+  auto text = f.read();
+  EXPECT_EQ(text.find("$comment dump limit"), limit);
+  EXPECT_NE(text.find("#2\n1" + identifierFor(text, "clk") + "\n$comment"),
+            std::string::npos);
+  EXPECT_EQ(valueRecords(text, identifierFor(text, "st")),
+            (std::vector<std::string>{"b0"}));
+  EXPECT_NE(identifierFor(text, "data"), identifierFor(text, "st"));
+}
+
+TEST(VCD, CompactCheckpointHistorySurvivesALaterSplit) {
+  Fixture f;
+  ASSERT_EQ(f.create(), TALOS_RT_OK);
+  ASSERT_EQ(f.openDump(), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(f.context, 0, nullptr, 0), TALOS_RT_OK);
+  f.setBits(kArrayBit, 12, 0, 0);
+  f.advanceTo(10);
+  f.setBits(kArrayBit, 12, 0x555, 0);
+  ASSERT_EQ(talos_rt_v1_dump_all(f.context), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_control(f.context, 0), TALOS_RT_OK);
+  f.advanceTo(20);
+  f.setBits(kArrayBit + 8, 4, 15, 0);
+  ASSERT_EQ(talos_rt_v1_dump_control(f.context, 1), TALOS_RT_OK);
+  auto text = f.read();
+  auto common = identifierFor(text, "mem[0]");
+  auto split = identifierFor(text, "mem[2]");
+  ASSERT_FALSE(common.empty());
+  ASSERT_FALSE(split.empty());
+  EXPECT_EQ(common, identifierFor(text, "mem[1]"));
+  EXPECT_NE(common, split);
+  EXPECT_EQ(valueRecords(text, common),
+            (std::vector<std::string>{"b0", "b101", "bx", "b101"}));
+  EXPECT_EQ(valueRecords(text, split),
+            (std::vector<std::string>{"b0", "b101", "bx", "b1111"}));
+  EXPECT_EQ(countOccurrences(text, "#10\n"), 1u);
+  EXPECT_EQ(countOccurrences(text, "#20\n"), 1u);
+}
+
+TEST(VCD, HardLinkedOutputPreservesBothNamesAndIndependentChanges) {
+  Fixture f;
+  ASSERT_EQ(f.create(), TALOS_RT_OK);
+  std::ofstream(f.path).close();
+  auto linked = f.directory / "linked.vcd";
+  std::filesystem::create_hard_link(f.path, linked);
+  ASSERT_EQ(f.openDump(), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(f.context, 0, nullptr, 0), TALOS_RT_OK);
+  f.setBits(kDataBit, 8, 4, 0);
+  f.setBits(kStructBit, 8, 4, 0);
+  f.advanceTo(2);
+  f.setBits(kStructBit, 8, 5, 0);
+  auto text = f.read();
+  EXPECT_TRUE(std::filesystem::equivalent(f.path, linked));
+  EXPECT_EQ(valueRecords(text, identifierFor(text, "data")),
+            (std::vector<std::string>{"b100"}));
+  EXPECT_EQ(valueRecords(text, identifierFor(text, "st")),
+            (std::vector<std::string>{"b100", "b101"}));
+  std::filesystem::remove(linked);
+}
+
+TEST(VCD, ReplayLeavesARenamedDestinationAlone) {
+  Fixture f;
+  ASSERT_EQ(f.create(), TALOS_RT_OK);
+  ASSERT_EQ(f.openDump(), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(f.context, 0, nullptr, 0), TALOS_RT_OK);
+  f.advanceTo(1);
+  auto original = f.directory / "original.vcd";
+  std::filesystem::rename(f.path, original);
+  std::ofstream(f.path) << "replacement";
+  EXPECT_EQ(talos_rt_v1_dump_flush(f.context), TALOS_RT_IO_ERROR);
+  EXPECT_EQ(talos_rt_v1_dump_close(f.context), TALOS_RT_IO_ERROR);
+  std::string contents;
+  std::ifstream replacement(f.path);
+  std::getline(replacement, contents);
+  EXPECT_EQ(contents, "replacement");
+  EXPECT_GT(std::filesystem::file_size(original), 0u);
+  std::filesystem::remove(original);
+}
+
+#if defined(__linux__)
+TEST(VCD, LimitCommentWriteFailureReachesTheCaller) {
+  Fixture f;
+  ASSERT_EQ(f.create(), TALOS_RT_OK);
+  std::filesystem::create_symlink("/dev/full", f.path);
+  ASSERT_EQ(f.openDump(), TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_dump_limit(f.context, 0), TALOS_RT_IO_ERROR);
+  EXPECT_EQ(talos_rt_v1_dump_flush(f.context), TALOS_RT_IO_ERROR);
+  EXPECT_EQ(talos_rt_v1_dump_close(f.context), TALOS_RT_IO_ERROR);
+  // The next $dumpfile before the first sample starts a new output session.
+  ASSERT_TRUE(std::filesystem::remove(f.path));
+  ASSERT_EQ(f.openDump(), TALOS_RT_OK);
+  EXPECT_NE(f.read().find("$comment dump limit"), std::string::npos);
+}
+
+TEST(VCD, SnapshotPreservesExistingFileAttributes) {
+  Fixture f;
+  ASSERT_EQ(f.create(), TALOS_RT_OK);
+  std::ofstream(f.path).close();
+  constexpr char attribute[] = "user.talos-vcd-test";
+  int result = ::setxattr(f.path.c_str(), attribute, "vcd", 3, 0);
+  if (result != 0 && errno == ENOTSUP)
+    GTEST_SKIP() << "filesystem does not support extended attributes";
+  ASSERT_EQ(result, 0);
+  char value[3];
+  ASSERT_EQ(::getxattr(f.path.c_str(), attribute, value, sizeof(value)), 3);
+  ASSERT_EQ(f.openDump(), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(f.context, 0, nullptr, 0), TALOS_RT_OK);
+  f.advanceTo(1);
+  EXPECT_FALSE(f.read().empty());
+  ASSERT_EQ(::getxattr(f.path.c_str(), attribute, value, sizeof(value)), 3);
+  EXPECT_EQ(std::string_view(value, 3), "vcd");
+}
+
+TEST(VCD, SnapshotPreservesTheNoDumpInodeFlag) {
+  Fixture f;
+  ASSERT_EQ(f.create(), TALOS_RT_OK);
+  std::unique_ptr<std::FILE, decltype(&std::fclose)> file(
+      std::fopen(f.path.c_str(), "w+b"), &std::fclose);
+  ASSERT_TRUE(file);
+  unsigned long flags = 0;
+  if (::ioctl(fileno(file.get()), FS_IOC_GETFLAGS, &flags) != 0)
+    GTEST_SKIP() << "filesystem does not expose inode flags";
+  flags |= FS_NODUMP_FL;
+  if (::ioctl(fileno(file.get()), FS_IOC_SETFLAGS, &flags) != 0)
+    GTEST_SKIP() << "filesystem does not allow setting the nodump flag";
+  file.reset();
+  ASSERT_EQ(f.openDump(), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(f.context, 0, nullptr, 0), TALOS_RT_OK);
+  f.advanceTo(1);
+  EXPECT_FALSE(f.read().empty());
+  file.reset(std::fopen(f.path.c_str(), "rb"));
+  ASSERT_TRUE(file);
+  ASSERT_EQ(::ioctl(fileno(file.get()), FS_IOC_GETFLAGS, &flags), 0);
+  EXPECT_NE(flags & FS_NODUMP_FL, 0u);
+}
+#endif
+
+TEST(VCD, CompactCaptureHonorsAnExistingZeroLimit) {
+  Fixture f;
+  ASSERT_EQ(f.create(), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_limit(f.context, 0), TALOS_RT_OK);
+  ASSERT_EQ(f.openDump(), TALOS_RT_OK);
+  auto text = f.read();
+  EXPECT_EQ(text.find("$var "), std::string::npos);
+  EXPECT_NE(text.find("$comment"), std::string::npos);
+}
+#endif
+
 TEST(VCD, AliasesAreEachDeclaredWithTheirOwnName) {
   Fixture fixture;
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
+  fixture.setBits(kStructBit, 8, 1, 0);
   fixture.advanceTo(10);
   std::string text = fixture.read();
 
@@ -764,6 +1023,7 @@ TEST(VCD, UnpackedArraysAreExpandedPerElement) {
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
+  fixture.setBits(kArrayBit + 4, 4, 1, 0);
   fixture.advanceTo(10);
   std::string text = fixture.read();
 
@@ -777,7 +1037,7 @@ TEST(VCD, UnpackedArraysAreExpandedPerElement) {
   // Neither the smashed vector nor the element bounds survive.
   EXPECT_EQ(text.find(" mem [11:0] $end"), std::string::npos);
   EXPECT_EQ(text.find(" mem [0:2] $end"), std::string::npos);
-  // Elements are distinct signals, not aliases of one range.
+  // The first two elements have different sampled values.
   EXPECT_NE(identifierFor(text, "mem[0]"), identifierFor(text, "mem[1]"));
 }
 

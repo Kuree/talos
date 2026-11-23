@@ -11,10 +11,29 @@
 #include "DesignBytecodeNets.h"
 #include "ProcessContext.h"
 #include "RuntimeInternal.h"
+#include "VCDCompact.h"
 #include "VCDFormat.h"
 #include "talos/Reflection/DesignReflection.h"
 
+#if (defined(__unix__) || defined(__APPLE__)) && !defined(__EMSCRIPTEN__)
+#define TALOS_POSIX_COMPACT_VCD 1
+#if defined(__linux__) || defined(__APPLE__)
+#include <sys/xattr.h>
+#endif
+#ifdef __linux__
+#include <linux/fs.h>
+#include <sys/ioctl.h>
+#endif
+#ifdef __APPLE__
+#include <copyfile.h>
+#endif
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
 #include <algorithm>
+#include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -27,8 +46,10 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -249,11 +270,6 @@ struct TraceVariable {
   bool isReal = false;
   // Zero for ordinary VCD. EVCD stores the port-direction capability bits.
   uint32_t portCaps = 0;
-  // The identifier code's characters as one word (unused bytes zero) and its
-  // length, when it has at most eight: a record copies the whole word. Zero
-  // length means the code is read from VCDTraceState::codeText.
-  uint64_t codeWord = 0;
-  uint8_t codeLength = 0;
   // EVCD only: per bit, the drivers on both sides of the dumped instance
   // boundary (IEEE 1800-2023 21.7.4.3.2). Empty unless both sides drive.
   struct BoundaryDriver {
@@ -327,6 +343,7 @@ public:
     return storage.data() + used;
   }
   void commit(size_t size) { used += size; }
+  void truncate(size_t size) { used = size; }
   const char *data() const { return storage.data(); }
   size_t size() const { return used; }
   bool empty() const { return used == 0; }
@@ -379,7 +396,15 @@ struct EVCDSession {
 
 // Defined outside the anonymous namespace so the context can hold a pointer to
 // it without exposing the layout to every translation unit.
+struct CompactVCDState : talos::runtime::vcd::CompactTrace {
+  OutputBuffer frame;
+  std::vector<char> replay;
+  std::chrono::steady_clock::time_point nextCheckpoint;
+};
+
 struct VCDTraceState {
+  talos_rt_status outputStatus = TALOS_RT_OK;
+  std::unique_ptr<CompactVCDState> compact;
   std::FILE *file = nullptr;
   std::string path;
   OutputBuffer buffer;
@@ -414,8 +439,6 @@ struct VCDTraceState {
   bool haveEmittedTime = false;
   uint64_t emittedTime = 0;
 
-  // Reused across records so emission never allocates in steady state.
-  std::string scratch;
   // The output so far ends a line: a limit comment needs no line break.
   bool atLineStart = true;
 };
@@ -433,17 +456,46 @@ bool limitEnabled(const VCDTraceState &state) { return state.limitSet; }
 // called, so `$dumplimit(0)` is the normative zero-byte maximum.
 bool limitEnabled(const EVCDSession &state) { return state.limitBytes != 0; }
 
+template <typename State> void flushBuffer(State &state) {
+  if (!state.file)
+    return;
+  bool ok = true;
+  if (!state.buffer.empty()) {
+    ok = std::fwrite(state.buffer.data(), 1, state.buffer.size(), state.file) ==
+         state.buffer.size();
+    state.buffer.clear();
+  }
+  if (std::fflush(state.file) != 0 || std::ferror(state.file))
+    ok = false;
+  if constexpr (std::is_same_v<State, VCDTraceState>)
+    if (!ok)
+      state.outputStatus = TALOS_RT_IO_ERROR;
+}
+
+template <typename State> void closeFile(State &state) {
+  if (!state.file)
+    return;
+  flushBuffer(state);
+  int result = std::fclose(state.file);
+  state.file = nullptr;
+  if constexpr (std::is_same_v<State, VCDTraceState>)
+    if (result != 0)
+      state.outputStatus = TALOS_RT_IO_ERROR;
+}
+
 template <typename State>
 void appendRaw(State &state, const char *data, size_t size) {
   if (!state.file)
     return;
+  if constexpr (std::is_same_v<State, VCDTraceState>)
+    if (state.compact && state.compact->journal &&
+        state.compact->collectingHeader)
+      state.compact->header.append(data, size);
   state.buffer.append(data, size);
   if (size != 0)
     state.atLineStart = data[size - 1] == '\n';
-  if (state.buffer.size() >= kFlushThreshold) {
-    std::fwrite(state.buffer.data(), 1, state.buffer.size(), state.file);
-    state.buffer.clear();
-  }
+  if (state.buffer.size() >= kFlushThreshold)
+    flushBuffer(state);
 }
 
 template <typename State> void append(State &state, std::string_view text) {
@@ -459,43 +511,11 @@ template <typename State> void append(State &state, std::string_view text) {
   appendRaw(state, text.data(), text.size());
 }
 
-/// Space for one record of at most `capacity` bytes at the end of the output
-/// buffer. The caller formats the record there and passes its end to
-/// commitRecord: the bytes are written once, with no intermediate copy.
-char *beginRecord(VCDTraceState &state, size_t capacity) {
-  return state.buffer.tail(capacity);
-}
-
-/// Keeps the record begun at `begin` and ending at `end`, or drops all of it
-/// when $dumplimit stops the output before it (21.7.1.5: never inside it).
-/// Same accounting as append.
-void commitRecord(VCDTraceState &state, const char *begin, const char *end) {
-  size_t size = static_cast<size_t>(end - begin);
-  bool keep = !state.limitReached;
-  if (keep && limitEnabled(state) &&
-      (state.writtenBytes >= state.limitBytes ||
-       size > state.limitBytes - state.writtenBytes)) {
-    state.limitReached = true;
-    keep = false;
-  }
-  if (keep)
-    state.writtenBytes += size;
-  if (!keep || !state.file)
-    return;
-  state.buffer.commit(size);
-  if (size != 0)
-    state.atLineStart = end[-1] == '\n';
-  if (state.buffer.size() >= kFlushThreshold) {
-    std::fwrite(state.buffer.data(), 1, state.buffer.size(), state.file);
-    state.buffer.clear();
-  }
-}
-
 /// Appends one record built from `parts` at once, so a $dumplimit stops before
 /// the whole record or after it, never inside it (21.7.1.5, Syntax 21-20).
 /// The record is built in `state.scratch`: no part may view that buffer.
-template <typename State>
-void appendRecord(State &state, std::initializer_list<std::string_view> parts) {
+void appendRecord(EVCDSession &state,
+                  std::initializer_list<std::string_view> parts) {
   std::string &record = state.scratch;
   record.clear();
   for (std::string_view part : parts)
@@ -519,26 +539,6 @@ template <typename State> void appendSigned(State &state, int64_t value) {
     append(state, std::string_view(digits, static_cast<size_t>(length)));
 }
 
-template <typename State> void flushBuffer(State &state) {
-  if (state.file && !state.buffer.empty()) {
-    std::fwrite(state.buffer.data(), 1, state.buffer.size(), state.file);
-    state.buffer.clear();
-  }
-  if (state.file)
-    std::fflush(state.file);
-}
-
-template <typename State> void closeFile(State &state) {
-  if (!state.file)
-    return;
-  if (!state.buffer.empty()) {
-    std::fwrite(state.buffer.data(), 1, state.buffer.size(), state.file);
-    state.buffer.clear();
-  }
-  std::fclose(state.file);
-  state.file = nullptr;
-}
-
 // The limit comment is expressly outside the limited waveform payload: IEEE
 // 21.7.1.5 requires it after dumping reaches the requested maximum. Use the
 // raw buffered path so the limiter cannot suppress its own diagnostic.
@@ -552,6 +552,7 @@ void finishLimit(VCDTraceState &state) {
       std::to_string(state.limitBytes) + " bytes reached $end\n";
   appendRaw(state, comment.data(), comment.size());
   closeFile(state);
+  state.compact.reset();
 }
 
 template <typename State>
@@ -877,10 +878,6 @@ struct PlanBuilder {
       variable.fourState = fourState;
       variable.isReal = isReal;
       std::string text = identifierCode(code);
-      if (text.size() <= sizeof(variable.codeWord)) {
-        std::memcpy(&variable.codeWord, text.data(), text.size());
-        variable.codeLength = static_cast<uint8_t>(text.size());
-      }
       state.variables.push_back(variable);
       state.codeText.push_back(std::move(text));
     } else if (fourState) {
@@ -895,6 +892,9 @@ struct PlanBuilder {
     append(state, " ");
     appendUnsigned(state, width);
     append(state, " ");
+    if (state.compact->journal)
+      state.compact->headerCodes.push_back(
+          {state.compact->header.size(), code, state.codeText[code].size()});
     append(state, state.codeText[code]);
     append(state, " ");
     append(state, name);
@@ -1158,7 +1158,7 @@ char *formatDecimal(uint64_t value, char *end) {
   return end;
 }
 
-template <typename State> void emitTime(State &state, uint64_t time) {
+void emitTime(EVCDSession &state, uint64_t time) {
   if (state.haveEmittedTime && state.emittedTime == time)
     return;
   // `#`, at most 20 digits and a newline, as one record.
@@ -1288,32 +1288,10 @@ char *formatWordDigits(uint64_t value, uint64_t unknown, unsigned count,
   return out;
 }
 
-// Emit one value record. Vectors drop redundant leading characters under the
-// IEEE left-extension rule: a leading `0` is always implied, a leading `x` or
-// `z` repeats, and a leading `1` never may be dropped.
-/// Writes `variable`'s identifier code at `out`, which has eight bytes of room
-/// past the code; returns the end.
-char *writeCode(char *out, const TraceVariable &variable,
-                const std::string &code) {
-  if (variable.codeLength != 0) {
-    std::memcpy(out, &variable.codeWord, sizeof(variable.codeWord));
-    return out + variable.codeLength;
-  }
-  std::memcpy(out, code.data(), code.size());
-  return out + code.size();
-}
-
-// A real's `r` record. Out of line: its floating-point state would otherwise
-// make every emitValue call save and restore the floating-point registers.
-[[gnu::noinline]] void emitRealValue(VCDTraceState &state,
-                                     const TraceVariable &variable,
-                                     const uint8_t *valuePlane) {
-  uint64_t word = 0;
-  for (uint64_t index = 0; index != variable.width && index != 64; ++index)
-    if (bitAt(valuePlane, variable.sourceBit + index))
-      word |= uint64_t{1} << index;
+[[gnu::noinline]] int formatRealWord(uint64_t word, uint64_t width,
+                                     char *text) {
   double value = 0;
-  if (variable.width == 32) {
+  if (width == 32) {
     uint32_t shortBits = static_cast<uint32_t>(word);
     float shortValue = 0;
     std::memcpy(&shortValue, &shortBits, sizeof(shortValue));
@@ -1321,89 +1299,7 @@ char *writeCode(char *out, const TraceVariable &variable,
   } else {
     std::memcpy(&value, &word, sizeof(value));
   }
-  char text[40];
-  int length = std::snprintf(text, sizeof(text), "r%.16g", value);
-  appendRecord(
-      state,
-      {std::string_view(text, length > 0 ? static_cast<size_t>(length) : 0),
-       " ", state.codeText[variable.code], "\n"});
-}
-
-void emitKnownValue(VCDTraceState &state, const TraceVariable &variable,
-                    uint64_t value) {
-  const std::string &code = state.codeText[variable.code];
-  char *text = beginRecord(state, variable.width + code.size() + 3 + 16);
-  char *out = text;
-  if (variable.width == 1) {
-    *out++ = value ? '1' : '0';
-  } else {
-    *out++ = 'b';
-    out = formatKnownBinary(value, out);
-    *out++ = ' ';
-  }
-  out = writeCode(out, variable, code);
-  *out++ = '\n';
-  commitRecord(state, text, out);
-}
-
-void emitValue(VCDTraceState &state, const TraceVariable &variable,
-               const uint8_t *valuePlane, const uint8_t *unknownPlane) {
-  if (variable.isReal)
-    return emitRealValue(state, variable, valuePlane);
-  if (variable.width == 1) {
-    const std::string &code = state.codeText[variable.code];
-    char *record = beginRecord(state, code.size() + 2 + 8);
-    record[0] = fourStateChar(bitAt(valuePlane, variable.sourceBit),
-                              variable.fourState &&
-                                  bitAt(unknownPlane, variable.sourceBit));
-    char *out = writeCode(record + 1, variable, code);
-    *out++ = '\n';
-    commitRecord(state, record, out);
-    return;
-  }
-  const std::string &code = state.codeText[variable.code];
-  if (variable.width <= 64) {
-    size_t planeBytes = state.shadowValue.size();
-    uint64_t value =
-        loadWord(valuePlane, planeBytes, variable.sourceBit, variable.width);
-    uint64_t unknown =
-        variable.fourState ? loadWord(unknownPlane, planeBytes,
-                                      variable.sourceBit, variable.width)
-                           : 0;
-    if (!unknown)
-      return emitKnownValue(state, variable, value);
-  }
-  // Find the printable suffix before reserving space. A large mostly-zero
-  // vector then writes only its significant words into the output buffer.
-  const uint8_t *unknown = variable.fourState ? unknownPlane : nullptr;
-  size_t bytes = state.shadowValue.size();
-  size_t width = talos::runtime::vcd::compactVectorWidth(
-      valuePlane, unknown, bytes, variable.sourceBit, variable.width);
-  char *text = beginRecord(state, width + code.size() + 3 + 16);
-  text[0] = 'b';
-  char *out = talos::runtime::vcd::formatVectorDigits(
-      valuePlane, unknown, bytes, variable.sourceBit, width, text + 1);
-  *out++ = ' ';
-  out = writeCode(out, variable, code);
-  *out++ = '\n';
-  commitRecord(state, text, out);
-}
-
-// `$dumpoff` records every variable as X without disturbing the shadow, so the
-// following `$dumpon` republishes real values rather than a difference against
-// the checkpoint.
-void emitAllX(VCDTraceState &state) {
-  for (const TraceVariable &variable : state.variables) {
-    // VCD has no unknown encoding for a real, so a suspended real simply keeps
-    // its last recorded value until $dumpon republishes it.
-    if (variable.isReal)
-      continue;
-    if (variable.width == 1) {
-      appendRecord(state, {"x", state.codeText[variable.code], "\n"});
-      continue;
-    }
-    appendRecord(state, {"bx ", state.codeText[variable.code], "\n"});
-  }
+  return std::snprintf(text, 40, "r%.16g", value);
 }
 
 void updateShadow(VCDTraceState &state, const uint8_t *valuePlane,
@@ -1418,30 +1314,484 @@ void updateShadow(VCDTraceState &state, const uint8_t *valuePlane,
   }
 }
 
-// Emit an explicit simulation-command checkpoint. This is separate from the
-// settled-slot differencer: `$dumpall` is observable even while ordinary
-// dumping is off, and a call before the pending initial sample must not consume
-// that end-of-slot `$dumpvars` sample.
-talos_rt_status emitDumpAll(talos_rt_context *context, VCDTraceState &state) {
-  if (!state.file || !state.planBuilt)
-    return TALOS_RT_OK;
+using talos::runtime::vcd::CompactTrace;
+
+// Small indices, frame sizes and time deltas occupy a single byte.
+char *writeJournalNumber(char *p, uint64_t n) {
+  while (n >= 128) {
+    *p++ = static_cast<char>((n & 127) | 128);
+    n >>= 7;
+  }
+  *p++ = static_cast<char>(n);
+  return p;
+}
+
+bool readJournalNumber(const char *&p, const char *end, uint64_t &value) {
+  value = 0;
+  for (unsigned shift = 0; shift < 64 && p != end; shift += 7) {
+    auto byte = static_cast<uint8_t>(*p++);
+    if (shift == 63 && byte > 1)
+      return false;
+    value |= uint64_t(byte & 127) << shift;
+    if (!(byte & 128))
+      return true;
+  }
+  return false;
+}
+
+void appendJournalNumber(OutputBuffer &buffer, uint64_t n) {
+  char *begin = buffer.tail(10);
+  buffer.commit(writeJournalNumber(begin, n) - begin);
+}
+
+void appendPlane(OutputBuffer &frame, const uint8_t *plane, size_t planeBytes,
+                 const TraceVariable &v) {
+  size_t bytes = (v.width + 7) / 8;
+  char *out = frame.tail(bytes + 8);
+  if (v.sourceBit % 8 == 0) {
+    std::memcpy(out, plane + v.sourceBit / 8, bytes);
+  } else {
+    for (uint64_t low = 0; low < v.width; low += 64) {
+      uint64_t word = loadWord(plane, planeBytes, v.sourceBit + low,
+                               std::min<uint64_t>(64, v.width - low));
+      std::memcpy(out + low / 8, &word, sizeof(word));
+    }
+  }
+  frame.commit(bytes);
+}
+
+enum class FrameKind : uint8_t { Changes, Initial, All, Off, On };
+
+std::string_view commandFor(FrameKind kind) {
+  switch (kind) {
+  case FrameKind::Initial:
+    return "$dumpvars\n";
+  case FrameKind::All:
+    return "$dumpall\n";
+  case FrameKind::Off:
+    return "$dumpoff\n";
+  case FrameKind::On:
+    return "$dumpon\n";
+  case FrameKind::Changes:
+    return {};
+  }
+  return {};
+}
+
+// A journal frame contains one packed value per distinct changed history,
+// including X/Z. Scalar changes need just a node index and a value byte.
+bool captureFrame(VCDTraceState &state, const uint8_t *value,
+                  const uint8_t *unknown, uint64_t time, FrameKind kind) {
+  auto &trace = *state.compact;
+  auto &out = trace.frame;
+  out.clear();
+  // Reserve a prefix for the frame size, filled once the last change is known.
+  out.tail(10);
+  out.commit(10);
+  appendJournalNumber(out, time - state.emittedTime);
+  char command = static_cast<char>(kind);
+  out.append(&command, 1);
+  for (uint32_t c : trace.changed) {
+    const auto &field = trace.fields[c];
+    const auto &group = trace.groups[field.group];
+    const auto &v = state.variables[c];
+    char *start = out.tail(32);
+    char *p = writeJournalNumber(start, group.node);
+    if (kind == FrameKind::Off) {
+      // Each selected integral value has an all-X checkpoint. The node
+      // supplies its width at replay, so the payload is implicit.
+      out.commit(p - start);
+    } else if (v.width == 1 && !v.isReal) {
+      *p++ = fourStateChar(group.value, group.unknown);
+      out.commit(p - start);
+    } else if (v.width <= 64) {
+      size_t bytes = (v.width + 7) / 8;
+      *p++ = group.unknown != 0;
+      std::memcpy(p, &group.value, sizeof(group.value));
+      p += bytes;
+      if (group.unknown) {
+        std::memcpy(p, &group.unknown, sizeof(group.unknown));
+        p += bytes;
+      }
+      out.commit(p - start);
+    } else {
+      char hasUnknown = !v.isReal && v.fourState && unknown;
+      *p++ = hasUnknown;
+      out.commit(p - start);
+      appendPlane(out, value, state.shadowValue.size(), v);
+      if (hasUnknown)
+        appendPlane(out, unknown, state.shadowValue.size(), v);
+    }
+  }
+  if (!trace.journal)
+    return true;
+  uint64_t size = out.size() - 10;
+  char prefix[10];
+  size_t prefixSize = writeJournalNumber(prefix, size) - prefix;
+  char *data = out.tail(0) - size - prefixSize;
+  std::memcpy(data, prefix, prefixSize);
+  if (std::fwrite(data, 1, prefixSize + size, trace.journal.get()) !=
+      prefixSize + size)
+    return false;
+  trace.bytes += prefixSize + size;
+  return true;
+}
+
+// Convert one packed sample or explicit checkpoint to complete VCD records.
+bool renderFrame(const VCDTraceState &state, const CompactTrace::Layout &layout,
+                 const char *frame, size_t length, OutputBuffer &out,
+                 uint64_t &time, bool firstFrame) {
+  const char *p = frame, *end = frame + length;
+  uint64_t delta;
+  if (!readJournalNumber(p, end, delta) || p == end)
+    return false;
+  auto kind = static_cast<FrameKind>(static_cast<uint8_t>(*p++));
+  if (kind > FrameKind::On)
+    return false;
+  time += delta;
+  if (firstFrame || delta) {
+    char digits[24];
+    char *endDigits = digits + sizeof(digits);
+    *--endDigits = '\n';
+    char *begin = formatDecimal(time, endDigits);
+    *--begin = '#';
+    out.append(begin, digits + sizeof(digits) - begin);
+  }
+  auto command = commandFor(kind);
+  out.append(command.data(), command.size());
+  while (p != end) {
+    uint64_t node;
+    if (!readJournalNumber(p, end, node) || node >= layout.spans.size() ||
+        (p == end && kind != FrameKind::Off))
+      return false;
+    const auto &v = state.variables[state.compact->nodes[node].variable];
+    size_t start = out.size();
+    if (kind == FrameKind::Off) {
+      if (v.width == 1)
+        out.append("x", 1);
+      else
+        out.append("bx ", 3);
+    } else if (v.width == 1 && !v.isReal) {
+      out.append(p++, 1);
+    } else {
+      bool hasUnknown = *p++;
+      size_t bytes = (v.width + 7) / 8;
+      if (static_cast<size_t>(end - p) / (hasUnknown ? 2 : 1) < bytes)
+        return false;
+      const auto *value = reinterpret_cast<const uint8_t *>(p);
+      const auto *unknown = hasUnknown ? value + bytes : nullptr;
+      p += bytes * (hasUnknown ? 2 : 1);
+      if (v.isReal) {
+        uint64_t word = 0;
+        std::memcpy(&word, value, std::min(bytes, sizeof(word)));
+        char *text = out.tail(41);
+        int n = formatRealWord(word, v.width, text);
+        if (n <= 0 || n >= 40)
+          return false;
+        text[n] = ' ';
+        out.commit(n + 1);
+      } else if (v.width <= 64 &&
+                 (!hasUnknown || loadWord(unknown, bytes, 0, v.width) == 0)) {
+        uint64_t word = 0;
+        std::memcpy(&word, value, bytes);
+        if (v.width < 64)
+          word &= (uint64_t{1} << v.width) - 1;
+        char *text = out.tail(v.width + 10);
+        *text = 'b';
+        char *last = formatKnownBinary(word, text + 1);
+        *last++ = ' ';
+        out.commit(last - text);
+      } else {
+        size_t width = talos::runtime::vcd::compactVectorWidth(
+            value, unknown, bytes, 0, v.width);
+        char *text = out.tail(width + 10);
+        *text = 'b';
+        char *last = talos::runtime::vcd::formatVectorDigits(
+            value, unknown, bytes, 0, width, text + 1);
+        *last++ = ' ';
+        out.commit(last - text);
+      }
+    }
+    const size_t prefix = out.size() - start;
+    auto span = layout.spans[node];
+    for (uint32_t id = span.begin; id < span.end; ++id) {
+      const auto &code = layout.codes[id];
+      if (id != span.begin) {
+        char *dest = out.tail(prefix + 8);
+        std::memcpy(dest, out.data() + start, prefix);
+        out.commit(prefix);
+      }
+      std::memcpy(out.tail(8), &code.text, 8);
+      out.commit(code.length);
+    }
+  }
+  if (!command.empty())
+    out.append("$end\n", 5);
+  return true;
+}
+
+#ifdef TALOS_POSIX_COMPACT_VCD
+bool stillNamesSnapshotTarget(const std::string &path,
+                              const struct stat &opened) {
+  struct stat named{};
+  return ::lstat(path.c_str(), &named) == 0 && S_ISREG(named.st_mode) &&
+         named.st_nlink == 1 && named.st_dev == opened.st_dev &&
+         named.st_ino == opened.st_ino && named.st_mode == opened.st_mode &&
+         named.st_uid == opened.st_uid && named.st_gid == opened.st_gid;
+}
+
+bool stillNamesOpenFile(const std::string &path, int fd) {
+  struct stat opened{};
+  return ::fstat(fd, &opened) == 0 && stillNamesSnapshotTarget(path, opened);
+}
+
+struct TemporaryTraceFile {
+  std::string path;
+  std::FILE *file = nullptr;
+  bool open(const std::string &destination, bool anonymous) {
+    std::string pattern = destination + ".XXXXXX";
+    int fd = ::mkstemp(pattern.data());
+    if (fd < 0)
+      return false;
+    path = std::move(pattern);
+    file = ::fdopen(fd, "w+b");
+    if (!file) {
+      if (stillNamesOpenFile(path, fd))
+        ::unlink(path.c_str());
+      ::close(fd);
+      return false;
+    }
+    talos_rt_close_on_exec(file);
+    if (anonymous) {
+      if (!stillNamesOpenFile(path, fd) || ::unlink(path.c_str()))
+        return false;
+      path.clear();
+    }
+    return true;
+  }
+  ~TemporaryTraceFile() {
+    if (file) {
+      if (!path.empty() && stillNamesOpenFile(path, fileno(file)))
+        ::unlink(path.c_str());
+      std::fclose(file);
+    }
+  }
+};
+#endif
+
+CompactTrace::Code packIdentifier(std::string_view id) {
+  // A base-94 uint32_t identifier and its terminating newline fit in a word.
+  CompactTrace::Code packed{0, id.size() + 1};
+  std::memcpy(&packed.text, id.data(), id.size());
+  reinterpret_cast<char *>(&packed.text)[id.size()] = '\n';
+  return packed;
+}
+
+// A value change, command, or timestamp occupies one complete line.
+void truncateAtRecordBoundary(OutputBuffer &out, size_t limit) {
+  while (limit && out.data()[limit - 1] != '\n')
+    --limit;
+  out.truncate(limit);
+}
+
+#ifdef TALOS_POSIX_COMPACT_VCD
+// Files carrying metadata the replacement cannot reproduce keep their inode.
+bool prepareSnapshotMetadata(int source, const struct stat &original,
+                             int target) {
+  struct stat created{};
+  if (::fstat(target, &created) || created.st_uid != original.st_uid ||
+      created.st_gid != original.st_gid || (original.st_mode & 07000))
+    return false;
+#if defined(__linux__)
+  auto plain = [](int fd) {
+    auto size = ::flistxattr(fd, nullptr, 0);
+    return size == 0 || (size < 0 && errno == ENOTSUP);
+  };
+  // Backup and copy-on-write policies are inode flags, separate from xattrs.
+  auto readFlags = [](int fd, unsigned long &flags) {
+    return ::ioctl(fd, FS_IOC_GETFLAGS, &flags) == 0 || errno == ENOTTY ||
+           errno == EOPNOTSUPP;
+  };
+  unsigned long sourceFlags = 0, targetFlags = 0;
+  if (!plain(source) || !plain(target) || !readFlags(source, sourceFlags) ||
+      !readFlags(target, targetFlags) || sourceFlags != targetFlags)
+    return false;
+#elif defined(__APPLE__)
+  if (original.st_flags ||
+      ::fcopyfile(source, target, nullptr, COPYFILE_ACL | COPYFILE_XATTR))
+    return false;
+#else
+  return false;
+#endif
+  return ::fchmod(target, original.st_mode & 0777) == 0;
+}
+#endif
+
+bool publishSnapshot(VCDTraceState &state, bool separate) {
+#ifdef TALOS_POSIX_COMPACT_VCD
+  auto &trace = *state.compact;
+  auto started = std::chrono::steady_clock::now();
+  flushBuffer(state);
+  struct stat opened{};
+  if (state.outputStatus != TALOS_RT_OK ||
+      ::fstat(fileno(state.file), &opened) ||
+      !stillNamesSnapshotTarget(state.path, opened))
+    return false;
+  TemporaryTraceFile temporary;
+  if (!temporary.open(state.path, false))
+    return false;
+  std::setvbuf(temporary.file, nullptr, _IONBF, 0);
+  auto layout = trace.layout(
+      separate, [](uint32_t id) { return packIdentifier(identifierCode(id)); });
+  OutputBuffer out;
+  size_t consumed = 0;
+  for (const auto &decl : trace.headerCodes) {
+    out.append(trace.header.data() + consumed, decl.offset - consumed);
+    auto id = identifierCode(layout.physical[decl.code]);
+    out.append(id.data(), id.size());
+    consumed = decl.offset + decl.length;
+  }
+  out.append(trace.header.data() + consumed, trace.header.size() - consumed);
+  uint64_t written = 0;
+  auto flush = [&]() {
+    bool ok =
+        std::fwrite(out.data(), 1, out.size(), temporary.file) == out.size();
+    written += out.size();
+    out.clear();
+    return ok;
+  };
+  if (std::fflush(trace.journal.get()) ||
+      ::fseeko(trace.journal.get(), 0, SEEK_SET))
+    return false;
+  uint64_t remaining = trace.bytes, time = 0, replayed = 0;
+  auto fitsLimit = [&]() {
+    return !state.limitSet || (written <= state.limitBytes &&
+                               out.size() <= state.limitBytes - written);
+  };
+  while (remaining && fitsLimit()) {
+    char prefix[10];
+    size_t length = 0;
+    do {
+      int byte = std::fgetc(trace.journal.get());
+      if (byte == EOF || length == sizeof(prefix) || !remaining)
+        return false;
+      --remaining;
+      prefix[length++] = static_cast<char>(byte);
+    } while (static_cast<uint8_t>(prefix[length - 1]) & 128);
+    const char *begin = prefix;
+    uint64_t size;
+    if (!readJournalNumber(begin, prefix + length, size) || size > remaining ||
+        size > SIZE_MAX)
+      return false;
+    trace.replay.resize(size);
+    if (std::fread(trace.replay.data(), 1, size, trace.journal.get()) != size ||
+        !renderFrame(state, layout, trace.replay.data(), size, out, time,
+                     replayed == 0))
+      return false;
+    remaining -= size;
+    if (!fitsLimit() && replayed >= trace.publishedSamples) {
+      // All previously visible frames fit. Keep each complete new record
+      // that also fits, even when the last frame contains a much wider value.
+      truncateAtRecordBoundary(out,
+                               static_cast<size_t>(state.limitBytes - written));
+      state.limitReached = true;
+      break;
+    }
+    ++replayed;
+    if (out.size() >= kFlushThreshold && fitsLimit() && !flush())
+      return false;
+  }
+  if (::fseeko(trace.journal.get(), 0, SEEK_END))
+    return false;
+  if (!fitsLimit()) {
+    // The previously published prefix is valid. Extending it with the
+    // requested independent identifiers would exceed the active limit.
+    state.limitReached = true;
+    return true;
+  }
+  if (!flush() || std::fflush(temporary.file) ||
+      !prepareSnapshotMetadata(fileno(state.file), opened,
+                               fileno(temporary.file)) ||
+      !stillNamesOpenFile(temporary.path, fileno(temporary.file)) ||
+      !stillNamesSnapshotTarget(state.path, opened) ||
+      std::rename(temporary.path.c_str(), state.path.c_str()))
+    return false;
+  temporary.path.clear();
+  std::swap(state.file, temporary.file);
+  state.writtenBytes = written;
+  auto finished = std::chrono::steady_clock::now();
+  // Large traces can take seconds to replay. Leave at least four replay
+  // durations between scheduled rewrites while a partition keeps splitting.
+  trace.nextCheckpoint =
+      finished + std::max<std::chrono::steady_clock::duration>(
+                     std::chrono::seconds(1), 4 * (finished - started));
+  trace.checkpointBytes = trace.bytes;
+  trace.publishedSamples = replayed;
+  trace.published = std::move(layout);
+  if (trace.groups.size() == trace.fields.size()) {
+    // Distinct histories never merge. All subsequent frames can use this
+    // published layout directly; no later force can require replay.
+    trace.journal.reset();
+    std::string{}.swap(trace.header);
+    std::vector<CompactTrace::HeaderCode>{}.swap(trace.headerCodes);
+    std::vector<char>{}.swap(trace.replay);
+  }
+  return true;
+#else
+  return false;
+#endif
+}
+
+// Pipes and other append-only destinations cannot replace a published header.
+// Give each physical range a permanent node and identifier. Capture and render
+// use the same packed frames as replaceable files, without a replay journal.
+void initializeFixedLayout(VCDTraceState &state) {
+  auto &trace = *state.compact;
+  auto count = state.variables.size();
+  trace.fields.resize(count);
+  trace.groups.resize(count);
+  trace.nodes.resize(count);
+  trace.published.spans.resize(count);
+  trace.published.codes.resize(count);
+  for (uint32_t i = 0; i < count; ++i) {
+    const auto code = state.variables[i].code;
+    trace.fields[i] = {i, CompactTrace::none, code};
+    trace.groups[i].size = 1;
+    trace.groups[i].node = i;
+    trace.nodes[i] = {CompactTrace::none, i};
+    trace.published.spans[i] = {i, i + 1};
+    trace.published.codes[i] = packIdentifier(state.codeText[code]);
+  }
+}
+
+bool fixIdentifiers(VCDTraceState &state) {
+  if (!state.file || !state.compact->journal)
+    return true;
+  auto fixed = std::make_unique<CompactVCDState>();
+  if (state.compact->samples && !publishSnapshot(state, true)) {
+    state.outputStatus = TALOS_RT_IO_ERROR;
+    closeFile(state);
+    return false;
+  }
+  state.compact = std::move(fixed);
+  if (state.planBuilt)
+    initializeFixedLayout(state);
   finishLimit(state);
-  if (!state.file)
-    return TALOS_RT_OK;
-  const uint8_t *valuePlane = nullptr;
-  const uint8_t *unknownPlane = nullptr;
-  talos_rt_status status = dumpPlanes(context, valuePlane, unknownPlane);
-  if (status != TALOS_RT_OK)
-    return status;
-  emitTime(state, context->schedulerTime);
-  append(state, "$dumpall\n");
-  for (const TraceVariable &variable : state.variables)
-    emitValue(state, variable, valuePlane, unknownPlane);
-  append(state, "$end\n");
-  if (!state.pendingInitial)
-    updateShadow(state, valuePlane, unknownPlane);
+  return true;
+}
+
+bool finishCompacting(VCDTraceState &state) {
+  bool ok = state.outputStatus == TALOS_RT_OK;
+  if (state.file && state.compact && state.compact->journal && ok &&
+      state.compact->samples &&
+      state.compact->published.spans.size() != state.compact->nodes.size() &&
+      !publishSnapshot(state, false)) {
+    ok = false;
+    state.outputStatus = TALOS_RT_IO_ERROR;
+  }
   finishLimit(state);
-  return TALOS_RT_OK;
+  state.compact.reset();
+  return ok && state.outputStatus == TALOS_RT_OK;
 }
 
 } // namespace
@@ -1487,8 +1837,18 @@ void armDumpSlotHook(talos_rt_context *context) {
 template <typename State>
 talos_rt_status openFile(talos_rt_context *context, State &state,
                          const std::string &path) {
+  bool closingPrevious = state.file != nullptr;
   closeFile(state);
-  state.file = std::fopen(path.c_str(), "wb");
+  const char *output = path.c_str();
+  if constexpr (std::is_same_v<State, VCDTraceState>) {
+    state.compact.reset();
+    if (closingPrevious && state.outputStatus != TALOS_RT_OK)
+      return state.outputStatus;
+    const char *overridePath = std::getenv("TALOS_RT_VCD_COMPACT_FILE");
+    if (overridePath && *overridePath)
+      output = overridePath;
+  }
+  state.file = std::fopen(output, "wb");
   // The writer buffers whole records itself (kFlushThreshold); a second stdio
   // buffer would only copy them again.
   if (state.file)
@@ -1496,7 +1856,27 @@ talos_rt_status openFile(talos_rt_context *context, State &state,
   talos_rt_close_on_exec(state.file);
   if (!state.file)
     return TALOS_RT_IO_ERROR;
-  state.path = path;
+  state.path = output;
+  if constexpr (std::is_same_v<State, VCDTraceState>) {
+    state.outputStatus = TALOS_RT_OK;
+    state.compact = std::make_unique<CompactVCDState>();
+#ifdef TALOS_POSIX_COMPACT_VCD
+    struct stat named{}, opened{};
+    if (!state.limitSet && !::lstat(output, &named) && S_ISREG(named.st_mode) &&
+        named.st_nlink == 1 && !::fstat(fileno(state.file), &opened) &&
+        named.st_dev == opened.st_dev && named.st_ino == opened.st_ino) {
+      // A DPI client may chdir after $dumpfile. Keep replay anchored to the
+      // file opened here, including when the HDL supplied a relative name.
+      std::unique_ptr<char, decltype(&std::free)> absolute(
+          ::realpath(output, nullptr), &std::free);
+      TemporaryTraceFile journal;
+      if (absolute && journal.open(absolute.get(), true)) {
+        state.path = absolute.get();
+        state.compact->journal.reset(std::exchange(journal.file, nullptr));
+      }
+    }
+#endif
+  }
   state.writtenBytes = 0;
   state.limitReached = false;
   state.buffer.clear();
@@ -1564,19 +1944,28 @@ talos_rt_status buildPlan(talos_rt_context *context, VCDTraceState &state) {
 
   buildRanges(state, context->execution->state_bit_count, context->twoState());
   buildTraceWords(state);
+  // A split tree over N ranges has at most 2N-1 nodes.
+  if (state.compact->journal && state.variables.size() > UINT32_MAX / 2)
+    state.compact = std::make_unique<CompactVCDState>();
+  state.compact->collectingHeader = false;
+  if (state.compact->journal)
+    state.compact->initialize(state.variables);
+  else
+    initializeFixedLayout(state);
   state.planBuilt = true;
   state.pendingInitial = true;
   finishLimit(state);
-  return TALOS_RT_OK;
+  return state.outputStatus;
 }
 
 // Difference the traced windows against the shadow and emit what moved.
-talos_rt_status emitSlot(talos_rt_context *context, VCDTraceState &state) {
+talos_rt_status emitSlot(talos_rt_context *context, VCDTraceState &state,
+                         FrameKind kind = FrameKind::Changes) {
   if (!state.file || !state.planBuilt)
-    return TALOS_RT_OK;
+    return state.outputStatus;
   finishLimit(state);
   if (!state.file)
-    return TALOS_RT_OK;
+    return state.outputStatus;
   const uint8_t *valuePlane = nullptr;
   const uint8_t *unknownPlane = nullptr;
   talos_rt_status status = dumpPlanes(context, valuePlane, unknownPlane);
@@ -1585,84 +1974,185 @@ talos_rt_status emitSlot(talos_rt_context *context, VCDTraceState &state) {
 
   uint64_t time = context->schedulerTime;
 
-  if (state.pendingInitial) {
-    emitTime(state, time);
-    append(state, "$dumpvars\n");
-    for (const TraceVariable &variable : state.variables)
-      emitValue(state, variable, valuePlane, unknownPlane);
-    append(state, "$end\n");
-    updateShadow(state, valuePlane, unknownPlane);
-    state.pendingInitial = false;
-    finishLimit(state);
-    return TALOS_RT_OK;
-  }
-
-  if (!state.enabled)
-    return TALOS_RT_OK;
-
-  for (size_t r = 0; r < state.ranges.size(); ++r) {
-    const auto &range = state.ranges[r];
-    size_t length = static_cast<size_t>(range.byteEnd - range.byteBegin);
-    if (length == 0)
-      continue;
-    bool moved = std::memcmp(state.shadowValue.data() + range.byteBegin,
-                             valuePlane + range.byteBegin, length) != 0 ||
-                 (unknownPlane &&
-                  std::memcmp(state.shadowUnknown.data() + range.byteBegin,
-                              unknownPlane + range.byteBegin, length) != 0);
-    if (!moved)
-      continue;
-    uint32_t index = range.firstVariable;
-    for (uint32_t w = state.firstWord[r]; w < state.firstWord[r + 1]; ++w) {
-      const auto &word = state.words[w];
-      if (word.byte == UINT64_MAX) {
-        const auto &v = state.variables[index++];
-        if (!bitRangeEqual(state.shadowValue.data(), valuePlane, v.sourceBit,
-                           v.width) ||
-            (v.fourState &&
-             !bitRangeEqual(state.shadowUnknown.data(), unknownPlane,
-                            v.sourceBit, v.width))) {
-          emitTime(state, time);
-          emitValue(state, v, valuePlane, unknownPlane);
-        }
-        continue;
-      }
-      auto load = [&](const uint8_t *plane) {
-        uint64_t bits;
-        std::memcpy(&bits, plane + word.byte, sizeof(bits));
-        return bits;
-      };
-      uint64_t value = load(valuePlane);
-      uint64_t delta = value ^ load(state.shadowValue.data());
-      uint64_t unknown = 0;
-      if (word.fourState) {
-        unknown = load(unknownPlane);
-        delta |= unknown ^ load(state.shadowUnknown.data());
-      }
-      if (delta) {
-        for (; index != word.end; ++index) {
-          uint64_t mask = state.fieldMasks[index];
-          if (!(delta & mask))
-            continue;
-          const auto &v = state.variables[index];
-          emitTime(state, time);
-          if (unknown & mask)
-            emitValue(state, v, valuePlane, unknownPlane);
-          else
-            emitKnownValue(state, v,
-                           (value & mask) >> (v.sourceBit - 8 * word.byte));
-        }
-      }
-      index = word.end;
+  auto planeWord = [&](const TraceVariable &v, uint64_t low,
+                       bool unknown) -> uint64_t {
+    const uint8_t *plane =
+        unknown ? (v.fourState ? unknownPlane : nullptr) : valuePlane;
+    return plane ? loadWord(plane, state.shadowValue.size(), v.sourceBit + low,
+                            std::min<uint64_t>(64, v.width - low))
+                 : 0;
+  };
+  auto recordWord = [&](const TraceVariable &v, uint64_t val, uint64_t unk) {
+    state.compact->change(
+        static_cast<uint32_t>(&v - state.variables.data()), val, unk,
+        [&](const auto &g) { return val == g.value && unk == g.unknown; });
+  };
+  auto recordRange = [&](const TraceVariable &v) {
+    if (v.width <= 64) {
+      recordWord(v, planeWord(v, 0, false), planeWord(v, 0, true));
+    } else {
+      state.compact->change(
+          static_cast<uint32_t>(&v - state.variables.data()), 0, 0,
+          [&](const auto &g) {
+            const auto &peer = state.variables[g.first];
+            for (uint64_t i = 0; i < v.width; i += 64)
+              if (planeWord(v, i, false) != planeWord(peer, i, false) ||
+                  planeWord(v, i, true) != planeWord(peer, i, true))
+                return false;
+            return true;
+          });
     }
-    std::memcpy(state.shadowValue.data() + range.byteBegin,
-                valuePlane + range.byteBegin, length);
-    if (unknownPlane)
-      std::memcpy(state.shadowUnknown.data() + range.byteBegin,
-                  unknownPlane + range.byteBegin, length);
+  };
+  if (kind == FrameKind::Changes && state.pendingInitial)
+    kind = FrameKind::Initial;
+  if (kind == FrameKind::Off) {
+    for (uint32_t i = 0; i < state.variables.size(); ++i)
+      if (!state.variables[i].isReal)
+        state.compact->change(i, 0, 0, [](const auto &) { return true; });
+  } else if (kind != FrameKind::Changes) {
+    for (const TraceVariable &v : state.variables)
+      recordRange(v);
+    if (kind != FrameKind::All || !state.pendingInitial)
+      updateShadow(state, valuePlane, unknownPlane);
+  } else if (!state.enabled) {
+    return TALOS_RT_OK;
+  } else {
+    for (size_t r = 0; r < state.ranges.size(); ++r) {
+      const auto &range = state.ranges[r];
+      size_t length = static_cast<size_t>(range.byteEnd - range.byteBegin);
+      if (length == 0)
+        continue;
+      bool moved = std::memcmp(state.shadowValue.data() + range.byteBegin,
+                               valuePlane + range.byteBegin, length) != 0 ||
+                   (unknownPlane &&
+                    std::memcmp(state.shadowUnknown.data() + range.byteBegin,
+                                unknownPlane + range.byteBegin, length) != 0);
+      if (!moved)
+        continue;
+      uint32_t index = range.firstVariable;
+      for (uint32_t w = state.firstWord[r]; w < state.firstWord[r + 1]; ++w) {
+        const auto &word = state.words[w];
+        if (word.byte == UINT64_MAX) {
+          const auto &v = state.variables[index++];
+          if (!bitRangeEqual(state.shadowValue.data(), valuePlane, v.sourceBit,
+                             v.width) ||
+              (v.fourState &&
+               !bitRangeEqual(state.shadowUnknown.data(), unknownPlane,
+                              v.sourceBit, v.width))) {
+            recordRange(v);
+          }
+          continue;
+        }
+        auto load = [&](const uint8_t *plane) {
+          uint64_t bits;
+          std::memcpy(&bits, plane + word.byte, sizeof(bits));
+          return bits;
+        };
+        uint64_t value = load(valuePlane);
+        uint64_t delta = value ^ load(state.shadowValue.data());
+        uint64_t unknown = 0;
+        if (word.fourState) {
+          unknown = load(unknownPlane);
+          delta |= unknown ^ load(state.shadowUnknown.data());
+        }
+        if (delta) {
+          for (; index != word.end; ++index) {
+            uint64_t mask = state.fieldMasks[index];
+            if (!(delta & mask))
+              continue;
+            const auto &v = state.variables[index];
+            unsigned shift = static_cast<unsigned>(v.sourceBit - 8 * word.byte);
+            recordWord(v, (value & mask) >> shift, (unknown & mask) >> shift);
+          }
+        }
+        index = word.end;
+      }
+      std::memcpy(state.shadowValue.data() + range.byteBegin,
+                  valuePlane + range.byteBegin, length);
+      if (unknownPlane)
+        std::memcpy(state.shadowUnknown.data() + range.byteBegin,
+                    unknownPlane + range.byteBegin, length);
+    }
+  }
+  auto &trace = *state.compact;
+  if (trace.touched.empty() && trace.changed.empty() &&
+      kind == FrameKind::Changes)
+    return TALOS_RT_OK;
+  size_t oldNodes = trace.nodes.size();
+  trace.refine(
+      [&](uint32_t code) {
+        const auto &v = state.variables[code];
+        std::string key;
+        for (uint64_t low = 0; low < v.width; low += 64) {
+          uint64_t val = planeWord(v, low, false);
+          uint64_t unk = planeWord(v, low, true);
+          key.append(reinterpret_cast<const char *>(&val), sizeof(val));
+          key.append(reinterpret_cast<const char *>(&unk), sizeof(unk));
+        }
+        return key;
+      },
+      [&](uint32_t code, auto &group) {
+        const auto &v = state.variables[code];
+        if (v.width <= 64) {
+          group.value = planeWord(v, 0, false);
+          group.unknown = planeWord(v, 0, true);
+        }
+      });
+  if (state.outputStatus != TALOS_RT_OK)
+    return state.outputStatus;
+  bool ok = captureFrame(state, valuePlane, unknownPlane, time, kind);
+  trace.changed.clear();
+  const bool split = oldNodes != trace.nodes.size();
+  const bool stableBeforeSplit = trace.samples - trace.lastSplit >= 128;
+  if (split)
+    trace.lastSplit = trace.samples;
+  if (ok && trace.published.spans.size() == trace.nodes.size() &&
+      (!trace.journal || trace.samples > 1)) {
+    size_t prior = state.buffer.size();
+    uint64_t previousTime = state.emittedTime;
+    ok = renderFrame(state, trace.published, trace.frame.data() + 10,
+                     trace.frame.size() - 10, state.buffer, previousTime,
+                     !state.haveEmittedTime);
+    if (state.limitSet &&
+        state.buffer.size() - prior > state.limitBytes - state.writtenBytes) {
+      truncateAtRecordBoundary(
+          state.buffer,
+          prior + static_cast<size_t>(state.limitBytes - state.writtenBytes));
+      state.limitReached = true;
+    }
+    state.writtenBytes += state.buffer.size() - prior;
+    trace.publishedSamples = trace.samples;
+    if (!state.haveEmittedTime || state.buffer.size() >= kFlushThreshold ||
+        trace.samples % 128 == 0)
+      flushBuffer(state);
+  } else if (ok &&
+             (trace.samples == 1 || state.limitSet ||
+              (split && stableBeforeSplit && trace.bytes < 1024 * 1024) ||
+              (trace.bytes < 1024 * 1024 &&
+               trace.bytes - trace.checkpointBytes >= kFlushThreshold) ||
+              (trace.samples % 128 == 0 &&
+               std::chrono::steady_clock::now() >= trace.nextCheckpoint))) {
+    ok = publishSnapshot(state, false);
+    if (!ok && trace.samples == 1 && state.outputStatus == TALOS_RT_OK) {
+      // No shared ID has been published yet. The existing header already
+      // has physical IDs, so the complete first checkpoint can be retried
+      // against that descriptor if the filesystem disallows replacement.
+      state.compact = std::make_unique<CompactVCDState>();
+      initializeFixedLayout(state);
+      return emitSlot(context, state, kind);
+    }
+  }
+  state.haveEmittedTime = true;
+  state.emittedTime = time;
+  if (kind == FrameKind::Initial)
+    state.pendingInitial = false;
+  if (!ok || state.outputStatus != TALOS_RT_OK) {
+    state.outputStatus = TALOS_RT_IO_ERROR;
+    closeFile(state);
+    return TALOS_RT_IO_ERROR;
   }
   finishLimit(state);
-  return TALOS_RT_OK;
+  return state.outputStatus;
 }
 
 char evcdValueChar(const TraceVariable &variable, bool value, bool unknown) {
@@ -2281,17 +2771,22 @@ void talos_rt_dump_destroy(talos_rt_context *context) noexcept {
     return;
   if (context->vcdState) {
     VCDTraceState *state = context->vcdState;
+    bool wasOpen = state->file != nullptr;
     TALOS_RT_TRY {
       if (state->file && !state->planBuilt && !state->planFailed &&
           !state->selections.empty())
         (void)buildPlan(context, *state);
       if (state->file && state->planBuilt)
         (void)emitSlot(context, *state);
+      finishCompacting(*state);
     }
     TALOS_RT_CATCH_ALL {
       // Teardown must not propagate; the file is still closed below.
     }
     closeFile(*state);
+    if (wasOpen && state->outputStatus == TALOS_RT_IO_ERROR)
+      std::fprintf(stderr, "talos: failed to finish VCD file '%s'\n",
+                   state->path.c_str());
     delete state;
     context->vcdState = nullptr;
   }
@@ -2332,9 +2827,10 @@ extern "C" talos_rt_status talos_rt_v1_dump_open(talos_rt_context *context,
     status = openFile(context, *state,
                       std::string(reinterpret_cast<const char *>(path),
                                   static_cast<size_t>(pathSize)));
-    if (status == TALOS_RT_OK)
-      finishLimit(*state);
-    return status;
+    if (status != TALOS_RT_OK)
+      return status;
+    finishLimit(*state);
+    return state->outputStatus;
   }
   TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
   TALOS_RT_CATCH_ALL { return TALOS_RT_IO_ERROR; }
@@ -2403,6 +2899,8 @@ extern "C" talos_rt_status talos_rt_v1_dump_vars(talos_rt_context *context,
       if (status != TALOS_RT_OK)
         return status;
       finishLimit(*state);
+      if (state->outputStatus != TALOS_RT_OK)
+        return state->outputStatus;
     }
     TraceSelection selection;
     selection.levels = levels;
@@ -2457,11 +2955,11 @@ extern "C" talos_rt_status talos_rt_v1_dump_all(talos_rt_context *context) {
     VCDTraceState *state = traceState(context);
     if (!state || !state->file ||
         (!state->planBuilt && state->selections.empty()))
-      return TALOS_RT_OK;
+      return state ? state->outputStatus : TALOS_RT_OK;
     talos_rt_status status = buildPlan(context, *state);
     if (status != TALOS_RT_OK)
       return status;
-    return emitDumpAll(context, *state);
+    return emitSlot(context, *state, FrameKind::All);
   }
   TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
   TALOS_RT_CATCH_ALL { return TALOS_RT_IO_ERROR; }
@@ -2477,7 +2975,7 @@ extern "C" talos_rt_status talos_rt_v1_dump_control(talos_rt_context *context,
     VCDTraceState *state = traceState(context);
     if (!state || !state->file ||
         (!state->planBuilt && state->selections.empty()))
-      return TALOS_RT_OK;
+      return state ? state->outputStatus : TALOS_RT_OK;
     talos_rt_status status = buildPlan(context, *state);
     if (status != TALOS_RT_OK)
       return status;
@@ -2491,26 +2989,7 @@ extern "C" talos_rt_status talos_rt_v1_dump_control(talos_rt_context *context,
     if (!state->file)
       return TALOS_RT_OK;
     state->enabled = wanted;
-    emitTime(*state, context->schedulerTime);
-    if (!wanted) {
-      append(*state, "$dumpoff\n");
-      emitAllX(*state);
-      append(*state, "$end\n");
-      finishLimit(*state);
-      return TALOS_RT_OK;
-    }
-    const uint8_t *valuePlane = nullptr;
-    const uint8_t *unknownPlane = nullptr;
-    status = dumpPlanes(context, valuePlane, unknownPlane);
-    if (status != TALOS_RT_OK)
-      return status;
-    append(*state, "$dumpon\n");
-    for (const TraceVariable &variable : state->variables)
-      emitValue(*state, variable, valuePlane, unknownPlane);
-    append(*state, "$end\n");
-    updateShadow(*state, valuePlane, unknownPlane);
-    finishLimit(*state);
-    return TALOS_RT_OK;
+    return emitSlot(context, *state, wanted ? FrameKind::On : FrameKind::Off);
   }
   TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
   TALOS_RT_CATCH_ALL { return TALOS_RT_IO_ERROR; }
@@ -2527,12 +3006,27 @@ extern "C" talos_rt_status talos_rt_v1_dump_limit(talos_rt_context *context,
     talos_rt_status status = ensureState(context, state);
     if (status != TALOS_RT_OK)
       return status;
+    // Drain the existing samples in their compact representation before
+    // applying the new maximum. A late limit must not expand the file simply
+    // by assigning distinct identifiers to an already published history.
+    if (state->compact && state->compact->journal && state->compact->samples) {
+      if (state->file &&
+          state->compact->published.spans.size() !=
+              state->compact->nodes.size() &&
+          !publishSnapshot(*state, false)) {
+        state->outputStatus = TALOS_RT_IO_ERROR;
+        closeFile(*state);
+        return TALOS_RT_IO_ERROR;
+      }
+    } else if (!fixIdentifiers(*state)) {
+      return TALOS_RT_IO_ERROR;
+    }
     state->limitSet = true;
     state->limitBytes = bytes;
     if (state->file && state->writtenBytes >= bytes)
       state->limitReached = true;
     finishLimit(*state);
-    return TALOS_RT_OK;
+    return state->outputStatus;
   }
   TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_ARGUMENT; }
 }
@@ -2546,8 +3040,23 @@ extern "C" talos_rt_status talos_rt_v1_dump_flush(talos_rt_context *context) {
     VCDTraceState *state = traceState(context);
     if (!state)
       return TALOS_RT_OK;
+    if (state->compact && state->compact->journal && state->limitSet) {
+      // Assigning optional independent IDs could itself consume the
+      // remaining byte budget. Flush the current representation instead.
+      if (state->file &&
+          state->compact->published.spans.size() !=
+              state->compact->nodes.size() &&
+          !publishSnapshot(*state, false)) {
+        state->outputStatus = TALOS_RT_IO_ERROR;
+        closeFile(*state);
+        return TALOS_RT_IO_ERROR;
+      }
+      finishLimit(*state);
+    } else if (!fixIdentifiers(*state)) {
+      return TALOS_RT_IO_ERROR;
+    }
     flushBuffer(*state);
-    return TALOS_RT_OK;
+    return state->outputStatus;
   }
   TALOS_RT_CATCH_ALL { return TALOS_RT_IO_ERROR; }
 }
@@ -2561,12 +3070,14 @@ extern "C" talos_rt_status talos_rt_v1_dump_close(talos_rt_context *context) {
     VCDTraceState *state = traceState(context);
     if (!state)
       return TALOS_RT_OK;
-    if (state->file && state->planBuilt)
-      (void)emitSlot(context, *state);
+    auto status = state->file && state->planBuilt ? emitSlot(context, *state)
+                                                  : TALOS_RT_OK;
+    if (!finishCompacting(*state) && status == TALOS_RT_OK)
+      status = TALOS_RT_IO_ERROR;
     closeFile(*state);
     if (!talos_rt_dump_active_unlocked(context))
       context->postponedSlotHooks &= ~kDumpSlotHook;
-    return TALOS_RT_OK;
+    return status == TALOS_RT_OK ? state->outputStatus : status;
   }
   TALOS_RT_CATCH_ALL { return TALOS_RT_IO_ERROR; }
 }

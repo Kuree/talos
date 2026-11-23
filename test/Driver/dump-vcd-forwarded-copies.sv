@@ -26,6 +26,8 @@ module top;
   initial begin
     $dumpfile("f.vcd");
     $dumpvars(0, top);
+    // Fix the header before the first sample to inspect compiler-proven aliases.
+    $dumpflush;
     #22 $finish;
   end
 endmodule
