@@ -17650,7 +17650,8 @@ bool deliverValueChanges(VPIState *state, bool applicationReturned) {
         [&](uint64_t, VPIValueChangeRegistration &record,
             const talos::runtime::VPIPackedChangePublication &event) {
           if (context->schedulerStatus != TALOS_RT_OK ||
-              context->destroyPending)
+              context->destroyPending ||
+              talos_rt_v1_scheduler_termination_requested(context))
             return;
           const unsigned offset =
               record.target.selectedOffset - record.target.rootStateOffset;

@@ -2117,6 +2117,7 @@ bool validateInitialization(const Image &image, const Function &function,
                      instruction.flags))
         return false;
       break;
+    case TALOS_RT_DB_VPI_PUBLICATION_FENCE:
     case TALOS_RT_DB_CLEAR_FRAME_ROOT:
     case TALOS_RT_DB_FRAME_ROOT:
       break;
@@ -2364,6 +2365,7 @@ bool validateFunctionCode(const Image &image, uint32_t functionIndex) {
                         layoutAt(image, function, instruction.source1));
     };
     switch (instruction.opcode) {
+    case TALOS_RT_DB_VPI_PUBLICATION_FENCE:
     case TALOS_RT_DB_NOP:
       if (instruction.flags || instruction.destination || instruction.source0 ||
           instruction.source1 || instruction.source2 || instruction.auxiliary ||

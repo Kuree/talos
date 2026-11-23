@@ -1127,7 +1127,10 @@ enum {
   // activation and resume through that same canonical continuation.
   TALOS_RT_DB_NATIVE_DIRECT_TASK_CALL = 66,
   TALOS_RT_DB_NATIVE_VIRTUAL_TASK_CALL = 67,
-  TALOS_RT_DB_NATIVE_INTERFACE_TASK_CALL = 68
+  TALOS_RT_DB_NATIVE_INTERFACE_TASK_CALL = 68,
+  // After a synchronous source publication, stop this activation if its
+  // application requested $finish/$stop (IEEE 1800-2023 38.4).
+  TALOS_RT_DB_VPI_PUBLICATION_FENCE = 69
 };
 
 // StoreState writes its exact post-resolution transition predicate to the

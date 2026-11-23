@@ -1,6 +1,7 @@
 //===- SimulationPackedLowering.cpp - Packed simulation conversion ----===//
 
 #include "SimulationPackedLowering.h"
+#include "NativeRuntimeCalls.h"
 #include "SimulationLocalStorageLowering.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Analysis/LocalStorageAnalysis.h"
@@ -405,6 +406,83 @@ NativeStateLayout makeCleanEvalStateLayout(const NativeStateLayout &layout) {
   authorize(clean.nets);
   authorize(clean.drivers);
   return clean;
+}
+
+// A source publication may invoke a value-change application; vpiFinish
+// takes effect when that application returns (38.4). A clean eval clone
+// cannot enter a subscriber, and its original source actor supplies these
+// fences when a real writer is watched. Propagate the cut through ordinary
+// HDL calls so their callers do not resume after the application finishes.
+static void fenceSourcePublications(ModuleOp module) {
+  SymbolTableCollection symbols;
+  DenseMap<Operation *, SmallVector<Operation *>> cuts, callers;
+  llvm::SetVector<Operation *> publishing;
+  module.walk([&](sim::SimFuncOp function) {
+    if (function.isExternal() || !function.getNumArguments() ||
+        !isa<sim::ContextType>(function.getArgumentTypes().front()) ||
+        schedule::has<schedule::Field::EvalContinuation>(function) ||
+        schedule::has<schedule::Field::EvalRawCaptures>(function) ||
+        schedule::has<schedule::metadata::nativeRegionBody>(function))
+      return;
+    function.walk([&](Operation *op) {
+      if (isa<schedule::NativeStateFrameStoreOp, schedule::NativeTransitionOp,
+              schedule::NativeHandleTransitionOp,
+              schedule::NativeHandleTransitionBytesOp>(op) ||
+          callsNativeRuntime(op, NativeRuntimeEntry::NativeOverride) ||
+          callsNativeRuntime(op, NativeRuntimeEntry::NativeDynamicOverride) ||
+          callsNativeRuntime(op, NativeRuntimeEntry::NativeReleaseOverride) ||
+          callsNativeRuntime(op, NativeRuntimeEntry::MethodInvoke) ||
+          callsNativeRuntime(op, NativeRuntimeEntry::InterfaceMethodInvoke)) {
+        publishing.insert(function);
+        cuts[function].push_back(op);
+      } else if (auto call = dyn_cast<sim::SimCallOp>(op)) {
+        if (auto callee = symbols.lookupNearestSymbolFrom<sim::SimFuncOp>(
+                call, call.getCalleeAttr()))
+          callers[callee].push_back(op);
+      }
+    });
+  });
+  for (size_t i = 0; i < publishing.size(); ++i)
+    for (Operation *call : callers[publishing[i]]) {
+      auto caller = call->getParentOfType<sim::SimFuncOp>();
+      publishing.insert(caller);
+      cuts[caller].push_back(call);
+    }
+  for (Operation *source : publishing) {
+    auto function = cast<sim::SimFuncOp>(source);
+    auto &sites = cuts[source];
+    llvm::erase_if(sites, [](Operation *op) {
+      return isa_and_nonnull<sim::SimReturnOp>(op->getNextNode());
+    });
+    if (sites.empty())
+      continue;
+    auto *stop = new Block;
+    function.getBody().push_back(stop);
+    OpBuilder builder = OpBuilder::atBlockBegin(stop);
+    SmallVector<Value> results;
+    for (Type type : function.getResultTypes()) {
+      Type raw = convertProcessType(type, module.getContext());
+      Value zero = LLVM::ZeroOp::create(builder, function.getLoc(), raw);
+      if (raw != type)
+        zero = UnrealizedConversionCastOp::create(builder, function.getLoc(),
+                                                  type, zero)
+                   .getResult(0);
+      results.push_back(zero);
+    }
+    emitManagedRootRangePop(builder, function.getLoc(), function,
+                            findManagedRootRangeRecord(function));
+    sim::SimReturnOp::create(builder, function.getLoc(), results);
+    for (Operation *op : llvm::reverse(sites)) {
+      Block *resume = op->getBlock()->splitBlock(std::next(op->getIterator()));
+      builder.setInsertionPointToEnd(op->getBlock());
+      Value ctx = sim::SimContextRuntimeOp::create(
+          builder, op->getLoc(), runtime::ContextType::get(module.getContext()),
+          function.getArgument(0));
+      Value finish = runtime::RTTerminationRequestedOp::create(
+          builder, op->getLoc(), builder.getI1Type(), ctx);
+      cf::CondBranchOp::create(builder, op->getLoc(), finish, stop, resume);
+    }
+  }
 }
 
 LogicalResult lowerPackedSimulationOperations(
@@ -1681,6 +1759,9 @@ LogicalResult lowerPackedSimulationOperations(
     scratch.replaceAllUsesWith(native.getResult());
     scratch.erase();
   }
+  if (runtime::bitEnumContainsAny(runtime::getExecutionFlags(module),
+                                  runtime::ExecutionFlags::PublishingWriters))
+    fenceSourcePublications(module);
   if (failed(threadStatuses()))
     return failure();
   markTiming("runtime status threading");

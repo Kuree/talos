@@ -4563,6 +4563,12 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
                  0};
       return TALOS_RT_OK;
     }
+    case TALOS_RT_DB_VPI_PUBLICATION_FENCE:
+      if (!talos_rt_v1_scheduler_termination_requested(context))
+        break;
+      // A non-CONTINUE action also unwinds ordinary bytecode calls.
+      *action = {TALOS_RT_FRAGMENT_TERMINATE, TALOS_RT_SUSPEND_NONE, 0, 0, 0, 0};
+      return TALOS_RT_OK;
     case TALOS_RT_DB_TERMINATE:
       *action = {TALOS_RT_FRAGMENT_TERMINATE,
                  TALOS_RT_SUSPEND_NONE,

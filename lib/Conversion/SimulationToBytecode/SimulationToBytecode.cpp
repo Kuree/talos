@@ -281,6 +281,10 @@ FailureOr<EncodedSimulationDesign> Encoder::encode() {
       analysis::DPIEffectAnalysis(design).exportsAreTransparent();
   if (failed(planFunctions()))
     return failure();
+  fencePublications = (vpiProfile & kDatabaseProfileRead) &&
+                      (options.requireBytecode ||
+                       (publishingWriters && nativeMethodCallees.empty() &&
+                        nativeTaskCallees.empty()));
   if (failed(planScheduleRanks()))
     return failure();
   if (failed(encodeFunctions()))
@@ -818,6 +822,15 @@ LogicalResult Encoder::encodeFunctions() {
         }
         if (failed(encodeOperation(plan, &operation)))
           return failure();
+        // A cbValueChange application can request termination upon return.
+        // Bytecode dispatch unwinds nested HDL calls on this action. Plain
+        // simulation has no such cut and keeps its original image.
+        if (fencePublications &&
+            isa<sim::SimRefStoreOp, sim::SimRefCopyOp, sim::SimDriverDriveOp,
+                sim::SimDriverDriveChangedOp, sim::SimOverrideOp,
+                sim::SimDynamicOverrideOp, sim::SimReleaseOverrideOp>(
+                &operation))
+          emit({TALOS_RT_DB_VPI_PUBLICATION_FENCE});
         for (Value result : operation.getResults())
           addRoot(roots, result);
       }
