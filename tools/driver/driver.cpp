@@ -1416,6 +1416,7 @@ static int executeCompilation(const InputArgList &args,
     registry.insert<talos::saif::SAIFDialect>();
   if (args.hasArg(OPT_upf))
     registry.insert<talos::upf::UPFDialect>();
+  talos::driver::registerTargetBackendServices(registry);
   // One explicitly sized pool is shared by all MLIR parallel pass adaptors.
   // Its lifetime encloses the context as required by MLIRContext.
   std::unique_ptr<llvm::DefaultThreadPool> compilerPool;

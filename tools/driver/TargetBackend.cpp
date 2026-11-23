@@ -9,6 +9,7 @@
 
 #include "TargetBackend.h"
 #include "talos/Conversion/SimulationToSchedule.h"
+#include "talos/Dialect/Native/EmbeddedDesignValidator.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
@@ -45,6 +46,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/DialectRegistry.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
@@ -245,6 +247,32 @@ std::unique_ptr<TargetBackend> createTargetBackend(TargetKind target) {
 #endif
   }
   return nullptr;
+}
+
+#if TALOS_HAS_NATIVE_BACKEND
+namespace {
+/// Validates with the runtime that native executables link. A closed
+/// executable targets this host, so the compiler and the executable accept
+/// the same design databases.
+struct RuntimeDesignValidator final : native::EmbeddedDesignValidator {
+  using EmbeddedDesignValidator::EmbeddedDesignValidator;
+
+  bool
+  validate(const talos_rt_execution_descriptor_v1 &descriptor) const override {
+    return talos_rt_v1_design_validate(&descriptor) == TALOS_RT_OK;
+  }
+};
+} // namespace
+#endif
+
+void registerTargetBackendServices(DialectRegistry &registry) {
+#if TALOS_HAS_NATIVE_BACKEND
+  registry.addExtension(+[](MLIRContext *, native::NativeDialect *dialect) {
+    dialect->addInterfaces<RuntimeDesignValidator>();
+  });
+#else
+  (void)registry;
+#endif
 }
 
 namespace {

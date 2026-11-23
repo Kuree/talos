@@ -1,6 +1,7 @@
 //===- NativeDialect.cpp - Native backend metadata ------------------------===//
 
 #include "talos/Dialect/Native/NativeDialect.h"
+#include "talos/Dialect/Native/EmbeddedDesignValidator.h"
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -13,6 +14,8 @@ using namespace mlir;
 using namespace talos::native;
 
 #include "talos/Dialect/Native/NativeDialect.cpp.inc"
+
+MLIR_DEFINE_EXPLICIT_TYPE_ID(talos::native::EmbeddedDesignValidator)
 
 #define GET_ATTRDEF_CLASSES
 #include "talos/Dialect/Native/NativeAttrs.cpp.inc"

@@ -3,6 +3,7 @@
 #include "NativeStateAccess.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 
+#include "talos/Dialect/Native/EmbeddedDesignValidator.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
 #include "talos/Dialect/SAIF/SAIFDialect.h"
@@ -198,7 +199,14 @@ LogicalResult makeSchedulerMain(ModuleOp module,
   bool hasExecution = module.lookupSymbol(executionName) != nullptr;
   NativeRuntimeEntry createDesign = NativeRuntimeEntry::ContextCreateForDesign;
   uint64_t validatedChecksum = 0, validatedBits = 0;
-  if (hasExecution && native::has<native::ClosedExecutable>(module) &&
+  auto *nativeDialect = context->getLoadedDialect<native::NativeDialect>();
+  const auto *validator =
+      nativeDialect
+          ? nativeDialect
+                ->getRegisteredInterface<native::EmbeddedDesignValidator>()
+          : nullptr;
+  if (validator && hasExecution &&
+      native::has<native::ClosedExecutable>(module) &&
       native::has<native::ReadableEvalState>(module)) {
     auto blob =
         module.lookupSymbol<LLVM::GlobalOp>("__talos_design_database_v1");
@@ -217,7 +225,7 @@ LogicalResult makeSchedulerMain(ModuleOp module,
       descriptor.design_database_size = bytes.getValue().size();
       // Validate the final serialized bytes and physical bounds with the
       // runtime validator. All names, relations and range checks are retained.
-      if (talos_rt_v1_design_validate(&descriptor) != TALOS_RT_OK)
+      if (!validator->validate(descriptor))
         return module.emitError(
             "embedded read-only design database failed validation");
       validatedBits = descriptor.state_bit_count;

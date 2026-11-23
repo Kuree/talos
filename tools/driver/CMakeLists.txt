@@ -169,6 +169,11 @@ function(talos_configure_driver target)
   if(NOT EMSCRIPTEN)
     target_link_libraries(${target} PRIVATE clangDriver clangBasic)
   endif()
+  if(TALOS_HAS_NATIVE_BACKEND)
+    # Validates closed native executables' embedded design databases at
+    # compile time (registerTargetBackendServices).
+    target_link_libraries(${target} PRIVATE talos_rt)
+  endif()
   if(WIN32)
     target_link_libraries(${target} PRIVATE "${TALOS_COMPILER_RT_BUILTINS}")
   endif()

@@ -89,7 +89,6 @@ add_mlir_library(TalosSimulationToLLVMCoroutine
   TransformUtils
 
   LINK_LIBS PUBLIC
-  talos_rt
   TalosCoverage
   TalosSAIFIR
   TalosSimulationToScheduleNative

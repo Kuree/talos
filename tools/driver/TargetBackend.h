@@ -25,8 +25,9 @@ class TargetMachine;
 }
 
 namespace mlir {
+class DialectRegistry;
 class ModuleOp;
-}
+} // namespace mlir
 
 namespace talos::driver {
 
@@ -145,6 +146,11 @@ public:
 /// it. A build configured for one target does not link the other's LLVM
 /// backend or LLD driver, so availability is a build-time property.
 std::unique_ptr<TargetBackend> createTargetBackend(TargetKind target);
+
+/// Register the compile-time services this build's backends provide to the
+/// compiler libraries. A native build validates a closed executable's embedded
+/// design database with the runtime it links.
+void registerTargetBackendServices(mlir::DialectRegistry &registry);
 
 /// Make target layout available during semantic type normalization, before
 /// references, bytecode descriptors and bit-stream plans acquire offsets.
