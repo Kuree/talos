@@ -76,6 +76,18 @@ static void addCaseProperties(Shape &shape, Operation *source,
   addIntegerProperty(shape, source, 650, flags);
 }
 
+// IEEE 1800-2023 20.10 defines $fatal, $error, $warning and $info as severity
+// system tasks. The frontend types them as functions so that a function body
+// may call them, but their VPI call objects are system task calls (37.42).
+static bool isTaskCall(semantic::SVCallExpressionOp call) {
+  if (call.getSubroutineKind() == semantic::SVSubroutineKind::Task)
+    return true;
+  return call.getIsSystemCall() &&
+         llvm::is_contained({StringRef("$fatal"), StringRef("$error"),
+                             StringRef("$warning"), StringRef("$info")},
+                            call.getCalleeName());
+}
+
 // Explicit receivers and exact declaration ownership both establish a method.
 // Static methods and implicit-this calls need not carry a receiver expression.
 static bool isMethodCall(semantic::SVCallExpressionOp call,
@@ -454,7 +466,7 @@ statementShape(Operation *source,
       expression = operand[0];
     }
     if (auto call = dyn_cast<semantic::SVCallExpressionOp>(expression)) {
-      bool task = call.getSubroutineKind() == semantic::SVSubroutineKind::Task;
+      bool task = isTaskCall(call);
       shape.kind = isMethodCall(call, semanticSymbols)
                        ? (task ? Kind::MethodTaskCall : Kind::MethodFuncCall)
                    : call.getIsSystemCall()
@@ -769,7 +781,7 @@ materializeProceduralCalls(sim::SimDesignOp design, const PreparedUnits &units,
       if (nextID > INT64_MAX)
         return call.emitOpError(
             "VPI call occurrence inventory exceeds its ID domain");
-      bool task = call.getSubroutineKind() == semantic::SVSubroutineKind::Task;
+      bool task = isTaskCall(call);
       Kind kind = isMethodCall(call, semanticSymbols)
                       ? (task ? Kind::MethodTaskCall : Kind::MethodFuncCall)
                   : call.getIsSystemCall()

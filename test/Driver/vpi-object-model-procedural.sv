@@ -126,8 +126,7 @@ endmodule
 // CHECK-NEXT: vpiRelease objects=1 properties=5/6 relations=1/4 answers=6
 // CHECK-NEXT: vpiRepeat objects=2 properties=5/6 relations=3/5 answers=15
 // CHECK-NEXT: vpiRepeatControl objects=1 properties=5/5 relations=2/5 answers=7
-// CHECK-NEXT: vpiSysFuncCall objects=1 properties=7/13 relations=1/8 answers=8
-// CHECK-NEXT: vpiSysTaskCall objects=1 properties=7/9 relations=1/6 answers=8
+// CHECK-NEXT: vpiSysTaskCall objects=2 properties=7/9 relations=1/6 answers=16
 // CHECK-NEXT: vpiTask objects=1 properties=13/16 relations=4/22 answers=17
 // CHECK-NEXT: vpiTaskCall objects=1 properties=7/8 relations=2/6 answers=9
 // CHECK-NEXT: vpiTimeQueue objects=2 properties=3/3 relations=0/1 answers=6
