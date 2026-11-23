@@ -3373,6 +3373,9 @@ struct talos_rt_context {
   std::unique_ptr<PackedNBAChangeMap> packedNBAChanges;
   uint64_t orderedSharedPackets = 0;
   uint64_t wholeChangeBankCommits = 0, wholeChangeBankRewrites = 0;
+  // Immutable compiler-owned triples (destination bit, source bit, width).
+  const uint64_t *vcdAliasRows = nullptr;
+  uint64_t vcdAliasCount = 0;
   CanonicalPlane staticNBAStorage;
   talos_rt_context();
   ~talos_rt_context();

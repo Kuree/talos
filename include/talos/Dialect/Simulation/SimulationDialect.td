@@ -343,6 +343,10 @@ def TalosSimulationDialect : Dialect {
     // end of every time slot is the bits [low, low + width) of the source root
     // [is_net, source_id, low]. The design database points its name there.
     "::mlir::DenseI64ArrayAttr":$waveform_source,
+    // A retained storage copy whose settled bits equal another storage view.
+    // Only Postponed VCD collection uses [source_id, low]; VPI addresses
+    // the original declaration and observes its actual publication time.
+    "::mlir::DenseI64ArrayAttr":$postponed_waveform_alias,
     "::mlir::UnitAttr":$persistent_repetition_all_matches,
     "::mlir::UnitAttr":$persistent_repetition_antecedent,
     "::mlir::UnitAttr":$persistent_repetition_dfa,

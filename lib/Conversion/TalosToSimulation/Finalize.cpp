@@ -1032,7 +1032,7 @@ static void buildTalosToSimulationPipelineImpl(
   }
   designManager.addPass(createSymbolDCEPass());
 
-  if (optLevel > 0 && vpiMode == "off") {
+  if (optLevel > 0 && (vpiMode == "off" || vpiMode == "read")) {
     // IEEE 1800-2023 23.3.3/4.9.6/4.7: an invisible single-driver port
     // connection may update its sink with the source write itself. Share the
     // storage before clock extraction sees clock ports, then drop the copies.
@@ -1040,10 +1040,11 @@ static void buildTalosToSimulationPipelineImpl(
     aliasOptions.vpi = vpiMode.str();
     designManager.addPass(
         createTalosSimAliasPortConnectionsPass(std::move(aliasOptions)));
-    designManager.addPass(createSymbolDCEPass());
+    if (vpiMode == "off")
+      designManager.addPass(createSymbolDCEPass());
     // IEEE 1800-2023 10.3.2/4.9.1/4.7/6.6.1: readers may evaluate a pure
     // single-driver continuous assignment themselves (see the pass).
-    if (forwardCopies != "off") {
+    if (vpiMode == "off" && forwardCopies != "off") {
       TalosSimForwardCopyProcessesPassOptions forwardOptions;
       forwardOptions.census = forwardCopies == "census";
       forwardOptions.closedModel = closedModel;

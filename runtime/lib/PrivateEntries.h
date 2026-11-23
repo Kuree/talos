@@ -38,6 +38,11 @@ talos_rt_status talos_rt_v1_native_state_initialize_bss(
     uint64_t bitCount, const talos_rt_native_state_fill_v1 *fills,
     uint64_t fillCount);
 
+// Generated constant Postponed VCD view table, valid for the model lifetime.
+talos_rt_status talos_rt_v1_dump_bind_aliases(talos_rt_context *context,
+                                              const uint64_t *rows,
+                                              uint64_t count);
+
 // Compiler-private ABI. Empty root sets are clean; every nonempty root is
 // queried even after rejection so diagnostic accounting remains exact.
 uint32_t talos_rt_v1_static_specialization_guard_roots(

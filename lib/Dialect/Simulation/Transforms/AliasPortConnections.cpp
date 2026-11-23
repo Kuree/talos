@@ -13,6 +13,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "WaveformObservation.h"
+#include "talos/Analysis/DPIEffectAnalysis.h"
 #include "talos/Analysis/HandleDataflowAnalysis.h"
 #include "talos/Analysis/ParallelWalk.h"
 #include "talos/Dialect/Schedule/ScheduleEnums.h"
@@ -203,8 +205,9 @@ private:
 
 void TalosSimAliasPortConnectionsPass::runOnOperation() {
   sim::SimDesignOp design = getOperation();
-  if (vpi != "off") {
-    if (vpi != "read" && vpi != "full") {
+  bool waveformOnly = vpi == "read";
+  if (vpi != "off" && !waveformOnly) {
+    if (vpi != "full") {
       design.emitOpError("VPI mode must be off, read, or full");
       return signalPassFailure();
     }
@@ -213,6 +216,9 @@ void TalosSimAliasPortConnectionsPass::runOnOperation() {
   if (design.getBody().empty())
     return;
   Block &designBlock = design.getBody().front();
+  if (waveformOnly)
+    for (auto storage : designBlock.getOps<sim::SimStorageDeclOp>())
+      sim::remove<sim::metadata::PostponedWaveformAlias>(storage);
 
   // IEEE 1800-2023 21.7: a waveform dump may name an eliminated sink; at
   // every slot end it holds its source's bits, so its declaration stays and
@@ -221,13 +227,18 @@ void TalosSimAliasPortConnectionsPass::runOnOperation() {
   // connections.
   bool dumps = false;
   bool dumpPorts = false;
+  bool immediateDump = false;
   design.walk([&](Operation *operation) {
     if (operation->getName().getStringRef().starts_with("simulation.dump."))
       dumps = true;
     if (isa<sim::SimDumpPortsOp, sim::SimDumpPortsControlOp>(operation))
       dumpPorts = true;
+    immediateDump |= sim::dumpCanObservePendingCopy(operation);
   });
-  if (dumpPorts)
+  if (dumpPorts || immediateDump ||
+      (waveformOnly &&
+       (!dumps ||
+        !analysis::DPIEffectAnalysis(design).exportsAreTransparent())))
     return;
 
   DenseMap<uint64_t, sim::SimStorageDeclOp> storages;
@@ -296,7 +307,8 @@ void TalosSimAliasPortConnectionsPass::runOnOperation() {
   DenseSet<Operation *> initializers = closure({root});
   SmallVector<Operation *> nonActive;
   for (auto function : designBlock.getOps<sim::SimFuncOp>())
-    if (function.getHomeRegion() != sim::EventRegion::Active)
+    if (function.getHomeRegion() != sim::EventRegion::Active ||
+        (dumps && function.getEntryKind() == sim::EntryKind::Final))
       nonActive.push_back(function);
   DenseSet<Operation *> nonActiveClosure = closure(std::move(nonActive));
 
@@ -778,6 +790,29 @@ void TalosSimAliasPortConnectionsPass::runOnOperation() {
   // of a captured array has. Spawn/call operands that bind another lifted
   // capture keep passing the whole root.
   MLIRContext *context = design.getContext();
+  if (waveformOnly) {
+    for (const auto &[id, view] : resolved) {
+      // $finish (including vpiFinish in a value callback) may interrupt an
+      // ordinary mutable port copy before its event runs. Alias only a direct
+      // copy of stable storage. VCD also checks equality at its first sample.
+      const Candidate *copy = byEliminated.lookup(id);
+      if (!copy || !copy->sinkElimination || copy->target != view.root)
+        continue;
+      bool immutable =
+          llvm::none_of(accessesOf(view.root), [&](const auto &item) {
+            return item.first != root &&
+                   item.second->kind != Access::Kind::Read;
+          });
+      if (!immutable)
+        continue;
+      auto projected = projectPath(storages[view.root].getType(), view.path);
+      sim::set<sim::metadata::PostponedWaveformAlias>(
+          storages[id],
+          DenseI64ArrayAttr::get(
+              context, {int64_t(view.root), int64_t(projected->first)}));
+    }
+    return;
+  }
   for (Candidate &candidate : candidates)
     if (!candidate.rejected && resolved.count(candidate.eliminated)) {
       candidate.spawn.erase();

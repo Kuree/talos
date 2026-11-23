@@ -33,6 +33,115 @@ static constexpr llvm::StringLiteral kFinalTimeAccessorName =
 static constexpr llvm::StringLiteral kTimePrecisionAccessorName =
     "talos_time_precision_fs";
 
+static LogicalResult bindWaveformAliases(ModuleOp module, OpBuilder &builder,
+                                         const NativeStateLayout &layout,
+                                         Value runtimeContext) {
+  SmallVector<std::array<uint64_t, 3>> rows;
+  WalkResult result = module.walk([&](sim::SimStorageDeclOp storage) {
+    auto alias = sim::get<sim::metadata::PostponedWaveformAlias>(storage);
+    if (!alias)
+      return WalkResult::advance();
+    auto width = sim::getPackedWidth(storage.getType());
+    if (!width || !*width)
+      return WalkResult::advance();
+    if (alias.size() != 2 || alias[0] < 0 || alias[1] < 0)
+      return WalkResult::interrupt();
+    auto dst = layout.storageOffsets.find(storage.getId());
+    auto src = layout.storageOffsets.find(alias[0]);
+    auto handle = layout.storage.find(alias[0]);
+    talos_rt_stable_handle_v1 physical{};
+    const auto *bound =
+        handle != layout.storage.end() &&
+                talos_rt_stable_handle_decode(handle->second, &physical) &&
+                physical.kind == TALOS_RT_STABLE_HANDLE_STATIC
+            ? layout.findBound(physical.id)
+            : nullptr;
+    if (!bound || uint64_t(alias[1]) > bound->width ||
+        *width > bound->width - uint64_t(alias[1]))
+      return WalkResult::interrupt();
+    if (dst == layout.storageOffsets.end() ||
+        src == layout.storageOffsets.end() || src->second > layout.bitCount ||
+        uint64_t(alias[1]) > layout.bitCount - src->second)
+      return WalkResult::interrupt();
+    uint64_t source = src->second + alias[1];
+    if (dst->second > layout.bitCount ||
+        *width > layout.bitCount - dst->second ||
+        *width > layout.bitCount - source)
+      return WalkResult::interrupt();
+    if (source != dst->second)
+      rows.push_back({dst->second, source, *width});
+    return WalkResult::advance();
+  });
+  if (result.wasInterrupted())
+    return module.emitError("invalid settled VCD alias range");
+  // Undelayed, collapsed wire/tri bits are one simulated net (23.3.3.7).
+  // Group contiguous mappings only; reversed or scattered bits do not form
+  // a vector view. Mixed resolution, pass devices and delayed nets retain
+  // independent declarations and sampling.
+  if (!layout.hasPassSwitch && !layout.connectivityCanonical.empty()) {
+    DenseSet<uint64_t> plain;
+    for (const auto &net : layout.netLayouts)
+      if (net.fourState &&
+          llvm::none_of(net.propagationDelays,
+                        [](auto delay) { return delay.has_value(); }) &&
+          (net.resolution == sim::NetResolutionKind::Wire ||
+           net.resolution == sim::NetResolutionKind::Tri))
+        plain.insert(net.id);
+    SmallVector<std::pair<uint64_t, uint64_t>> bits;
+    for (const auto &[canonical, members] : layout.connectivityComponents) {
+      if (!llvm::all_of(members,
+                        [&](auto bit) { return plain.contains(bit.net); }))
+        continue;
+      uint64_t src = layout.netOffsets.at(canonical.first) + canonical.second;
+      for (auto bit : members) {
+        uint64_t dst = layout.netOffsets.at(bit.net) + bit.offset;
+        if (src != dst)
+          bits.emplace_back(dst, src);
+      }
+    }
+    llvm::sort(bits);
+    size_t first = 0;
+    while (first < bits.size()) {
+      size_t end = first + 1;
+      while (end < bits.size() && bits[end].first == bits[end - 1].first + 1 &&
+             bits[end].second == bits[end - 1].second + 1)
+        ++end;
+      rows.push_back({bits[first].first, bits[first].second, end - first});
+      first = end;
+    }
+  }
+  if (rows.empty())
+    return success();
+  llvm::sort(rows);
+  SmallVector<int64_t> values;
+  for (const auto &row : rows)
+    llvm::append_range(values, row);
+  auto loc = module.getLoc();
+  auto i64 = builder.getI64Type();
+  constexpr StringLiteral name = "__talos_vcd_aliases_v1";
+  makeConstantGlobal(module, loc, LLVM::LLVMArrayType::get(i64, values.size()),
+                     name, LLVM::Linkage::Internal, 8,
+                     DenseElementsAttr::get(
+                         RankedTensorType::get({int64_t(values.size())}, i64),
+                         ArrayRef(values)));
+  declareNativeRuntime(module, NativeRuntimeEntry::DumpBindAliases);
+  auto status = LLVM::CallOp::create(
+      builder, loc, TypeRange{builder.getI32Type()},
+      getNativeRuntimeCallee(module.getContext(),
+                             NativeRuntimeEntry::DumpBindAliases),
+      ValueRange{runtimeContext,
+                 LLVM::AddressOfOp::create(
+                     builder, loc,
+                     LLVM::LLVMPointerType::get(module.getContext()), name),
+                 llvmConstant(builder, loc, i64, rows.size())});
+  LLVM::CallOp::create(
+      builder, loc, TypeRange{},
+      getNativeRuntimeCallee(module.getContext(),
+                             NativeRuntimeEntry::SchedulerFail),
+      ValueRange{runtimeContext, status.getResult()});
+  return success();
+}
+
 LogicalResult makeSchedulerMain(ModuleOp module,
                                 const NativeStateLayout &stateLayout,
                                 bool useAOT, bool directEval,
@@ -216,6 +325,16 @@ LogicalResult makeSchedulerMain(ModuleOp module,
   builder.setInsertionPointToStart(ready);
   Value runtimeContext =
       LLVM::LoadOp::create(builder, location, pointer, outContext, 8);
+  if (hasExecution &&
+      !runtime::bitEnumContainsAny(runtime::getExecutionFlags(module),
+                                   runtime::ExecutionFlags::VPIWrite) &&
+      runtime::bitEnumContainsAll(
+          runtime::getExecutionFlags(module),
+          runtime::ExecutionFlags::VPIRead |
+              runtime::ExecutionFlags::WaveformMetadata) &&
+      mlir::failed(
+          bindWaveformAliases(module, builder, stateLayout, runtimeContext)))
+    return failure();
   auto initializers =
       module.lookupSymbol<LLVM::GlobalOp>("__talos_state_initializers_v1");
   if (!initializers)

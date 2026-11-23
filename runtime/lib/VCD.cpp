@@ -56,6 +56,9 @@ constexpr uint64_t kDefaultMaxExpandedElements = 32;
 // Byte gap below which two traced ranges are merged. Merging trades a few
 // untraced bytes inside a memcmp for one fewer range in the scan loop.
 constexpr uint64_t kRangeMergeGap = 32;
+// Bound the number of individual tests a single changing bit usually triggers.
+// Variables sharing a byte must stay together until all comparisons finish.
+constexpr uint32_t kVariablesPerRange = 32;
 
 uint32_t read32(const uint8_t *data) {
   uint32_t value = 0;
@@ -217,16 +220,19 @@ talos_rt_status dumpPlanes(const talos_rt_context *context,
   if (plan && plan->state_bit_count == execution.state_bit_count &&
       plan->state_value && (plan->state_unknown || context->twoState())) {
     value = plan->state_value;
-    unknown = plan->state_unknown;
+    unknown = context->twoState() ? nullptr : plan->state_unknown;
     return TALOS_RT_OK;
   }
   size_t stateWords =
       static_cast<size_t>((execution.state_bit_count + 63) / 64);
   if (context->stateValue.size() != stateWords ||
-      context->stateUnknown.size() != stateWords)
+      (!context->twoState() && context->stateUnknown.size() != stateWords))
     return TALOS_RT_INVALID_DESIGN;
   value = reinterpret_cast<const uint8_t *>(context->stateValue.data());
-  unknown = reinterpret_cast<const uint8_t *>(context->stateUnknown.data());
+  unknown =
+      context->twoState()
+          ? nullptr
+          : reinterpret_cast<const uint8_t *>(context->stateUnknown.data());
   return TALOS_RT_OK;
 }
 
@@ -269,9 +275,39 @@ struct TraceRange {
   uint32_t lastVariable = 0;
 };
 
+// Consecutive VCD declarations whose selected bits fit in one load from
+// each plane. The fallback entry covers a single wider or unaligned view.
+struct TraceWord {
+  uint64_t byte;
+  uint32_t end;
+  bool fourState;
+};
+
 struct TraceSelection {
   std::string scope;
   uint64_t levels = 0;
+};
+
+// Preserve the live byte offsets for comparison, while only faulting pages
+// that contain selected variables. An omitted unpacked memory can otherwise
+// fill most of both shadows without contributing a single VCD record.
+class TraceShadow {
+public:
+  void reset(size_t bytes) {
+    CanonicalPlane fresh;
+    fresh.assign(bytes / 8 + (bytes % 8 != 0), 0);
+    storage.swap(fresh);
+    byteCount = bytes;
+  }
+  size_t size() const { return byteCount; }
+  uint8_t *data() { return reinterpret_cast<uint8_t *>(storage.data()); }
+  const uint8_t *data() const {
+    return reinterpret_cast<const uint8_t *>(storage.data());
+  }
+
+private:
+  CanonicalPlane storage;
+  size_t byteCount = 0;
 };
 
 // Output bytes not yet written to the file. A record is formatted directly at
@@ -327,8 +363,8 @@ struct EVCDSession {
   std::vector<TraceVariable> variables;
   std::vector<std::string> codeText;
   std::vector<TraceRange> ranges;
-  std::vector<uint8_t> shadowValue;
-  std::vector<uint8_t> shadowUnknown;
+  TraceShadow shadowValue;
+  TraceShadow shadowUnknown;
   uint64_t limitBytes = 0;
   uint64_t writtenBytes = 0;
   bool limitReached = false;
@@ -363,8 +399,11 @@ struct VCDTraceState {
   // Identifier code per traced range, indexed by TraceVariable::code.
   std::vector<std::string> codeText;
   std::vector<TraceRange> ranges;
-  std::vector<uint8_t> shadowValue;
-  std::vector<uint8_t> shadowUnknown;
+  std::vector<uint32_t> firstWord;
+  std::vector<TraceWord> words;
+  std::vector<uint64_t> fieldMasks;
+  TraceShadow shadowValue;
+  TraceShadow shadowUnknown;
 
   uint64_t maxExpandedElements = kDefaultMaxExpandedElements;
   bool limitSet = false;
@@ -797,6 +836,33 @@ struct PlanBuilder {
   // unpacked array. `name` is already the fully qualified leaf spelling.
   void declareLeaf(uint64_t typeOffset, uint64_t sourceBit, uint64_t width,
                    std::string_view name, std::string_view keyword) {
+    const uint64_t *aliases = context->vcdAliasRows;
+    if (aliases) {
+      uint64_t lo = 0, hi = context->vcdAliasCount;
+      while (lo < hi) {
+        uint64_t mid = lo + (hi - lo) / 2;
+        if (aliases[3 * mid] <= sourceBit)
+          lo = mid + 1;
+        else
+          hi = mid;
+      }
+      if (lo) {
+        const uint64_t *alias = aliases + 3 * (lo - 1);
+        uint64_t low = sourceBit - alias[0];
+        if (low < alias[2] && width <= alias[2] - low) {
+          const uint8_t *value = nullptr, *unknown = nullptr;
+          uint64_t alternative = alias[1] + low;
+          bool same = dumpPlanes(context, value, unknown) == TALOS_RT_OK;
+          for (uint64_t bit = 0; same && bit != width; ++bit)
+            same = bitAt(value, sourceBit + bit) ==
+                       bitAt(value, alternative + bit) &&
+                   bitAt(unknown, sourceBit + bit) ==
+                       bitAt(unknown, alternative + bit);
+          if (same)
+            sourceBit = alternative;
+        }
+      }
+    }
     bool isReal = typeIsReal(database, typeOffset);
     auto [entry, inserted] =
         codeByRange.try_emplace(std::make_pair(sourceBit, width),
@@ -1013,22 +1079,28 @@ void buildRanges(State &state, uint64_t stateBitCount, bool twoState) {
               return left.width < right.width;
             });
   uint64_t stateBytes = (stateBitCount + 7) / 8;
-  state.shadowValue.assign(static_cast<size_t>(stateBytes), 0);
+  state.shadowValue.reset(static_cast<size_t>(stateBytes));
   if (!twoState)
-    state.shadowUnknown.assign(static_cast<size_t>(stateBytes), 0);
+    state.shadowUnknown.reset(static_cast<size_t>(stateBytes));
   state.ranges.clear();
   for (uint32_t index = 0; index != state.variables.size(); ++index) {
-    const TraceVariable &variable = state.variables[index];
+    TraceVariable &variable = state.variables[index];
+    // A two-state simulation can retain a four-state source declaration.
+    // Its trace uses the value plane alone, including when no X/Z plane exists.
+    variable.fourState &= !twoState;
     uint64_t begin = variable.sourceBit / 8;
     uint64_t end = (variable.sourceBit + variable.width + 7) / 8;
     if (end > stateBytes)
       end = stateBytes;
-    if (!state.ranges.empty() &&
-        begin <= state.ranges.back().byteEnd + kRangeMergeGap) {
+    if (!state.ranges.empty()) {
       TraceRange &last = state.ranges.back();
-      last.byteEnd = std::max(last.byteEnd, end);
-      last.lastVariable = index + 1;
-      continue;
+      if (begin < last.byteEnd ||
+          (index - last.firstVariable < kVariablesPerRange &&
+           begin - last.byteEnd <= kRangeMergeGap)) {
+        last.byteEnd = std::max(last.byteEnd, end);
+        last.lastVariable = index + 1;
+        continue;
+      }
     }
     TraceRange range;
     range.byteBegin = begin;
@@ -1037,6 +1109,40 @@ void buildRanges(State &state, uint64_t stateBitCount, bool twoState) {
     range.lastVariable = index + 1;
     state.ranges.push_back(range);
   }
+}
+
+// Precompute the masks once, after aliases and the trace order are fixed.
+// Overlapping declarations compare against the same old shadow until the
+// complete byte range has been emitted (21.7.2).
+void buildTraceWords(VCDTraceState &state) {
+  const uint64_t bytes = state.shadowValue.size();
+  state.firstWord.clear();
+  state.words.clear();
+  state.fieldMasks.resize(state.variables.size());
+  for (const TraceRange &range : state.ranges) {
+    state.firstWord.push_back(state.words.size());
+    for (uint32_t i = range.firstVariable; i < range.lastVariable;) {
+      const TraceVariable &first = state.variables[i];
+      uint64_t byte = bytes >= 8 ? std::min(first.sourceBit / 8, bytes - 8) : 0;
+      uint32_t begin = i;
+      while (bytes >= 8 && i < range.lastVariable) {
+        const TraceVariable &v = state.variables[i];
+        uint64_t shift = v.sourceBit - 8 * byte;
+        if (v.isReal || v.fourState != first.fourState || shift >= 64 ||
+            v.width > 64 - shift)
+          break;
+        uint64_t mask =
+            v.width == 64 ? UINT64_MAX : (uint64_t{1} << v.width) - 1;
+        state.fieldMasks[i++] = mask << shift;
+      }
+      if (i == begin) {
+        ++i;
+        byte = UINT64_MAX;
+      }
+      state.words.push_back({byte, i, first.fourState});
+    }
+  }
+  state.firstWord.push_back(state.words.size());
 }
 
 //===----------------------------------------------------------------------===//
@@ -1223,6 +1329,23 @@ char *writeCode(char *out, const TraceVariable &variable,
        " ", state.codeText[variable.code], "\n"});
 }
 
+void emitKnownValue(VCDTraceState &state, const TraceVariable &variable,
+                    uint64_t value) {
+  const std::string &code = state.codeText[variable.code];
+  char *text = beginRecord(state, variable.width + code.size() + 3 + 16);
+  char *out = text;
+  if (variable.width == 1) {
+    *out++ = value ? '1' : '0';
+  } else {
+    *out++ = 'b';
+    out = formatKnownBinary(value, out);
+    *out++ = ' ';
+  }
+  out = writeCode(out, variable, code);
+  *out++ = '\n';
+  commitRecord(state, text, out);
+}
+
 void emitValue(VCDTraceState &state, const TraceVariable &variable,
                const uint8_t *valuePlane, const uint8_t *unknownPlane) {
   if (variable.isReal)
@@ -1247,34 +1370,19 @@ void emitValue(VCDTraceState &state, const TraceVariable &variable,
         variable.fourState ? loadWord(unknownPlane, planeBytes,
                                       variable.sourceBit, variable.width)
                            : 0;
-    if (unknown == 0) {
-      // A known value keeps no leading zero, or just "0" (Tables 21-8, 21-9).
-      // The record is formatted in place at the end of the output buffer.
-      char *text = beginRecord(
-          state, static_cast<size_t>(variable.width) + code.size() + 3 + 16);
-      text[0] = 'b';
-      char *out = formatKnownBinary(value, text + 1);
-      *out++ = ' ';
-      out = writeCode(out, variable, code);
-      *out++ = '\n';
-      commitRecord(state, text, out);
-      return;
-    }
+    if (!unknown)
+      return emitKnownValue(state, variable, value);
   }
-  // Unknown bits or more than 64: the record `b<bits> <code>\n` is formatted
-  // in place a plane word at a time, then the droppable leading characters
-  // are shifted out behind the `b`.
-  size_t width = static_cast<size_t>(variable.width);
+  // Find the printable suffix before reserving space. A large mostly-zero
+  // vector then writes only its significant words into the output buffer.
+  const uint8_t *unknown = variable.fourState ? unknownPlane : nullptr;
+  size_t bytes = state.shadowValue.size();
+  size_t width = talos::runtime::vcd::compactVectorWidth(
+      valuePlane, unknown, bytes, variable.sourceBit, variable.width);
   char *text = beginRecord(state, width + code.size() + 3 + 16);
   text[0] = 'b';
-  char *bits = text + 1;
-  talos::runtime::vcd::formatVectorDigits(
-      valuePlane, variable.fourState ? unknownPlane : nullptr,
-      state.shadowValue.size(), variable.sourceBit, variable.width, bits);
-  size_t first = talos::runtime::vcd::droppableLeadingDigits(bits, width);
-  if (first != 0)
-    std::memmove(bits, bits + first, width - first);
-  char *out = bits + (width - first);
+  char *out = talos::runtime::vcd::formatVectorDigits(
+      valuePlane, unknown, bytes, variable.sourceBit, width, text + 1);
   *out++ = ' ';
   out = writeCode(out, variable, code);
   *out++ = '\n';
@@ -1455,6 +1563,7 @@ talos_rt_status buildPlan(talos_rt_context *context, VCDTraceState &state) {
   append(state, "$enddefinitions $end\n");
 
   buildRanges(state, context->execution->state_bit_count, context->twoState());
+  buildTraceWords(state);
   state.planBuilt = true;
   state.pendingInitial = true;
   finishLimit(state);
@@ -1491,7 +1600,8 @@ talos_rt_status emitSlot(talos_rt_context *context, VCDTraceState &state) {
   if (!state.enabled)
     return TALOS_RT_OK;
 
-  for (const TraceRange &range : state.ranges) {
+  for (size_t r = 0; r < state.ranges.size(); ++r) {
+    const auto &range = state.ranges[r];
     size_t length = static_cast<size_t>(range.byteEnd - range.byteBegin);
     if (length == 0)
       continue;
@@ -1502,31 +1612,48 @@ talos_rt_status emitSlot(talos_rt_context *context, VCDTraceState &state) {
                               unknownPlane + range.byteBegin, length) != 0);
     if (!moved)
       continue;
-    size_t planeBytes = state.shadowValue.size();
-    for (uint32_t index = range.firstVariable; index != range.lastVariable;
-         ++index) {
-      const TraceVariable &variable = state.variables[index];
-      if (variable.width <= 64) {
-        // One word per plane for the common narrow variable.
-        if (loadWord(state.shadowValue.data(), planeBytes, variable.sourceBit,
-                     variable.width) == loadWord(valuePlane, planeBytes,
-                                                 variable.sourceBit,
-                                                 variable.width) &&
-            (!variable.fourState ||
-             loadWord(state.shadowUnknown.data(), planeBytes,
-                      variable.sourceBit, variable.width) ==
-                 loadWord(unknownPlane, planeBytes, variable.sourceBit,
-                          variable.width)))
-          continue;
-      } else if (bitRangeEqual(state.shadowValue.data(), valuePlane,
-                               variable.sourceBit, variable.width) &&
-                 (!variable.fourState ||
-                  bitRangeEqual(state.shadowUnknown.data(), unknownPlane,
-                                variable.sourceBit, variable.width))) {
+    uint32_t index = range.firstVariable;
+    for (uint32_t w = state.firstWord[r]; w < state.firstWord[r + 1]; ++w) {
+      const auto &word = state.words[w];
+      if (word.byte == UINT64_MAX) {
+        const auto &v = state.variables[index++];
+        if (!bitRangeEqual(state.shadowValue.data(), valuePlane, v.sourceBit,
+                           v.width) ||
+            (v.fourState &&
+             !bitRangeEqual(state.shadowUnknown.data(), unknownPlane,
+                            v.sourceBit, v.width))) {
+          emitTime(state, time);
+          emitValue(state, v, valuePlane, unknownPlane);
+        }
         continue;
       }
-      emitTime(state, time);
-      emitValue(state, variable, valuePlane, unknownPlane);
+      auto load = [&](const uint8_t *plane) {
+        uint64_t bits;
+        std::memcpy(&bits, plane + word.byte, sizeof(bits));
+        return bits;
+      };
+      uint64_t value = load(valuePlane);
+      uint64_t delta = value ^ load(state.shadowValue.data());
+      uint64_t unknown = 0;
+      if (word.fourState) {
+        unknown = load(unknownPlane);
+        delta |= unknown ^ load(state.shadowUnknown.data());
+      }
+      if (delta) {
+        for (; index != word.end; ++index) {
+          uint64_t mask = state.fieldMasks[index];
+          if (!(delta & mask))
+            continue;
+          const auto &v = state.variables[index];
+          emitTime(state, time);
+          if (unknown & mask)
+            emitValue(state, v, valuePlane, unknownPlane);
+          else
+            emitKnownValue(state, v,
+                           (value & mask) >> (v.sourceBit - 8 * word.byte));
+        }
+      }
+      index = word.end;
     }
     std::memcpy(state.shadowValue.data() + range.byteBegin,
                 valuePlane + range.byteBegin, length);
@@ -2293,6 +2420,34 @@ extern "C" talos_rt_status talos_rt_v1_dump_vars(talos_rt_context *context,
   TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_ARGUMENT; }
 }
 
+// The compiler supplies distinct physical storage for each name. Only a
+// Postponed dump uses the proven source range (1800-2023 21.7.2.3); VPI
+// reads and value-change subscriptions keep the declaration's real offset.
+extern "C" talos_rt_status
+talos_rt_v1_dump_bind_aliases(talos_rt_context *context, const uint64_t *rows,
+                              uint64_t count) {
+  if (!context || !context->execution || !rows ||
+      count > SIZE_MAX / (3 * sizeof(uint64_t)))
+    return TALOS_RT_INVALID_ARGUMENT;
+  ContextTransaction transaction(context);
+  ContextMutexLock lock(context);
+  if (context->vcdState)
+    return TALOS_RT_INVALID_LIFECYCLE;
+  uint64_t bits = context->execution->state_bit_count;
+  uint64_t end = 0;
+  for (uint64_t i = 0; i < count; ++i) {
+    const uint64_t dst = rows[3 * i], src = rows[3 * i + 1],
+                   width = rows[3 * i + 2];
+    if (dst < end || !width || dst > bits || width > bits - dst || src > bits ||
+        width > bits - src)
+      return TALOS_RT_INVALID_DESIGN;
+    end = dst + width;
+  }
+  context->vcdAliasRows = rows;
+  context->vcdAliasCount = count;
+  return TALOS_RT_OK;
+}
+
 extern "C" talos_rt_status talos_rt_v1_dump_all(talos_rt_context *context) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -2596,27 +2751,30 @@ char *talos::runtime::vcd::formatVectorDigits(const uint8_t *value,
   }
 }
 
-size_t talos::runtime::vcd::droppableLeadingDigits(const char *digits,
-                                                   size_t width) {
-  char lead = digits[0];
-  if (lead == '1')
-    return 0;
-  size_t first = 0;
-  // Skip whole words of the leading character, then single characters.
-  uint64_t leadWord = 0x0101010101010101ull * static_cast<uint8_t>(lead);
-  while (first + 9 <= width) {
-    uint64_t word;
-    std::memcpy(&word, digits + first + 1, sizeof(word));
-    if (word != leadWord)
-      break;
-    first += 8;
+size_t talos::runtime::vcd::compactVectorWidth(const uint8_t *value,
+                                              const uint8_t *unknown,
+                                              size_t planeBytes, uint64_t bit,
+                                              uint64_t width) {
+  uint64_t top = bit + width - 1;
+  bool leadingValue = bitAt(value, top);
+  bool leadingUnknown = bitAt(unknown, top);
+  if (leadingValue && !leadingUnknown)
+    return width;
+  for (uint64_t end = width; end;) {
+    unsigned count = (end - 1) % 64 + 1;
+    uint64_t low = end - count;
+    uint64_t v = loadWord(value, planeBytes, bit + low, count);
+    uint64_t u = unknown ? loadWord(unknown, planeBytes, bit + low, count) : 0;
+    uint64_t different = (leadingValue ? ~v : v) | (leadingUnknown ? ~u : u);
+    different &= UINT64_MAX >> (64 - count);
+    if (different) {
+      unsigned last = 63 - __builtin_clzll(different);
+      // Table 21-9: zero before a one is implicit. X or Z extension, or a
+      // leading zero before X/Z, must retain one character of the prefix.
+      bool nextIsOne = ((v & ~u) >> last) & 1;
+      return low + last + 1 + (leadingUnknown || !nextIsOne);
+    }
+    end = low;
   }
-  while (first + 1 < width && digits[first + 1] == lead)
-    ++first;
-  // A known zero before X/Z is not redundant: dropping it would make the
-  // shorter value left-extend with X/Z instead of zero (Table 21-9's `0X10`
-  // case). The last leading zero may be dropped only before a one.
-  if (lead == '0' && first + 1 < width && digits[first + 1] == '1')
-    ++first;
-  return first;
+  return 1;
 }

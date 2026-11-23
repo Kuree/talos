@@ -1302,9 +1302,10 @@ TEST(VCDFormat, VectorDigitsMatchABitwiseReference) {
           ASSERT_EQ(end - actual.data(), static_cast<ptrdiff_t>(width));
           actual.resize(static_cast<size_t>(width));
           ASSERT_EQ(actual, expected) << "width " << width << " low " << low;
-          ASSERT_EQ(talos::runtime::vcd::droppableLeadingDigits(
-                        actual.data(), static_cast<size_t>(width)),
-                    drop)
+          ASSERT_EQ(talos::runtime::vcd::compactVectorWidth(
+                        value.data(), twoState ? nullptr : unknown.data(),
+                        planeBytes, low, width),
+                    width - drop)
               << expected;
           ++cases;
         }

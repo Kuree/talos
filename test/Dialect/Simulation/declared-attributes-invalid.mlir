@@ -169,3 +169,16 @@ simulation.design @steady_odd {
   // expected-error @+1 {{attribute 'simulation.steady_unknown' must hold (offset, width) pairs}}
   simulation.storage.decl 0 in 0 : !simulation.logic<8> design {simulation.steady_unknown = array<i64: 0, 1, 4>}
 }
+
+// -----
+
+// expected-error @+1 {{attribute 'simulation.postponed_waveform_alias' belongs on a storage declaration}}
+func.func private @misplaced() attributes {simulation.postponed_waveform_alias = array<i64: 0, 0>}
+
+// -----
+
+simulation.design @malformed_wave_view {
+  simulation.scope.decl 0
+  // expected-error @+1 {{attribute 'simulation.postponed_waveform_alias' requires a nonnegative source ID and bit offset}}
+  simulation.storage.decl 0 in 0 : !simulation.logic<8> design {simulation.postponed_waveform_alias = array<i64: 0, -1>}
+}

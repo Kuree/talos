@@ -736,6 +736,7 @@ static const llvm::StringMap<discardable::PayloadCheck> &declarations() {
       metadata::PersistentImplicationAntecedentResult,
       metadata::PersistentImplicationHandoff, metadata::PersistentMonitor,
       metadata::PostponedDisplay, metadata::WaveformSource,
+      metadata::PostponedWaveformAlias,
       metadata::PersistentRepetitionAllMatches,
       metadata::PersistentRepetitionAntecedent,
       metadata::PersistentRepetitionDfa,
@@ -857,6 +858,13 @@ static LogicalResult verifyDeclaredAttribute(Operation *operation,
   auto error = [&]() {
     return operation->emitOpError("attribute '") << name << "' ";
   };
+  if (name == PostponedWaveformAlias::getNameStr()) {
+    if (!isa<SimStorageDeclOp>(operation))
+      return error() << "belongs on a storage declaration";
+    auto alias = cast<DenseI64ArrayAttr>(value).asArrayRef();
+    if (alias.size() != 2 || alias[0] < 0 || alias[1] < 0)
+      return error() << "requires a nonnegative source ID and bit offset";
+  }
   if (name == VpiExpressionIdentifier::getNameStr() &&
       !isa<SimVPIRelationDeclOp>(operation))
     return error() << "requires an exact expression leaf relation";

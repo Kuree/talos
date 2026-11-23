@@ -25,10 +25,11 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "WaveformObservation.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
-#include "mlir/IR/Builders.h"
 #include "mlir/IR/AttrTypeSubElements.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
@@ -142,7 +143,7 @@ std::optional<Root> rootOf(const analysis::HandleFacts &facts, Value v,
 /// `cf.br ^b; ^b: views, reads, pure ops, one write; suspend.change/any`.
 std::optional<Copy> matchCopy(sim::SimFuncOp function,
                               const analysis::HandleFacts &facts,
-                              std::string &why) {
+                              bool waveforms, std::string &why) {
   if (function.isExternal() || !function.isPrivate() ||
       function.getHomeRegion() != sim::EventRegion::Active ||
       (function.getEntryKind() != sim::EntryKind::PortInput &&
@@ -299,6 +300,24 @@ std::optional<Copy> matchCopy(sim::SimFuncOp function,
         v = cast.getInput();
       } else if (auto cast = dyn_cast<sim::SimPackedUnflattenOp>(def)) {
         v = cast.getInput();
+      } else if (waveforms && isa<arith::TruncIOp>(def) &&
+                 isa<IntegerType>(v.getType())) {
+        // A two-state packed slice lowers to a logical shift and a low-bit
+        // truncation. The VCD alias must select only actual input bits.
+        v = def->getOperand(0);
+      } else if (auto shift = dyn_cast<arith::ShRUIOp>(def);
+                 waveforms && shift) {
+        auto type = dyn_cast<IntegerType>(shift.getType());
+        APInt amount;
+        if (!type || !matchPattern(shift.getRhs(), m_ConstantInt(&amount)) ||
+            type.getWidth() < copy.width ||
+            offset > type.getWidth() - copy.width ||
+            amount.ugt(type.getWidth() - copy.width - offset)) {
+          relocation = false;
+          break;
+        }
+        offset += amount.getZExtValue();
+        v = shift.getLhs();
       } else {
         relocation = false;
         break;
@@ -518,11 +537,11 @@ bool isForwarded(Operation *op, unsigned index) {
 /// other functions.
 std::unique_ptr<Summary>
 summarize(sim::SimFuncOp function,
-          const analysis::HandleDataflowAnalysis &analysis) {
+          const analysis::HandleDataflowAnalysis &analysis, bool waveforms) {
   auto summary = std::make_unique<Summary>();
   summary->function = function;
   analysis::HandleFacts facts = analysis.derive(function);
-  summary->copy = matchCopy(function, facts, summary->why);
+  summary->copy = matchCopy(function, facts, waveforms, summary->why);
   for (unsigned i = 0; i < function.getNumArguments(); ++i) {
     auto kind = function.getArgAttrOfType<IntegerAttr>(
         i, sim::metadata::CaptureKind::getNameStr());
@@ -808,6 +827,7 @@ struct DesignState {
   std::map<Root, Type> types; // declared element types
   std::shared_ptr<const analysis::IsolatedWireDriverTopology> topology;
   bool waveforms = false;
+  bool immediateDump = false;
   /// $dumpports is present: its extended VCD shows each port's direction and
   /// driving strengths (21.7.4), which a forwarded copy no longer has.
   bool dumpPorts = false;
@@ -1145,7 +1165,8 @@ public:
       writers.clear();
       for (Summary *summary : summaries) {
         if (changed.contains(summary->function))
-          *summary = std::move(*summarize(summary->function, *state.analysis));
+          *summary = std::move(
+              *summarize(summary->function, *state.analysis, state.waveforms));
         for (const Write &write : summary->writes)
           writers[write.root].push_back(write.op);
       }
@@ -1865,7 +1886,8 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
         missing.push_back(function);
     SmallVector<std::unique_ptr<Summary>> solved(missing.size());
     parallelFor(context, 0, missing.size(), [&](size_t index) {
-      solved[index] = summarize(missing[index], *state.analysis);
+      solved[index] =
+          summarize(missing[index], *state.analysis, state.waveforms);
     });
     for (auto [function, summary] : llvm::zip(missing, solved))
       state.summaries[function] = std::move(summary);
@@ -1956,14 +1978,30 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
     for (auto &[root, sink] : sinks) {
       if (sink.blocked)
         continue;
+      if (state.immediateDump) {
+        sink.block("waveform dump: immediate checkpoint");
+        continue;
+      }
       bool relocations = llvm::all_of(sink.pieces, [](const Piece &piece) {
         return piece.copy->relocation && piece.copy->reads.size() == 1;
       });
-      if (sink.pieces.size() != 1)
-        sink.block(relocations ? "waveform dump: relocation pieces"
-                               : "waveform dump: expression pieces");
-      else if (!relocations)
-        sink.block("waveform dump: expression");
+      if (!relocations) {
+        sink.block(sink.pieces.size() == 1
+                       ? "waveform dump: expression"
+                       : "waveform dump: expression pieces");
+        continue;
+      }
+      // Coverage above proves these pieces tile the sink from bit zero.
+      // When they tile one source range in the same order, the VCD record
+      // can describe that entire range with one identifier (21.7.2.3).
+      const Copy &first = *sink.pieces.front().copy;
+      for (const Piece &piece : llvm::drop_begin(sink.pieces))
+        if (!(piece.copy->reads.front().root == first.reads.front().root) ||
+            piece.copy->sourceLow < piece.low ||
+            piece.copy->sourceLow - piece.low != first.sourceLow) {
+          sink.block("waveform dump: relocation pieces");
+          break;
+        }
     }
   // The net's value must be its drivers' (IEEE 1800-2023 6.6.1): a plain,
   // undelayed wire whose strong drivers partition it, with no collapsed
@@ -2636,15 +2674,21 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
       if (resumesOutsideActive(site.op))
         reactiveReaders.insert(site.sink);
     }
-    for (const Root &root : reactiveReaders) {
-      Sink &sink = sinks[root];
+    for (auto &[root, sink] : sinks) {
+      // $finish can end a Reactive or Final writer before the Active copy
+      // runs. The final waveform sample must retain the previous sink value.
+      if (sink.blocked || (!state.waveforms && !reactiveReaders.count(root)))
+        continue;
       for (const Piece &piece : sink.pieces)
-        for (const SourceRead &read : piece.copy->reads)
-          if (llvm::any_of(writersOf.lookup(keyOf(read.root)),
-                           [&](const Writer &writer) {
-                             return state.nonActive.contains(writer.function);
-                           }))
-            sink.block("reactive reader");
+        for (const SourceRead &read : piece.copy->reads) {
+          auto writers = writersOf.find(keyOf(read.root));
+          if (writers != writersOf.end() &&
+              llvm::any_of(writers->second, [&](const Writer &writer) {
+                return state.nonActive.contains(writer.function);
+              }))
+            sink.block(state.waveforms ? "waveform dump: non-Active writer"
+                                       : "reactive reader");
+        }
     }
   }
   // Leaves first: a sink whose source is itself an eligible sink waits for
@@ -3056,12 +3100,11 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
         declarations[keyOf(Root{true, uint64_t(net.getId())})] = &op;
       else if (auto storage = dyn_cast<sim::SimStorageDeclOp>(op))
         declarations[keyOf(Root{false, uint64_t(storage.getId())})] = &op;
-    for (const Copy *copy : copies) {
-      if (!ready.count(copy->sink))
-        continue;
-      Operation *declaration = declarations.lookup(keyOf(copy->sink));
-      assert(declaration && copy->relocation && copy->reads.size() == 1 &&
-             "a forwarded dumped sink is one whole relocation");
+    for (const Root &root : ready) {
+      const Copy *copy = sinks.at(root).pieces.front().copy;
+      Operation *declaration = declarations.lookup(keyOf(root));
+      assert(declaration && copy->relocation && copy->sinkLow == 0 &&
+             "a forwarded dumped sink starts at the first source range");
       const SourceRead &read = copy->reads.front();
       sim::set<sim::metadata::WaveformSource>(
           declaration,
@@ -3175,17 +3218,21 @@ void TalosSimForwardCopyProcessesPass::runOnOperation() {
       state.observed.insert(keyOf(root));
   }
   state.topology = analysis::getIsolatedWireDriverTopology(design);
-  // Function bodies are summarized per round; the rest of the design is
-  // fixed.
-  design.walk<WalkOrder::PreOrder>([&](Operation *op) {
-    if (isa<sim::SimFuncOp>(op))
-      return WalkResult::skip();
+  auto noteDump = [&](Operation *op) {
     if (isa<sim::SimDumpVarsOp, sim::SimDumpAllOp, sim::SimDumpControlOp,
             sim::SimDumpFlushOp, sim::SimDumpPortsOp,
             sim::SimDumpPortsControlOp>(op))
       state.waveforms = true;
     if (isa<sim::SimDumpPortsOp, sim::SimDumpPortsControlOp>(op))
       state.dumpPorts = true;
+    state.immediateDump |= sim::dumpCanObservePendingCopy(op);
+  };
+  // Function bodies are summarized per round; the rest of the design is
+  // fixed.
+  design.walk<WalkOrder::PreOrder>([&](Operation *op) {
+    if (isa<sim::SimFuncOp>(op))
+      return WalkResult::skip();
+    noteDump(op);
     if (isa<sim::SimNetDeclOp, sim::SimStorageDeclOp, sim::SimPortDeclOp,
             sim::SimVPINetIdentityDeclOp>(op))
       return WalkResult::advance();
@@ -3202,14 +3249,7 @@ void TalosSimForwardCopyProcessesPass::runOnOperation() {
   });
   for (auto function : designBlock.getOps<sim::SimFuncOp>())
     if (!function.isExternal())
-      function.walk([&](Operation *op) {
-        if (isa<sim::SimDumpVarsOp, sim::SimDumpAllOp, sim::SimDumpControlOp,
-                sim::SimDumpFlushOp, sim::SimDumpPortsOp,
-                sim::SimDumpPortsControlOp>(op))
-          state.waveforms = true;
-        if (isa<sim::SimDumpPortsOp, sim::SimDumpPortsControlOp>(op))
-          state.dumpPorts = true;
-      });
+      function.walk(noteDump);
   // Normalize before indexing symbol users: even a branch can carry a
   // discardable symbol reference, and normalization can erase that branch.
   // Census mode uses the same normalized shapes, then restores the bodies so
@@ -3294,7 +3334,9 @@ void TalosSimForwardCopyProcessesPass::runOnOperation() {
     SmallVector<Operation *> work;
     for (auto function : designBlock.getOps<sim::SimFuncOp>())
       if (!function.isExternal() &&
-          function.getHomeRegion() != sim::EventRegion::Active)
+          (function.getHomeRegion() != sim::EventRegion::Active ||
+           (state.waveforms &&
+            function.getEntryKind() == sim::EntryKind::Final)))
         work.push_back(function);
     while (!work.empty()) {
       Operation *function = work.pop_back_val();
@@ -3318,7 +3360,7 @@ void TalosSimForwardCopyProcessesPass::runOnOperation() {
         continue;
       auto &summary = state.summaries[function];
       if (!summary)
-        summary = summarize(function, *state.analysis);
+        summary = summarize(function, *state.analysis, state.waveforms);
       summaries.push_back(summary.get());
     }
     FinalReportProof proofs(design, state, summaries);

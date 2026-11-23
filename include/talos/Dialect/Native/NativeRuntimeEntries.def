@@ -636,6 +636,8 @@ TALOS_NATIVE_RUNTIME(DpiOpenArrayUnpack, talos_rt_v1_dpi_open_array_unpack,
 TALOS_NATIVE_RUNTIME(DpiStringCopy, talos_rt_v1_dpi_string_copy,
                      SIG(I32, Ptr, Ptr, Ptr), None)
 TALOS_NATIVE_RUNTIME(DumpAll, talos_rt_v1_dump_all, SIG(I32, Ptr), None)
+TALOS_NATIVE_RUNTIME(DumpBindAliases, talos_rt_v1_dump_bind_aliases,
+                     SIG(I32, Ptr, Ptr, I64), None)
 TALOS_NATIVE_RUNTIME(DumpControl, talos_rt_v1_dump_control, SIG(I32, Ptr, I32),
                      None)
 TALOS_NATIVE_RUNTIME(DumpFlush, talos_rt_v1_dump_flush, SIG(I32, Ptr), None)
