@@ -135,6 +135,14 @@ config.substitutions.append(
         config.talos_llvm_dist, config.talos_target_triple,
         target_cxx_flags))
 )
+# C++ objects that a talos-built simulator links (VPI/DPI plugins) must use
+# the runtime's C runtime and plain (not dllimport) PLI/DPI symbols, exactly as
+# %target_clang does for C plugins.
+config.substitutions.append(
+    ("%target_plugin_cxx", '"{}/bin/clang++" --target={} {}'.format(
+        config.talos_llvm_dist, config.talos_target_triple,
+        target_compile_flags if sys.platform == "win32" else target_cxx_flags))
+)
 if sys.platform == "win32":
     runtime_link_flags = (
         '-fuse-ld=lld -nostartfiles -Wl,/debug:symtab -Wl,/stack:8388608 -Wl,/opt:noicf '

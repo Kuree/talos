@@ -29,6 +29,7 @@ struct Options {
   std::vector<std::string> implicitCheckNot;
   bool allowEmpty = false;
   bool allowUnusedPrefixes = false;
+  bool matchFullLines = false;
 };
 
 static bool consumeValue(int &index, int argc, char **argv, StringRef option,
@@ -72,6 +73,10 @@ static bool parseOptions(int argc, char **argv, Options &options) {
       options.allowUnusedPrefixes = true;
       continue;
     }
+    if (argument == "--match-full-lines") {
+      options.matchFullLines = true;
+      continue;
+    }
     if (argument.starts_with("-")) {
       errs() << "FileCheck: unsupported option '" << argument << "'\n";
       return false;
@@ -104,6 +109,7 @@ int main(int argc, char **argv) {
     request.ImplicitCheckNot.push_back(pattern);
   request.AllowEmptyInput = options.allowEmpty;
   request.AllowUnusedPrefixes = options.allowUnusedPrefixes;
+  request.MatchFullLines = options.matchFullLines;
 
   FileCheck checker(request);
   if (!checker.ValidateCheckPrefixes())
