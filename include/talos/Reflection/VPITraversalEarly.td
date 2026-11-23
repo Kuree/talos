@@ -770,8 +770,11 @@ def VPIEarlyExtendsArguments : VPITraversalEdge<
 def VPIEarlyDerivedClasses : VPITraversalEdge<ClassDefnObjects,
   DerivedClassesRel, IterateMode, ClassDefnObjects, NoOrder,
   "37.31">;
+// IEEE 1800-2023 37.31: single arrowheads into instance and scope make the
+// class defn's containing instance a one-to-one relation; the instance side
+// iterates its class defns (37.10).
 def VPIEarlyClassDefnInstances : VPITraversalEdge<ClassDefnObjects,
-  InstanceRel, IterateMode, VPIEarlyInstances, NoOrder, "37.31">;
+  InstanceRel, HandleMode, VPIEarlyInstances, NoOrder, "37.31">;
 def VPIEarlyClassDefnMethods : VPITraversalEdge<ClassDefnObjects, MethodsRel,
   IterateMode, VPIEarlyTaskFuncs, NoOrder, "37.31", 0,
   AutomaticDirectChild>;

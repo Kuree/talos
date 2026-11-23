@@ -5332,7 +5332,8 @@ add("37.15", S({vpiRefObj}), vpiInstance, Mode::Handle,
     S({vpiModule, vpiPackage, vpiInterface, vpiProgram}), Order::None);
 add("37.39", S({vpiModPath}), vpiInstance, Mode::Handle,
     S({vpiModule, vpiInterface}), Order::None);
-add("37.31", S({vpiClassDefn}), vpiInstance, Mode::Iterate,
+// 37.31: single arrowhead into instance, so the relation is one-to-one.
+add("37.31", S({vpiClassDefn}), vpiInstance, Mode::Handle,
     S({vpiModule, vpiPackage, vpiInterface, vpiProgram}), Order::None);
 add("37.10", S({0}), vpiInstance, Mode::Iterate,
     S({vpiModule, vpiPackage, vpiInterface, vpiProgram}), Order::None);

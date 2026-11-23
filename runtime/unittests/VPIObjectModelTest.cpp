@@ -79,7 +79,7 @@ TEST(VPIObjectModel, RefObjectTypespecRequiresNetVariableOrPartSelectActual) {
 constexpr size_t kExpectedTraversalCount = 1914;
 static_assert(sizeof(vpiTraversals) / sizeof(vpiTraversals[0]) ==
               kExpectedTraversalCount);
-constexpr size_t kExpectedPropertyCount = 2336;
+constexpr size_t kExpectedPropertyCount = 2334;
 static_assert(sizeof(vpiProperties) / sizeof(vpiProperties[0]) ==
               kExpectedPropertyCount);
 constexpr size_t kExpectedValuePolicyCount = 57;
@@ -437,6 +437,7 @@ std::map<uint32_t, KindSet> buildReadPropertyApplicabilityOracle() {
   signedObjects.insert({vpiIODecl, vpiFunction});
   add(signedObjects, {vpiSigned});
 
+  // 37.60: repeat control is not an atomic stmt, so it has no label (vpiName).
   add(makePropertyObjectSet({vpiPackage,
                              vpiModule,
                              vpiInterface,
@@ -504,7 +505,6 @@ std::map<uint32_t, KindSet> buildReadPropertyApplicabilityOracle() {
                              vpiNullStmt,
                              vpiRelease,
                              vpiRepeat,
-                             vpiRepeatControl,
                              vpiSysTaskCall,
                              vpiTaskCall,
                              vpiWait,
@@ -587,7 +587,8 @@ std::map<uint32_t, KindSet> buildReadPropertyApplicabilityOracle() {
   add({vpiAttribute}, {vpiDefAttribute});
   add({vpiDelayTerm, vpiDelayDevice}, {vpiDelayType});
   add({vpiIterator}, {vpiIteratorType});
-  add({vpiContAssign, vpiContAssignBit}, {vpiOffset});
+  // 37.47: "offset from LSB" belongs to the cont assign bit box only.
+  add({vpiContAssignBit}, {vpiOffset});
   add({0}, {vpiSaveRestartID, vpiSaveRestartLocation, vpiCompatibilityMode});
   add(makePropertyObjectSet({vpiFrame}, {VPIObjectFamily::Variable}),
       {vpiValid});
@@ -3559,8 +3560,10 @@ TEST(VPIObjectModel, EarlyDiagramEnclosuresExpandWithoutFamilyLeakage) {
   EXPECT_EQ(
       requireTraversal(vpiClassDefn, vpiDerivedClasses, Mode::Iterate).order,
       Order::None);
-  EXPECT_EQ(requireTraversal(vpiClassDefn, vpiInstance, Mode::Iterate).order,
+  // 37.31: the arrow into instance has a single head (one-to-one).
+  EXPECT_EQ(requireTraversal(vpiClassDefn, vpiInstance, Mode::Handle).order,
             Order::None);
+  expectAbsent(vpiClassDefn, vpiInstance, Mode::Iterate);
   EXPECT_EQ(requireTraversal(vpiFrame, vpiAutomatics, Mode::Iterate).order,
             Order::None);
 }
@@ -3762,7 +3765,7 @@ TEST(VPIObjectModel, SpecialExpressionRelationsAddOnlyTheirNamedNodes) {
 
 TEST(VPIObjectModel, ClassClassObjectAndClockingIterationsDoNotInventOrder) {
   for (uint32_t selector :
-       {vpiDerivedClasses, vpiInstance, vpiMethods, vpiClassTypespec})
+       {vpiDerivedClasses, vpiMethods, vpiClassTypespec})
     expectNoOrder(vpiClassDefn, selector, Mode::Iterate);
   EXPECT_EQ(requireTraversal(vpiClassDefn, vpiConstraint, Mode::Iterate).order,
             Order::Declaration);

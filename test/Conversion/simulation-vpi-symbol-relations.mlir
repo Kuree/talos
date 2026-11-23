@@ -6,7 +6,8 @@
 
 // IEEE 1800-2023 37.31-32: class definitions reach the base typespec
 // through an extends object; a class typespec reaches its base typespec
-// directly. Both forms retain their distinct semantic identities.
+// directly. Both forms retain their distinct semantic identities. A class
+// defn's containing instance is one-to-one (37.31: single arrowhead).
 module attributes {
   llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128",
   llvm.target_triple = "x86_64-unknown-linux-gnu"
@@ -80,7 +81,7 @@ module attributes {
     simulation.vpi_relation.decl <kind = symbol, symbol = @derived_type>
         selector 677 handle ordinal 0 to <kind = symbol, symbol = @base_type>
     simulation.vpi_relation.decl <kind = symbol, symbol = @derived>
-        selector 745 iterate ordinal 0 to <kind = symbol, symbol = @top>
+        selector 745 handle ordinal 0 to <kind = symbol, symbol = @top>
     simulation.code_unit.decl 1 in 1 initial hierarchy "top.initial"
     simulation.func @initial(%ctx: !simulation.context
         {simulation.capture_kind = 0 : i32})
@@ -99,7 +100,7 @@ module attributes {
 // CHECK-DAG: relation {{.*}} source_type=630 mode=handle selector=652 ordinal=0 {{.*}} source_name=top.Derived.derived_type target_name=top.Derived
 // CHECK-DAG: relation {{.*}} source_type=630 mode=handle selector=677 ordinal=0 {{.*}} source_name=top.Derived.derived_type target_name=top.Base.base_type
 // CHECK-DAG: relation {{.*}} source_type=630 mode=iterate selector=730 ordinal=0 {{.*}} source_name=top.Base.base_type target_name=top.Base.method
-// CHECK-DAG: relation {{.*}} source_type=652 mode=iterate selector=745 ordinal=0 {{.*}} source_name=top.Derived target_name=top
+// CHECK-DAG: relation {{.*}} source_type=652 mode=handle selector=745 ordinal=0 {{.*}} source_name=top.Derived target_name=top
 // CHECK-DAG: relation {{.*}} source_type=677 mode=iterate selector=89 ordinal=0 {{.*}} source_name=top.Derived.extends target_name=top.arg0
 // CHECK-DAG: relation {{.*}} source_type=677 mode=iterate selector=89 ordinal=1 {{.*}} source_name=top.Derived.extends target_name=top.arg1
 // CHECK-DAG: relation {{.*}} source_type=630 mode=iterate selector=725 ordinal=0 {{.*}} source_name=top.Base.base_type target_name=top.Base.local_type

@@ -654,7 +654,7 @@ def NamedPropertyObjects : VPIObjectSet<"NamedPropertyObjects",
    ImmediateAssert, ImmediateAssume, ImmediateCover, AssignStmt, Assignment,
    Begin, Case, Deassign, DelayControl, Disable, EventControl, EventStmt, For,
    Force, Forever, Fork, If, IfElse, NamedBegin, NamedFork, NullStmt, Release,
-   Repeat, RepeatControl, SysTaskCall, TaskCall, Wait, While, MethodTaskCall,
+   Repeat, SysTaskCall, TaskCall, Wait, While, MethodTaskCall,
    DoWhile, OrderedWait, WaitFork, DisableFork, ExpectStmt, ForeachStmt,
    ReturnStmt, Break, Continue, EnumConst, NettypeDecl],
   [VariableFamily, NetFamily, TypespecFamily]>;
@@ -753,8 +753,6 @@ def ReadAttributeObjects : VPIObjectSet<"ReadAttributeObjects", [Attribute]>;
 def DelayTypePropertyObjects : VPIObjectSet<"DelayTypePropertyObjects",
   [DelayTerm, DelayDevice]>;
 def ReadIteratorObjects : VPIObjectSet<"ReadIteratorObjects", [Iterator]>;
-def ContinuousAssignmentObjects : VPIObjectSet<
-  "ContinuousAssignmentObjects", [ContAssign, ContAssignBit]>;
 def ReadParameterObjects : VPIObjectSet<"ReadParameterObjects",
   [Parameter, TypeParameter]>;
 def ReadValueParameterObjects : VPIObjectSet<"ReadValueParameterObjects",
@@ -1113,8 +1111,10 @@ def IteratorTypeProperty : VPIProperty<"vpiIteratorType", 57,
   IntegerProperty, ReadIteratorObjects, "37.84">;
 def LibraryProperty : VPIProperty<"vpiLibrary", 58, StringProperty,
   InstanceObjects, "37.10">;
+// IEEE 1800-2023 37.47: "offset from LSB" sits inside the cont assign bit box;
+// only delay, net decl assign, strength and value belong to both kinds.
 def OffsetProperty : VPIProperty<"vpiOffset", 60, IntegerProperty,
-  ContinuousAssignmentObjects, "37.47">;
+  VPIObjectSet<"ContAssignBitPropertyObjects", [ContAssignBit]>, "37.47">;
 def ResolvedNetTypeProperty : VPIProperty<"vpiResolvedNetType", 61,
   IntegerProperty, NetPropertyObjects, "37.16", StaticProperty,
   DeniedWhenProtected, 1, NoPropertyObjects, NoPropertyObjects,
