@@ -2556,6 +2556,10 @@ talos_rt_v1_scheduler_install_aot(talos_rt_context *context,
   const talos_rt_native_merged_fragment *mergedFragments =
       plan->merged_fragments;
   uint64_t mergedFragmentCount = plan->merged_fragment_count;
+  const unsigned accumulatorPlanes = context->twoState() ? 6 : 7;
+  const size_t maxAccumulatorWords =
+      SIZE_MAX / sizeof(uint64_t) / accumulatorPlanes;
+  size_t rootWords = 0;
   for (uint32_t index = 0; index != nbaRootCount; ++index) {
     const talos_rt_static_nba_root &root = nbaRoots[index];
     if (root.static_state == 0 || root.bit_width == 0 ||
@@ -2564,6 +2568,10 @@ talos_rt_v1_scheduler_install_aot(talos_rt_context *context,
         (root.generated_accumulator &&
          root.bit_width > TALOS_RT_GENERATED_NBA_MAX_BITS))
       return TALOS_RT_INVALID_ARGUMENT;
+    uint64_t words = (root.bit_width + 63) / 64;
+    if (words > maxAccumulatorWords - rootWords)
+      return TALOS_RT_OUT_OF_MEMORY;
+    rootWords += words;
     if (root.generated_slot_count && !root.generated_slots)
       return TALOS_RT_INVALID_ARGUMENT;
     for (uint64_t slot = 0; slot != root.generated_slot_count; ++slot) {
@@ -2924,6 +2932,13 @@ talos_rt_v1_scheduler_install_aot(talos_rt_context *context,
       context->nativeSchedulePersistentDirtySummary.assign(dirtySummaryWords,
                                                            0);
       context->staticNBAAccumulators.clear();
+      // A root can be a whole RAM even when only a tiny view is ever staged.
+      // Bind all payload and transition windows in one demand-zero allocation;
+      // do not touch unreferenced pages or copy seven root-sized vectors.
+      CanonicalPlane backing;
+      backing.assign(rootWords * accumulatorPlanes, 0);
+      context->staticNBAStorage.swap(backing);
+      uint64_t *nextWords = context->staticNBAStorage.data();
       context->staticNBAAccumulators.reserve(nbaRootCount);
       context->staticNBAAccumulatorsPending = false;
       context->staticNBAPendingAccumulatorCount = 0;
@@ -2959,19 +2974,24 @@ talos_rt_v1_scheduler_install_aot(talos_rt_context *context,
         context->nativeScheduleGeneratedBatchEligible &= generatedBatchRoot;
         if (generatedRoot)
           context->nativeScheduleGeneratedNBAOffsets[index] = state->bitOffset;
-        size_t words = static_cast<size_t>((root.bit_width + 63) / 64);
-        StaticNBAAccumulator accumulator;
-        accumulator.value.assign(words, 0);
+        size_t words = root.bit_width / 64 + (root.bit_width % 64 != 0);
+        auto &accumulator = context->staticNBAAccumulators.emplace_back();
+        auto slice = [&]() -> StaticNBAAccumulator::Words {
+          auto *first = nextWords;
+          nextWords += words;
+          return {first, words};
+        };
+        accumulator.value = slice();
         if (context->twoState())
           accumulator.unknown.assignZero(words);
         else
-          accumulator.unknown.assign(words, 0);
-        accumulator.writeMask.assign(words, 0);
-        accumulator.transient.assign(words, 0);
-        accumulator.changed.assign(words, 0);
-        accumulator.posedge.assign(words, 0);
-        accumulator.negedge.assign(words, 0);
-        context->staticNBAAccumulators.push_back(std::move(accumulator));
+          accumulator.unknown.bind(reinterpret_cast<uint8_t *>(slice().data()),
+                                   words);
+        accumulator.writeMask = slice();
+        accumulator.transient = slice();
+        accumulator.changed = slice();
+        accumulator.posedge = slice();
+        accumulator.negedge = slice();
         if (root.generated_accumulator)
           GeneratedNBAStorage(root.generated_accumulator, context->twoState())
               .clear();
@@ -3772,6 +3792,21 @@ talos_rt_v1_native_state_sync(talos_rt_context *context, uint8_t *value,
             state.bitWidth >
                 context->execution->state_bit_count - state.bitOffset)
           return TALOS_RT_LAYOUT_MISMATCH;
+      // The native generic scheduler also repeatedly decodes static handles.
+      // Populate its dense compiler-ID index before spawning any process;
+      // irregular or later registrations continue to use the immutable map.
+      if (!context->nativeSchedulePlan && context->nativeScheduleStaticStateIndex.empty() &&
+          context->scheduledProcesses.empty() && context->scheduledDesignTasks.empty() &&
+          !context->activeNativeProcess && !context->nativeStaticStates.empty()) {
+        const auto count = context->nativeStaticStates.size();
+        if (std::all_of(context->nativeStaticStates.begin(), context->nativeStaticStates.end(),
+                        [count](const auto &entry) { return entry.first <= count; })) {
+          std::vector<NativeStaticState> index(count + 1);
+          for (const auto &[id, state] : context->nativeStaticStates)
+            index[id] = state;
+          context->nativeScheduleStaticStateIndex = std::move(index);
+        }
+      }
       context->nativeStaticStatesWithinPlanes = true;
     }
     if (!importNativeStatePlanesUnlocked(context, value, unknown,
@@ -3825,7 +3860,14 @@ talos_rt_v1_native_state_bind_continuous(talos_rt_context *context,
       else
         context->continuousUnknown.assign(limbs, 0);
     }
-    context->continuousMask.resize(limbs, 0);
+    if (context->continuousMask.size() != limbs) {
+      CanonicalPlane mask;
+      mask.assign(limbs, 0);
+      size_t retained = std::min(limbs, context->continuousMask.size());
+      if (retained)
+        std::copy_n(context->continuousMask.data(), retained, mask.data());
+      context->continuousMask.swap(mask);
+    }
     *value = reinterpret_cast<uint8_t *>(context->continuousValue.data());
     *unknown = reinterpret_cast<uint8_t *>(context->continuousUnknown.data());
     *mask = reinterpret_cast<uint8_t *>(context->continuousMask.data());

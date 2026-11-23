@@ -1269,9 +1269,30 @@ extern "C" talos_rt_status talos_rt_v1_context_register_import_signature(
   });
 }
 
-extern "C" talos_rt_status talos_rt_v1_context_create_for_design(
-    const talos_rt_execution_descriptor_v1 *execution,
-    talos_rt_context **outContext) {
+enum class NativePlaneBootstrap { Full, ResolveDrivers, Bind };
+
+static NativePlaneBootstrap
+nativePlaneBootstrap(const talos::designbytecode::Image &image) {
+  using namespace talos::designbytecode;
+  // Plain port connectivity, nets and driver defaults only initialize plane
+  // bits. A pass switch or a driver initially at X can also initialize
+  // strength state or schedule events. Preserve ordinary startup for them.
+  for (uint64_t i = 0; i < image.connectivityCount; ++i)
+    if (connectivityAt(image, i).flags & 8)
+      return NativePlaneBootstrap::Full;
+  for (uint64_t i = 0; i < image.stateDescriptorCount; ++i) {
+    auto record = captureAt(image, i);
+    if (record.function == kDriverStateDescriptor &&
+        (record.argument & TALOS_RT_DB_DRIVER_INITIAL_X))
+      return NativePlaneBootstrap::ResolveDrivers;
+  }
+  return NativePlaneBootstrap::Bind;
+}
+
+static talos_rt_status
+createContextForDesign(const talos_rt_execution_descriptor_v1 *execution,
+                       talos_rt_context **outContext,
+                       uint64_t validatedChecksum, bool bindsNativePlanes) {
   if (!outContext)
     return TALOS_RT_INVALID_ARGUMENT;
   *outContext = nullptr;
@@ -1289,10 +1310,15 @@ extern "C" talos_rt_status talos_rt_v1_context_create_for_design(
           TALOS_RT_EXECUTION_WAVEFORM_METADATA |
           TALOS_RT_EXECUTION_DPI_EXPORTS | TALOS_RT_EXECUTION_CLASS_BITSTREAM |
           TALOS_RT_EXECUTION_COVERAGE_SCHEMA |
-          TALOS_RT_EXECUTION_POLLED_COLLECTION | TALOS_RT_EXECUTION_TWO_STATE;
+          TALOS_RT_EXECUTION_POLLED_COLLECTION | TALOS_RT_EXECUTION_TWO_STATE |
+          TALOS_RT_EXECUTION_VPI_PUBLISHING_WRITERS;
       if (execution->version != TALOS_RT_VERSION ||
           execution->dpi_reserved != 0 ||
           (execution->flags & ~validFlags) != 0 ||
+          ((execution->flags & TALOS_RT_EXECUTION_VPI_PUBLISHING_WRITERS) &&
+           (!(execution->flags & TALOS_RT_EXECUTION_HAS_BYTECODE) ||
+            !(execution->flags & TALOS_RT_EXECUTION_VPI_READ) ||
+            (execution->flags & TALOS_RT_EXECUTION_VPI_WRITE))) ||
           ((execution->flags & TALOS_RT_EXECUTION_VPI_WRITE) != 0 &&
            (execution->flags & TALOS_RT_EXECUTION_VPI_READ) == 0) ||
           ((execution->flags & TALOS_RT_EXECUTION_REQUIRE_BYTECODE) != 0 &&
@@ -1319,7 +1345,7 @@ extern "C" talos_rt_status talos_rt_v1_context_create_for_design(
         return TALOS_RT_INVALID_DESIGN;
       if ((execution->flags & TALOS_RT_EXECUTION_HAS_DESIGN_DATABASE) != 0) {
         talos_rt_status status =
-            talos_rt_initialize_design_database(execution, designDatabase);
+            talos_rt_initialize_design_database(execution, designDatabase, validatedChecksum);
         if (status != TALOS_RT_OK)
           return status;
       }
@@ -1362,21 +1388,37 @@ extern "C" talos_rt_status talos_rt_v1_context_create_for_design(
         return status;
       }
     }
+    // The generated fills and bind run before any source process or callback.
+    // A private canonical image would be discarded at that bind. Preserve
+    // the logical bounds for its checks and build the net index on first use.
+    auto bootstrap = bindsNativePlanes && execution &&
+                             !execution->observer_count && !hasCoverageSchema
+                         ? nativePlaneBootstrap(designBytecodeImage)
+                         : NativePlaneBootstrap::Full;
+    bool usesInitialNativePlanes = bootstrap == NativePlaneBootstrap::Bind;
     if (execution && execution->state_bit_count != 0) {
       if (execution->state_bit_count > std::numeric_limits<size_t>::max() - 63)
         talos_rt_out_of_memory();
       size_t limbs =
           static_cast<size_t>((execution->state_bit_count + 63) / 64);
-      context->stateValue.assign(limbs, 0);
-      if (context->twoState())
+      if (usesInitialNativePlanes)
+        context->stateValue.assignZero(limbs);
+      else
+        context->stateValue.assign(limbs, 0);
+      if (context->twoState() || usesInitialNativePlanes)
         context->stateUnknown.assignZero(limbs);
       else
-        context->stateUnknown.assign(limbs, UINT64_MAX);
+        // Without pass controls the initial resolver reads only net/driver
+        // lanes, whose declaration defaults are explicitly written before
+        // resolution. Leave discarded variable pages demand-zero until bind.
+        context->stateUnknown.assign(
+            limbs,
+            bootstrap == NativePlaneBootstrap::ResolveDrivers ? 0 : UINT64_MAX);
       unsigned tail = static_cast<unsigned>(execution->state_bit_count % 64);
       if (tail != 0)
         context->stateUnknown.back() &= (uint64_t{1} << tail) - 1;
     }
-    if (execution &&
+    if (execution && !usesInitialNativePlanes &&
         (execution->flags & TALOS_RT_EXECUTION_HAS_BYTECODE) != 0) {
       talos_rt_status status = talos_rt_initialize_design_state(context);
       if (status != TALOS_RT_OK) {
@@ -1398,6 +1440,25 @@ extern "C" talos_rt_status talos_rt_v1_context_create_for_design(
   }
   TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
   TALOS_RT_CATCH_ALL { return TALOS_RT_IO_ERROR; }
+}
+
+extern "C" talos_rt_status talos_rt_v1_context_create_for_design(
+    const talos_rt_execution_descriptor_v1 *execution,
+    talos_rt_context **outContext) {
+  return createContextForDesign(execution, outContext, 0, false);
+}
+
+extern "C" talos_rt_status talos_rt_v1_context_create_embedded_read(
+    const talos_rt_execution_descriptor_v1 *execution,
+    talos_rt_context **outContext, uint64_t validatedChecksum,
+    uint64_t validatedBits, uint32_t bindsNativePlanes) {
+  bool sameLayout = execution && execution->state_bit_count == validatedBits &&
+                    (execution->flags & (TALOS_RT_EXECUTION_VPI_READ |
+                                         TALOS_RT_EXECUTION_VPI_WRITE)) ==
+                        TALOS_RT_EXECUTION_VPI_READ;
+  return createContextForDesign(execution, outContext,
+                                sameLayout ? validatedChecksum : 0,
+                                sameLayout && bindsNativePlanes);
 }
 
 extern "C" void talos_rt_v1_context_destroy(talos_rt_context *context) {

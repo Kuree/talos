@@ -3,7 +3,23 @@
 #ifndef TALOS_RUNTIME_LIB_EXCEPTIONSUPPORT_H
 #define TALOS_RUNTIME_LIB_EXCEPTIONSUPPORT_H
 
+#include <cstdio>
 #include <cstdlib>
+#include <new>
+
+// Preserve the native runtime's status-based allocation failure handling. The
+// wasm runtime is compiled with -fno-exceptions and a noexcept libc++, so
+// explicitly detected unrepresentable allocations follow the same fatal path
+// as allocator failures there.
+[[noreturn]] inline void talos_rt_out_of_memory() {
+#if !defined(TALOS_RT_IGNORE_EXCEPTIONS) &&                                    \
+    (defined(__cpp_exceptions) || defined(_CPPUNWIND))
+  throw std::bad_alloc();
+#else
+  std::fputs("talos runtime: out of memory\n", stderr);
+  std::abort();
+#endif
+}
 
 // Keep exception translation at native C ABI boundaries without requiring
 // exception support in the wasm runtime. In the exception-free build the

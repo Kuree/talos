@@ -4,10 +4,13 @@
 #ifndef TALOS_RUNTIME_LIB_CANONICALPLANE_H
 #define TALOS_RUNTIME_LIB_CANONICALPLANE_H
 
+#include "ExceptionSupport.h"
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <vector>
+#include <cstdlib>
+#include <limits>
+#include <memory>
 
 // Generated planes are byte arrays. The alias-qualified limb also permits
 // their use by runtime code when the model and runtime are linked with LTO.
@@ -51,13 +54,18 @@ public:
     shared_ = false;
   }
   void assign(size_t count, uint64_t value) {
-    owned.assign(count, value);
-    words = owned.data();
+    // Large simulation memories can stay backed by the system's zero page
+    // until actually written or rebound to the generated state image.
+    bool fresh = reserveOwned(count, value == 0);
+    if (count && (value || !fresh))
+      std::fill_n(owned.get(), count, value);
+    words = owned.get();
     count_ = count;
     shared_ = false;
   }
   void bind(uint8_t *plane, size_t count) {
-    std::vector<uint64_t>().swap(owned);
+    owned.reset();
+    capacity = 0;
     words = reinterpret_cast<CanonicalLimb *>(plane);
     count_ = count;
     shared_ = true;
@@ -65,6 +73,7 @@ public:
   bool shared() const { return shared_; }
   void swap(CanonicalPlane &other) noexcept {
     owned.swap(other.owned);
+    std::swap(capacity, other.capacity);
     std::swap(words, other.words);
     std::swap(count_, other.count_);
     std::swap(shared_, other.shared_);
@@ -87,6 +96,13 @@ public:
   uint64_t back() const { return (*this)[count_ - 1]; }
 
   CanonicalPlane() = default;
+  CanonicalPlane(CanonicalPlane &&other) noexcept { swap(other); }
+  CanonicalPlane &operator=(CanonicalPlane &&other) noexcept {
+    CanonicalPlane moved;
+    moved.swap(other);
+    swap(moved);
+    return *this;
+  }
   CanonicalPlane(const CanonicalPlane &other) { *this = other; }
   CanonicalPlane &operator=(const CanonicalPlane &other) {
     if (this != &other) {
@@ -94,9 +110,10 @@ public:
         assignZero(other.count_);
         return *this;
       }
-      owned.assign(other.begin(), other.end());
-      words = owned.data();
-      count_ = owned.size();
+      reserveOwned(other.count_, false);
+      std::copy_n(other.words, other.count_, owned.get());
+      words = owned.get();
+      count_ = other.count_;
       shared_ = false;
     }
     return *this;
@@ -111,7 +128,25 @@ public:
   }
 
 private:
-  std::vector<uint64_t> owned;
+  struct Free {
+    void operator()(uint64_t *p) const { std::free(p); }
+  };
+  bool reserveOwned(size_t count, bool zero) {
+    if (count <= capacity)
+      return false;
+    if (count > std::numeric_limits<size_t>::max() / sizeof(uint64_t))
+      talos_rt_out_of_memory();
+    auto *p =
+        static_cast<uint64_t *>(zero ? std::calloc(count, sizeof(uint64_t))
+                                     : std::malloc(count * sizeof(uint64_t)));
+    if (!p)
+      talos_rt_out_of_memory();
+    owned.reset(p);
+    capacity = count;
+    return true;
+  }
+  std::unique_ptr<uint64_t, Free> owned;
+  size_t capacity = 0;
   CanonicalLimb *words = nullptr;
   size_t count_ = 0;
   bool shared_ = false;

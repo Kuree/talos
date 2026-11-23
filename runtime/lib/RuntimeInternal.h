@@ -97,20 +97,6 @@ talos_rt_managed_word_from_object(const talos_rt_object_v1 *object) noexcept {
       reinterpret_cast<uintptr_t>(object));
 }
 
-// Preserve the native runtime's status-based allocation failure handling. The
-// wasm runtime is compiled with -fno-exceptions and a noexcept libc++, so
-// explicitly detected unrepresentable allocations follow the same fatal path
-// as allocator failures there.
-[[noreturn]] inline void talos_rt_out_of_memory() {
-#if !defined(TALOS_RT_IGNORE_EXCEPTIONS) &&                                    \
-    (defined(__cpp_exceptions) || defined(_CPPUNWIND))
-  throw std::bad_alloc();
-#else
-  std::fputs("talos runtime: out of memory\n", stderr);
-  std::abort();
-#endif
-}
-
 inline std::optional<uint64_t> talos_rt_scan_raw_size(uint64_t bitWidth,
                                                       bool fourState) noexcept {
   if (bitWidth == 0 || bitWidth > UINT64_MAX - 31)
@@ -922,6 +908,7 @@ struct NativeUnknownSummary {
   std::vector<uint64_t> patterns;
   // Root indices sorted by bit offset; roots are disjoint.
   std::vector<uint32_t> byOffset;
+  uint32_t lastWriteRoot = UINT32_MAX;
   // Per root, the 64-bit chunk where the last refresh found it differing from
   // its pattern (bit = UINT64_MAX if none) and the pattern cursor for it.
   struct Mismatch {
@@ -1050,22 +1037,43 @@ struct PowerNBAFeatureState {
 };
 
 struct StaticNBAAccumulator {
+  StaticNBAAccumulator() = default;
+  StaticNBAAccumulator(const StaticNBAAccumulator &) = delete;
+  StaticNBAAccumulator &operator=(const StaticNBAAccumulator &) = delete;
+  StaticNBAAccumulator(StaticNBAAccumulator &&) = default;
+  StaticNBAAccumulator &operator=(StaticNBAAccumulator &&) = default;
+
   uint8_t *valuePlane = nullptr;
   uint8_t *unknownPlane = nullptr;
   uint64_t planeBitCount = 0;
   uint32_t execRegion = TALOS_RT_REGION_NBA;
   uint64_t sequence = 0;
   bool valid = false;
-  std::vector<uint64_t> value;
+  // Disjoint slices of the plan's zero-initialized accumulator storage.
+  // Two-state models use an implicit zero plane for unknown bits.
+  struct Words {
+    uint64_t *first = nullptr;
+    size_t count = 0;
+    size_t size() const { return count; }
+    uint64_t *data() { return first; }
+    const uint64_t *data() const { return first; }
+    uint64_t *begin() { return first; }
+    const uint64_t *begin() const { return first; }
+    uint64_t *end() { return count ? first + count : first; }
+    const uint64_t *end() const { return count ? first + count : first; }
+    uint64_t &operator[](size_t i) { return first[i]; }
+    uint64_t operator[](size_t i) const { return first[i]; }
+  };
+  Words value;
   CanonicalPlane unknown;
-  std::vector<uint64_t> writeMask;
+  Words writeMask;
   // Staged bits rewritten with a different value since the last barrier.
   // The merge keeps only the final value; the commit reports these bits as
   // changed so change waiters still see a round trip (IEEE 1800-2017 4.6(b)).
-  std::vector<uint64_t> transient;
-  std::vector<uint64_t> changed;
-  std::vector<uint64_t> posedge;
-  std::vector<uint64_t> negedge;
+  Words transient;
+  Words changed;
+  Words posedge;
+  Words negedge;
 };
 
 struct ScheduledManagedNBA {
@@ -3212,7 +3220,7 @@ struct talos_rt_context {
   // Latest values published by continuous assignments to variable storage.
   // Unlike procedural writes, these remain active beneath force / assign and
   // are republished as soon as the higher-priority override is released.
-  std::vector<uint64_t> continuousMask;
+  CanonicalPlane continuousMask;
   CanonicalPlane continuousValue;
   CanonicalPlane continuousUnknown;
   // Built once from the immutable execution image and shared by net
@@ -3365,6 +3373,7 @@ struct talos_rt_context {
   std::unique_ptr<PackedNBAChangeMap> packedNBAChanges;
   uint64_t orderedSharedPackets = 0;
   uint64_t wholeChangeBankCommits = 0, wholeChangeBankRewrites = 0;
+  CanonicalPlane staticNBAStorage;
   talos_rt_context();
   ~talos_rt_context();
 };
@@ -4626,7 +4635,7 @@ bool talos_rt_checked_design_record(
 
 talos_rt_status talos_rt_initialize_design_database(
     const talos_rt_execution_descriptor_v1 *execution,
-    DesignDatabaseCache &cache) noexcept;
+    DesignDatabaseCache &cache, uint64_t validatedChecksum = 0) noexcept;
 talos_rt_status talos_rt_register_design_database(
     const talos_rt_execution_descriptor_v1 *execution,
     const DesignDatabaseCache &cache) noexcept;

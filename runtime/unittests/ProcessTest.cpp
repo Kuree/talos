@@ -6752,6 +6752,30 @@ TEST(Scheduler, NativePlaneFillsPreserveBitsAndInitializeOnce) {
   }
 }
 
+TEST(Scheduler, LoaderZeroedPlanesResetOnReentry) {
+  talos_rt_execution_descriptor_v1 execution{};
+  execution.version = TALOS_RT_VERSION;
+  execution.state_bit_count = 80;
+  alignas(8) std::array<uint8_t, 18> values{}, unknown{};
+  constexpr talos_rt_native_state_fill_v1 fill{6, 4, 1, 1};
+  for (unsigned run = 0; run != 2; ++run) {
+    talos_rt_context *context = nullptr;
+    ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_native_state_initialize_bss(
+                  context, values.data(), unknown.data(), 80, &fill, 1),
+              TALOS_RT_OK);
+    EXPECT_EQ(values, unknown);
+    EXPECT_EQ(values[0], 0xc0);
+    EXPECT_EQ(values[1], 3);
+    EXPECT_TRUE(std::all_of(values.begin() + 2, values.end(),
+                            [](uint8_t v) { return v == 0; }));
+    talos_rt_v1_context_destroy(context);
+    values.fill(0xff);
+    unknown.fill(0x55);
+  }
+}
+
 TEST(Scheduler, SharedPlanesKeepInitializersTailAndKnownnessNotifications) {
   // IEEE 1800-2023 6.8, 9.4.2: sharing must preserve compiler initial values
   // and invalidate/recheck two-state proofs even after a runtime write has

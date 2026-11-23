@@ -18,6 +18,7 @@
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSwitch.h"
+#include "llvm/Support/Endian.h"
 
 using namespace mlir;
 
@@ -86,6 +87,37 @@ LogicalResult makeSchedulerMain(ModuleOp module,
                         outContext, 8);
   constexpr StringLiteral executionName = "__talos_execution_descriptor_v1";
   bool hasExecution = module.lookupSymbol(executionName) != nullptr;
+  NativeRuntimeEntry createDesign = NativeRuntimeEntry::ContextCreateForDesign;
+  uint64_t validatedChecksum = 0, validatedBits = 0;
+  if (hasExecution && native::has<native::ClosedExecutable>(module) &&
+      native::has<native::ReadableEvalState>(module)) {
+    auto blob =
+        module.lookupSymbol<LLVM::GlobalOp>("__talos_design_database_v1");
+    auto bytes = blob && blob.getConstant()
+                     ? dyn_cast_or_null<StringAttr>(blob.getValueOrNull())
+                     : StringAttr{};
+    if (bytes) {
+      talos_rt_execution_descriptor_v1 descriptor{};
+      descriptor.version = TALOS_RT_VERSION;
+      descriptor.flags =
+          static_cast<uint32_t>(runtime::getExecutionFlags(module));
+      if (auto bits = runtime::get<runtime::StateBits>(module))
+        descriptor.state_bit_count = bits.getUInt();
+      descriptor.design_database =
+          reinterpret_cast<const uint8_t *>(bytes.getValue().data());
+      descriptor.design_database_size = bytes.getValue().size();
+      // Validate the final serialized bytes and physical bounds with the
+      // runtime validator. All names, relations and range checks are retained.
+      if (talos_rt_v1_design_validate(&descriptor) != TALOS_RT_OK)
+        return module.emitError(
+            "embedded read-only design database failed validation");
+      validatedBits = descriptor.state_bit_count;
+      validatedChecksum = llvm::support::endian::read64le(
+          descriptor.design_database +
+          offsetof(talos_rt_design_database_header_v1, checksum));
+      createDesign = NativeRuntimeEntry::ContextCreateEmbeddedRead;
+    }
+  }
   bool hasCoverage = runtime::has<runtime::CoverageSchemaBlob>(module);
   bool hasSAIF = saif::has<saif::Output>(module);
   // A functional schema is also required for covergroup methods used directly
@@ -128,6 +160,12 @@ LogicalResult makeSchedulerMain(ModuleOp module,
   bool sharedNativeState = hasExecution && useAOT && directEval &&
                            stateLayout.bitCount && !hasObserver &&
                            !hasCoverage && !hasSAIF;
+  // Shared packed storage uses the module's private zero-initialized planes.
+  // A closed main can retain the loader's demand-zero backing on first entry.
+  auto initializePlanes =
+      sharedNativeState && native::has<native::ClosedExecutable>(module)
+          ? NativeRuntimeEntry::NativeStateInitializeBSS
+          : NativeRuntimeEntry::NativeStateInitialize;
   uint64_t linePointCount = 0;
   uint64_t toggleBitCount = 0;
   if (hasCoverage) {
@@ -146,11 +184,15 @@ LogicalResult makeSchedulerMain(ModuleOp module,
   if (hasExecution) {
     Value execution =
         LLVM::AddressOfOp::create(builder, location, pointer, executionName);
+    SmallVector<Value> args{execution, outContext};
+    if (validatedChecksum) {
+      args.push_back(llvmConstant(builder, location, i64, validatedChecksum));
+      args.push_back(llvmConstant(builder, location, i64, validatedBits));
+      args.push_back(llvmConstant(builder, location, i32, sharedNativeState));
+    }
     auto create = LLVM::CallOp::create(
         builder, location, TypeRange{i32},
-        getNativeRuntimeCallee(context,
-                               NativeRuntimeEntry::ContextCreateForDesign),
-        ValueRange{execution, outContext});
+        getNativeRuntimeCallee(context, createDesign), args);
     Value succeeded = arith::CmpIOp::create(
         builder, location, arith::CmpIPredicate::eq, create.getResult(),
         llvmConstant(builder, location, i32, 0));
@@ -183,8 +225,7 @@ LogicalResult makeSchedulerMain(ModuleOp module,
       4;
   auto initialized = LLVM::CallOp::create(
       builder, location, TypeRange{i32},
-      getNativeRuntimeCallee(context,
-                             NativeRuntimeEntry::NativeStateInitialize),
+      getNativeRuntimeCallee(context, initializePlanes),
       ValueRange{runtimeContext,
                  detail::createStatePlaneAddress(builder, location,
                                                  schedule::StatePlane::Value),
@@ -1021,12 +1062,11 @@ LogicalResult makeSchedulerMain(ModuleOp module,
   declareNativeRuntime(module, NativeRuntimeEntry::SchedulerTime);
 
   if (hasExecution)
-    declareNativeRuntime(module, NativeRuntimeEntry::ContextCreateForDesign);
+    declareNativeRuntime(module, createDesign);
   else
     declareNativeRuntime(module, NativeRuntimeEntry::ContextCreate);
   declareNativeRuntimes(module,
-                        {NativeRuntimeEntry::NativeStateInitialize,
-                         NativeRuntimeEntry::ContextDestroy,
+                        {initializePlanes, NativeRuntimeEntry::ContextDestroy,
                          NativeRuntimeEntry::ContextConfigureArgv,
                          NativeRuntimeEntry::NativeStateRegisterStatic});
   if (requiresNativeStateSync)

@@ -486,6 +486,8 @@ typedef struct talos_rt_handle_v1 {
 /* Value-only simulation state. Canonical unknown-plane pointers are null;
  * DPI C representations retain their declared layout and receive zero bval. */
 #define TALOS_RT_EXECUTION_TWO_STATE (UINT32_C(1) << 11)
+// A native read executable has source publication paths for watched writers.
+#define TALOS_RT_EXECUTION_VPI_PUBLISHING_WRITERS (UINT32_C(1) << 12)
 
 // Executable scheduler-queue ordinals. PLI callbacks use separate scheduler
 // checkpoints; Preponed sampling uses a slot-boundary hook.

@@ -2179,22 +2179,38 @@ talos_rt_initialize_design_state(talos_rt_context *context) noexcept {
             static_cast<size_t>((image.stateBitCount + 63) / 64) ||
         context->stateUnknown.size() != context->stateValue.size())
       return TALOS_RT_INVALID_DESIGN;
+    // Each validated net/driver descriptor is one contiguous fill. Keep
+    // descriptor order and clip just the first and last limb. No HDL or VPI
+    // observer is active while declaration defaults are installed (6.8).
+    auto fillPlane = [](CanonicalPlane &plane, uint64_t offset, uint64_t width,
+                        bool set) {
+      if (!width || !plane.data())
+        return;
+      uint64_t bits = set ? UINT64_MAX : 0;
+      if (unsigned shift = offset % 64) {
+        uint64_t leading = std::min<uint64_t>(width, 64 - shift);
+        storePackedBits(plane, offset, leading, bits);
+        offset += leading;
+        width -= leading;
+      }
+      std::fill_n(plane.data() + offset / 64, width / 64, bits);
+      if (uint64_t trailing = width % 64)
+        storePackedBits(plane, offset + width - trailing, trailing, bits);
+    };
     for (uint64_t index = 0; index != image.stateDescriptorCount; ++index) {
       CaptureRecord driver = captureAt(image, index);
       if (driver.function == kNetStateDescriptor) {
         bool fourState = (driver.argument & 1) != 0;
-        for (uint64_t bitIndex = 0; bitIndex != driver.planeSize; ++bitIndex) {
-          setBit(context->stateValue, driver.valueOffset + bitIndex, fourState);
-          setBit(context->stateUnknown, driver.valueOffset + bitIndex,
-                 fourState);
-        }
+        fillPlane(context->stateValue, driver.valueOffset, driver.planeSize,
+                  fourState);
+        fillPlane(context->stateUnknown, driver.valueOffset, driver.planeSize,
+                  fourState);
       } else if (driver.function == kDriverStateDescriptor) {
         bool initialX = (driver.argument & TALOS_RT_DB_DRIVER_INITIAL_X) != 0;
-        for (uint64_t bitIndex = 0; bitIndex != driver.planeSize; ++bitIndex) {
-          setBit(context->stateValue, driver.valueOffset + bitIndex,
-                 !context->twoState() && !initialX);
-          setBit(context->stateUnknown, driver.valueOffset + bitIndex, true);
-        }
+        fillPlane(context->stateValue, driver.valueOffset, driver.planeSize,
+                  !context->twoState() && !initialX);
+        fillPlane(context->stateUnknown, driver.valueOffset, driver.planeSize,
+                  true);
       }
     }
     NetAliasCache *cache = getNetAliasCache(image, context);

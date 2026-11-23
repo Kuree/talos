@@ -475,6 +475,9 @@ TALOS_NATIVE_RUNTIME(ContextCreate, talos_rt_v1_context_create, SIG(I32, Ptr),
 TALOS_NATIVE_RUNTIME(ContextCreateForDesign,
                      talos_rt_v1_context_create_for_design, SIG(I32, Ptr, Ptr),
                      None)
+TALOS_NATIVE_RUNTIME(ContextCreateEmbeddedRead,
+                     talos_rt_v1_context_create_embedded_read,
+                     SIG(I32, Ptr, Ptr, I64, I64, I32), None)
 TALOS_NATIVE_RUNTIME(ContextDestroy, talos_rt_v1_context_destroy, SIG(V, Ptr),
                      None)
 TALOS_NATIVE_RUNTIME(ContextRegisterImportSignature,
@@ -826,6 +829,8 @@ TALOS_NATIVE_RUNTIME(NativeStateBindUnknownSummary,
                      talos_rt_v1_native_state_bind_unknown_summary,
                      SIG(I32, Ptr, Ptr, I64, Ptr, Ptr, I64, Ptr, I64), None)
 TALOS_NATIVE_RUNTIME(NativeStateInitialize, talos_rt_v1_native_state_initialize,
+                     SIG(I32, Ptr, Ptr, Ptr, I64, Ptr, I64), None)
+TALOS_NATIVE_RUNTIME(NativeStateInitializeBSS, talos_rt_v1_native_state_initialize_bss,
                      SIG(I32, Ptr, Ptr, Ptr, I64, Ptr, I64), None)
 TALOS_NATIVE_RUNTIME(NativeStateLoadPlane, talos_rt_v1_native_state_load_plane,
                      SIG(I32, Ptr, Ptr, I64, I64, I64, I32, I32, Ptr), None)

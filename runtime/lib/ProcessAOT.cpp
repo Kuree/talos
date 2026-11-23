@@ -3899,6 +3899,7 @@ void talos_rt_release_native_schedule_plan(talos_rt_context *context) noexcept {
   context->nativeScheduleSnapshotActors.clear();
   context->nativeScheduleSnapshotNBAs.clear();
   context->staticNBAAccumulators.clear();
+  context->staticNBAStorage.assignZero(0);
   context->staticNBAAccumulatorsPending = false;
   context->staticNBAPendingAccumulatorCount = 0;
   context->staticNBASlowRoots.clear();

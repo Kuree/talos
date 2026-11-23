@@ -4464,6 +4464,23 @@ bool validateExpressions(const Database &database,
   return true;
 }
 
+// The generated traversal catalog is sorted by source kind. Restrict
+// relationship validation to that kind's contiguous rows.
+auto traversalRange(uint32_t kind) {
+  using namespace talos::reflection;
+  auto end = std::end(vpiTraversals);
+  auto first =
+      std::lower_bound(std::begin(vpiTraversals), end, kind,
+                       [](const VPITraversalDescriptor &edge, uint32_t value) {
+                         return edge.sourceType < value;
+                       });
+  auto last = std::upper_bound(
+      first, end, kind, [](uint32_t value, const VPITraversalDescriptor &edge) {
+        return value < edge.sourceType;
+      });
+  return std::make_pair(first, last);
+}
+
 bool validateDatabaseImpl(const Database &database) {
   if (database.scopeCount == 0 || !isScopeOffset(database, database.root))
     return false;
@@ -4514,18 +4531,27 @@ bool validateDatabaseImpl(const Database &database) {
   std::unordered_set<uint32_t> sourceExpressionConstants;
   std::unordered_set<uint32_t> namedParameters;
   std::unordered_set<uint32_t> unavailableParameterDefaults;
-  std::unordered_set<uint64_t> reached;
+  // parseHeader has checked the record tables and their extents. Track
+  // validated record ordinals directly, with no allocation per declaration.
+  std::vector<bool> reached(database.scopeCount + database.objectCount);
+  uint64_t reachedCount = 0;
   std::vector<uint64_t> pending{database.root};
   while (!pending.empty()) {
     uint64_t offset = pending.back();
     pending.pop_back();
-    if (!reached.insert(offset).second)
-      return false;
     const uint8_t *record;
     uint32_t kind;
     if (!getRecord(database, offset, record, kind) ||
         kind == TALOS_RT_DESIGN_RECORD_TYPE)
       return false;
+    uint64_t ordinal =
+        kind == TALOS_RT_DESIGN_RECORD_SCOPE
+            ? (offset - database.scopes) / kScopeSize
+            : database.scopeCount + (offset - database.objects) / kObjectSize;
+    if (reached[ordinal])
+      return false;
+    reached[ordinal] = true;
+    ++reachedCount;
     uint32_t caps = read32(record + 4);
     uint32_t intrinsicKind = recordVPIKind(record);
     bool internal = (caps & TALOS_RT_DESIGN_CAP_INTERNAL) != 0;
@@ -4729,7 +4755,7 @@ bool validateDatabaseImpl(const Database &database) {
         return false;
     }
   }
-  if (reached.size() != database.scopeCount + database.objectCount)
+  if (reachedCount != reached.size())
     return false;
 
   // Fixed properties are a sparse, globally sorted map.  Validate against the
@@ -7442,8 +7468,10 @@ bool validateDatabaseImpl(const Database &database) {
       }
       nextDefinitionMemberRelationTarget += targetCount;
     }
-    for (const auto &edge : talos::reflection::vpiTraversals) {
-      if (edge.sourceType != kind || !isDefinitionMemberInventory(edge))
+    auto [firstEdge, lastEdge] = traversalRange(kind);
+    for (auto it = firstEdge; it != lastEdge; ++it) {
+      const auto &edge = *it;
+      if (!isDefinitionMemberInventory(edge))
         continue;
       bool expected = false, found = false;
       for (uint32_t ordinal = 0; ordinal != memberCount; ++ordinal)
@@ -8361,12 +8389,11 @@ bool validateDatabaseImpl(const Database &database) {
     // direction. Semantic cross-references such as vpiDerivedClasses are not
     // declaration edges even though they also target a class definition.
     if (iterate && !rootSource && relationBackedTarget && lexicalForward) {
+      auto [first, last] = traversalRange(targetKind);
       bool hasMatchingParent = std::any_of(
-          std::begin(talos::reflection::vpiTraversals),
-          std::end(talos::reflection::vpiTraversals),
+          first, last,
           [&](const talos::reflection::VPITraversalDescriptor &parentEdge) {
-            return parentEdge.sourceType == targetKind &&
-                   parentEdge.mode ==
+            return parentEdge.mode ==
                        talos::reflection::VPITraversalMode::Handle &&
                    parentEdge.automaticRelation ==
                        talos::reflection::VPIAutomaticRelation::ParentScope &&
@@ -9531,15 +9558,8 @@ bool validateDatabaseImpl(const Database &database) {
     if (eventArrayStorage.count(packedArray) != 0 &&
         boundEvents.count(packedTarget) != 0)
       return false;
-    auto firstEdge = std::lower_bound(
-        std::begin(talos::reflection::vpiTraversals),
-        std::end(talos::reflection::vpiTraversals), targetKind,
-        [](const talos::reflection::VPITraversalDescriptor &edge,
-           uint32_t kind) { return edge.sourceType < kind; });
-    for (auto edgeIterator = firstEdge;
-         edgeIterator != std::end(talos::reflection::vpiTraversals) &&
-         edgeIterator->sourceType == targetKind;
-         ++edgeIterator) {
+    auto [firstEdge, lastEdge] = traversalRange(targetKind);
+    for (auto edgeIterator = firstEdge; edgeIterator != lastEdge; ++edgeIterator) {
       const auto &edge = *edgeIterator;
       if (edge.mode != talos::reflection::VPITraversalMode::Handle ||
           edge.automaticRelation !=
@@ -9560,9 +9580,10 @@ bool validateDatabaseImpl(const Database &database) {
 
   uint64_t previousHash = 0;
   std::string_view previousName;
-  std::unordered_set<uint64_t> indexedRecords;
+  std::vector<bool> indexedScopes(database.scopeCount),
+      indexedObjects(database.objectCount),
+      indexedStatics(database.staticObjectCount);
   std::unordered_map<uint64_t, uint64_t> indexedNames;
-  indexedRecords.reserve(static_cast<size_t>(database.indexCount));
   indexedNames.reserve(static_cast<size_t>(database.indexCount));
   for (uint64_t index = 0; index != database.indexCount; ++index) {
     const uint8_t *entry = database.data + database.index + index * kIndexSize;
@@ -9573,7 +9594,11 @@ bool validateDatabaseImpl(const Database &database) {
     const uint8_t *record;
     uint64_t recordOffset = read64(entry + 16);
     uint64_t recordName = 0;
+    std::vector<bool> *membership;
+    uint64_t ordinal;
     if (isStaticObjectOffset(database, recordOffset)) {
+      membership = &indexedStatics;
+      ordinal = (recordOffset - database.staticObjects) / kStaticObjectSize;
       record = database.data + recordOffset;
       uint32_t relativeName = read32(record + 16);
       if (relativeName == 0 || relativeName >= database.stringSize)
@@ -9584,6 +9609,13 @@ bool validateDatabaseImpl(const Database &database) {
       if (!getRecord(database, recordOffset, record, kind) ||
           kind == TALOS_RT_DESIGN_RECORD_TYPE)
         return false;
+      if (kind == TALOS_RT_DESIGN_RECORD_SCOPE) {
+        membership = &indexedScopes;
+        ordinal = (recordOffset - database.scopes) / kScopeSize;
+      } else {
+        membership = &indexedObjects;
+        ordinal = (recordOffset - database.objects) / kObjectSize;
+      }
       recordName = read64(record + 40);
       if (kind == TALOS_RT_DESIGN_RECORD_STATIC_OBJECT &&
           (read32(record + 4) & TALOS_RT_DESIGN_CAP_FRAME_LOCAL))
@@ -9591,23 +9623,23 @@ bool validateDatabaseImpl(const Database &database) {
     }
     if (hash != nameHash(reinterpret_cast<const uint8_t *>(name.data()),
                          name.size()) ||
-        !indexedRecords.insert(recordOffset).second ||
+        (*membership)[ordinal] ||
         !indexedNames.emplace(read64(entry + 8), recordOffset).second ||
         recordName != read64(entry + 8) ||
         (index != 0 && (hash < previousHash ||
                         (hash == previousHash && name <= previousName))))
       return false;
+    (*membership)[ordinal] = true;
     previousHash = hash;
     previousName = name;
   }
-  for (uint64_t index = 0; index != database.scopeCount; ++index)
-    if (indexedRecords.find(database.scopes + index * kScopeSize) ==
-        indexedRecords.end())
-      return false;
+  if (std::find(indexedScopes.begin(), indexedScopes.end(), false) !=
+      indexedScopes.end())
+    return false;
   for (uint64_t index = 0; index != database.staticObjectCount; ++index) {
     uint64_t offset = database.staticObjects + index * kStaticObjectSize;
     uint32_t name = read32(database.data + offset + 16);
-    bool indexed = indexedRecords.find(offset) != indexedRecords.end();
+    bool indexed = indexedStatics[index];
     if ((name != 0) != indexed)
       return false;
     if (indexed)
@@ -9682,7 +9714,7 @@ bool validateDatabaseImpl(const Database &database) {
   for (uint64_t index = 0; index != database.objectCount; ++index) {
     uint64_t offset = database.objects + index * kObjectSize;
     const uint8_t *port = database.data + offset;
-    bool indexed = indexedRecords.find(offset) != indexedRecords.end();
+    bool indexed = indexedObjects[index];
     uint64_t refLowConnectionKey =
         (uint64_t{relationEndpoint(talos::reflection::TableKind::Object,
                                    static_cast<uint32_t>(index))}
@@ -11956,12 +11988,18 @@ designVPIStatementIsProtected(const Database &database,
 
 talos_rt_status talos_rt_initialize_design_database(
     const talos_rt_execution_descriptor_v1 *execution,
-    DesignDatabaseCache &cache) noexcept {
+    DesignDatabaseCache &cache, uint64_t validatedChecksum) noexcept {
   if (!execution)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
     Database database;
-    talos_rt_status status = loadValidatedDatabase(execution, database);
+    // A closed read executable embeds the checksum of the image validated
+    // by its compiler. parseHeader checks the actual bytes, profile and
+    // table bounds. Host-provided descriptors take the full validator.
+    bool embedded = validatedChecksum && parseHeader(execution, database) &&
+                    read64(database.data + offsetof(DatabaseHeader, checksum)) ==
+                        validatedChecksum;
+    talos_rt_status status = embedded ? TALOS_RT_OK : loadValidatedDatabase(execution, database);
     if (status != TALOS_RT_OK)
       return status;
     database.validated = true;
@@ -14176,33 +14214,8 @@ talos_rt_status talos_rt_read_design_slice(talos_rt_context *context,
   std::lock_guard<TalosContextMutex> lock(context->mutex);
   const uint8_t *canonicalValuePlane = nullptr;
   const uint8_t *canonicalUnknownPlane = nullptr;
-  const talos_rt_native_schedule_plan *plan = context->nativeSchedulePlan;
-  if (plan && !context->vpiObservationDemand &&
-      (plan->flags & TALOS_RT_NATIVE_SCHEDULE_DIRECT_STATE) != 0 &&
-      !context->nativeScheduleDeoptimized &&
-      plan->state_bit_count == context->execution->state_bit_count &&
-      plan->state_value && plan->state_unknown) {
-    bool dirty = context->nativeScheduleDirtyRootsPresent;
-    if (dirty) {
-      dirty = false;
-      __int128 selectedEnd = static_cast<__int128>(selectedOffset) + bitWidth;
-      for (const auto &[id, state] : context->nativeStaticStates)
-        if (static_cast<__int128>(state.bitOffset) < selectedEnd &&
-            static_cast<__int128>(selectedOffset) <
-                static_cast<__int128>(state.bitOffset) + state.bitWidth &&
-            (context->nativeScheduleTransientDirtyRoots.find(id) !=
-                 context->nativeScheduleTransientDirtyRoots.end() ||
-             context->nativeSchedulePersistentDirtyRoots.find(id) !=
-                 context->nativeSchedulePersistentDirtyRoots.end())) {
-          dirty = true;
-          break;
-        }
-    }
-    if (!dirty) {
-      canonicalValuePlane = plan->state_value;
-      canonicalUnknownPlane = plan->state_unknown;
-    }
-  }
+  selectCanonicalReadPlanesUnlocked(context, selectedOffset, bitWidth,
+                                    canonicalValuePlane, canonicalUnknownPlane);
 
   uint64_t limbs = (bitWidth - 1) / 64 + 1;
   for (uint64_t limb = 0; limb != limbs; ++limb) {

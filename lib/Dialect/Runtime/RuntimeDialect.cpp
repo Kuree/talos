@@ -111,6 +111,8 @@ static_assert(static_cast<uint32_t>(ExecutionFlags::HasBytecode) ==
               TALOS_RT_EXECUTION_HAS_BYTECODE);
 static_assert(static_cast<uint32_t>(ExecutionFlags::HasDesignDatabase) ==
               TALOS_RT_EXECUTION_HAS_DESIGN_DATABASE);
+static_assert(static_cast<uint32_t>(ExecutionFlags::PublishingWriters) ==
+              TALOS_RT_EXECUTION_VPI_PUBLISHING_WRITERS);
 static_assert(static_cast<uint32_t>(ExecutionFlags::VPIRead) ==
               TALOS_RT_EXECUTION_VPI_READ);
 static_assert(static_cast<uint32_t>(ExecutionFlags::VPIWrite) ==

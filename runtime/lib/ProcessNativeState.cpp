@@ -158,11 +158,11 @@ void releaseOwnedNativeStates(talos_rt_context *context,
   instance->ownership_context = nullptr;
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_native_state_initialize(talos_rt_context *context, uint8_t *value,
-                                    uint8_t *unknown, uint64_t bitCount,
-                                    const talos_rt_native_state_fill_v1 *fills,
-                                    uint64_t fillCount) {
+static talos_rt_status
+initializeNativePlanes(talos_rt_context *context, uint8_t *value,
+                       uint8_t *unknown, uint64_t bitCount,
+                       const talos_rt_native_state_fill_v1 *fills,
+                       uint64_t fillCount, bool initiallyZero) {
   if (!context || !value || (!unknown && !context->twoState()) ||
       value == unknown ||
       (reinterpret_cast<uintptr_t>(value) % alignof(uint64_t)) ||
@@ -192,9 +192,11 @@ talos_rt_v1_native_state_initialize(talos_rt_context *context, uint8_t *value,
   // IEEE 1800-2023 4.5, 6.7.1, 6.8: initialize before design activation,
   // including partial bytes and zero padding outside the canonical state.
   size_t bytes = static_cast<size_t>((bitCount + 7) / 8) + 8;
-  std::memset(value, 0, bytes);
-  if (unknown)
-    std::memset(unknown, 0, bytes);
+  if (!initiallyZero) {
+    std::memset(value, 0, bytes);
+    if (unknown)
+      std::memset(unknown, 0, bytes);
+  }
   auto set = [](uint8_t *plane, uint64_t begin, uint64_t width) {
     uint64_t end = begin + width;
     size_t first = static_cast<size_t>(begin / 8);
@@ -221,6 +223,28 @@ talos_rt_v1_native_state_initialize(talos_rt_context *context, uint8_t *value,
   return TALOS_RT_OK;
 }
 
+extern "C" talos_rt_status
+talos_rt_v1_native_state_initialize(talos_rt_context *context, uint8_t *value,
+                                    uint8_t *unknown, uint64_t bitCount,
+                                    const talos_rt_native_state_fill_v1 *fills,
+                                    uint64_t fillCount) {
+  return initializeNativePlanes(context, value, unknown, bitCount, fills,
+                                fillCount, false);
+}
+
+// Closed executable startup supplies private, loader-zeroed globals. Leave
+// untouched pages sparse on first entry. Subsequent runs still reset the
+// complete image, including guard bytes and previous x/z bits (6.8, 6.11).
+extern "C" talos_rt_status talos_rt_v1_native_state_initialize_bss(
+    talos_rt_context *context, uint8_t *value, uint8_t *unknown,
+    uint64_t bitCount, const talos_rt_native_state_fill_v1 *fills,
+    uint64_t fillCount) {
+  static std::atomic_flag used = ATOMIC_FLAG_INIT;
+  const bool initiallyZero = !used.test_and_set(std::memory_order_relaxed);
+  return initializeNativePlanes(context, value, unknown, bitCount, fills,
+                                fillCount, initiallyZero);
+}
+
 //===----------------------------------------------------------------------===//
 // Generated unknown summary
 //===----------------------------------------------------------------------===//
@@ -245,9 +269,20 @@ uint64_t patternBits(const NativeUnknownSummary &summary,
     return 0;
   const uint64_t *ranges = &summary.patterns[2 * entry.first_pattern];
   uint32_t index = cursor ? *cursor : 0;
-  while (index != entry.pattern_count &&
-         ranges[2 * index] + ranges[2 * index + 1] <= bit)
-    ++index;
+  if (!cursor && entry.pattern_count > 8) {
+    uint32_t end = entry.pattern_count;
+    while (index < end) {
+      uint32_t middle = index + (end - index) / 2;
+      if (ranges[2 * middle] + ranges[2 * middle + 1] <= bit)
+        index = middle + 1;
+      else
+        end = middle;
+    }
+  } else {
+    while (index != entry.pattern_count &&
+           ranges[2 * index] + ranges[2 * index + 1] <= bit)
+      ++index;
+  }
   if (cursor)
     *cursor = index;
   uint64_t mask = 0;
@@ -309,18 +344,30 @@ bool refreshUnknownRoot(NativeUnknownSummary &summary, uint32_t root) {
 
 /// The roots overlapping plane bits [bitOffset, bitOffset + bitWidth).
 template <typename Callback>
-void forEachUnknownRoot(const NativeUnknownSummary &summary, uint64_t bitOffset,
+void forEachUnknownRoot(NativeUnknownSummary &summary, uint64_t bitOffset,
                         uint64_t bitWidth, Callback callback) {
   uint64_t end =
       bitOffset > UINT64_MAX - bitWidth ? UINT64_MAX : bitOffset + bitWidth;
   const auto &roots = summary.roots;
+  // Bursts such as $readmemh initialize adjacent words of one array.
+  // A wholly contained write overlaps exactly this root (validated at bind).
+  if (summary.lastWriteRoot < roots.size()) {
+    const auto &last = roots[summary.lastWriteRoot];
+    if (bitOffset >= last.bit_offset &&
+        end <= last.bit_offset + last.bit_width) {
+      callback(summary.lastWriteRoot);
+      return;
+    }
+  }
   auto first = std::partition_point(
       summary.byOffset.begin(), summary.byOffset.end(), [&](uint32_t root) {
         return roots[root].bit_offset + roots[root].bit_width <= bitOffset;
       });
   for (auto it = first;
-       it != summary.byOffset.end() && roots[*it].bit_offset < end; ++it)
+       it != summary.byOffset.end() && roots[*it].bit_offset < end; ++it) {
+    summary.lastWriteRoot = *it;
     callback(*it);
+  }
 }
 
 void markUnknownRoot(NativeUnknownSummary &summary, uint32_t root) {
@@ -377,6 +424,8 @@ void markNativeUnknownBitsUnlocked(const talos_rt_context *context,
   if (summary->patterns.empty() && !(unknown & written & lowBits(bitWidth)))
     return;
   forEachUnknownRoot(*summary, bitOffset, bitWidth, [&](uint32_t root) {
+    if (summary->generated[root / 64] & (uint64_t{1} << (root % 64)))
+      return;
     const talos_rt_native_unknown_root_v1 &entry = summary->roots[root];
     // The written bits inside this root, relative to `bitOffset`.
     uint64_t begin = std::max(entry.bit_offset, bitOffset);
@@ -564,17 +613,21 @@ bool importNativeStatePlanesUnlocked(talos_rt_context *context,
     return false;
   if (context->stateValue.shared())
     return true;
-  std::fill(context->stateValue.begin(), context->stateValue.end(), 0);
-  std::fill(context->stateUnknown.begin(), context->stateUnknown.end(), 0);
 #if (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__) ||  \
     defined(_WIN32)
   size_t byteCount = static_cast<size_t>((bitCount + 7) / 8);
   if (byteCount != 0) {
     std::memcpy(context->stateValue.data(), value, byteCount);
-    if (unknown && context->stateUnknown.data())
-      std::memcpy(context->stateUnknown.data(), unknown, byteCount);
+    if (auto *destination = context->stateUnknown.data()) {
+      if (unknown)
+        std::memcpy(destination, unknown, byteCount);
+      else
+        std::memset(destination, 0, byteCount);
+    }
   }
 #else
+  std::fill(context->stateValue.begin(), context->stateValue.end(), 0);
+  std::fill(context->stateUnknown.begin(), context->stateUnknown.end(), 0);
   for (uint64_t bit = 0; bit != bitCount; ++bit) {
     uint64_t mask = uint64_t{1} << (bit % 64);
     if (byteBit(value, bit))
@@ -1599,12 +1652,19 @@ static talos_rt_status nativeStateStorePlane(
                                 uint64_t next) {
       if (!unknownPlane)
         return;
-      markNativeUnknownBitsUnlocked(context, destination, width, next);
       const auto *plan = context->nativeSchedulePlan;
-      if (plan && plan->state_unknown == globalPlane)
-        publishNativeKnownnessChangeUnlocked(
-            plan, destination, width,
-            loadPackedBytes(globalPlane, destination, width), next);
+      if (plan && plan->state_unknown == globalPlane) {
+        uint64_t old = loadPackedBytes(globalPlane, destination, width);
+        // The generated unknown bits are still the pre-store value here.
+        // An unchanged X/Z footprint cannot invalidate a clean root.
+        if (old == next &&
+            (!context->nativeUnknownSummary ||
+             context->nativeUnknownSummary->plane == globalPlane))
+          return;
+        publishNativeKnownnessChangeUnlocked(plan, destination, width, old,
+                                             next);
+      }
+      markNativeUnknownBitsUnlocked(context, destination, width, next);
     };
     // IEEE 1800-2023 9.4.2: an event observes a change in the expression's
     // value. Keep one changed result for the complete write: its caller

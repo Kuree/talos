@@ -359,13 +359,14 @@ def RTExecutionPolledCollection :
     I32BitEnumAttrCaseBit<"PolledCollection", 10, "polled_collection">;
 def RTExecutionTwoState :
     I32BitEnumAttrCaseBit<"TwoState", 11, "two_state">;
+def RTExecutionPublishingWriters : I32BitEnumAttrCaseBit<"PublishingWriters", 12, "publishing_writers">;
 def RTExecutionFlags : I32BitEnumAttr<"ExecutionFlags",
     "execution descriptor capabilities", [
   RTExecutionNone, RTExecutionHasBytecode, RTExecutionHasDesignDatabase,
   RTExecutionVPIRead, RTExecutionVPIWrite, RTExecutionRequireBytecode,
   RTExecutionPreponedSnapshot, RTExecutionWaveformMetadata,
   RTExecutionDPIExports, RTExecutionClassBitstream, RTExecutionCoverageSchema,
-  RTExecutionPolledCollection, RTExecutionTwoState
+  RTExecutionPolledCollection, RTExecutionTwoState, RTExecutionPublishingWriters
 ]> {
   let cppNamespace = "::talos::runtime";
   let genSpecializedAttr = 0;
