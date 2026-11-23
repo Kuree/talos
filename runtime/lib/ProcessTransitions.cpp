@@ -3675,23 +3675,26 @@ extern "C" void talos_rt_v1_scheduler_wide_transition_owned(
 // contribution and publish the change of the *complete* packed assignment
 // to the installed fanout. The original frame owns the logical process
 // throughout (1800-2023 4.6(a), 9.4.2, 10.6.2).
-static bool publishFrameStore(talos_rt_context *context, uint8_t *valuePlane,
-                              uint8_t *unknownPlane, uint64_t stateBits,
-                              uint64_t handle, uint32_t width, uint32_t flags,
-                              uint64_t value, uint64_t unknown) {
+static std::optional<uint64_t>
+sharedFrameStoreOffset(talos_rt_context *context, uint8_t *valuePlane,
+                       uint8_t *unknownPlane, uint64_t stateBits,
+                       uint64_t handle, uint32_t width, uint32_t flags) {
   const auto *plan = context->nativeSchedulePlan;
   bool fourState = flags & TALOS_RT_FRAME_STORE_UNKNOWN;
   bool continuous = flags & TALOS_RT_FRAME_STORE_CONTINUOUS;
   if (!plan || plan->state_bit_count != stateBits ||
-      plan->state_value != valuePlane || activeNativeAOTContext != context ||
-      lockedNativeAOTContext != context || !context->activeNativeProcess ||
+      plan->state_value != valuePlane || !context->activeNativeProcess ||
       context->activeExecRegion == TALOS_RT_REGION_POSTPONED ||
-      !(plan->flags & TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL) ||
       context->schedulerStatus != TALOS_RT_OK || context->powerNBAs ||
       context->observerDepth || context->observerForcesCanonicalPlane ||
       context->nativeScheduleDirtyRootsPresent ||
       context->nativeScheduleExternalWritePending ||
-      publicationBatchContext == context || !context->stateValue.shared() ||
+      // A prior buffered transition has to publish first. With an empty
+      // window, the ordinary transition's batch flush would do nothing.
+      (publicationBatchContext == context &&
+       (context->publicationBatch.staticID ||
+        context->publicationBatch.flushing)) ||
+      !context->stateValue.shared() ||
       valuePlane != reinterpret_cast<uint8_t *>(context->stateValue.data()) ||
       (fourState && (!unknownPlane || unknownPlane != plan->state_unknown ||
                      !context->stateUnknown.shared() ||
@@ -3702,18 +3705,32 @@ static bool publishFrameStore(talos_rt_context *context, uint8_t *valuePlane,
         context->continuousValue.size() != context->stateValue.size() ||
         (fourState &&
          context->continuousUnknown.size() != context->stateUnknown.size()))))
-    return false;
+    return std::nullopt;
   uint32_t id;
   int64_t offset;
   if (!decodeNativeStatic(handle, id, offset) || offset < 0)
-    return false;
+    return std::nullopt;
   const auto *state = findNativeStaticState(context, id);
   if (!state || uint64_t(offset) > state->bitWidth ||
       width > state->bitWidth - uint64_t(offset) ||
       state->bitOffset > stateBits ||
       state->bitWidth > stateBits - state->bitOffset)
+    return std::nullopt;
+  return state->bitOffset + uint64_t(offset);
+}
+
+static bool publishFrameStore(talos_rt_context *context, uint8_t *valuePlane,
+                              uint8_t *unknownPlane, uint64_t stateBits,
+                              uint64_t handle, uint32_t width, uint32_t flags,
+                              uint64_t value, uint64_t unknown) {
+  auto at = sharedFrameStoreOffset(context, valuePlane, unknownPlane, stateBits,
+                                   handle, width, flags);
+  if (!at)
     return false;
-  uint64_t bit = state->bitOffset + uint64_t(offset);
+  uint64_t bit = *at;
+  auto *plan = context->nativeSchedulePlan;
+  bool fourState = flags & TALOS_RT_FRAME_STORE_UNKNOWN;
+  bool continuous = flags & TALOS_RT_FRAME_STORE_CONTINUOUS;
   uint64_t mask = packedWidthMask(width);
   value &= mask;
   unknown = fourState ? unknown & mask : 0;
@@ -3738,7 +3755,7 @@ static bool publishFrameStore(talos_rt_context *context, uint8_t *valuePlane,
     hidden |= loadPackedBits(context->assignMask, bit, width);
   value = (old & hidden) | (value & ~hidden);
   unknown = (oldUnknown & hidden) | (unknown & ~hidden);
-  if (fourState) {
+  if (oldUnknown != unknown) {
     markNativeUnknownBitsUnlocked(context, bit, width, unknown);
     publishNativeKnownnessChangeUnlocked(plan, bit, width, oldUnknown, unknown);
   }
@@ -3773,6 +3790,45 @@ static bool publishFrameStore(talos_rt_context *context, uint8_t *valuePlane,
   return true;
 }
 
+template <size_t Capacity>
+static void checkedFrameStore(talos_rt_context *context, uint8_t *valuePlane,
+                              uint8_t *unknownPlane, uint64_t stateBits,
+                              uint64_t handle, uint32_t width, uint32_t flags,
+                              const uint8_t *input,
+                              const uint8_t *inputUnknown) {
+  bool fourState = flags & TALOS_RT_FRAME_STORE_UNKNOWN;
+  uint8_t old[Capacity], oldUnknown[Capacity], next[Capacity],
+      nextUnknown[Capacity];
+  auto read = [&](uint8_t *base, bool x, uint8_t *out) {
+    return talos_rt_v1_native_state_load_plane(context, base, stateBits, handle,
+                                               width, x, x, out);
+  };
+  auto store = flags & TALOS_RT_FRAME_STORE_CONTINUOUS
+                   ? talos_rt_v1_native_state_store_continuous_plane
+                   : talos_rt_v1_native_state_store_plane;
+  uint8_t ignored = 0;
+  auto status = read(valuePlane, false, old);
+  if (status == TALOS_RT_OK && fourState)
+    status = read(unknownPlane, true, oldUnknown);
+  if (status == TALOS_RT_OK)
+    status = store(context, valuePlane, stateBits, handle, width, 0, input,
+                   &ignored);
+  if (status == TALOS_RT_OK && fourState)
+    status = store(context, unknownPlane, stateBits, handle, width, 1,
+                   inputUnknown, &ignored);
+  if (status == TALOS_RT_OK)
+    status = read(valuePlane, false, next);
+  if (status == TALOS_RT_OK && fourState)
+    status = read(unknownPlane, true, nextUnknown);
+  if (status != TALOS_RT_OK) {
+    talos_rt_v1_scheduler_fail(context, status);
+    return;
+  }
+  talos_rt_v1_scheduler_signal_transition(
+      context, handle, width, old, fourState ? oldUnknown : nullptr, next,
+      fourState ? nextUnknown : nullptr);
+}
+
 extern "C" void
 talos_rt_v1_native_frame_store(talos_rt_context *context, uint8_t *valuePlane,
                                uint8_t *unknownPlane, uint64_t stateBits,
@@ -3801,46 +3857,108 @@ talos_rt_v1_native_frame_store(talos_rt_context *context, uint8_t *valuePlane,
       if (context->signalDiagnosticsEnabled)
         ++context->signalDiagnostics.frameStoreFallbacks;
     }
-    // At an intervention, clipped selection or observer boundary, capture and
-    // reload the effective planes through the same services as any framed
-    // store. An UPF observer sees the transition in its original position.
-    bool fourState = flags & TALOS_RT_FRAME_STORE_UNKNOWN;
-    uint8_t old[8]{}, oldUnknown[8]{}, next[8]{}, nextUnknown[8]{};
-    auto read = [&](uint8_t *base, bool x, uint8_t *out) {
-      return talos_rt_v1_native_state_load_plane(context, base, stateBits,
-                                                 handle, width, x, x, out);
-    };
-    auto store = flags & TALOS_RT_FRAME_STORE_CONTINUOUS
-                     ? talos_rt_v1_native_state_store_continuous_plane
-                     : talos_rt_v1_native_state_store_plane;
-    uint8_t ignored = 0;
-    auto status = read(valuePlane, false, old);
-    if (status == TALOS_RT_OK && fourState)
-      status = read(unknownPlane, true, oldUnknown);
-    storePackedWord<uint64_t>(next, value);
-    storePackedWord<uint64_t>(nextUnknown, unknown);
-    if (status == TALOS_RT_OK)
-      status = store(context, valuePlane, stateBits, handle, width, 0, next,
-                     &ignored);
-    if (status == TALOS_RT_OK && fourState)
-      status = store(context, unknownPlane, stateBits, handle, width, 1,
-                     nextUnknown, &ignored);
-    if (status == TALOS_RT_OK)
-      status = read(valuePlane, false, next);
-    if (status == TALOS_RT_OK && fourState)
-      status = read(unknownPlane, true, nextUnknown);
-    if (status != TALOS_RT_OK) {
-      talos_rt_v1_scheduler_fail(context, status);
-      return;
-    }
-    talos_rt_v1_scheduler_signal_transition(
-        context, handle, width, old, fourState ? oldUnknown : nullptr, next,
-        fourState ? nextUnknown : nullptr);
+    uint8_t input[8], inputUnknown[8];
+    storePackedWord<uint64_t>(input, value);
+    storePackedWord<uint64_t>(inputUnknown, unknown);
+    checkedFrameStore<8>(context, valuePlane, unknownPlane, stateBits, handle,
+                         width, flags, input, inputUnknown);
   }
   TALOS_RT_CATCH(const std::bad_alloc &) {
     talos_rt_v1_scheduler_fail(context, TALOS_RT_OUT_OF_MEMORY);
   }
-  TALOS_RT_CATCH_ALL { talos_rt_v1_scheduler_fail(context, TALOS_RT_INVALID_ARGUMENT); }
+  TALOS_RT_CATCH_ALL {
+    talos_rt_v1_scheduler_fail(context, TALOS_RT_INVALID_ARGUMENT);
+  }
+}
+
+// Capture and publish a multiword blocking assignment as one event (4.6(a),
+// 9.4.2). Buffers are in the native packed ABI's little-endian bit order.
+extern "C" void talos_rt_v1_native_frame_store_wide(
+    talos_rt_context *context, uint8_t *valuePlane, uint8_t *unknownPlane,
+    uint64_t stateBits, uint64_t handle, uint32_t width, uint32_t flags,
+    const uint8_t *input, const uint8_t *inputUnknown) {
+  if (!context || !input || width <= 64 || width > 256 ||
+      (flags &
+       ~(TALOS_RT_FRAME_STORE_CONTINUOUS | TALOS_RT_FRAME_STORE_UNKNOWN))) {
+    talos_rt_v1_scheduler_fail(context, TALOS_RT_INVALID_ARGUMENT);
+    return;
+  }
+  if (handle == UINT64_MAX)
+    return;
+  ContextTransaction transaction(context);
+  TALOS_RT_TRY {
+    const bool fourState = flags & TALOS_RT_FRAME_STORE_UNKNOWN;
+    uint64_t old[4]{}, oldUnknown[4]{}, next[4]{}, nextUnknown[4]{};
+    uint64_t changed[4]{}, rise[4]{}, fall[4]{};
+    if (!(flags & TALOS_RT_FRAME_STORE_CONTINUOUS)) {
+      ContextMutexLock lock(context);
+      auto at = sharedFrameStoreOffset(context, valuePlane, unknownPlane,
+                                       stateBits, handle, width, flags);
+      if (at && context->forceMask.empty() && context->assignMask.empty()) {
+        uint64_t change = 0, hiddenUnknown = 0;
+        for (unsigned low = 0; low < width; low += 64) {
+          unsigned i = low / 64, count = std::min(64u, width - low);
+          uint64_t mask = packedWidthMask(count);
+          old[i] = loadPackedBits(context->stateValue, *at + low, count);
+          oldUnknown[i] =
+              loadPackedBits(context->stateUnknown, *at + low, count);
+          if (!fourState)
+            hiddenUnknown |= oldUnknown[i];
+          next[i] = loadPackedBytes(input, low, count);
+          nextUnknown[i] =
+              fourState ? loadPackedBytes(inputUnknown, low, count) : 0;
+          changed[i] = (old[i] ^ next[i]) | (oldUnknown[i] ^ nextUnknown[i]);
+          change |= changed[i];
+          uint64_t wasZero = ~old[i] & ~oldUnknown[i],
+                   wasOne = old[i] & ~oldUnknown[i];
+          uint64_t nowZero = ~next[i] & ~nextUnknown[i],
+                   nowOne = next[i] & ~nextUnknown[i];
+          rise[i] = ((wasZero & ~nowZero) | (oldUnknown[i] & nowOne)) & mask;
+          fall[i] = ((wasOne & ~nowOne) | (oldUnknown[i] & nowZero)) & mask;
+        }
+        if (!hiddenUnknown) {
+          if (context->signalDiagnosticsEnabled)
+            ++context->signalDiagnostics.frameStoresShared;
+          if (!change)
+            return;
+          for (unsigned low = 0; low < width; low += 64) {
+            unsigned i = low / 64, count = std::min(64u, width - low);
+            if (old[i] != next[i])
+              storePackedBits(context->stateValue, *at + low, count, next[i]);
+            if (oldUnknown[i] != nextUnknown[i]) {
+              markNativeUnknownBitsUnlocked(context, *at + low, count,
+                                            nextUnknown[i]);
+              publishNativeKnownnessChangeUnlocked(
+                  context->nativeSchedulePlan, *at + low, count, oldUnknown[i],
+                  nextUnknown[i]);
+              storePackedBits(context->stateUnknown, *at + low, count,
+                              nextUnknown[i]);
+            }
+          }
+          auto bytes = [](const uint64_t *words) {
+            return reinterpret_cast<const uint8_t *>(words);
+          };
+          (void)publishNativeSignalTransitionUnlocked(
+              context, handle, width, bytes(changed), bytes(rise), bytes(fall),
+              bytes(old), fourState ? bytes(oldUnknown) : nullptr, bytes(next),
+              fourState ? bytes(nextUnknown) : nullptr);
+          return;
+        }
+      }
+    }
+    if (context->signalDiagnosticsEnabled)
+      ++context->signalDiagnostics.frameStoreFallbacks;
+    uint8_t zero[32]{};
+    checkedFrameStore<32>(context, valuePlane, unknownPlane, stateBits, handle,
+                          width, flags, input,
+                          inputUnknown ? inputUnknown : zero);
+  }
+  TALOS_RT_CATCH(const std::bad_alloc &) {
+    talos_rt_v1_scheduler_fail(context, TALOS_RT_OUT_OF_MEMORY);
+  }
+  TALOS_RT_CATCH_ALL {
+    talos_rt_v1_scheduler_fail(context, TALOS_RT_INVALID_ARGUMENT);
+  }
 }
 
 // A periodic edge can have both generated readers and ordinary testbench

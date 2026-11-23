@@ -762,6 +762,36 @@ public:
     std::optional<DirectStaticStateRange> directRange =
         resolveDirectStaticStateRange(adaptor.getReference().front(), *width,
                                       directLayout);
+    // Keep a framed subscriber writer as one publishing operation. Its
+    // generated eval body still owns the direct path. Expanding both sides
+    // of a per-store guard in the fallback duplicates the same plane loads,
+    // stores and transition code at every scalar assignment (4.10, 38.36.1).
+    auto sourceOwner = schedule::get<schedule::metadata::evalSourceOwner>(op);
+    bool ownSource =
+        !sourceOwner ||
+        (sourceOwner.getCodeUnit() && function.getCodeUnitId() &&
+         sourceOwner.getCodeUnit().getUInt() == *function.getCodeUnitId());
+    Value source = op.getValue();
+    if (auto unflatten = source.getDefiningOp<sim::SimPackedUnflattenOp>())
+      source = unflatten.getInput();
+    bool fileWord =
+        isa_and_nonnull<sim::SimFileReadMemTokenOp>(source.getDefiningOp());
+    if (!assumeClean && !nbaEquivalent && ownSource &&
+        (entryKind != sim::EntryKind::Function || fileWord) &&
+        !schedule::has<schedule::Field::EvalContinuation>(function) &&
+        native::has<native::ReadableEvalState>(
+            op->getParentOfType<ModuleOp>()) &&
+        *width <= 256 && adaptor.getValue().front().getType() == plane &&
+        sim::getPackedScalarType(valueType)) {
+      bool fourState = containsLogic(valueType) && !twoState;
+      schedule::NativeStateFrameStoreOp::create(
+          rewriter, op.getLoc(), adaptor.getValue().front(),
+          fourState && adaptor.getValue().size() == 2 ? adaptor.getValue()[1]
+                                                      : Value(),
+          adaptor.getReference().front(), stateBitCount, fourState, continuous);
+      rewriter.eraseOp(op);
+      return success();
+    }
     // Guard the entire procedural store, including its publication. The clean
     // path can use exact static fanout without canonical reloads; a live writer
     // or observer invalidates the global flag before entering the slow path.
@@ -876,11 +906,6 @@ public:
     // Active handoff. Publish its packed blocking write as one transaction.
     // The runtime owns the actual armed waits, the retained driver value and
     // any externally masked bits (1800-2023 4.6, 9.4.2, 10.6.2).
-    auto sourceOwner = schedule::get<schedule::metadata::evalSourceOwner>(op);
-    bool ownSource =
-        !sourceOwner ||
-        (sourceOwner.getCodeUnit() && function.getCodeUnitId() &&
-         sourceOwner.getCodeUnit().getUInt() == *function.getCodeUnitId());
     if (native::has<native::RankedSignalWriter>(function) &&
         function.getEntryKind() != sim::EntryKind::Function && ownSource &&
         !nbaEquivalent && needsNotification &&

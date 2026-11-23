@@ -812,6 +812,8 @@ TALOS_NATIVE_RUNTIME(NativeDynamicOverride, talos_rt_v1_native_dynamic_override,
                      None)
 TALOS_NATIVE_RUNTIME(NativeFrameStore, talos_rt_v1_native_frame_store,
                      SIG(V, Ptr, Ptr, Ptr, I64, I64, I32, I32, I64, I64), None)
+TALOS_NATIVE_RUNTIME(NativeFrameStoreWide, talos_rt_v1_native_frame_store_wide,
+                     SIG(V, Ptr, Ptr, Ptr, I64, I64, I32, I32, Ptr, Ptr), None)
 TALOS_NATIVE_RUNTIME(NativeOverride, talos_rt_v1_native_override,
                      SIG(I32, Ptr, Ptr, Ptr, I64, I64, I64, I32, I32, Ptr, Ptr),
                      None)

@@ -1709,7 +1709,7 @@ def NativeStateFrameStoreOp : ScheduleNativeOp<"state.frame_store"> {
   let summary = "write and publish the native state a stable handle names";
   let description = [{
     The executing process's complete packed blocking write of `value`, at
-    most 64 bits, to the state `handle` names: with `four_state`, `unknown`
+    most 256 bits, to the state `handle` names: with `four_state`, `unknown`
     holds its X/Z bits (none when absent), and both planes change before the
     one value-change publication of the write (IEEE 1800-2023 9.4.2). A bit
     that a force or procedural continuous assignment holds keeps its value
@@ -1717,7 +1717,7 @@ def NativeStateFrameStoreOp : ScheduleNativeOp<"state.frame_store"> {
     the runtime also keeps for a later release (10.6.2). `state_bits` is the
     size of the design state.
 
-    It stands for the runtime's `talos_rt_v1_native_frame_store`, which
+    It stands for the runtime's scalar or multiword frame store, which
     publishes in place when it can and otherwise falls back to the generic
     handle-addressed store and transition; like that call it has unknown
     memory effects. Native lowering creates it; it becomes the call once AOT

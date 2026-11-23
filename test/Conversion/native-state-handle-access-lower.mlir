@@ -15,6 +15,7 @@ module {
   llvm.func @talos_rt_v1_native_state_store_plane(!llvm.ptr, !llvm.ptr, i64, i64, i64, i32, !llvm.ptr, !llvm.ptr) -> i32
   llvm.func @talos_rt_v1_native_state_store_continuous_plane(!llvm.ptr, !llvm.ptr, i64, i64, i64, i32, !llvm.ptr, !llvm.ptr) -> i32
   llvm.func @talos_rt_v1_native_frame_store(!llvm.ptr, !llvm.ptr, !llvm.ptr, i64, i64, i32, i32, i64, i64)
+  llvm.func @talos_rt_v1_native_frame_store_wide(!llvm.ptr, !llvm.ptr, !llvm.ptr, i64, i64, i32, i32, !llvm.ptr, !llvm.ptr)
 
   // CHECK-LABEL: llvm.func @load_bytes(
   // CHECK-SAME: %[[HANDLE:.*]]: i64, %[[BUFFER:.*]]: !llvm.ptr)
@@ -160,6 +161,20 @@ module {
   llvm.func @frame(%handle: i64, %value: i7, %unknown: i7) {
     schedule.state.frame_store %value, %unknown to %handle four_state continuous {state_bits = 128 : i64} : i7, i7
     schedule.state.frame_store %value to %handle {state_bits = 128 : i64} : i7
+    llvm.return
+  }
+
+  // Wider assignments publish all limbs in a single runtime call. An
+  // omitted unknown input is an implicit zero buffer.
+  // CHECK-LABEL: llvm.func @wide_frame(
+  // CHECK: llvm.store %{{.*}}, %[[V:.*]] {alignment = 1 : i64} : i129, !llvm.ptr
+  // CHECK: llvm.store %{{.*}}, %[[U:.*]] {alignment = 1 : i64} : i129, !llvm.ptr
+  // CHECK-NEXT: llvm.call @talos_rt_v1_native_frame_store_wide(%{{.*}}, %[[V]], %[[U]])
+  // CHECK: %[[KNOWN:.*]] = llvm.mlir.zero : !llvm.ptr
+  // CHECK-NEXT: llvm.call @talos_rt_v1_native_frame_store_wide(%{{.*}}, %[[KNOWN]])
+  llvm.func @wide_frame(%handle: i64, %value: i129, %unknown: i129) {
+    schedule.state.frame_store %value, %unknown to %handle four_state {state_bits = 256 : i64} : i129, i129
+    schedule.state.frame_store %value to %handle four_state {state_bits = 256 : i64} : i129
     llvm.return
   }
 

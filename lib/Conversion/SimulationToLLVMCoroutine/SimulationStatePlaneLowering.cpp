@@ -1360,8 +1360,10 @@ NativeRuntimeEntry getNativeStateHandleAccessEntry(Operation *access) {
           schedule::NativeStateLoadHandleBytesOp,
           schedule::NativeStateLoadAutomaticOp>(access))
     return NativeRuntimeEntry::NativeStateLoadPlane;
-  if (isa<schedule::NativeStateFrameStoreOp>(access))
-    return NativeRuntimeEntry::NativeFrameStore;
+  if (auto store = dyn_cast<schedule::NativeStateFrameStoreOp>(access))
+    return store.getValue().getType().getIntOrFloatBitWidth() <= 64
+               ? NativeRuntimeEntry::NativeFrameStore
+               : NativeRuntimeEntry::NativeFrameStoreWide;
   auto store = dyn_cast<schedule::NativeStateStoreHandleOp>(access);
   bool continuous = store
                         ? store.getContinuous()
@@ -1379,7 +1381,7 @@ Value loadNativeRuntimeContext(OpBuilder &builder, Location location) {
   return LLVM::LoadOp::create(builder, location, pointer, address, 8);
 }
 
-// The runtime's frame store takes 64-bit words.
+// Scalar stores pass their planes in registers. Wider stores pass packed bytes.
 void lowerFrameStore(OpBuilder &builder,
                      schedule::NativeStateFrameStoreOp store) {
   Location location = store.getLoc();
@@ -1403,10 +1405,12 @@ void lowerFrameStore(OpBuilder &builder,
   uint32_t flags =
       (store.getContinuous() ? TALOS_RT_FRAME_STORE_CONTINUOUS : 0) |
       (fourState ? TALOS_RT_FRAME_STORE_UNKNOWN : 0);
-  Value unknown = store.getUnknown()
+  unsigned width = store.getValue().getType().getIntOrFloatBitWidth();
+  Value unknownWord;
+  if (width <= 64)
+    unknownWord = store.getUnknown()
                       ? word(store.getUnknown())
                       : detail::llvmConstant(builder, location, i64, 0);
-  unsigned width = store.getValue().getType().getIntOrFloatBitWidth();
   SmallVector<Value, 9> arguments{
       loadNativeRuntimeContext(builder, location),
       valuePlane,
@@ -1414,14 +1418,31 @@ void lowerFrameStore(OpBuilder &builder,
       detail::llvmConstant(builder, location, i64, store.getStateBits()),
       store.getHandle(),
       detail::llvmConstant(builder, location, i32, width),
-      detail::llvmConstant(builder, location, i32, flags),
-      word(store.getValue()),
-      unknown};
+      detail::llvmConstant(builder, location, i32, flags)};
+  SmallVector<Value, 2> temporaries;
+  if (width <= 64) {
+    arguments.push_back(word(store.getValue()));
+    arguments.push_back(unknownWord);
+  } else {
+    for (Value bits : {store.getValue(), store.getUnknown()}) {
+      if (!bits) {
+        arguments.push_back(
+            LLVM::ZeroOp::create(builder, location, valuePlane.getType()));
+        continue;
+      }
+      Value tmp = detail::beginTemporary(builder, location, bits.getType(), 1);
+      LLVM::StoreOp::create(builder, location, bits, tmp, 1);
+      temporaries.push_back(tmp);
+      arguments.push_back(tmp);
+    }
+  }
   LLVM::CallOp::create(
       builder, location, TypeRange{},
       getNativeRuntimeCallee(builder.getContext(),
                              getNativeStateHandleAccessEntry(store)),
       arguments);
+  for (Value tmp : temporaries)
+    detail::endTemporary(builder, location, tmp);
 }
 
 // A read of an automatic variable passes no design state: its buffer stands

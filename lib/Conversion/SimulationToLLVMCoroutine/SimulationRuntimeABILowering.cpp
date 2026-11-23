@@ -88,6 +88,7 @@ void declareNativeRuntimeABI(ModuleOp module) {
                                  Entry::NativeStateLoadPlane,
                                  Entry::NativeStateStorePlane,
                                  Entry::NativeFrameStore,
+                                 Entry::NativeFrameStoreWide,
                                  Entry::NativeStateStoreContinuousPlane,
                                  Entry::NativeOverride,
                                  Entry::NativeDynamicOverride,

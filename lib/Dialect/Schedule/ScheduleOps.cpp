@@ -552,8 +552,8 @@ LogicalResult NativeStateFrameStoreOp::verify() {
   if (failed(verifyTypedMemoryOp(*this)))
     return failure();
   unsigned width = getValue().getType().getIntOrFloatBitWidth();
-  if (width == 0 || width > 64)
-    return emitOpError("writes ") << width << " bits, not 1 to 64";
+  if (width == 0 || width > 256)
+    return emitOpError("writes ") << width << " bits, not 1 to 256";
   if (Value unknown = getUnknown()) {
     if (!getFourState())
       return emitOpError("has X/Z bits for a two-state destination");

@@ -104,11 +104,11 @@ module {
 
 // -----
 
-// A frame store writes 1 to 64 bits.
+// A frame store writes 1 to 256 bits.
 module {
-  llvm.func @wide_frame(%handle: i64, %value: i65) {
-    // expected-error @below {{writes 65 bits, not 1 to 64}}
-    schedule.state.frame_store %value to %handle {state_bits = 128 : i64} : i65
+  llvm.func @wide_frame(%handle: i64, %value: i257) {
+    // expected-error @below {{writes 257 bits, not 1 to 256}}
+    schedule.state.frame_store %value to %handle {state_bits = 128 : i64} : i257
     llvm.return
   }
 }

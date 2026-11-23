@@ -1431,6 +1431,71 @@ TEST(RuntimeInternals, FramedStorePublishesEffectivePlanesAndRetainsDriver) {
   talos_rt_v1_context_destroy(context);
 }
 
+TEST(RuntimeInternals, WideFrameStorePreservesFourStateWindows) {
+  talos_rt_execution_descriptor_v1 execution{};
+  execution.version = TALOS_RT_VERSION;
+  execution.state_bit_count = 256;
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+            TALOS_RT_OK);
+  alignas(uint64_t) uint8_t value[32]{}, unknown[32]{};
+  ASSERT_EQ(talos_rt_v1_native_state_bind_shared(context, value, unknown, 256),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 5, 130),
+            TALOS_RT_OK);
+  talos_rt_native_schedule_plan plan{};
+  plan.state_value = value;
+  plan.state_unknown = unknown;
+  plan.state_bit_count = 256;
+  context->nativeSchedulePlan = &plan;
+  talos_rt_process_instance_v1 instance{};
+  context->activeNativeProcess = &instance;
+  context->activeExecRegion = TALOS_RT_REGION_ACTIVE;
+  context->signalDiagnosticsEnabled = true;
+  std::array<uint8_t, 17> input, x;
+  input.fill(0xa5);
+  x.fill(0x69);
+  auto write = [&](unsigned offset, unsigned width, const uint8_t *xz) {
+    auto handle =
+        talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_STATIC, 1, offset);
+    talos_rt_v1_native_frame_store_wide(context, value, unknown, 256, handle,
+                                        width, TALOS_RT_FRAME_STORE_UNKNOWN,
+                                        input.data(), xz);
+    EXPECT_EQ(context->schedulerStatus, TALOS_RT_OK);
+  };
+  {
+    ContextTransaction transaction(context);
+    NativeAOTContextScope active(context);
+    NativeAOTMutexScope locked(context);
+    write(1, 129, x.data());
+    EXPECT_EQ(context->signalDiagnostics.frameStoresShared, 1u);
+    for (unsigned bit = 0; bit < 256; ++bit) {
+      bool inside = bit >= 6 && bit < 135;
+      EXPECT_EQ(loadPackedBits(context->stateValue, bit, 1),
+                inside && byteBit(input.data(), bit - 6));
+      EXPECT_EQ(loadPackedBits(context->stateUnknown, bit, 1),
+                inside && byteBit(x.data(), bit - 6));
+    }
+    // A partial out-of-bounds tail and a force on its first selected bit
+    // still use the checked effective value. A null X/Z buffer writes knowns.
+    context->forceMask.assign(4, 0);
+    storePackedBits(context->forceMask, 72, 1, 1);
+    auto forcedValue = loadPackedBits(context->stateValue, 72, 1);
+    auto forcedUnknown = loadPackedBits(context->stateUnknown, 72, 1);
+    input.fill(0xff);
+    write(67, 65, nullptr);
+    EXPECT_EQ(context->signalDiagnostics.frameStoreFallbacks, 1u);
+    EXPECT_EQ(loadPackedBits(context->stateValue, 72, 1), forcedValue);
+    EXPECT_EQ(loadPackedBits(context->stateUnknown, 72, 1), forcedUnknown);
+    EXPECT_EQ(loadPackedBits(context->stateValue, 73, 62), packedWidthMask(62));
+    EXPECT_EQ(loadPackedBits(context->stateUnknown, 73, 62), 0u);
+    EXPECT_EQ(loadPackedBits(context->stateValue, 135, 2), 0u);
+  }
+  context->activeNativeProcess = nullptr;
+  context->nativeSchedulePlan = nullptr;
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(RuntimeInternals, PackedRangeExistenceMatchesIndividualBits) {
   EXPECT_FALSE(anyPackedBits(nullptr, 0, 0));
   EXPECT_FALSE(anyPackedBits(nullptr, 7, 100));

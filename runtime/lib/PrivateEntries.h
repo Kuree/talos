@@ -38,6 +38,11 @@ talos_rt_status talos_rt_v1_native_state_initialize_bss(
     uint64_t bitCount, const talos_rt_native_state_fill_v1 *fills,
     uint64_t fillCount);
 
+void talos_rt_v1_native_frame_store_wide(
+    talos_rt_context *context, uint8_t *valuePlane, uint8_t *unknownPlane,
+    uint64_t stateBits, uint64_t handle, uint32_t width, uint32_t flags,
+    const uint8_t *value, const uint8_t *unknown);
+
 // Generated constant Postponed VCD view table, valid for the model lifetime.
 talos_rt_status talos_rt_v1_dump_bind_aliases(talos_rt_context *context,
                                               const uint64_t *rows,
