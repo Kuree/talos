@@ -326,8 +326,10 @@ bool shouldSplitNativeModule(const llvm::Module &module,
       continue;
     ++functionCount;
     instructionCount += function.getInstructionCount();
+    if (functionCount >= 128 || instructionCount >= 100000)
+      return true;
   }
-  return functionCount >= 128 || instructionCount >= 100000;
+  return false;
 }
 
 struct NativeModuleSplitPlan {
@@ -339,7 +341,8 @@ struct NativeModuleSplitPlan {
 };
 
 Expected<NativeModuleSplitPlan>
-planNativeModuleSplit(llvm::Module &module, const NativePartitionPlan &plan) {
+planNativeModuleSplit(llvm::Module &module, const NativePartitionPlan &plan,
+                      bool keepPrivateReadDefinitions) {
   // The semantic manifest supplies stable ownership and dependency identity,
   // but an owner can contain a huge generated class or tens of thousands of
   // constants.  Treating every owner as an indivisible physical shard leaves
@@ -401,8 +404,14 @@ planNativeModuleSplit(llvm::Module &module, const NativePartitionPlan &plan) {
   // functions to import helpers. Such an outlier is a unit by itself: joining
   // its caller would pull the caller out of ThinLTO too, and its private
   // callees reach it only as the helpers placed below.
-  auto outlier = [](const llvm::Function &function) {
-    return function.getInstructionCount() > 20000;
+  // The split does not rewrite bodies. In particular, an outlier may call
+  // the same multi-block evaluator from thousands of dispatch cases.
+  llvm::DenseMap<const llvm::Function *, unsigned> functionSizes;
+  for (const llvm::Function &function : module)
+    if (!function.isDeclaration())
+      functionSizes.try_emplace(&function, function.getInstructionCount());
+  auto outlier = [&](const llvm::Function &function) {
+    return functionSizes.lookup(&function) > 20000;
   };
   llvm::DenseMap<const llvm::Function *, const llvm::Function *> clusterRoots =
       detail::nativeSplitClusterRoots(module, ownerOf, exported, outlier);
@@ -431,7 +440,7 @@ planNativeModuleSplit(llvm::Module &module, const NativePartitionPlan &plan) {
     unit.key.append(value.getName());
     unit.values.push_back(&value);
     if (function) {
-      uint64_t instructions = function->getInstructionCount();
+      uint64_t instructions = functionSizes.lookup(function);
       instructionCount += instructions;
       unit.weight = std::max<uint64_t>(1, instructions);
       unit.nativeObject = outlier(*function);
@@ -447,7 +456,7 @@ planNativeModuleSplit(llvm::Module &module, const NativePartitionPlan &plan) {
       continue;
     SplitUnit &unit = units[unitOfRoot.lookup(root)];
     unit.values.push_back(&function);
-    uint64_t instructions = function.getInstructionCount();
+    uint64_t instructions = functionSizes.lookup(&function);
     instructionCount += instructions;
     unit.weight += std::max<uint64_t>(1, instructions);
   }
@@ -517,7 +526,7 @@ planNativeModuleSplit(llvm::Module &module, const NativePartitionPlan &plan) {
         const llvm::Function *callee =
             call ? call->getCalledFunction() : nullptr;
         if (callee && callee != caller && !callee->isDeclaration() &&
-            callee->getInstructionCount() <= 256)
+            functionSizes.lookup(callee) <= 256)
           ++callCounts[callee];
       }
       for (const auto &[callee, count] : callCounts) {
@@ -537,13 +546,42 @@ planNativeModuleSplit(llvm::Module &module, const NativePartitionPlan &plan) {
     }
   }
 
-  // Physical balancing can cut any semantic owner boundary. Cross-object
-  // definitions therefore cannot retain local linkage. Give every local
-  // definition a deterministic hidden name before cloning. ThinLTO may still
-  // internalize these after it has seen the complete program.
+  // Physical balancing can cut any semantic owner boundary. Promote a local
+  // definition when another object must name it. A closed reader often has
+  // thousands of frame descriptors and helpers used only in their own shard.
+  // Keep those private so ordinary constant merging, inlining and DCE still
+  // apply even in the direct-codegen partitions.
+  auto privateToGroup = [&](const llvm::GlobalValue &definition) {
+    auto group = assignments.find(&definition);
+    if (group == assignments.end() || definition.isUsedByMetadata() ||
+        exported.contains(definition.getName()))
+      return false;
+    SmallVector<const llvm::User *, 8> work(definition.user_begin(),
+                                            definition.user_end());
+    llvm::SmallPtrSet<const llvm::User *, 8> visited;
+    while (!work.empty()) {
+      const llvm::User *use = work.pop_back_val();
+      const llvm::GlobalValue *owner = dyn_cast<llvm::GlobalValue>(use);
+      if (auto instruction = dyn_cast<llvm::Instruction>(use))
+        owner = instruction->getFunction();
+      if (owner) {
+        auto target = assignments.find(owner);
+        if (target == assignments.end() || target->second != group->second)
+          return false;
+      } else {
+        if (!isa<llvm::Constant>(use) || use->isUsedByMetadata())
+          return false;
+        if (visited.insert(use).second)
+          llvm::append_range(work, use->users());
+      }
+    }
+    return true;
+  };
   SmallVector<llvm::GlobalValue *> localDefinitions;
   for (llvm::GlobalValue &value : module.global_values())
-    if (!value.isDeclaration() && value.hasLocalLinkage())
+    if (!value.isDeclaration() && value.hasLocalLinkage() &&
+        !(keepPrivateReadDefinitions && module.getModuleInlineAsm().empty() &&
+          privateToGroup(value)))
       localDefinitions.push_back(&value);
   llvm::sort(localDefinitions,
              [](const llvm::GlobalValue *lhs, const llvm::GlobalValue *rhs) {
@@ -1343,6 +1381,8 @@ LogicalResult emitTargetOutput(ModuleOp module,
   bool pruneModel = options.target == TargetKind::Native &&
                     options.kind == NativeOutputKind::Executable &&
                     options.optLevel > 0;
+  bool keepPrivateReadDefinitions =
+      pruneModel && native::has<native::ReadableEvalState>(module);
   if (pruneModel)
     native::mark<native::ClosedExecutable>(module);
   else
@@ -1547,8 +1587,8 @@ LogicalResult emitTargetOutput(ModuleOp module,
       sys::fs::remove(path);
   };
   if (splitModule) {
-    Expected<NativeModuleSplitPlan> splitPlan =
-        planNativeModuleSplit(*llvmModule, *nativePartitionPlan);
+    Expected<NativeModuleSplitPlan> splitPlan = planNativeModuleSplit(
+        *llvmModule, *nativePartitionPlan, keepPrivateReadDefinitions);
     if (!splitPlan) {
       logAllUnhandledErrors(splitPlan.takeError(), errs(), "talos: error: ");
       return failure();
