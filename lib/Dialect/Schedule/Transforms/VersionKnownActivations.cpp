@@ -58,19 +58,28 @@ using analysis::LocalUnknownAnalysis;
 /// check.
 constexpr uint64_t largeSegmentOperations = 128;
 
-/// Whether a fused clocked kernel exceeds the inline budget.
-bool isLargeClockedKernel(sim::SimFuncOp function) {
-  if (!schedule::hasEvalRoles(function, schedule::EvalRole::ClockedKernel))
-    return false;
+/// Segment size for a fused kernel above the module's native inline budget.
+uint64_t largeKernelSegmentSize(sim::SimFuncOp function) {
+  bool clocked =
+      schedule::hasEvalRoles(function, schedule::EvalRole::ClockedKernel);
+  if (!clocked &&
+      !(schedule::has<schedule::Field::EvalFusionGroup>(function) &&
+        schedule::has<schedule::Field::EvalInductiveTwoState>(function)))
+    return 0;
   uint64_t budget =
       schedule::getMaxInlineOperations(function->getParentOfType<ModuleOp>());
   uint64_t operations = 0;
-  return function
-      .walk([&](Operation *) {
-        return ++operations < budget ? WalkResult::advance()
-                                     : WalkResult::interrupt();
-      })
-      .wasInterrupted();
+  if (!function
+           .walk([&](Operation *) {
+             return ++operations < budget ? WalkResult::advance()
+                                          : WalkResult::interrupt();
+           })
+           .wasInterrupted())
+    return 0;
+  // A clocked segment stages independent updates. Combinational statements
+  // forward values between many owners, so use larger cuts to amortize
+  // their live-in checks.
+  return clocked ? largeSegmentOperations : budget;
 }
 
 /// Bound copies inside a large fused kernel's four-state source: at most half
@@ -1124,7 +1133,8 @@ public:
     // fuses many independent processes, so one X/Z among all their inputs
     // would otherwise send every member to its four-state body. Runs of its
     // members choose for themselves instead (IEEE 1800-2023 6.3.1).
-    bool large = !function.isExternal() && isLargeClockedKernel(function);
+    uint64_t largeSegmentSize = largeKernelSegmentSize(function);
+    bool large = largeSegmentSize != 0;
     if (function.isExternal() ||
         function.getEntryKind() != sim::EntryKind::Function ||
         schedule::has<schedule::Field::EvalPathKnownPredicate>(function) ||
@@ -1145,8 +1155,7 @@ public:
             })
             .wasInterrupted())
       return markAllAnalysesPreserved();
-    Segments segments =
-        cut(function, large ? largeSegmentOperations : segmentSize);
+    Segments segments = cut(function, large ? largeSegmentSize : segmentSize);
     analysis::HandleDataflowResult handles = inputs->handles.analyze(function);
     auto provenKnown = [&](Operation *read) {
       return inputs->provesKnown(function, handles, read);
@@ -1196,7 +1205,8 @@ public:
       return 3 * words + 2 * segment.checks + 3 * netWords +
              3 * (segment.slotChecks.size() + segment.liveIns.size()) + 4;
     };
-    auto profitable = [&](const LocalUnknownAnalysis::Segment &segment) {
+    auto profitable = [&](const LocalUnknownAnalysis::Segment &segment,
+                          bool countUnchanged) {
       uint64_t cost = 2 * checkCost(segment);
       // A guarded variant has already removed the work covered by its
       // inductive proof. Penalize another copy for executable work that
@@ -1204,7 +1214,7 @@ public:
       // profitability heuristic, independent of function size or an arbitrary
       // segmentation threshold. Weak candidates remain available to the
       // existing smaller-region versioner.
-      if (nested)
+      if (countUnchanged)
         cost += segment.unchangedWork;
       return !segment.untestable &&
              (!segment.gate.empty() || !segment.netGate.empty() ||
@@ -1212,16 +1222,6 @@ public:
              segment.benefit >= minimumBenefit && segment.benefit > cost;
     };
     ArrayRef<LocalUnknownAnalysis::Segment> results = analysis.getSegments();
-    SmallVector<bool> admissions;
-    for (const auto &segment : results)
-      admissions.push_back(profitable(segment));
-    // Each segment copy has its own entry check, so an X/Z in one member's
-    // inputs sends only that segment to four-state code. The cap bounds the
-    // copies of a large kernel's four-state source, which runs only while
-    // some input holds X/Z; its two-state variant runs once those inputs are
-    // known, and keeps every copy that pays for its check.
-    if (large && !nested)
-      limitLargeKernelCopies(results, admissions);
     unsigned versioned = 0;
     uint64_t benefit = 0, roots = 0;
     bool wholeVersioned = false;
@@ -1235,7 +1235,7 @@ public:
     if (wholeAnalysis && wholeAnalysis->getSegments().size() == 1 &&
         wholeAnalysis->getSegments().front().checks == 0 &&
         wholeAnalysis->getSegments().front().slotChecks.empty() &&
-        profitable(wholeAnalysis->getSegments().front())) {
+        profitable(wholeAnalysis->getSegments().front(), nested)) {
       Versioner outer(function, *wholeAnalysis, *inputs);
       const auto &whole = wholeAnalysis->getSegments().front();
       if (outer.version(wholeSegments->begins.front(), nullptr, whole)) {
@@ -1250,6 +1250,16 @@ public:
         }
       }
     }
+    // With a whole-body known path, local combinational checks execute
+    // only on its fallback. Charge them for the checks they execute there
+    // and cap duplication as for the large four-state source.
+    bool fallbackSegments = wholeVersioned && !schedule::hasEvalRoles(
+        function, schedule::EvalRole::ClockedKernel);
+    SmallVector<bool> admissions;
+    for (const auto &segment : results)
+      admissions.push_back(profitable(segment, nested && !fallbackSegments));
+    if (large && (!nested || fallbackSegments))
+      limitLargeKernelCopies(results, admissions);
     Versioner versioner(function, analysis, *inputs);
     for (auto [index, segment] : llvm::enumerate(results)) {
       bool admitted = admissions[index];

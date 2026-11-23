@@ -4,6 +4,14 @@
 !nibbles = !simulation.unpacked_array<0 : 1 x !simulation.logic<4>>
 
 module {
+  func.func @pack_snapshot(%source: !nibbles) -> !simulation.logic<8> {
+    %result = simulation.aggregate.export_bitstream %source plan
+        [5407724624, 2, 8, 8,
+         4294967298, 0, 2, 4, 4, 4,
+         1, 0, 4, 0, 0, 4] : (!nibbles) -> !simulation.logic<8>
+    return %result : !simulation.logic<8>
+  }
+
   func.func @fold_known_bits() -> i16 {
     %hi = arith.constant 18 : i8
     %lo = arith.constant 52 : i8
@@ -31,6 +39,10 @@ module {
   }
 }
 
+// CHECK-LABEL: func.func @pack_snapshot
+// CHECK: %[[FIRST:.*]] = simulation.aggregate.extract %arg0[0]
+// CHECK: %[[LAST:.*]] = simulation.aggregate.extract %arg0[1]
+// CHECK: simulation.logic.concat %[[FIRST]], %[[LAST]]
 // CHECK-LABEL: func.func @fold_known_bits
 // CHECK: %[[KNOWN:.*]] = arith.constant 4660 : i16
 // CHECK: return %[[KNOWN]]

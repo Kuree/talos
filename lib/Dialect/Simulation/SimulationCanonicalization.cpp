@@ -3312,21 +3312,39 @@ struct FoldSmallAggregateExportBitstream final
           return false;
       return true;
     };
-    if (!collect(op.getInput()) || leaves.empty())
-      return failure();
     SmallVector<Type> scalarTypes;
-    uint64_t totalWidth = 0;
-    for (Value leaf : leaves) {
-      Type scalar = getPackedScalarType(leaf.getType());
-      std::optional<unsigned> width = getPackedWidth(scalar);
-      if (!scalar || !width || !isa<IntegerType, LogicType>(scalar) ||
-          *width > std::numeric_limits<uint64_t>::max() - totalWidth)
+    Type arrayElement;
+    if (collect(op.getInput())) {
+      for (Value leaf : leaves)
+        scalarTypes.push_back(leaf.getType());
+    } else {
+      // An array SSA value captures all its elements at the original read.
+      // For a small flat array, concatenate them in declaration order
+      // (IEEE 1800-2023 6.24.3, 11.4.14).
+      auto array = dyn_cast<UnpackedArrayType>(op.getInput().getType());
+      if (!array)
         return failure();
-      scalarTypes.push_back(scalar);
-      totalWidth += *width;
+      unsigned count = getAggregateNumElements(array);
+      if (!count || count > maximumLeaves)
+        return failure();
+      arrayElement = array.getElementType();
+      leaves.clear();
+      scalarTypes.assign(count, arrayElement);
     }
-    if (totalWidth != *resultWidth)
+    uint64_t totalWidth = 0;
+    for (Type &type : scalarTypes) {
+      type = getPackedScalarType(type);
+      if (!type || !isa<IntegerType, LogicType>(type))
+        return failure();
+      totalWidth += *getPackedWidth(type);
+    }
+    if (scalarTypes.empty() || totalWidth != *resultWidth)
       return failure();
+
+    if (arrayElement)
+      for (unsigned i = 0; i < scalarTypes.size(); ++i)
+        leaves.push_back(SimAggregateExtractOp::create(
+            rewriter, op.getLoc(), arrayElement, op.getInput(), i));
     for (auto [index, scalar] : llvm::enumerate(scalarTypes))
       if (scalar != leaves[index].getType())
         leaves[index] = SimPackedFlattenOp::create(rewriter, op.getLoc(),

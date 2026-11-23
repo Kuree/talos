@@ -2440,27 +2440,42 @@ buildSliceSchedule(ArrayRef<const ActivationRegionAnalysis *> activations,
     successors[from].push_back(to);
     ++incoming[to];
   }
-  std::set<unsigned> ready;
-  for (unsigned id = 0; id < nodes.size(); ++id)
-    if (!incoming[id])
-      ready.insert(id);
+  // Among ready nodes, prefer a newly unblocked consumer. This shortens
+  // live ranges when loads from its producers are forwarded into SSA.
+  // Keep one stack per activation for the same-process preference. A node
+  // taken from either stack is discarded lazily from the other.
+  SmallVector<unsigned> ready;
+  DenseMap<const ActivationRegionAnalysis *, SmallVector<unsigned, 4>> byOwner;
+  SmallVector<bool> scheduled(nodes.size(), false);
+  auto enqueue = [&](unsigned id) {
+    ready.push_back(id);
+    byOwner[nodes[id].activation].push_back(id);
+  };
+  auto discardScheduled = [&](auto &stack) {
+    while (!stack.empty() && scheduled[stack.back()])
+      stack.pop_back();
+  };
+  // Reverse insertion preserves source order among simultaneous releases.
+  for (unsigned id = nodes.size(); id != 0; --id)
+    if (!incoming[id - 1])
+      enqueue(id - 1);
   result.order.clear();
   const ActivationRegionAnalysis *previous = nullptr;
-  while (!ready.empty()) {
-    auto next = ready.begin();
-    if (previous)
-      for (auto it = ready.begin(); it != ready.end(); ++it)
-        if (nodes[*it].activation == previous) {
-          next = it;
-          break;
-        }
-    unsigned id = *next;
-    ready.erase(next);
+  while (result.order.size() < nodes.size()) {
+    discardScheduled(ready);
+    unsigned id = ready.back();
+    if (previous) {
+      auto &same = byOwner.at(previous);
+      discardScheduled(same);
+      if (!same.empty())
+        id = same.back();
+    }
+    scheduled[id] = true;
     result.order.push_back(id);
     previous = nodes[id].activation;
-    for (unsigned successor : successors[id])
+    for (unsigned successor : llvm::reverse(successors[id]))
       if (!--incoming[successor])
-        ready.insert(successor);
+        enqueue(successor);
   }
   // Rebuild component identities for the chosen DAG order. Every component
   // is a singleton; identities must agree with offsets into this order.

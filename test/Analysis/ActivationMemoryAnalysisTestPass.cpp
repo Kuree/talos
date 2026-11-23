@@ -681,6 +681,14 @@ public:
                            : cycle.empty() ? "unavailable"
                                            : "cyclic")
                        << '\n';
+          if (order) {
+            llvm::errs() << "slice order:";
+            for (const auto &slice : *order)
+              llvm::errs()
+                  << " @"
+                  << slice.activation->getActivationFunction().getSymName();
+            llvm::errs() << '\n';
+          }
         }
         if (publications) {
           auto order =
