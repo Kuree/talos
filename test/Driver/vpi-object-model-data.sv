@@ -86,7 +86,7 @@ endmodule
 // CHECK: null objects=1 properties=3/5 relations=3/12 answers=6
 // CHECK-NEXT: vpiAssignment objects=4 properties=7/8 relations=3/8 answers=36
 // CHECK-NEXT: vpiBegin objects=1 properties=5/7 relations=3/21 answers=8
-// CHECK-NEXT: vpiConstant objects=134 properties=8/10 relations=3/5 answers=940
+// CHECK-NEXT: vpiConstant objects=132 properties=8/10 relations=3/5 answers=926
 // CHECK-NEXT: vpiDelayControl objects=1 properties=5/6 relations=2/5 answers=7
 // CHECK-NEXT: vpiFuncCall objects=1 properties=6/11 relations=2/8 answers=8
 // CHECK-NEXT: vpiFunction objects=1 properties=17/19 relations=2/26 answers=19
@@ -99,8 +99,8 @@ endmodule
 // CHECK-NEXT: vpiRegBit objects=85 properties=21/24 relations=8/20 answers=2388
 // CHECK-NEXT: vpiTimeVar objects=2 properties=21/24 relations=4/19 answers=50
 // CHECK-NEXT: vpiTimeQueue objects=1 properties=3/3 relations=0/1 answers=3
-// CHECK-NEXT: vpiRange objects=23 properties=6/6 relations=2/2 answers=176
-// CHECK-NEXT: vpiRegArray objects=5 properties=23/26 relations=10/25 answers=155
+// CHECK-NEXT: vpiRange objects=25 properties=6/6 relations=2/2 answers=192
+// CHECK-NEXT: vpiRegArray objects=5 properties=23/26 relations=10/25 answers=153
 // CHECK-NEXT: vpiPackage objects=1 properties=18/23 relations=0/27 answers=18
 // CHECK-NEXT: vpiTypeParameter objects=1 properties=8/8 relations=5/6 answers=13
 // CHECK-NEXT: vpiLongIntVar objects=1 properties=21/24 relations=4/19 answers=25

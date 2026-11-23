@@ -242,7 +242,8 @@ struct __vpiHandle {
   // Source provenance only; semantic/base identity remains unchanged.
   bool originalTypeDefault = false;
   bool suppressSemanticDimension = false;
-  bool liveInterfaceRange = false;
+  // A range whose bounds follow a dynamic array's or queue's current size.
+  bool liveArrayRange = false;
   // IEEE 1800-2023 37.29 detail 2 restricts value access based on the
   // traversal that produced a handle, not on the declaration's physical
   // owner.  Keep that provenance on the opaque handle itself so a direct
@@ -3482,6 +3483,14 @@ bool isManagedArrayKind(uint32_t kind) {
          kind == TALOS_RT_DESIGN_SEMANTIC_ASSOC_ARRAY;
 }
 
+// Their elements live in that container, which VPI does not reach yet.
+void noticeManagedElementsUnavailable(VPIState *state) {
+  setError(state,
+           "elements of a dynamic array, queue or associative array are not "
+           "available through VPI",
+           vpiNotice);
+}
+
 // Whether a fixed unpacked array has a dynamic, queue or associative dimension
 // below its own, as int fa[2][] does. Physical layout stops at that
 // dimension's managed reference, so only the semantic type shows it.
@@ -3915,10 +3924,7 @@ bool appendIndexedSelection(__vpiHandle *source,
   // in the managed container their storage references.
   if (semantic.offset && semanticTypeInfo(source, semantic, semanticInfo) &&
       isManagedArrayKind(semanticInfo.kind)) {
-    setError(source->owner,
-             "elements of a dynamic array, queue or associative array are not "
-             "available through VPI",
-             vpiNotice);
+    noticeManagedElementsUnavailable(source->owner);
     return false;
   }
   const bool isArray = type.kind == TALOS_RT_DESIGN_TYPE_ARRAY;
@@ -5406,19 +5412,45 @@ bool interfaceArrayExtent(__vpiHandle *source,
   return true;
 }
 
-bool liveInterfaceRangeBounds(__vpiHandle *range, int64_t &left, int64_t &right,
-                              uint64_t &count) {
+bool managedContainerLength(__vpiHandle *handle, uint64_t &count);
+
+// IEEE 1800-2023 37.22 detail 1: the range of a dynamic array or queue
+// dimension is [0:n-1] for its current size n, and empty while it has no
+// elements. An array of virtual interfaces counts its interface selections.
+bool liveArrayExtent(__vpiHandle *array, talos_rt_design_cursor_v1 semantic,
+                     int64_t &left, int64_t &right, uint64_t &count) {
+  if (isVirtualInterfaceSequence(array, semantic))
+    return interfaceArrayExtent(array, array->selectionSteps, semantic, left,
+                                right, count);
+  talos_rt_design_semantic_type_info_v1 info{};
+  if (!semanticTypeInfo(array, semantic, info) ||
+      (info.kind != TALOS_RT_DESIGN_SEMANTIC_DYNAMIC_ARRAY &&
+       info.kind != TALOS_RT_DESIGN_SEMANTIC_QUEUE) ||
+      !managedContainerLength(array, count))
+    return false;
+  if (count > INT64_MAX) {
+    setError(array->owner, "array size exceeds VPI indices", vpiNotice);
+    return false;
+  }
+  left = 0;
+  right = count ? static_cast<int64_t>(count - 1) : -1;
+  return true;
+}
+
+bool liveArrayRangeBounds(__vpiHandle *range, int64_t &left, int64_t &right,
+                          uint64_t &count) {
   vpiHandle use = makeUseHandle(range);
   auto *source = findHandle(use);
-  bool result =
-      source && interfaceArrayExtent(source, source->selectionSteps,
-                                     range->semanticCursor, left, right, count);
+  bool result = source && liveArrayExtent(source, range->semanticCursor, left,
+                                          right, count);
   range->owner->handles.erase(reinterpret_cast<uintptr_t>(use));
   return result;
 }
 
-vpiHandle makeLiveInterfaceRange(__vpiHandle *source,
-                                 talos_rt_design_cursor_v1 semantic) {
+// The leftmost range of a dynamic array or queue, whose bounds follow the
+// array's current size each time they are queried.
+vpiHandle makeLiveArrayRange(__vpiHandle *source,
+                             talos_rt_design_cursor_v1 semantic) {
   TALOS_RT_TRY {
     auto range = std::make_unique<__vpiHandle>();
     range->owner = source->owner;
@@ -5427,7 +5459,7 @@ vpiHandle makeLiveInterfaceRange(__vpiHandle *source,
     range->cursor = source->cursor;
     range->semanticCursor = semantic;
     range->exactVpiType = vpiRange;
-    range->liveInterfaceRange = true;
+    range->liveArrayRange = true;
     range->allocationScheme = source->allocationScheme;
     range->protectedObject = source->protectedObject;
     range->classDefinitionOrigin = source->classDefinitionOrigin;
@@ -5436,8 +5468,7 @@ vpiHandle makeLiveInterfaceRange(__vpiHandle *source,
     return keepHandle(source->owner, std::move(range));
   }
   TALOS_RT_CATCH_ALL {
-    setError(source->owner, "could not allocate virtual-interface array range",
-             vpiSystem);
+    setError(source->owner, "could not allocate a live array range", vpiSystem);
     return nullptr;
   }
 }
@@ -5627,10 +5658,7 @@ vpiHandle makeSemanticIterator(__vpiHandle *source, PLI_INT32 selector) {
   }
   if ((elementIteration || selector == vpiVarSelect) &&
       isManagedArrayKind(info.kind)) {
-    setError(source->owner,
-             "elements of a dynamic array, queue or associative array are not "
-             "available through VPI",
-             vpiNotice);
+    noticeManagedElementsUnavailable(source->owner);
     return nullptr;
   }
   // A var select (IEEE 1800-2023 37.17 detail 7, 37.19) is an element
@@ -5652,15 +5680,13 @@ vpiHandle makeSemanticIterator(__vpiHandle *source, PLI_INT32 selector) {
   else if (elementIteration &&
            info.kind == TALOS_RT_DESIGN_SEMANTIC_UNPACKED_ARRAY) {
     // IEEE 1800-2023 37.17: vpiReg iterates the variables of an array var.
-    // Detail 9 counts every leaf element as one of those variables and
-    // detail 26 makes the array their prefix object, so the iteration walks
-    // the leaves in the model's index order, leftmost dimension outermost.
+    // Detail 9 makes vpiSize the number of those variables, which Talos
+    // counts as every leaf element, and detail 26 makes the array their
+    // prefix object. The iteration walks the same leaves in the model's
+    // index order, leftmost dimension outermost.
     if (hasManagedArrayDimensionBelow(source, semantic)) {
       // The leaves of int fa[2][] are inside the dynamic arrays.
-      setError(source->owner,
-               "elements of a dynamic array, queue or associative array are "
-               "not available through VPI",
-               vpiNotice);
+      noticeManagedElementsUnavailable(source->owner);
       return nullptr;
     }
     shape = {};
@@ -6740,26 +6766,10 @@ bool readManagedStateWord(__vpiHandle *handle, uint64_t &word) {
                               handle->selectionBitOffset, word);
 }
 
-// IEEE 1800-2023 37.17 detail 9: the number of variables in a dynamic array,
-// queue or associative array is its current element count, read from the
-// managed container its storage references. A multidimensional array with such
-// a dimension (int q[$][2], int fa[2][]) is reported as unavailable.
-bool managedArrayElementCount(__vpiHandle *handle,
-                              talos_rt_design_cursor_v1 semantic,
-                              uint64_t &count) {
-  talos_rt_design_cursor_v1 child{};
-  talos_rt_design_semantic_type_info_v1 childType{};
-  if (!semanticElement(handle, semantic, child) ||
-      !semanticTypeInfo(handle, child, childType))
-    return false;
-  if (childType.kind == TALOS_RT_DESIGN_SEMANTIC_UNPACKED_ARRAY ||
-      isManagedArrayKind(childType.kind)) {
-    setError(handle->owner,
-             "vpiSize of a multidimensional array with a dynamic, queue or "
-             "associative dimension is not available",
-             vpiNotice);
-    return false;
-  }
+// The current element count of the dynamic array, queue or associative array
+// that `handle` denotes, read from the managed container its storage
+// references. An array that was never allocated is empty.
+bool managedContainerLength(__vpiHandle *handle, uint64_t &count) {
   talos_rt_context *context = handle->owner->context;
   ContextTransaction transaction(context);
   ManagedExecutionScope managed(context);
@@ -6783,6 +6793,29 @@ bool managedArrayElementCount(__vpiHandle *handle,
   }
   count = talos_rt_v1_container_size(object);
   return true;
+}
+
+// IEEE 1800-2023 37.17 detail 9: the number of variables in a dynamic array,
+// queue or associative array is its current element count. A multidimensional
+// array with such a dimension (int q[$][2], int fa[2][]) is reported as
+// unavailable.
+bool managedArrayElementCount(__vpiHandle *handle,
+                              talos_rt_design_cursor_v1 semantic,
+                              uint64_t &count) {
+  talos_rt_design_cursor_v1 child{};
+  talos_rt_design_semantic_type_info_v1 childType{};
+  if (!semanticElement(handle, semantic, child) ||
+      !semanticTypeInfo(handle, child, childType))
+    return false;
+  if (childType.kind == TALOS_RT_DESIGN_SEMANTIC_UNPACKED_ARRAY ||
+      isManagedArrayKind(childType.kind)) {
+    setError(handle->owner,
+             "vpiSize of a multidimensional array with a dynamic, queue or "
+             "associative dimension is not available",
+             vpiNotice);
+    return false;
+  }
+  return managedContainerLength(handle, count);
 }
 
 bool readManagedStateWord(__vpiHandle *handle, const VPIValueSource &source,
@@ -11099,16 +11132,25 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_handle(PLI_INT32 type,
     return nullptr;
   }
   if ((type == vpiLeftRange || type == vpiRightRange) &&
-      (handle->liveInterfaceRange ||
-       ((handle->form == VPIObjectForm::Design ||
-         handle->form == VPIObjectForm::Indexed) &&
-        sourceType == vpiRegArray))) {
+      (handle->liveArrayRange || ((handle->form == VPIObjectForm::Design ||
+                                   handle->form == VPIObjectForm::Indexed) &&
+                                  sourceType == vpiRegArray))) {
     talos_rt_design_cursor_v1 semantic{};
     talos_rt_design_semantic_type_info_v1 info{};
-    if (semanticCursorFor(handle, semantic) &&
-        semanticTypeInfo(handle, semantic, info) &&
-        isVirtualInterfaceSequence(handle, semantic)) {
-      if (!handle->liveInterfaceRange) {
+    const bool typed = semanticCursorFor(handle, semantic) &&
+                       semanticTypeInfo(handle, semantic, info);
+    const bool interfaces =
+        typed && isVirtualInterfaceSequence(handle, semantic);
+    // IEEE 1800-2023 37.17 detail 6 and 37.22: the leftmost range of a
+    // dynamic array or queue follows its current size, an associative array's
+    // is always empty, and an empty range has no bounds. The storage of these
+    // arrays holds a container reference whose packed range is not theirs.
+    if (typed && info.kind == TALOS_RT_DESIGN_SEMANTIC_ASSOC_ARRAY)
+      return nullptr;
+    if (typed && (handle->liveArrayRange || interfaces ||
+                  info.kind == TALOS_RT_DESIGN_SEMANTIC_DYNAMIC_ARRAY ||
+                  info.kind == TALOS_RT_DESIGN_SEMANTIC_QUEUE)) {
+      if (interfaces && !handle->liveArrayRange) {
         std::vector<std::vector<VPISelectionStep>> selections;
         if (!collectInterfaceArraySelections(handle, selections) ||
             selections.empty())
@@ -11117,10 +11159,9 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_handle(PLI_INT32 type,
       int64_t left = 0, right = 0;
       uint64_t count = 0;
       bool available =
-          handle->liveInterfaceRange
-              ? liveInterfaceRangeBounds(handle, left, right, count)
-              : interfaceArrayExtent(handle, handle->selectionSteps, semantic,
-                                     left, right, count);
+          handle->liveArrayRange
+              ? liveArrayRangeBounds(handle, left, right, count)
+              : liveArrayExtent(handle, semantic, left, right, count);
       if (!available || !count)
         return nullptr;
       return makeSemanticObjectHandle(
@@ -12465,8 +12506,12 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_scan(vpiHandle opaque) {
       }
       vpiHandle result = nullptr;
       bool liveRange = false;
-      if (iterator->next++ == 0 && iterator->useType == vpiRegArray &&
-          isVirtualInterfaceSequence(iterator, current)) {
+      // IEEE 1800-2023 37.22 detail 1: an array variable's leftmost dynamic
+      // or queue range is [0:n-1] for its current size; associative ranges
+      // and ranges obtained from a typespec are empty. A deeper dynamic or
+      // queue range has no single size (each element sizes it separately),
+      // and Talos reports it empty too.
+      if (iterator->next++ == 0 && iterator->useType == vpiRegArray) {
         talos_rt_design_semantic_type_info_v1 dimension{};
         if (semanticTypeInfo(iterator, current, dimension) &&
             (dimension.kind == TALOS_RT_DESIGN_SEMANTIC_DYNAMIC_ARRAY ||
@@ -12474,7 +12519,7 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_scan(vpiHandle opaque) {
           liveRange = true;
           vpiHandle use = makeUseHandle(iterator);
           if (auto *source = findHandle(use))
-            result = makeLiveInterfaceRange(source, current);
+            result = makeLiveArrayRange(source, current);
           state->handles.erase(reinterpret_cast<uintptr_t>(use));
         }
       }
@@ -13204,12 +13249,12 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_get(PLI_INT32 property,
       return vpiUndefined;
     return (type.flags & TALOS_RT_DESIGN_TYPE_SIGNED) != 0;
   }
-  if (handle->liveInterfaceRange && property == vpiSize) {
+  if (handle->liveArrayRange && property == vpiSize) {
     if (!propertyFor(handle, property))
       return vpiUndefined;
     int64_t left = 0, right = 0;
     uint64_t count = 0;
-    return liveInterfaceRangeBounds(handle, left, right, count)
+    return liveArrayRangeBounds(handle, left, right, count)
                ? static_cast<PLI_INT32>(std::min<uint64_t>(count, INT32_MAX))
                : vpiUndefined;
   }
@@ -15631,7 +15676,7 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_compare_objects(vpiHandle first,
       left->selectionRootType == right->selectionRootType &&
       left->selectionAccessKind == right->selectionAccessKind &&
       left->selectionBitOffset == right->selectionBitOffset &&
-      left->liveInterfaceRange == right->liveInterfaceRange &&
+      left->liveArrayRange == right->liveArrayRange &&
       left->selectionSteps.size() == right->selectionSteps.size() &&
       std::equal(
           left->selectionSteps.begin(), left->selectionSteps.end(),
