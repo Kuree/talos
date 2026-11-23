@@ -14,11 +14,14 @@ void put_null(void) {
   report("null");
 }
 
+// vpiReturnEvent asks for the event a delayed put schedules; a put without
+// delay returns NULL.
 void put_int(void) {
   s_vpi_value value = {vpiIntVal, {0}};
   value.value.integer = 7;
-  vpi_put_value(vpi_handle_by_name("top.e", NULL), &value, NULL, vpiNoDelay);
-  report("int");
+  vpiHandle event = vpi_put_value(vpi_handle_by_name("top.e", NULL), &value,
+                                  NULL, vpiNoDelay | vpiReturnEvent);
+  report(event ? "int returned an event," : "int");
 }
 
 void put_element(void) {

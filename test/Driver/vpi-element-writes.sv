@@ -10,7 +10,10 @@
 // not. A 2-state target, even inside a 4-state variable, stores x and z as 0
 // (6.11.2). Writes Talos does not support yet (a tagged union member, which
 // would bypass its tag (7.3.2), forcing a selection, a selection of a class
-// member, and a string, whose storage is a managed reference) give a notice.
+// member, a string, whose storage is a managed reference, and a net with a
+// driver, which would keep the value until the driver changes) give a notice
+// and leave the object unchanged. vpiReturnEvent without a delay still writes
+// and returns NULL.
 module top;
   typedef struct packed { logic [3:0] hi, lo; } packed_t;
   typedef struct { int a; byte b; } unpacked_t;
@@ -32,6 +35,7 @@ module top;
   int whole_int;
   string names [2] = '{"ab", "cd"};
   string name = "ef";
+  wire [7:0] driven = 8'hf0;
   import "DPI-C" context function void write_elements();
   always @(ints[1]) $display("woke on ints[1]=%0d", ints[1]);
   always @(ints[0]) $display("woke on ints[0]");
@@ -46,7 +50,8 @@ module top;
       $display("tagged_u is still none");
     $display("wide=%h,%h,%h mixed=%0d,%b mixed_p=%b whole_int=%0d", wide[0],
              wide[1], wide[2], mixed.a, mixed.b, mixed_p, whole_int);
-    $display("names=%s,%s name=%s", names[0], names[1], name);
+    $display("names=%s,%s name=%s driven=%h", names[0], names[1], name,
+             driven);
   end
 endmodule
 
@@ -58,6 +63,7 @@ endmodule
 // CHECK-NEXT: top.unpacked_s.a=111: written
 // CHECK-NEXT: top.tagged_u.word=1: writes to a tagged union member are not supported
 // CHECK-NEXT: top.ints[2]=1: force and release of a selected element are not supported
+// CHECK-NEXT: top.ints[2]=1: force and release of a selected element are not supported
 // CHECK-NEXT: top.obj.items[0]=1: writes to a selection of a class member are not supported
 // CHECK-NEXT: top.wide[1]=1000000000000000000000000000000000000001: written
 // CHECK-NEXT: top.mixed.a=zx1: written
@@ -65,9 +71,11 @@ endmodule
 // CHECK-NEXT: top.whole_int=1z: written
 // CHECK-NEXT: top.names[0]=1: writes to string variables are not supported
 // CHECK-NEXT: top.name=1: writes to string variables are not supported
+// CHECK-NEXT: top.driven[3]=0: writes to a net with drivers or port connections are not supported
+// CHECK-NEXT: top.driven=0: writes to a net with drivers or port connections are not supported
 // CHECK-NEXT: woke on ints[1]=42
 // CHECK-NEXT: ints=1,42,3 mem[3]=1x0z mem[2]=xxxx vec=04 grid[1][0]=0110 grid[0][0]=xxxx
 // CHECK-NEXT: packed_s=f2 unpacked_s=7,6 obj.items[0]=0
 // CHECK-NEXT: tagged_u is still none
 // CHECK-NEXT: wide=xxxxxxxxxx,8000000001,xxxxxxxxxx mixed=1,0101 mixed_p=01001111 whole_int=2
-// CHECK-NEXT: names=ab,cd name=ef
+// CHECK-NEXT: names=ab,cd name=ef driven=f0

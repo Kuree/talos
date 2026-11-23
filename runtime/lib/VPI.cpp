@@ -8135,6 +8135,23 @@ vpiHandle namedEventWaitingProcesses(__vpiHandle *source) {
   return makeThreadIterator(source, vpiWaitingProcesses, std::move(processes));
 }
 
+// Reports a design write the runtime refused. A writable net refuses a
+// direct write when it has drivers or shares its storage with other names (a
+// port connection): IEEE 1800-2023 38.34 keeps a value put on such a net
+// until one of its drivers changes, which Talos does not implement yet.
+void reportWriteFailure(VPIState *state, const talos_rt_design_info_v1 &root,
+                        talos_rt_status status) {
+  if (status == TALOS_RT_PERMISSION_DENIED &&
+      root.kind == TALOS_RT_DESIGN_RECORD_NET &&
+      (root.capabilities & TALOS_RT_DESIGN_CAP_WRITE) != 0)
+    setError(state,
+             "writes to a net with drivers or port connections are not "
+             "supported",
+             vpiNotice);
+  else
+    setError(state, "VPI write failed");
+}
+
 // Whether a selection passes through a member of a tagged union, whose tag
 // a member write would bypass (IEEE 1800-2023 7.3.2).
 bool selectsTaggedUnionMember(__vpiHandle *handle) {
@@ -8205,12 +8222,11 @@ void writeSelection(__vpiHandle *handle, const uint64_t *value,
     }
     depositBits(rootValue, offset, value, width);
     depositBits(rootUnknown, offset, unknown, width);
-    if (talos_rt_v1_design_write(context, handle->cursor, rootValue.data(),
-                                 rootUnknown.data(),
-                                 root.bit_width) != TALOS_RT_OK) {
-      setError(handle->owner, "VPI write failed");
-      return;
-    }
+    talos_rt_status status =
+        talos_rt_v1_design_write(context, handle->cursor, rootValue.data(),
+                                 rootUnknown.data(), root.bit_width);
+    if (status != TALOS_RT_OK)
+      reportWriteFailure(handle->owner, root, status);
   }
   TALOS_RT_CATCH_ALL {
     setError(handle->owner, "VPI write buffer is out of memory", vpiSystem);
@@ -15407,6 +15423,10 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_put_value(vpiHandle opaque,
   __vpiHandle *handle = validate(opaque);
   if (!handle)
     return nullptr;
+  // IEEE 1800-2023 38.34: vpiReturnEvent asks for the event a delayed write
+  // schedules, and the result is NULL when no delay is used. Every write
+  // accepted here takes effect without delay, so the bit changes nothing.
+  flags &= ~vpiReturnEvent;
   if (!allowProtectedSource(handle, "vpi_put_value") ||
       rejectSourceClassPropertyValue(handle))
     return nullptr;
@@ -15598,8 +15618,10 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_put_value(vpiHandle opaque,
                                      unknown.data(), info.bit_width)
           : talos_rt_v1_design_write(context, storage, value.data(),
                                      unknown.data(), info.bit_width);
-  if (status != TALOS_RT_OK)
-    setError(handle->owner, "VPI write failed");
+  if (status != TALOS_RT_OK && flags == vpiForceFlag)
+    setError(handle->owner, "VPI force failed");
+  else if (status != TALOS_RT_OK)
+    reportWriteFailure(handle->owner, info, status);
   return nullptr;
 }
 
