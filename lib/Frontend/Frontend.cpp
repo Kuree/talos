@@ -1863,7 +1863,21 @@ private:
       const slang::ast::Type *current = &type;
       while (current->kind == SK::TypeAlias) {
         const auto &alias = current->as<slang::ast::TypeAliasType>();
-        aliases.push_back(getSemanticSymbolReference(alias));
+        // Slang also uses TypeAliasType for a type parameter's effective
+        // type. Only a declared typedef contributes a vpiTypedefAlias link
+        // (IEEE 1800-2023 37.25, 37.28).
+        const auto *scope = alias.getParentScope();
+        const auto *syntax = alias.getSyntax();
+        const auto *symbol =
+            scope && (!syntax ||
+                      syntax->kind !=
+                          slang::syntax::SyntaxKind::TypedefDeclaration)
+                ? scope->find(alias.name)
+                : nullptr;
+        if (!symbol || symbol->kind != SK::TypeParameter ||
+            &symbol->as<slang::ast::TypeParameterSymbol>().getTypeAlias() !=
+                &alias)
+          aliases.push_back(getSemanticSymbolReference(alias));
         current = &alias.targetType.getType();
         if (!active.insert(current).second) {
           active.erase(&type);
