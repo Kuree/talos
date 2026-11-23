@@ -6034,6 +6034,39 @@ talos_rt_status validateStandalone(std::vector<uint8_t> &bytes,
 // Compact code decodes to the same instructions as the fixed-width table,
 // and runs the same; a malformed encoding fails code validation, and a
 // malformed table header fails parsing.
+// Older read images serialized an explicit application-return fence after
+// a publishing operation. Its on-wire opcode stays 69 after the encoder
+// stops emitting it. A clear latch falls through, and a latched $finish
+// terminates this activation before its next continuation (38.4).
+TEST(DesignBytecode, ExecutesLegacyPublicationFence) {
+  Fixture fixture;
+  const size_t code = get64(fixture.bytecode, 72);
+  instruction(fixture.bytecode, code, 1, 69);
+  instruction(fixture.bytecode, code, 2, TALOS_RT_DB_CONTINUE);
+  fixture.bytecode = compactCode(fixture.bytecode);
+  fixture.execution.bytecode = fixture.bytecode.data();
+  fixture.execution.bytecode_size = fixture.bytecode.size();
+  fixture.execution.checksum = imageChecksum(fixture.bytecode);
+  ASSERT_EQ(validateStandalone(fixture.bytecode), TALOS_RT_OK);
+
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&fixture.execution, &context),
+            TALOS_RT_OK);
+  std::array<uint64_t, 8> frame{};
+  talos_rt_fragment_action_v1 action{};
+  auto execute = [&] {
+    return talos_rt_execute_design_bytecode(fixture.entry, context,
+                                            frame.data(), sizeof(frame), 32, 32,
+                                            0, 0, &action);
+  };
+  ASSERT_EQ(execute(), TALOS_RT_OK);
+  EXPECT_EQ(action.kind, TALOS_RT_FRAGMENT_CONTINUE);
+  ASSERT_EQ(talos_rt_v1_scheduler_finish(context, 0), TALOS_RT_OK);
+  ASSERT_EQ(execute(), TALOS_RT_OK);
+  EXPECT_EQ(action.kind, TALOS_RT_FRAGMENT_TERMINATE);
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(DesignBytecode, CompactCodeDecodesLikeFixedCode) {
   for (std::vector<uint8_t> fixed :
        {makeBytecode(), makeSchedulerBytecode(), makeVPIBytecode(),
