@@ -85,6 +85,10 @@ TALOS_NATIVE_RUNTIME(AssertionEnabled, talos_rt_v1_assertion_enabled,
 TALOS_NATIVE_RUNTIME(AssertionActionState, talos_rt_v1_assertion_action_state,
                      SIG(I32, Ptr, I64), EvalInline)
 
+// Capture one scalar assignment as one ordered FIFO record (4.6(b), 10.4.2).
+TALOS_NATIVE_RUNTIME(EvalNbaCaptureWord, talos_rt_v1_eval_nba_capture_word,
+                     SIG(I32, Ptr, Ptr, I64, I64, I64, I64),
+                     EvalInline | ReadinessTransparent | CutQuiet)
 // Growth of the private ordered NBA queue. Generated code reaches it only
 // from a capacity test. It allocates only that queue: it never executes
 // actors, changes design state, consumes generated NBA accumulators or
@@ -98,6 +102,9 @@ TALOS_NATIVE_RUNTIME(EvalNbaReserveRecords,
                      SIG(I32, Ptr, Ptr, I32),
                      EvalInline | PendingTransparent | ReadinessTransparent |
                          CutQuiet | Cold)
+// Reads outstanding runtime work at capture; does not consume or publish it.
+TALOS_NATIVE_RUNTIME(EvalNbaRuntimePending, talos_rt_v1_eval_nba_runtime_pending,
+                     SIG(I32, Ptr, I32), EvalInline | ReadinessTransparent | CutQuiet)
 // The failure latch records an error status and the caller returns from the
 // activation. It cannot schedule or execute an actor.
 TALOS_NATIVE_RUNTIME(SchedulerFail, talos_rt_v1_scheduler_fail,

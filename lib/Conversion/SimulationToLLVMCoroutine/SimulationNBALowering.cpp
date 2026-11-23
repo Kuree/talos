@@ -1235,7 +1235,8 @@ private:
 // window may straddle a machine word; neighboring bits are excluded.
 Value buildGeneratedNBAChange(OpBuilder &builder, Location location,
                               uint64_t bitOffset, unsigned width, Value value,
-                              Value unknown) {
+                              Value unknown,
+                              bool preserveCurrentUnknown = false) {
   auto resultType = cast<IntegerType>(value.getType());
   assert(width > 0 && width <= resultType.getWidth());
   unsigned firstBit = bitOffset % 8;
@@ -1244,6 +1245,8 @@ Value buildGeneratedNBAChange(OpBuilder &builder, Location location,
   auto loadCurrent = [&](schedule::StatePlane plane) -> Value {
     Value current = schedule::NativeStateLoadOp::create(
         builder, location, spanType, plane, Value{}, bitOffset / 8, 1);
+    if (preserveCurrentUnknown && plane == schedule::StatePlane::Unknown)
+      setNativeLatchDestination(current.getDefiningOp());
     if (firstBit)
       current = arith::ShRUIOp::create(
           builder, location, current,
@@ -2001,9 +2004,9 @@ void emitGeneratedNBATransient(OpBuilder &builder, Location location,
 
 Value buildNativeNBAChange(OpBuilder &builder, Location location,
                            uint64_t bitOffset, unsigned width, Value value,
-                           Value unknown) {
+                           Value unknown, bool preserveCurrentUnknown) {
   return buildGeneratedNBAChange(builder, location, bitOffset, width, value,
-                                 unknown);
+                                 unknown, preserveCurrentUnknown);
 }
 
 void populateNBAToLLVMConversionPatterns(

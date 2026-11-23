@@ -12,6 +12,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include <cstdint>
@@ -72,6 +73,9 @@ struct NativeStaticNBAPlan {
   // after declaration initialization. With no pending NBA, assigning their
   // current four-state value cannot change state before or at the barrier.
   llvm::SmallVector<bool> unchangedSafeRoots;
+  // The same source writer proof for an exclusive read-only FIFO. Only its
+  // ordered staging path checks both the private FIFO and runtime queues.
+  llvm::SmallBitVector readOrderedHoldRoots;
   // For a fixed site on a mixed-writer root, the extent starting at its
   // captured offset that is disjoint from every immediate write.
   llvm::DenseMap<uint64_t, uint64_t> unchangedSiteWidths;
@@ -117,7 +121,8 @@ struct NativeStaticNBAPlan {
 mlir::Value buildNativeNBAChange(mlir::OpBuilder &builder,
                                  mlir::Location location, uint64_t bitOffset,
                                  unsigned width, mlir::Value value,
-                                 mlir::Value unknown);
+                                 mlir::Value unknown,
+                                 bool preserveCurrentUnknown = false);
 
 /// Branch from the builder's block to `continuation`, recording a four-state
 /// NBA handoff when the captured, destination-masked unknown bits are nonzero.

@@ -49,4 +49,10 @@ talos_rt_v1_eval_nba_reserve_records(talos_rt_context *context,
                                      talos::runtime::EvalNBAQueue *queue,
                                      uint32_t records);
 
+// Append the captured planes as one FIFO record. The caller publishes
+// readiness only after this append succeeds.
+extern "C" talos_rt_status talos_rt_v1_eval_nba_capture_word(
+    talos_rt_context *context, talos::runtime::EvalNBAQueue *queue,
+    uint64_t site, uint64_t offset, uint64_t value, uint64_t unknown);
+
 #endif

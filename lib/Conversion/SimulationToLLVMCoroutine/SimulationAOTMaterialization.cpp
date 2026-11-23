@@ -1666,6 +1666,7 @@ FailureOr<bool> makeNativeEvalPlan(
     return observed ? width : 0;
   };
   SmallVector<DynamicEvalNBA> dynamicEvalNBAs;
+  DenseMap<uint64_t, size_t> dynamicNBAIndices;
   // All implementations of one source site must share a capture: a process
   // can change between its two-state and four-state bodies within a barrier.
   // If any implementation needs the queue/periodic protocol, keep the whole
@@ -1754,6 +1755,19 @@ FailureOr<bool> makeNativeEvalPlan(
     llvm::errs() << "talos whole-value change banks: roots="
                  << bankCandidates.size() << '\n';
   const bool hasOrderedNBA = !orderedNBARoots.empty();
+  auto holdsInFIFO = [&](uint32_t root) {
+    return root < staticNBAPlan.readOrderedHoldRoots.size() &&
+           staticNBAPlan.readOrderedHoldRoots.test(root) &&
+           orderedNBARoots.contains(root);
+  };
+  constexpr StringLiteral fifoPendingName =
+      "__talos_eval_fifo_pending_roots_v1";
+  bool trackFIFO = llvm::any_of(orderedNBARoots, holdsInFIFO);
+  size_t fifoWords = (nbaRoots.size() + 63) / 64;
+  auto fifoWord = [&](OpBuilder &b, Location loc, uint32_t root) -> Value {
+    Value base = LLVM::AddressOfOp::create(b, loc, pointer, fifoPendingName);
+    return byteGEP(b, loc, base, uint64_t{root / 64} * 8);
+  };
   if (hasOrderedNBA) {
     OpBuilder globals = OpBuilder::atBlockBegin(module.getBody());
     auto makeZero = [&](StringRef name, Type type) {
@@ -1768,6 +1782,12 @@ FailureOr<bool> makeNativeEvalPlan(
     };
     makeZero(evalNBAQueueName, LLVM::LLVMStructType::getLiteral(
                                    context, {pointer, i32, i32, i32}));
+    if (trackFIFO) {
+      makeZero(fifoPendingName, LLVM::LLVMArrayType::get(i64, fifoWords));
+      declareNativeRuntime(module, NativeRuntimeEntry::EvalNbaRuntimePending);
+    }
+    if (native::has<native::ReadableEvalState>(module))
+      declareNativeRuntime(module, NativeRuntimeEntry::EvalNbaCaptureWord);
     declareNativeRuntime(module, NativeRuntimeEntry::EvalNbaReserve);
     declareNativeRuntime(module, NativeRuntimeEntry::EvalNbaReserveRecords);
   }
@@ -2989,13 +3009,14 @@ FailureOr<bool> makeNativeEvalPlan(
         // marks its root dirty, so an equal second write still restores the
         // value after an earlier pulse (1800-2023 4.6(b), 9.4.2, 10.4.2).
         auto fixedTarget = staticNBAPlan.siteFixedOffsets.find(site);
+        bool readHold = holdsInFIFO(root->second);
         bool inertCandidate =
-            (width > 64 ||
+            (readHold || width > 64 ||
              (orderedWide &&
               schedule::has<schedule::Field::EvalRuntimeCalendar>(module))) &&
             fixedTarget != staticNBAPlan.siteFixedOffsets.end() &&
-            staticNBAPlan.canDiscardUnchanged(root->second, site,
-                                              fixedTarget->second, width) &&
+            (readHold || staticNBAPlan.canDiscardUnchanged(
+                             root->second, site, fixedTarget->second, width)) &&
             fixedTarget->second <= rootWidth &&
             width <= rootWidth - fixedTarget->second;
         SmallVector<Value> orderedChunkDifferences;
@@ -3009,7 +3030,7 @@ FailureOr<bool> makeNativeEvalPlan(
             Value valueChunk = loadChunk(nbaStage.getValue(), chunk);
             Value delta = buildNativeNBAChange(
                 nbaBuilder, nbaStage.getLoc(), offset + chunk * 64, bits,
-                valueChunk, loadUnknownChunk(chunk));
+                valueChunk, loadUnknownChunk(chunk), readHold);
             difference = arith::OrIOp::create(nbaBuilder, nbaStage.getLoc(),
                                               difference, delta);
             if ((!changeBanks[root->second].empty() &&
@@ -3026,8 +3047,34 @@ FailureOr<bool> makeNativeEvalPlan(
               nbaBuilder, nbaStage.getLoc(), dirty,
               llvmConstant(nbaBuilder, nbaStage.getLoc(), i64,
                            uint64_t{1} << (root->second % 64)));
-          if (orderedWide &&
-              !schedule::has<schedule::Field::EvalRuntimeCalendar>(module))
+          if (readHold) {
+            // 4.6(b), 10.4.2: an earlier capture for this root can still
+            // produce a pulse. A different FIFO root cannot change its bits.
+            auto loc = nbaStage.getLoc();
+            Value word = LLVM::LoadOp::create(
+                nbaBuilder, loc, i64, fifoWord(nbaBuilder, loc, root->second),
+                8);
+            Value mask = llvmConstant(nbaBuilder, loc, i64,
+                                      uint64_t{1} << (root->second % 64));
+            Value fifo = arith::AndIOp::create(nbaBuilder, loc, word, mask);
+            Value runtimePending =
+                LLVM::CallOp::create(
+                    nbaBuilder, loc, TypeRange{i32},
+                    getNativeRuntimeSymbol(
+                        NativeRuntimeEntry::EvalNbaRuntimePending),
+                    ValueRange{
+                        nbaStage.getRuntimeContext(),
+                        llvmConstant(
+                            nbaBuilder, loc, i32,
+                            staticNBAPlan.roots[root->second].static_state)})
+                    .getResult();
+            pending = arith::OrIOp::create(nbaBuilder, loc, pending, fifo);
+            pending = arith::OrIOp::create(
+                nbaBuilder, loc, pending,
+                arith::ExtUIOp::create(nbaBuilder, loc, i64, runtimePending));
+          } else if (orderedWide &&
+                     !schedule::has<schedule::Field::EvalRuntimeCalendar>(
+                         module))
             pending = arith::OrIOp::create(
                 nbaBuilder, nbaStage.getLoc(), pending,
                 arith::ExtUIOp::create(
@@ -3059,11 +3106,76 @@ FailureOr<bool> makeNativeEvalPlan(
           overlaps = arith::AndIOp::create(nbaBuilder, nbaStage.getLoc(),
                                            overlaps, needed);
         }
+        auto registerOrderedRecord = [&](uint64_t key, uint64_t bits,
+                                         uint64_t atomicWidth) {
+          if (!dynamicNBAIndices.try_emplace(key, dynamicEvalNBAs.size())
+                   .second)
+            return;
+          DynamicEvalNBA entry{root->second, key, bits};
+          entry.queued = true;
+          entry.atomicWidth = atomicWidth;
+          entry.offsetName = "offset";
+          entry.valueName = "value";
+          entry.unknownName = "unknown";
+          dynamicEvalNBAs.push_back(std::move(entry));
+        };
         if (!changeBanks[root->second].empty()) {
           emitWholeNBACapture(nbaBuilder, nbaStage, changeBanks[root->second],
                               root->second, width, overlaps,
                               nbaStage.getValue(), nbaStage.getUnknown(),
                               orderedChunkDifferences, twoStateBanks);
+        } else if (orderedWide && width <= 64 &&
+                   native::has<native::ReadableEvalState>(module)) {
+          // Keep the scalar capture as one operation in every specialized
+          // executor. Its FIFO record has exactly the same layout and replay
+          // site as a record appended by a source frame (4.6(b), 10.4.2).
+          registerOrderedRecord(site, width, 0);
+          Location loc = nbaStage.getLoc();
+          Block *before = nbaStage->getBlock();
+          Block *continuation = before->splitBlock(nbaStage->getIterator());
+          auto *capture = new Block;
+          before->getParent()->getBlocks().insert(
+              Region::iterator(continuation), capture);
+          nbaBuilder.setInsertionPointToEnd(before);
+          cf::CondBranchOp::create(nbaBuilder, loc, overlaps, capture,
+                                   continuation);
+          nbaBuilder.setInsertionPointToStart(capture);
+          Value queued =
+              LLVM::CallOp::create(
+                  nbaBuilder, loc, TypeRange{i32},
+                  getNativeRuntimeSymbol(
+                      NativeRuntimeEntry::EvalNbaCaptureWord),
+                  ValueRange{nbaStage.getRuntimeContext(),
+                             LLVM::AddressOfOp::create(nbaBuilder, loc, pointer,
+                                                       evalNBAQueueName),
+                             llvmConstant(nbaBuilder, loc, i64, site),
+                             requestedStart, staged64, stagedUnknown64})
+                  .getResult();
+          bool shared =
+              schedule::has<schedule::Field::EvalRuntimeCalendar>(module);
+          if (shared || readHold) {
+            auto *mark = new Block;
+            before->getParent()->getBlocks().insert(
+                Region::iterator(continuation), mark);
+            Value ok = arith::CmpIOp::create(
+                nbaBuilder, loc, arith::CmpIPredicate::eq, queued,
+                llvmConstant(nbaBuilder, loc, i32, TALOS_RT_OK));
+            cf::CondBranchOp::create(nbaBuilder, loc, ok, mark, continuation);
+            nbaBuilder.setInsertionPointToStart(mark);
+            if (shared) {
+              // The canonical capture and its proof use the same typed indices.
+              markPendingNBARoot(nbaBuilder, loc, root->second);
+            } else {
+              Value at = fifoWord(nbaBuilder, loc, root->second);
+              Value prior = LLVM::LoadOp::create(nbaBuilder, loc, i64, at, 8);
+              Value mask = llvmConstant(nbaBuilder, loc, i64,
+                                        uint64_t{1} << (root->second % 64));
+              LLVM::StoreOp::create(
+                  nbaBuilder, loc,
+                  arith::OrIOp::create(nbaBuilder, loc, prior, mask), at, 8);
+            }
+          }
+          cf::BranchOp::create(nbaBuilder, loc, continuation);
         } else if (orderedWide) {
           uint64_t chunks = (width + 63) / 64;
           auto chunkSite = [&](uint64_t index) {
@@ -3073,26 +3185,15 @@ FailureOr<bool> makeNativeEvalPlan(
           bool packed = atomicWidth != 0;
           uint64_t fullRecords =
               packed ? runtime::packedWideNBARecords(chunks) : chunks;
-          auto registerRecord = [&](uint64_t key, uint64_t bits) {
-            if (llvm::any_of(dynamicEvalNBAs, [&](const DynamicEvalNBA &entry) {
-                  return entry.site == key;
-                }))
-              return;
-            DynamicEvalNBA entry{root->second, key, bits};
-            entry.queued = true;
-            entry.atomicWidth = atomicWidth;
-            entry.offsetName = "offset";
-            entry.valueName = "value";
-            entry.unknownName = "unknown";
-            dynamicEvalNBAs.push_back(std::move(entry));
-          };
           // Runtime initializers and cold actors can append legacy chunks
           // to the same FIFO. Each layout has its own first-record key.
           for (uint64_t index = 0; index != chunks; ++index)
-            registerRecord(chunkSite(index),
-                           std::min<uint64_t>(64, width - index * 64));
+            registerOrderedRecord(chunkSite(index),
+                                  std::min<uint64_t>(64, width - index * 64),
+                                  atomicWidth);
           if (packed)
-            registerRecord(runtime::packedWideNBATag | site, width);
+            registerOrderedRecord(runtime::packedWideNBATag | site, width,
+                                  atomicWidth);
           // Preserve each activation, including repeated writes to one lane.
           // The hot path is only direct record stores. Storage growth is cold
           // and cannot execute actors or re-enter the scheduler.
@@ -3259,6 +3360,15 @@ FailureOr<bool> makeNativeEvalPlan(
           // The common calendar drains all pending roots in NBA (4.4.2.4).
           if (schedule::has<schedule::Field::EvalRuntimeCalendar>(module))
             markPendingNBARoot(nbaBuilder, loc, root->second);
+          else if (readHold) {
+            Value at = fifoWord(nbaBuilder, loc, root->second);
+            Value prior = LLVM::LoadOp::create(nbaBuilder, loc, i64, at, 8);
+            Value mask = llvmConstant(nbaBuilder, loc, i64,
+                                      uint64_t{1} << (root->second % 64));
+            LLVM::StoreOp::create(
+                nbaBuilder, loc,
+                arith::OrIOp::create(nbaBuilder, loc, prior, mask), at, 8);
+          }
           cf::BranchOp::create(nbaBuilder, loc, continuation);
         } else if (wideSlots) {
           Block *inertContinuation = nullptr;
@@ -3280,14 +3390,12 @@ FailureOr<bool> makeNativeEvalPlan(
           Value validBit = LLVM::ZExtOp::create(nbaBuilder, nbaStage.getLoc(),
                                                 i32, overlaps);
           for (uint64_t index = 0; index != chunks; ++index) {
-            uint64_t slotSite =
-                chunks == 1 ? slotSourceSite
-                            : evalNBAChunkSite(slotSourceSite, index);
-            auto existing = llvm::find_if(dynamicEvalNBAs,
-                                          [&](const DynamicEvalNBA &entry) {
-                                            return entry.site == slotSite;
-                                          });
-            if (existing == dynamicEvalNBAs.end()) {
+            uint64_t slotSite = chunks == 1
+                                    ? slotSourceSite
+                                    : evalNBAChunkSite(slotSourceSite, index);
+            auto [position, insert] =
+                dynamicNBAIndices.try_emplace(slotSite, dynamicEvalNBAs.size());
+            if (insert) {
               DynamicEvalNBA entry{root->second, slotSite,
                                    std::min<uint64_t>(64, width - index * 64)};
               // The fixed target of every staging into this slot. A
@@ -3337,8 +3445,8 @@ FailureOr<bool> makeNativeEvalPlan(
                            i64, native::get<native::TwoState>(module) ? 2 : 4),
                        8, schedule::NBASlotField::Transition);
               dynamicEvalNBAs.push_back(std::move(entry));
-              existing = std::prev(dynamicEvalNBAs.end());
             }
+            const auto *existing = &dynamicEvalNBAs[position->second];
             auto storeGlobal = [&, &nbaStage = nbaStage](StringRef name,
                                                          Value value,
                                                          unsigned alignment) {
@@ -4044,9 +4152,8 @@ FailureOr<bool> makeNativeEvalPlan(
       for (uint64_t index = 0; index != chunks; ++index) {
         uint64_t recordSite =
             chunks == 1 ? site.site : evalNBAChunkSite(site.site, index);
-        if (llvm::any_of(dynamicEvalNBAs, [&](const auto &entry) {
-              return entry.site == recordSite;
-            }))
+        if (!dynamicNBAIndices.try_emplace(recordSite, dynamicEvalNBAs.size())
+                 .second)
           continue;
         DynamicEvalNBA entry{
             site.root, recordSite,
@@ -6552,33 +6659,31 @@ FailureOr<bool> makeNativeEvalPlan(
   // runtime ready-node worklist.
   uint32_t directActivationWordCount =
       static_cast<uint32_t>((mergedFragments.size() + 63) / 64);
-  Value activatedNodes;
-  Value activatedDirect;
-  if (generateGroupedFanout) {
-    activatedNodes =
-        entryAlloca(builder, location, i64, activationWordCount, 8);
-    for (uint32_t word = 0; word != activationWordCount; ++word)
-      LLVM::StoreOp::create(builder, location,
-                            llvmConstant(builder, location, i64, 0),
-                            byteGEP(builder, location, activatedNodes,
-                                    uint64_t{word} * sizeof(uint64_t)),
-                            8);
-  }
-  // Direct eval publication is independent of whether any generic grouped
-  // fanout exists.  In particular, an eval-only design can have no
-  // `activatedNodes` bitmap while still publishing fixed NBA roots to direct
-  // fragments.  Keep this alloca governed by its own word count so the later
-  // direct epilogue never observes an unset MLIR Value.
-  if (directActivationWordCount != 0) {
-    activatedDirect =
-        entryAlloca(builder, location, i64, directActivationWordCount, 8);
-    for (uint32_t word = 0; word != directActivationWordCount; ++word)
-      LLVM::StoreOp::create(builder, location,
-                            llvmConstant(builder, location, i64, 0),
-                            byteGEP(builder, location, activatedDirect,
-                                    uint64_t{word} * sizeof(uint64_t)),
-                            8);
-  }
+  // The two bitmaps have independent sizes. In large readable designs they
+  // may cover thousands of retained actors. One bulk fill represents the
+  // all-zero starting set before any NBA wakes are accumulated (4.5, 9.4.2).
+  auto createActivationWords = [&](uint32_t words) -> Value {
+    if (!words)
+      return {};
+    Value buffer = entryAlloca(builder, location, i64, words, 8);
+    if (vpi.allowsRead() && words > runtime::ReadySetLayout::flatWordLimit) {
+      Value zero = llvmConstant(builder, location, builder.getI8Type(), 0);
+      LLVM::MemsetOp::create(builder, location, buffer, zero,
+                             llvmConstant(builder, location, i64,
+                                          uint64_t{words} * sizeof(uint64_t)),
+                             /*isVolatile=*/false);
+    } else {
+      Value zero = llvmConstant(builder, location, i64, 0);
+      for (uint32_t word = 0; word != words; ++word) {
+        Value address = byteGEP(builder, location, buffer,
+                                uint64_t{word} * sizeof(uint64_t));
+        LLVM::StoreOp::create(builder, location, zero, address, 8);
+      }
+    }
+    return buffer;
+  };
+  Value activatedNodes = createActivationWords(activationWordCount);
+  Value activatedDirect = createActivationWords(directActivationWordCount);
 
   constexpr auto stateValue = schedule::StatePlane::Value;
   constexpr auto stateUnknown = schedule::StatePlane::Unknown;
@@ -6604,6 +6709,7 @@ FailureOr<bool> makeNativeEvalPlan(
   Value orderedDirectGuard;
   llvm::DenseMap<uint64_t, Block *> queueCases;
   llvm::DenseMap<std::pair<uint32_t, uint64_t>, Block *> commitCases;
+  DenseMap<Block *, std::optional<uint64_t>> fixedQueueOffsets;
   if (hasOrderedNBA) {
     if (::talos::schedule::has<::talos::schedule::Field::EvalRuntimeCalendar>(
             module)) {
@@ -6701,6 +6807,21 @@ FailureOr<bool> makeNativeEvalPlan(
         if (inserted)
           commit->second = block();
         Block *destination = commit->second;
+        if (native::has<native::ReadableEvalState>(module)) {
+          // Multiple sites can share a commit body. A fixed captured offset is
+          // usable only when every source site routed here proves the same one.
+          // This includes wide chunks and the retained runtime implementations.
+          constexpr uint64_t sourceMask = (uint64_t{1} << 48) - 1;
+          auto target =
+              staticNBAPlan.siteFixedOffsets.find(entry.site & sourceMask);
+          std::optional<uint64_t> offset;
+          if (target != staticNBAPlan.siteFixedOffsets.end())
+            offset = target->second + ((entry.site >> 48) & 0x7fff) * 64;
+          auto [common, first] =
+              fixedQueueOffsets.try_emplace(destination, offset);
+          if (!first && common->second != offset)
+            common->second.reset();
+        }
         constexpr uint64_t nextChunk = uint64_t{1} << 48;
         if ((entry.site >> 63) && ((entry.site >> 48) & 0x7fff) &&
             queueCases.lookup(entry.site - nextChunk) == destination)
@@ -6774,6 +6895,14 @@ FailureOr<bool> makeNativeEvalPlan(
     LLVM::StoreOp::create(builder, location,
                           llvmConstant(builder, location, i32, 0),
                           evalNBAQueueField(builder, location, 1), 4);
+    if (trackFIFO) {
+      Value pending = LLVM::AddressOfOp::create(builder, location, pointer,
+                                                fifoPendingName);
+      Value zero = llvmConstant(builder, location, builder.getI8Type(), 0);
+      LLVM::MemsetOp::create(
+          builder, location, pending, zero,
+          llvmConstant(builder, location, i64, fifoWords * 8), false);
+    }
   }
   cf::BranchOp::create(builder, location, publicationEntry);
   builder.setInsertionPointToStart(publicationEntry);
@@ -6872,10 +7001,11 @@ FailureOr<bool> makeNativeEvalPlan(
     // (siteFixedOffsets: the target captured at the enqueue, IEEE 1800-2023
     // 4.9.4 and 10.4.2). Use that constant, so that the range clipping and
     // window arithmetic below fold to a fixed-offset merge.
-    Value dynamicBit =
-        !entry.queued && entry.constantOffset
-            ? llvmConstant(builder, location, i64, *entry.constantOffset)
-            : loadStaged(entry.offsetName);
+    auto offset = entry.queued
+                      ? fixedQueueOffsets.lookup(queueCases.lookup(entry.site))
+                      : entry.constantOffset;
+    Value dynamicBit = offset ? llvmConstant(builder, location, i64, *offset)
+                              : loadStaged(entry.offsetName);
     uint64_t rootWidth = staticNBAPlan.roots[entry.rootIndex].bit_width;
     auto publicationRange = builder.getDenseI64ArrayAttr(
         {static_cast<int64_t>(staticNBAPlan.generatedOffsets[entry.rootIndex]),
@@ -7178,7 +7308,8 @@ FailureOr<bool> makeNativeEvalPlan(
     const talos_rt_static_nba_root &dynamicRoot = nbaRoots[entry.rootIndex];
     auto dynamicFanout = fanoutIndicesOf(dynamicRoot.static_state);
     if (entry.queued && !dynamicFanout.empty() &&
-        schedule::has<schedule::Field::EvalRuntimeCalendar>(module)) {
+        (native::has<native::ReadableEvalState>(module) ||
+         schedule::has<schedule::Field::EvalRuntimeCalendar>(module))) {
       // The record is committed. An unchanged four-state field cannot wake
       // a reader (9.4.2), even when the record's target is dynamic. Preserve
       // every wake collected by earlier records in the same NBA barrier.
@@ -7210,103 +7341,170 @@ FailureOr<bool> makeNativeEvalPlan(
                                                    oldPublishedUnknown,
                                                    newZero)),
         widthMask);
-    Value publishedStart =
-        arith::AddIOp::create(builder, location, safeDynamicBit, highClip);
-    Value publishedWidth = arith::SubIOp::create(
-        builder, location,
-        arith::SubIOp::create(builder, location,
-                              llvmConstant(builder, location, i64, entry.width),
-                              lowClip),
-        highClip);
-    for (uint32_t fanoutIndex : dynamicFanout) {
-      const talos_rt_static_fanout_entry &fanout = fanoutEntries[fanoutIndex];
-      if (fanout.bit_width == 0)
-        continue;
-      Value writeHigh = arith::AddIOp::create(builder, location, publishedStart,
-                                              publishedWidth);
-      Value fanoutLow = llvmConstant(builder, location, i64, fanout.low_bit);
-      Value fanoutHigh = llvmConstant(builder, location, i64,
-                                      fanout.low_bit + fanout.bit_width);
-      Value dynamicAbove =
-          arith::CmpIOp::create(builder, location, arith::CmpIPredicate::uge,
-                                publishedStart, fanoutLow);
-      Value overlapLow = arith::SelectOp::create(
-          builder, location, dynamicAbove, publishedStart, fanoutLow);
-      Value dynamicBelow = arith::CmpIOp::create(
-          builder, location, arith::CmpIPredicate::ule, writeHigh, fanoutHigh);
-      Value overlapHigh = arith::SelectOp::create(
-          builder, location, dynamicBelow, writeHigh, fanoutHigh);
-      Value overlaps =
-          arith::CmpIOp::create(builder, location, arith::CmpIPredicate::ult,
-                                overlapLow, overlapHigh);
-      Value localLow =
-          arith::SubIOp::create(builder, location, overlapLow, publishedStart);
-      Value overlapWidth =
-          arith::SubIOp::create(builder, location, overlapHigh, overlapLow);
-      Value safeLocalLow =
-          arith::SelectOp::create(builder, location, overlaps, localLow,
-                                  llvmConstant(builder, location, i64, 0));
-      Value safeOverlapWidth =
-          arith::SelectOp::create(builder, location, overlaps, overlapWidth,
-                                  llvmConstant(builder, location, i64, 1));
-      Value observed = changed;
-      switch (fanout.edge) {
-      case TALOS_RT_WAIT_EDGE_POSEDGE:
-        observed = posedge;
-        break;
-      case TALOS_RT_WAIT_EDGE_NEGEDGE:
-        observed = negedge;
-        break;
-      case TALOS_RT_WAIT_EDGE_BOTH:
-        observed = arith::OrIOp::create(builder, location, posedge, negedge);
-        break;
-      default:
-        break;
+    // A fixed NBA record and its wait ranges have compile-time coordinates.
+    // Combine all destinations with the same predicate and bitmap word. This
+    // keeps FIFO replay and the per-record old/new edge, without generating
+    // dynamic overlap arithmetic or a separate update per subscriber.
+    bool fixedFanout = entry.queued && offset && *offset <= rootWidth &&
+                       entry.width <= rootWidth - *offset;
+    if (fixedFanout) {
+      using WakeKey = std::tuple<uint32_t, uint64_t, unsigned, uint32_t>;
+      llvm::MapVector<WakeKey, uint64_t> wakes;
+      for (unsigned fanoutIndex : dynamicFanout) {
+        const auto &fanout = fanoutEntries[fanoutIndex];
+        uint64_t low = std::max<uint64_t>(*offset, fanout.low_bit);
+        uint64_t end = std::min<uint64_t>(
+            *offset + entry.width, uint64_t{fanout.low_bit} + fanout.bit_width);
+        if (low >= end)
+          continue;
+        uint64_t mask = (UINT64_MAX >> (64 - (end - low))) << (low - *offset);
+        bool direct = fanoutRoute(fanout) == TALOS_RT_FANOUT_DIRECT &&
+                      fanout.merged_bit < directActivationWordCount * 64;
+        uint32_t bit = direct ? fanout.merged_bit : fanout.compute_node;
+        if (bit / 64 >=
+                (direct ? directActivationWordCount : activationWordCount) ||
+            !(direct ? activatedDirect : activatedNodes))
+          return module.emitError(
+              "fixed NBA fanout has no generated activation target");
+        wakes[{fanout.edge, mask, direct, bit / 64}] |= uint64_t{1}
+                                                        << (bit % 64);
       }
-      // Edge masks above use the source-language field coordinates.  Remove
-      // the invalid low prefix so bit zero now names `publishedStart`, which
-      // is the coordinate used by the fanout overlap below.
-      observed = arith::ShRUIOp::create(builder, location, observed, lowClip);
-      Value selectedObserved =
-          arith::ShRUIOp::create(builder, location, observed, safeLocalLow);
-      Value maskShift = arith::SubIOp::create(
-          builder, location, llvmConstant(builder, location, i64, 64),
-          safeOverlapWidth);
-      Value overlapMask = arith::ShRUIOp::create(
-          builder, location, llvmConstant(builder, location, i64, UINT64_MAX),
-          maskShift);
-      Value anyObserved = arith::CmpIOp::create(
-          builder, location, arith::CmpIPredicate::ne,
-          arith::AndIOp::create(builder, location, selectedObserved,
-                                overlapMask),
-          llvmConstant(builder, location, i64, 0));
-      Value triggered =
-          arith::AndIOp::create(builder, location, overlaps, anyObserved);
-      bool direct = fanoutRoute(fanout) == TALOS_RT_FANOUT_DIRECT &&
-                    fanout.merged_bit < directActivationWordCount * 64 &&
-                    directActivationWordCount != 0;
-      Value activation = direct ? activatedDirect : activatedNodes;
-      uint32_t activationBit = direct ? fanout.merged_bit : fanout.compute_node;
-      uint32_t activationWords =
-          direct ? directActivationWordCount : activationWordCount;
-      if (!activation || activationBit >= activationWords * 64)
-        return module.emitError(
-            "dynamic NBA fanout has no generated activation target");
-      Value activationAddress =
-          byteGEP(builder, location, activation,
-                  uint64_t{activationBit / 64} * sizeof(uint64_t));
-      Value priorActivation =
-          LLVM::LoadOp::create(builder, location, i64, activationAddress, 8);
-      Value selectedActivation = arith::SelectOp::create(
-          builder, location, triggered,
-          llvmConstant(builder, location, i64,
-                       uint64_t{1} << (activationBit % 64)),
-          llvmConstant(builder, location, i64, 0));
-      LLVM::StoreOp::create(builder, location,
-                            arith::OrIOp::create(builder, location,
-                                                 priorActivation,
-                                                 selectedActivation),
-                            activationAddress, 8);
+      llvm::MapVector<std::pair<unsigned, uint32_t>, Value> additions;
+      for (const auto &wake : wakes) {
+        auto [edge, mask, direct, word] = wake.first;
+        Value bits = changed;
+        if (edge == TALOS_RT_WAIT_EDGE_POSEDGE)
+          bits = posedge;
+        else if (edge == TALOS_RT_WAIT_EDGE_NEGEDGE)
+          bits = negedge;
+        else if (edge == TALOS_RT_WAIT_EDGE_BOTH)
+          bits = arith::OrIOp::create(builder, location, posedge, negedge);
+        Value tested =
+            arith::AndIOp::create(builder, location, bits,
+                                  llvmConstant(builder, location, i64, mask));
+        Value triggered = arith::CmpIOp::create(
+            builder, location, arith::CmpIPredicate::ne, tested, zero64);
+        Value add = arith::SelectOp::create(
+            builder, location, triggered,
+            llvmConstant(builder, location, i64, wake.second), zero64);
+        auto &pending = additions[{direct, word}];
+        pending =
+            pending
+                ? Value(arith::OrIOp::create(builder, location, pending, add))
+                : add;
+      }
+      for (auto &addition : additions) {
+        auto [direct, word] = addition.first;
+        Value address = byteGEP(builder, location,
+                                direct ? activatedDirect : activatedNodes,
+                                uint64_t{word} * sizeof(uint64_t));
+        Value prior = LLVM::LoadOp::create(builder, location, i64, address, 8);
+        LLVM::StoreOp::create(
+            builder, location,
+            arith::OrIOp::create(builder, location, prior, addition.second),
+            address, 8);
+      }
+    } else {
+      Value publishedStart =
+          arith::AddIOp::create(builder, location, safeDynamicBit, highClip);
+      Value publishedWidth = arith::SubIOp::create(
+          builder, location,
+          arith::SubIOp::create(
+              builder, location,
+              llvmConstant(builder, location, i64, entry.width), lowClip),
+          highClip);
+      for (uint32_t fanoutIndex : dynamicFanout) {
+        const talos_rt_static_fanout_entry &fanout = fanoutEntries[fanoutIndex];
+        if (fanout.bit_width == 0)
+          continue;
+        Value writeHigh = arith::AddIOp::create(builder, location,
+                                                publishedStart, publishedWidth);
+        Value fanoutLow = llvmConstant(builder, location, i64, fanout.low_bit);
+        Value fanoutHigh = llvmConstant(builder, location, i64,
+                                        fanout.low_bit + fanout.bit_width);
+        Value dynamicAbove =
+            arith::CmpIOp::create(builder, location, arith::CmpIPredicate::uge,
+                                  publishedStart, fanoutLow);
+        Value overlapLow = arith::SelectOp::create(
+            builder, location, dynamicAbove, publishedStart, fanoutLow);
+        Value dynamicBelow =
+            arith::CmpIOp::create(builder, location, arith::CmpIPredicate::ule,
+                                  writeHigh, fanoutHigh);
+        Value overlapHigh = arith::SelectOp::create(
+            builder, location, dynamicBelow, writeHigh, fanoutHigh);
+        Value overlaps =
+            arith::CmpIOp::create(builder, location, arith::CmpIPredicate::ult,
+                                  overlapLow, overlapHigh);
+        Value localLow = arith::SubIOp::create(builder, location, overlapLow,
+                                               publishedStart);
+        Value overlapWidth =
+            arith::SubIOp::create(builder, location, overlapHigh, overlapLow);
+        Value safeLocalLow =
+            arith::SelectOp::create(builder, location, overlaps, localLow,
+                                    llvmConstant(builder, location, i64, 0));
+        Value safeOverlapWidth =
+            arith::SelectOp::create(builder, location, overlaps, overlapWidth,
+                                    llvmConstant(builder, location, i64, 1));
+        Value observed = changed;
+        switch (fanout.edge) {
+        case TALOS_RT_WAIT_EDGE_POSEDGE:
+          observed = posedge;
+          break;
+        case TALOS_RT_WAIT_EDGE_NEGEDGE:
+          observed = negedge;
+          break;
+        case TALOS_RT_WAIT_EDGE_BOTH:
+          observed = arith::OrIOp::create(builder, location, posedge, negedge);
+          break;
+        default:
+          break;
+        }
+        // Edge masks above use the source-language field coordinates.  Remove
+        // the invalid low prefix so bit zero now names `publishedStart`, which
+        // is the coordinate used by the fanout overlap below.
+        observed = arith::ShRUIOp::create(builder, location, observed, lowClip);
+        Value selectedObserved =
+            arith::ShRUIOp::create(builder, location, observed, safeLocalLow);
+        Value maskShift = arith::SubIOp::create(
+            builder, location, llvmConstant(builder, location, i64, 64),
+            safeOverlapWidth);
+        Value overlapMask = arith::ShRUIOp::create(
+            builder, location, llvmConstant(builder, location, i64, UINT64_MAX),
+            maskShift);
+        Value observedOverlap = arith::AndIOp::create(
+            builder, location, selectedObserved, overlapMask);
+        Value anyObserved = arith::CmpIOp::create(
+            builder, location, arith::CmpIPredicate::ne, observedOverlap,
+            llvmConstant(builder, location, i64, 0));
+        Value triggered =
+            arith::AndIOp::create(builder, location, overlaps, anyObserved);
+        bool direct = fanoutRoute(fanout) == TALOS_RT_FANOUT_DIRECT &&
+                      fanout.merged_bit < directActivationWordCount * 64 &&
+                      directActivationWordCount != 0;
+        Value activation = direct ? activatedDirect : activatedNodes;
+        uint32_t activationBit =
+            direct ? fanout.merged_bit : fanout.compute_node;
+        uint32_t activationWords =
+            direct ? directActivationWordCount : activationWordCount;
+        if (!activation || activationBit >= activationWords * 64)
+          return module.emitError(
+              "dynamic NBA fanout has no generated activation target");
+        Value activationAddress =
+            byteGEP(builder, location, activation,
+                    uint64_t{activationBit / 64} * sizeof(uint64_t));
+        Value priorActivation =
+            LLVM::LoadOp::create(builder, location, i64, activationAddress, 8);
+        Value activationMask = llvmConstant(
+            builder, location, i64, uint64_t{1} << (activationBit % 64));
+        Value selectedActivation = arith::SelectOp::create(
+            builder, location, triggered, activationMask,
+            llvmConstant(builder, location, i64, 0));
+        LLVM::StoreOp::create(builder, location,
+                              arith::OrIOp::create(builder, location,
+                                                   priorActivation,
+                                                   selectedActivation),
+                              activationAddress, 8);
+      }
     }
     cf::BranchOp::create(builder, location, nextDynamic);
     if (entry.queued)

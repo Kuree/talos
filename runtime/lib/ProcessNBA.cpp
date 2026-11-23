@@ -832,6 +832,26 @@ talos_rt_v1_scheduler_generic_nba_words(talos_rt_context *context,
 }
 
 extern "C" uint32_t
+talos_rt_v1_eval_nba_runtime_pending(talos_rt_context *context,
+                                     uint32_t state) {
+  // The generated FIFO tests its own captures. A source-frame NBA, a
+  // deferred path event, or an intervention must keep the ordered record.
+  return !context || lockedNativeAOTContext != context ||
+         activeNativeAOTContext != context || !context->nativeSchedulePlan ||
+         context->nativeScheduleDeoptimized ||
+         context->nativeScheduleExternalWritePending ||
+         !context->scheduledNBAs.empty() ||
+         !context->scheduledDesignNBAs.empty() ||
+         !context->scheduledInertialPathNBAs.empty() ||
+         context->staticNBAAccumulatorsPending || context->powerNBAs ||
+         !context->forceMask.empty() || !context->assignMask.empty() ||
+         (context->nativeScheduleDirtyRootsPresent &&
+          (!context->stateValue.shared() ||
+           context->nativeSchedulePersistentDirtyRoots.count(state) ||
+           context->nativeScheduleTransientDirtyRoots.count(state)));
+}
+
+extern "C" uint32_t
 talos_rt_v1_scheduler_generic_nba_pending(talos_rt_context *context,
                                           uint32_t id) {
   const uint64_t *words = talos_rt_v1_scheduler_generic_nba_words(context, id);
@@ -3166,6 +3186,20 @@ talos_rt_v1_eval_nba_reserve_records(talos_rt_context *context,
   TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_ARGUMENT; }
 }
 
+extern "C" talos_rt_status talos_rt_v1_eval_nba_capture_word(
+    talos_rt_context *context, EvalNBAQueue *queue, uint64_t site,
+    uint64_t offset, uint64_t value, uint64_t unknown) {
+  if (queue->size >= queue->capacity) {
+    auto status = talos_rt_v1_eval_nba_reserve(context, queue);
+    if (status != TALOS_RT_OK) {
+      queue->error = status;
+      return status;
+    }
+  }
+  queue->data[queue->size++] = {site, offset, value, unknown};
+  return TALOS_RT_OK;
+}
+
 void talos_rt_release_eval_nba_queues(talos_rt_context *context) noexcept {
   for (auto *queue : context->nativeEvalNBAQueues) {
     std::free(queue->data);
@@ -4573,21 +4607,40 @@ commitOrderedNBAWord(talos_rt_context *context, uint32_t staticState,
   uint64_t newValue = (oldValue & ~mask) | (value & mask);
   uint64_t newUnknown = (oldUnknown & ~mask) | (unknown & mask);
   bool changed = oldValue != newValue || oldUnknown != newUnknown;
-  if (context->execution &&
-      context->execution->state_bit_count == plan->state_bit_count) {
-    auto *canonicalValue =
-        reinterpret_cast<uint8_t *>(context->stateValue.data());
-    auto *canonicalUnknown =
-        reinterpret_cast<uint8_t *>(context->stateUnknown.data());
-    if (canonicalValue != plan->state_value)
-      storePackedBytes(canonicalValue, planeBit, width, newValue);
-    if (canonicalUnknown != plan->state_unknown)
-      storePackedBytes(canonicalUnknown, planeBit, width, newUnknown);
+  bool boundMirror = nativeImageMatchesNBAPlan(context, plan);
+  // On the shared read image a value-only transition cannot invalidate any
+  // X/Z proof (6.11.2). Store directly at this FIFO position, then publish
+  // with the same old/new values as every other ordered update (4.6(b)).
+  bool valueOnly =
+      oldUnknown == newUnknown && boundMirror && context->execution &&
+      (context->execution->flags & TALOS_RT_EXECUTION_VPI_PUBLISHING_WRITERS) &&
+      context->stateValue.shared() &&
+      reinterpret_cast<const uint8_t *>(context->stateValue.data()) ==
+          plan->state_value &&
+      reinterpret_cast<const uint8_t *>(context->stateUnknown.data()) ==
+          plan->state_unknown &&
+      (!context->nativeUnknownSummary ||
+       context->nativeUnknownSummary->plane == plan->state_unknown);
+  if (valueOnly) {
+    if (changed)
+      storePackedBytes(plan->state_value, planeBit, width, newValue);
+  } else {
+    if (context->execution &&
+        context->execution->state_bit_count == plan->state_bit_count) {
+      auto *canonicalValue =
+          reinterpret_cast<uint8_t *>(context->stateValue.data());
+      auto *canonicalUnknown =
+          reinterpret_cast<uint8_t *>(context->stateUnknown.data());
+      if (canonicalValue != plan->state_value)
+        storePackedBytes(canonicalValue, planeBit, width, newValue);
+      if (canonicalUnknown != plan->state_unknown)
+        storePackedBytes(canonicalUnknown, planeBit, width, newUnknown);
+    }
+    if ((changed || !boundMirror) &&
+        !storeNativeScheduleStateUnlocked(context, planeBit, width, newValue,
+                                          newUnknown, oldUnknown))
+      return TALOS_RT_LAYOUT_MISMATCH;
   }
-  if ((changed || !nativeImageMatchesNBAPlan(context, plan)) &&
-      !storeNativeScheduleStateUnlocked(context, planeBit, width, newValue,
-                                        newUnknown, oldUnknown))
-    return TALOS_RT_LAYOUT_MISMATCH;
   ++context->signalDiagnostics.aotNBAStages;
   ++context->signalDiagnostics.aotNBACommits;
   capture(staticState, destination, width, oldValue, oldUnknown, newValue,

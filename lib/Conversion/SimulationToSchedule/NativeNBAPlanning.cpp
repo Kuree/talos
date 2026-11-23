@@ -710,10 +710,14 @@ FailureOr<NativeStaticNBAPlan> buildNativeStaticNBAPlan(
   // when no immediate writer can intervene (4.6(b), 10.4.2). Use the closed
   // source writer inventory. Forces and power-loss cancellation have their
   // own write ordering and retain the ordinary path.
+  bool sharedCalendar =
+      schedule::has<schedule::Field::EvalRuntimeCalendar>(module);
+  bool readFIFO =
+      !sharedCalendar && native::has<native::ReadableEvalState>(module);
   bool closedWriters =
       sourceWriters && design.getComputeGraphAttr() &&
-      design.getComputeGraphAttr().getVpi() == schedule::ComputeVPIMode::Off &&
-      schedule::has<schedule::Field::EvalRuntimeCalendar>(module) &&
+      design.getComputeGraphAttr().getVpi() != schedule::ComputeVPIMode::Full &&
+      (sharedCalendar || readFIFO) &&
       !design
            .walk([](Operation *op) {
              return isa<sim::SimOverrideOp, sim::SimReleaseOverrideOp,
@@ -723,16 +727,23 @@ FailureOr<NativeStaticNBAPlan> buildNativeStaticNBAPlan(
                         : WalkResult::advance();
            })
            .wasInterrupted();
+  if (closedWriters && readFIFO)
+    plan.readOrderedHoldRoots.resize(plan.roots.size());
   for (auto [index, root] : llvm::enumerate(plan.roots)) {
+    bool stable = completeWriters &&
+                  native::has<native::ClosedExecutable>(module) &&
+                  seen[index] && immediateOnly[index] &&
+                  !immediateWriters.contains(root.static_state);
     plan.unchangedSafeRoots[index] =
-        completeWriters && native::has<native::ClosedExecutable>(module) &&
-        (plan.privateInfluenceRoots[index] || closedWriters) && seen[index] &&
-        immediateOnly[index] && !immediateWriters.contains(root.static_state);
+        stable && (plan.privateInfluenceRoots[index] ||
+                   (closedWriters && sharedCalendar));
+    if (!plan.readOrderedHoldRoots.empty() && stable)
+      plan.readOrderedHoldRoots.set(index);
   }
   auto ranges = design ? schedule::get<schedule::Field::NbaHoldRanges>(design)
                        : DenseI64ArrayAttr{};
-  if (closedWriters && completeWriters && ranges && ranges.size() % 3 == 0 &&
-      native::has<native::ClosedExecutable>(module)) {
+  if (closedWriters && sharedCalendar && completeWriters && ranges &&
+      ranges.size() % 3 == 0 && native::has<native::ClosedExecutable>(module)) {
     // A source slice is a certificate for one descriptor. If separate
     // immediately written descriptors alias its native root, keep the
     // ordinary capture. Revalidate each range against the native bounds.
@@ -779,13 +790,16 @@ FailureOr<NativeStaticNBAPlan> buildNativeStaticNBAPlan(
                  << " immediate-writers=" << immediateWriters.size()
                  << " disjoint-writer-sites=" << plan.unchangedSiteWidths.size()
                  << " closed-executable="
-                 << native::has<native::ClosedExecutable>(module) << '\n';
+                 << native::has<native::ClosedExecutable>(module)
+                 << " exclusive-fifo=" << plan.readOrderedHoldRoots.count()
+                 << '\n';
   // Wide slots can retain the complete next image and every overwritten
   // change. Admit only an immediate whole-variable update at every source
   // site, including startup and all execution-domain copies. The ordinary
   // accumulator consumes the same change mask for runtime writers.
   plan.wholeChangeBanks.assign(plan.roots.size(), false);
   if (closedWriters && completeWriters &&
+      design.getComputeGraphAttr().getVpi() == schedule::ComputeVPIMode::Off &&
       native::has<native::ClosedExecutable>(module) &&
       !schedule::has<schedule::Field::ForceGenericNBA>(module) &&
       !sim::has<sim::metadata::SnapshotPublications>(module)) {
