@@ -2043,27 +2043,19 @@ static bool publishStaticAOTSignalTransitionUnlockedImpl(
       return false;
     std::tie(lo, hi) = context->nativePeriodicRuntimeFanoutRanges[staticID];
   } else {
-    auto first = end;
-    auto last = end;
     if (staticID < context->nativeScheduleFanoutRanges.size()) {
-      auto [firstIndex, lastIndex] =
-          context->nativeScheduleFanoutRanges[staticID];
-      if (firstIndex <= lastIndex &&
-          lastIndex <= context->nativeScheduleFanoutEntryCount) {
-        first = begin + firstIndex;
-        last = begin + lastIndex;
-      }
+      std::tie(lo, hi) = context->nativeScheduleFanoutRanges[staticID];
     } else {
-      first =
+      auto first =
           std::lower_bound(begin, end, staticID,
                            [](const talos_rt_static_fanout_entry &entry,
                               uint32_t id) { return entry.static_state < id; });
-      last = first;
+      auto last = first;
       while (last != end && last->static_state == staticID)
         ++last;
+      lo = first - begin;
+      hi = last - begin;
     }
-    lo = first - begin;
-    hi = last - begin;
     if (hi - lo >= 8 && staticID < context->nativeFanoutWindows.size() &&
         bitWidth && bitWidth <= UINT64_MAX - publishedLow) {
       const auto &source = context->nativeFanoutWindows[staticID];
@@ -2138,23 +2130,22 @@ static bool publishStaticAOTSignalTransitionUnlockedImpl(
       if (!(projectedEdges & (1u << entry->edge)))
         continue;
     uint32_t slot = entry->actor_slot;
-    if (slot >= context->nativeScheduleActors.size()) {
-      context->schedulerStatus = TALOS_RT_INVALID_LIFECYCLE;
-      return true;
-    }
+    // Installation validates the immutable actor, kernel and ingress-word
+    // indices. The actor bound to a slot and its armed wait remain live.
+    auto *actor = context->nativeScheduleActors[slot];
+    if (!actor)
+      continue;
     if (context->nativePeriodicPublicationHandle == stableID &&
         slot < context->nativePeriodicAliasContinuations.size() &&
         context->nativePeriodicAliasContinuations[slot] == entry->continuation)
       continue;
     if constexpr (UseClockIngress) {
       if (coalescePending &&
-          (entry->reserved & ingressMask) == ingressValue &&
-          entry->kernel < context->nativeSchedulePlan->clock_kernel_count) {
+          (entry->reserved & ingressMask) == ingressValue) {
         const auto &kernel =
             context->nativeSchedulePlan->clock_kernels[entry->kernel];
-        if (entry->merged_bit / 64 < kernel.ingress_word_count &&
-            (kernel.ingress_mask[entry->merged_bit / 64] &
-             (uint64_t{1} << (entry->merged_bit % 64))))
+        if (kernel.ingress_mask[entry->merged_bit / 64] &
+            (uint64_t{1} << (entry->merged_bit % 64)))
           continue;
       }
     }
@@ -2172,9 +2163,6 @@ static bool publishStaticAOTSignalTransitionUnlockedImpl(
       if (!matched)
         continue;
     }
-    talos_rt_process_instance_v1 *actor = context->nativeScheduleActors[slot];
-    if (!actor)
-      continue;
     size_t index = context->nativeScheduleActorIndices[slot];
     if (index >= context->scheduledProcesses.size()) {
       context->schedulerStatus = TALOS_RT_INVALID_LIFECYCLE;
@@ -2206,14 +2194,7 @@ static bool publishStaticAOTSignalTransitionUnlockedImpl(
     }
     if constexpr (UseClockIngress) {
       if ((entry->reserved & ingressMask) == ingressValue) {
-        if (entry->kernel >= context->nativeSchedulePlan->clock_kernel_count ||
-            entry->merged_bit / 64 >=
-                context->nativeSchedulePlan->clock_kernels[entry->kernel]
-                    .ingress_word_count) {
-          context->schedulerStatus = TALOS_RT_INVALID_CONTINUATION;
-          return true;
-        }
-        talos_rt_native_clock_kernel kernel =
+        const auto &kernel =
             context->nativeSchedulePlan->clock_kernels[entry->kernel];
         if (context->saif)
           talos_rt_saif_wake_actor_unlocked(context, entry->actor_slot);

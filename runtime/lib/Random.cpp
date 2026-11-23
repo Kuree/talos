@@ -1,5 +1,6 @@
 //===- Random.cpp - Deterministic hierarchical PCG streams ---------------===//
 
+#include "ProcessObservers.h"
 #include "RuntimeInternal.h"
 
 #include <cmath>
@@ -115,9 +116,8 @@ talos_rt_random_active_state_unlocked(talos_rt_context *context) {
   uint64_t token = context->activeLogicalProcessToken;
   if ((token & TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG) != 0) {
     token &= ~TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG;
-    for (ScheduledProcess &process : context->scheduledProcesses)
-      if (process.token == token)
-        return &process.random;
+    if (auto *process = findScheduledProcess(context, token))
+      return &process->random;
   } else {
     for (ScheduledDesignTask &task : context->scheduledDesignTasks)
       if (task.id == token)
@@ -135,9 +135,9 @@ processRandomStateUnlocked(talos_rt_context *context, uint64_t logicalProcess) {
     return context->activeRandom;
   if ((logicalProcess & TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG) != 0) {
     uint64_t token = logicalProcess & ~TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG;
-    for (ScheduledProcess &process : context->scheduledProcesses)
-      if (process.token == token && process.instance)
-        return &process.random;
+    if (auto *process = findScheduledProcess(context, token);
+        process && process->instance)
+      return &process->random;
     return context->terminatedNativeProcesses.randomState(token);
   }
   for (ScheduledDesignTask &task : context->scheduledDesignTasks)

@@ -466,6 +466,14 @@ bool talos_rt_evaluate_native_bound_observer_unlocked(
 
 ScheduledProcess *findScheduledProcess(talos_rt_context *context,
                                        uint64_t token) {
+  // Native tokens start at one and new processes append to the scheduler.
+  // A rollback or compaction can break that correspondence. The token in
+  // the candidate slot is authoritative before using the positional lookup.
+  if (token - 1 < context->scheduledProcesses.size()) {
+    auto &process = context->scheduledProcesses[token - 1];
+    if (process.token == token)
+      return &process;
+  }
   if (auto indexed = context->scheduledProcessIndices.find(token);
       indexed != context->scheduledProcessIndices.end() &&
       indexed->second < context->scheduledProcesses.size()) {

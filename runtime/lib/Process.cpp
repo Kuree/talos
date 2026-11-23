@@ -2363,10 +2363,23 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_add_planned(
 [[gnu::noinline]] static uint32_t
 resolvePendingPrioritySignal(talos_rt_context *context) {
   ContextMutexLock lock(context);
+  auto triggered = [](const ScheduledProcess &process) {
+    return process.instance && process.prioritySignal &&
+           (process.signalTriggered ||
+            (process.signalLatch && process.signalLatch->triggered));
+  };
+  // A computed wake enters the poll set at publication. Test those likely
+  // waiters first. A parked or deoptimized calendar can have an incomplete
+  // index, so only the full scan below may clear the priority latch.
+  for (uint64_t token : context->nativePollCandidates) {
+    auto it = context->scheduledProcessIndices.find(token);
+    if (it != context->scheduledProcessIndices.end() &&
+        it->second < context->scheduledProcesses.size() &&
+        triggered(context->scheduledProcesses[it->second]))
+      return 1;
+  }
   for (const ScheduledProcess &process : context->scheduledProcesses)
-    if (process.instance && process.prioritySignal &&
-        (process.signalTriggered ||
-         (process.signalLatch && process.signalLatch->triggered)))
+    if (triggered(process))
       return 1;
   for (const ScheduledDesignTask &task : context->scheduledDesignTasks)
     if (!task.terminated && task.prioritySignal && task.signalTriggered)
