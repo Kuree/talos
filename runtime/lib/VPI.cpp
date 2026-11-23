@@ -7878,6 +7878,70 @@ bool decodeValue(__vpiHandle *handle, const s_vpi_value *source, uint64_t width,
   }
 }
 
+// Resolves the executable identity of a named event handle (IEEE 1800-2023
+// 37.27). The caller holds a context transaction and a managed scope.
+bool namedEventID(__vpiHandle *source, uint64_t &eventID) {
+  eventID = UINT64_MAX;
+  VPIClassMemberBinding member{};
+  auto status = talos_rt_cached_vpi_class_member(source->owner->context,
+                                                 source->cursor, &member);
+  if (status != TALOS_RT_OK && status != TALOS_RT_EOF) {
+    setError(source->owner, "named event VPI class binding is invalid",
+             vpiInternal);
+    return false;
+  }
+  const bool staticEvent = status == TALOS_RT_OK && member.isStatic &&
+                           member.staticEventID != UINT64_MAX;
+  if (staticEvent) {
+    eventID = member.staticEventID;
+  } else {
+    status = source->form == VPIObjectForm::Design
+                 ? talos_rt_cached_vpi_event_binding(source->owner->context,
+                                                     source->cursor, &eventID)
+                 : TALOS_RT_EOF;
+    if (status != TALOS_RT_OK && status != TALOS_RT_EOF) {
+      setError(source->owner, "named event VPI executable binding is invalid",
+               vpiInternal);
+      return false;
+    }
+    if (status == TALOS_RT_EOF && source->form == VPIObjectForm::Design) {
+      VPIEventCellBinding cell{};
+      status = talos_rt_cached_vpi_event_array_cell(source->owner->context,
+                                                    source->cursor, &cell);
+      if (status == TALOS_RT_OK) {
+        uint64_t unknown = 0;
+        status =
+            talos_rt_read_design_slice(source->owner->context, cell.storage,
+                                       cell.bitOffset, 64, &eventID, &unknown);
+        if (status != TALOS_RT_OK || unknown) {
+          setError(source->owner, "named event VPI array cell read failed",
+                   vpiInternal);
+          return false;
+        }
+      } else if (status != TALOS_RT_EOF) {
+        setError(source->owner, "named event VPI array binding is invalid",
+                 vpiInternal);
+        return false;
+      }
+    }
+    if (status == TALOS_RT_EOF) {
+      // Event variables and selected class event fields hold the executable
+      // event identity. Source-only declaration anchors carry no such value.
+      talos_rt_design_info_v1 info{};
+      if (!infoFor(source, info))
+        return false;
+      if (info.type_offset == 0 || info.bit_width != 64) {
+        setError(source->owner, "named event has no executable event binding",
+                 vpiNotice);
+        return false;
+      }
+      if (!readManagedStateWord(source, eventID))
+        return false;
+    }
+  }
+  return true;
+}
+
 vpiHandle namedEventWaitingProcesses(__vpiHandle *source) {
   if (source->classDefinitionOrigin) {
     setError(source->owner, "a lexical named event has no readable actual",
@@ -7892,65 +7956,10 @@ vpiHandle namedEventWaitingProcesses(__vpiHandle *source) {
     return nullptr;
   }
   uint64_t eventID = UINT64_MAX;
-  VPIClassMemberBinding member{};
-  auto status = talos_rt_cached_vpi_class_member(source->owner->context,
-                                                 source->cursor, &member);
-  if (status != TALOS_RT_OK && status != TALOS_RT_EOF) {
-    setError(source->owner, "named event VPI class binding is invalid",
-             vpiInternal);
+  if (!namedEventID(source, eventID))
     return nullptr;
-  }
-  const bool staticEvent = status == TALOS_RT_OK && member.isStatic &&
-                           member.staticEventID != UINT64_MAX;
-  if (staticEvent) {
-    eventID = member.staticEventID;
-  } else {
-    status = source->form == VPIObjectForm::Design
-                 ? talos_rt_cached_vpi_event_binding(source->owner->context,
-                                                     source->cursor, &eventID)
-                 : TALOS_RT_EOF;
-    if (status != TALOS_RT_OK && status != TALOS_RT_EOF) {
-      setError(source->owner, "named event VPI executable binding is invalid",
-               vpiInternal);
-      return nullptr;
-    }
-    if (status == TALOS_RT_EOF && source->form == VPIObjectForm::Design) {
-      VPIEventCellBinding cell{};
-      status = talos_rt_cached_vpi_event_array_cell(source->owner->context,
-                                                    source->cursor, &cell);
-      if (status == TALOS_RT_OK) {
-        uint64_t unknown = 0;
-        status =
-            talos_rt_read_design_slice(source->owner->context, cell.storage,
-                                       cell.bitOffset, 64, &eventID, &unknown);
-        if (status != TALOS_RT_OK || unknown) {
-          setError(source->owner, "named event VPI array cell read failed",
-                   vpiInternal);
-          return nullptr;
-        }
-      } else if (status != TALOS_RT_EOF) {
-        setError(source->owner, "named event VPI array binding is invalid",
-                 vpiInternal);
-        return nullptr;
-      }
-    }
-    if (status == TALOS_RT_EOF) {
-      // Event variables and selected class event fields hold the executable
-      // event identity. Source-only declaration anchors carry no such value.
-      talos_rt_design_info_v1 info{};
-      if (!infoFor(source, info))
-        return nullptr;
-      if (info.type_offset == 0 || info.bit_width != 64) {
-        setError(source->owner, "named event has no executable event binding",
-                 vpiNotice);
-        return nullptr;
-      }
-      if (!readManagedStateWord(source, eventID))
-        return nullptr;
-    }
-  }
   std::vector<uint64_t> processes;
-  status =
+  auto status =
       talos_rt_named_event_waiters(source->owner->context, eventID, processes);
   if (status != TALOS_RT_OK) {
     setError(source->owner, "named event VPI waiter query failed",
@@ -7958,6 +7967,42 @@ vpiHandle namedEventWaitingProcesses(__vpiHandle *source) {
     return nullptr;
   }
   return makeThreadIterator(source, vpiWaitingProcesses, std::move(processes));
+}
+
+// IEEE 1800-2023 38.34: a put to a named event toggles it like `->`; the
+// value is ignored and value_p may be NULL.
+vpiHandle triggerNamedEvent(__vpiHandle *handle, PLI_INT32 flags) {
+  if (flags != vpiNoDelay) {
+    setError(handle->owner, "delayed VPI writes are not supported");
+    return nullptr;
+  }
+  talos_rt_context *context = handle->owner->context;
+  {
+    // IEEE 1800-2023 38.36.2: no value writes or events in the read-only
+    // (Postponed) synchronization; refuse it as a VPI error rather than
+    // failing the scheduler.
+    ContextMutexLock lock(context);
+    if (context->activeExecRegion == TALOS_RT_REGION_POSTPONED) {
+      setError(handle->owner,
+               "VPI writes are forbidden in the Postponed region");
+      return nullptr;
+    }
+  }
+  uint64_t eventID = UINT64_MAX;
+  {
+    ContextTransaction transaction(context);
+    ManagedExecutionScope managed(context);
+    if (managed.getStatus() != TALOS_RT_OK || !managed.getLane()) {
+      setError(handle->owner, "named event VPI write cannot enter GC scope",
+               vpiInternal);
+      return nullptr;
+    }
+    if (!namedEventID(handle, eventID))
+      return nullptr;
+  }
+  talos_rt_v1_scheduler_event_after(context, eventID, /*nonblocking=*/0,
+                                    /*delay=*/0);
+  return nullptr;
 }
 
 vpiHandle virtualInterfaceActual(__vpiHandle *source) {
@@ -15113,6 +15158,8 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_put_value(vpiHandle opaque,
     setError(handle->owner, "class member has no writable actual", vpiNotice);
     return nullptr;
   }
+  if (vpiTypeForHandle(handle) == vpiNamedEvent)
+    return triggerNamedEvent(handle, flags);
   if (handle->form == VPIObjectForm::Indexed) {
     setError(handle->owner,
              "indexed VPI writes require selected-state scheduling support");

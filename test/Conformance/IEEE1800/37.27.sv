@@ -1,6 +1,5 @@
 // CLAUSE: Named events: a named event reports name, lifetime, allocation and waiting processes, vpi_put_value triggers it, and event arrays give indexed elements
-// XFAIL: *
-// vpi_put_value on a named event does not toggle it (38.34): a NULL value_p reports "VPI write value is null" and vpiIntVal segfaults.
+// SINCE: 0.3.0
 // RUN: %clang -c -fPIC %S/Inputs/37.27/probe.c -I%resource_dir/include -o %t.helper0.o
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top --vpi=full -O3 --execution-tier=%tier %s %t.helper0.o -o %t.exe
 // RUN: %t.exe
