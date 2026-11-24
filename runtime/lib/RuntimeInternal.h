@@ -3214,20 +3214,6 @@ struct talos_rt_context {
   // every ordinary publication to the corresponding canonical design bit.
   std::vector<uint64_t> forceMask;
   std::vector<uint64_t> assignMask;
-  // IEEE 1800-2023 38.34: a value put on a net with drivers or port aliases
-  // holds until one of the net's drivers changes value; then the whole net is
-  // resolved again. Each held alias root records the put's group (the roots
-  // one put wrote) and its drivers' contributions (value | unknown << 1) at
-  // the put. `netDepositMask` marks held design bits so they stay off the
-  // clean native path while held.
-  struct NetDepositHold {
-    uint64_t group = 0;
-    std::vector<uint8_t> drivers;
-  };
-  std::unordered_map<uint64_t, NetDepositHold> netDepositHolds;
-  std::unordered_map<uint64_t, std::vector<uint64_t>> netDepositGroups;
-  uint64_t nextNetDepositGroup = 0;
-  std::vector<uint64_t> netDepositMask;
   CanonicalPlane assignValue;
   CanonicalPlane assignUnknown;
   // A nonzero entry identifies the detached evaluator that owns a dynamic
@@ -3425,6 +3411,21 @@ struct talos_rt_context {
   const uint64_t *vcdAliasRows = nullptr;
   uint64_t vcdAliasCount = 0;
   CanonicalPlane staticNBAStorage;
+  // IEEE 1800-2023 38.34: a value put on a net with drivers or port aliases
+  // holds until one of the net's drivers changes value; then the whole net is
+  // resolved again. Each held alias root records the put's group (the roots
+  // one put wrote) and its drivers' contributions (value | unknown << 1) at
+  // the put. `netDepositMask` marks held design bits so they stay off the
+  // clean native path while held. Kept last so that adding them moved no
+  // hot field.
+  struct NetDepositHold {
+    uint64_t group = 0;
+    std::vector<uint8_t> drivers;
+  };
+  std::unordered_map<uint64_t, NetDepositHold> netDepositHolds;
+  std::unordered_map<uint64_t, std::vector<uint64_t>> netDepositGroups;
+  uint64_t nextNetDepositGroup = 0;
+  std::vector<uint64_t> netDepositMask;
   talos_rt_context();
   ~talos_rt_context();
 };

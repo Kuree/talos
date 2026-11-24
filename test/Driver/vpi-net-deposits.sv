@@ -6,17 +6,18 @@
 // RUN:   --execution-tier=bytecode %s %t.o -o %t.bytecode.exe
 // RUN: %t.bytecode.exe | FileCheck %s --match-full-lines
 
-// IEEE 1800-2023 38.34: vpi_put_value on a net "overrides the resolved value
-// of the net. This value shall remain in effect until one of the drivers of
-// the net changes value. When this occurs, the net shall be re-evaluated using
-// the normal resolution algorithms." The put reaches the net's readers and
-// every port-connected name, a driver re-evaluated to its old value changes
-// nothing, and a changed driver re-evaluates the whole net, including bits
-// that another driver drives. A force overrides a put, and its release
-// returns the drivers' value (10.6.2). A put is not a driver: from_child
-// takes c.in + 1 once the child's assignment sees the put on w (ab), then
-// holds a put on one of its bits (af). Native code and bytecode resolve nets
-// on different paths, so both run. A net with a delay is refused.
+// IEEE 1800-2023 38.34: vpi_put_value on a net "overrides the resolved value of
+// the net. This value shall remain in effect until one of the drivers of the
+// net changes value. When this occurs, the net shall be re-evaluated using the
+// normal resolution algorithms." The put reaches the net's readers and every
+// port-connected name, a driver re-evaluated to its old value changes nothing,
+// and a changed driver re-evaluates the whole net, including bits that another
+// driver drives. A force overrides a put, and its release returns the drivers'
+// value (10.6.2); releasing a net that is not forced leaves a put in place
+// (38.34: release frees "from a forced value"). A put is not a driver:
+// from_child takes c.in + 1 once the child's assignment sees the put on w (ab),
+// then holds a put on one of its bits (af). Native code and bytecode resolve
+// nets on different paths, so both run. A net with a delay is refused.
 module child(input wire [7:0] in, output wire [7:0] out);
   assign out = in + 8'd1;
 endmodule
@@ -65,6 +66,8 @@ module top;
     #0 $display("drivers changed: w=%h reader=%h from_child=%h masked=%b halves=%h wired=%h",
                 w, reader, from_child, masked, halves, wired);
     put("top.w", "01010101");
+    release_net("top.w");
+    #0 $display("release without force: w=%h", w);
     force_net("top.w", "11110000");
     #1 $display("forced: w=%h", w);
     release_net("top.w");
@@ -78,5 +81,6 @@ endmodule
 // CHECK-NEXT: bit put: from_child=af
 // CHECK-NEXT: held: w=aa q=aa from_child=af masked=1x0z1x0z halves=99 wired=33
 // CHECK-NEXT: drivers changed: w=31 reader=31 from_child=32 masked=1x0z1x0z halves=25 wired=xx
+// CHECK-NEXT: release without force: w=55
 // CHECK-NEXT: forced: w=f0
 // CHECK-NEXT: released: w=31

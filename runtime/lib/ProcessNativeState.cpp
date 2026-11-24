@@ -1675,9 +1675,8 @@ static talos_rt_status nativeStateStorePlane(
     // overridden bits), take whole words (two-tier B5).
     if (globalOffset >= 0 && static_cast<uint64_t>(globalOffset) <= rootWidth &&
         bitWidth <= rootWidth - static_cast<uint64_t>(globalOffset) &&
-        (!canonical ||
-         (bitWidth > 64 && context->forceMask.empty() &&
-          context->assignMask.empty() && context->netDepositHolds.empty()))) {
+        (!canonical || (bitWidth > 64 && context->forceMask.empty() &&
+                        context->assignMask.empty()))) {
       uint64_t destination = rootOffset + static_cast<uint64_t>(globalOffset);
       for (uint64_t bit = 0; bit < bitWidth; bit += 64) {
         uint64_t width = std::min<uint64_t>(64, bitWidth - bit);
@@ -1707,11 +1706,13 @@ static talos_rt_status nativeStateStorePlane(
       uint64_t destination = rootOffset + static_cast<uint64_t>(globalOffset);
       bool masked =
           (!context->forceMask.empty() &&
-           loadPackedBits(context->forceMask, destination, bitWidth) != 0) ||
+           (loadPackedBits(context->forceMask, destination, bitWidth) != 0 ||
+            // A held VPI put (38.34) allocates forceMask too.
+            (!context->netDepositHolds.empty() &&
+             loadPackedBits(context->netDepositMask, destination, bitWidth) !=
+                 0))) ||
           (!context->assignMask.empty() &&
-           loadPackedBits(context->assignMask, destination, bitWidth) != 0) ||
-          (!context->netDepositHolds.empty() &&
-           loadPackedBits(context->netDepositMask, destination, bitWidth) != 0);
+           loadPackedBits(context->assignMask, destination, bitWidth) != 0);
       uint64_t next = 0;
       for (uint64_t byte = 0; byte != byteCount; ++byte)
         next |= uint64_t{value[byte]} << (byte * 8);
@@ -1767,8 +1768,9 @@ static talos_rt_status nativeStateStorePlane(
       // IEEE 1800-2023 38.34: a held put on a net also keeps its bits until
       // a driver of the net changes.
       if (canonical && (forced || assigned ||
-                        talos_rt_net_deposit_holds_unlocked(
-                            context, destination, storeBegin, storeEnd)))
+                        (!context->netDepositHolds.empty() &&
+                         talos_rt_net_deposit_holds_unlocked(
+                             context, destination, storeBegin, storeEnd))))
         continue;
       bool old =
           canonical

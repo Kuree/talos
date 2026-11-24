@@ -103,11 +103,9 @@ bool nativeAOTTransientBoundaryClean(const talos_rt_context *context) {
     return std::any_of(mask.begin(), mask.end(),
                        [](uint64_t word) { return word != 0; });
   };
-  // A held VPI put on a net (IEEE 1800-2023 38.34) overrides the drivers like
-  // a force until one of them changes.
-  return !anyOverride(context->forceMask) &&
-         !anyOverride(context->assignMask) &&
-         !anyOverride(context->netDepositMask);
+  // A held VPI put on a net (IEEE 1800-2023 38.34) marks its roots
+  // persistently dirty, which the check above already sees.
+  return !anyOverride(context->forceMask) && !anyOverride(context->assignMask);
 }
 
 bool nativePeriodicAOTEnvironmentClean(const talos_rt_context *context) {
@@ -704,7 +702,7 @@ void refreshNativeStaticSpecializationFastUnlocked(talos_rt_context *context) {
         !context->observerForcesCanonicalPlane && context->observerDepth == 0 &&
         !context->vpiObservationDemand && !context->observedWriters &&
         !any(context->forceMask) && !any(context->assignMask) &&
-        !any(context->netDepositMask);
+        context->netDepositHolds.empty();
     return;
   }
   const talos_rt_native_schedule_plan *plan =
@@ -4368,11 +4366,15 @@ void talos_rt_unobserve_writers_unlocked(talos_rt_context *context,
     observed.rootUsers.erase(it);
     if (context->nativeScopedWrite)
       continue;
+    // An override keeps the root dirty: a force, a procedural assign, or a
+    // held VPI put on a net (IEEE 1800-2023 38.34).
     const auto *state = findNativeStaticState(context, root);
     if (!state ||
         nativeMaskIntersectsRange(context->forceMask, state->bitOffset,
                                   state->bitWidth) ||
         nativeMaskIntersectsRange(context->assignMask, state->bitOffset,
+                                  state->bitWidth) ||
+        nativeMaskIntersectsRange(context->netDepositMask, state->bitOffset,
                                   state->bitWidth))
       continue;
     if (context->nativeSchedulePlan && !context->nativeScheduleDeoptimized &&

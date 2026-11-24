@@ -2928,8 +2928,7 @@ bool publishNativeSignalTransitionUnlocked(
       (!context->nativeSchedulePlan || context->stateValue.shared()) &&
       talos_rt_transition_unconsumed_unlocked(context, bitOffset);
   if (unconsumed && context->forceMask.empty() && context->assignMask.empty() &&
-      context->netDepositHolds.empty() && context->stateValue.shared() &&
-      context->stateUnknown.shared()) {
+      context->stateValue.shared() && context->stateUnknown.shared()) {
     // With an outstanding clock handoff, the full walk would ignore every
     // matching direct bit already set by this generated publication. Walk
     // the residual rows alone. An observer, override or a different
@@ -2990,10 +2989,9 @@ bool publishNativeSignalTransitionUnlocked(
   std::vector<uint8_t> overriddenNegedge;
   // A held VPI put on a net (IEEE 1800-2023 38.34) overrides its drivers the
   // same way until one changes; the native store that saw the change has
-  // already ended the hold.
+  // already ended the hold. A put allocates forceMask, so this path runs.
   if (!establishesOverride &&
-      (!context->forceMask.empty() || !context->assignMask.empty() ||
-       !context->netDepositHolds.empty())) {
+      (!context->forceMask.empty() || !context->assignMask.empty())) {
     size_t byteCount = static_cast<size_t>((bitWidth + 7) / 8);
     for (uint64_t bit = 0; bit != bitWidth; ++bit) {
       uint64_t absolute = 0;
@@ -3335,8 +3333,7 @@ bool staticTransitionTakesOrdinaryPath(const talos_rt_context *context) {
 bool publicationBatchCanMerge(const talos_rt_context *context) {
   return context->schedulerStatus == TALOS_RT_OK &&
          context->forceMask.empty() && context->assignMask.empty() &&
-         context->netDepositHolds.empty() && !context->coverage &&
-         !context->saif && !context->clockOccurrences &&
+         !context->coverage && !context->saif && !context->clockOccurrences &&
          !context->exactEvents && !context->vpiObservationDemand &&
          !context->observerDepth && !context->observerForcesCanonicalPlane &&
          context->signalValueSnapshots.empty() &&

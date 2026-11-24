@@ -2569,6 +2569,11 @@ talos_rt_status talos_rt_deposit_design_nets(talos_rt_context *context,
     endDepositHolds(*cache, context, roots, replaced);
     if (context->netDepositMask.empty())
       context->netDepositMask.assign(context->stateValue.size(), 0);
+    // Like a force, a held put needs the override-aware store and publication
+    // paths, which run once forceMask exists; a design without overrides
+    // never pays for the check.
+    if (context->forceMask.empty())
+      context->forceMask.assign(context->stateValue.size(), 0);
     const bool useNativeState = context->nativeStateValue != nullptr;
     const uint64_t group = ++context->nextNetDepositGroup;
     std::vector<NetPublication> publications;
@@ -2713,19 +2718,27 @@ talos_rt_status talos_rt_release_design_nets(talos_rt_context *context,
     std::sort(roots.begin(), roots.end());
     roots.erase(std::unique(roots.begin(), roots.end()), roots.end());
     std::vector<uint64_t> releasedBits;
+    std::vector<uint64_t> resolvedRoots;
     for (uint64_t root : roots) {
       auto members = cache->members.find(root);
       if (members == cache->members.end())
         return TALOS_RT_INVALID_HANDLE;
+      bool forced = false;
       for (uint64_t destination : members->second)
         if (destination / 64 < context->forceMask.size()) {
-          context->forceMask[destination / 64] &=
-              ~(uint64_t{1} << (destination % 64));
+          uint64_t mask = uint64_t{1} << (destination % 64);
+          forced |= (context->forceMask[destination / 64] & mask) != 0;
+          context->forceMask[destination / 64] &= ~mask;
           releasedBits.push_back(destination);
         }
+      // IEEE 1800-2023 38.34: a release frees a net from a forced value; a
+      // put held on a net that was not forced stays until a driver changes.
+      if (forced || !context->netDepositHolds.count(root))
+        resolvedRoots.push_back(root);
     }
     bool changed = false;
-    if (!resolveNetRoots(*cache, context, std::move(roots), changed,
+    if (!resolvedRoots.empty() &&
+        !resolveNetRoots(*cache, context, std::move(resolvedRoots), changed,
                          /*useNativeState=*/context->nativeStateValue !=
                                  nullptr ||
                              !cache->passComponents.empty()))
