@@ -11116,6 +11116,82 @@ TEST(Scheduler, LocalEvalNBACapturesUseTheCommonBarrier) {
   talos_rt_v1_context_destroy(context);
 }
 
+TEST(Scheduler, PreNBARankedWaitersSurviveIndexCollisionsAndCompaction) {
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  schedulerOrder.clear();
+  schedulerWaitKind = TALOS_RT_SUSPEND_CHANGE;
+  schedulerWaitEdge = TALOS_RT_WAIT_EDGE_CHANGE;
+  schedulerWaitWidth = 1;
+  enum : uint64_t { active = 411, retire, observe, idle, first };
+  std::vector<std::unique_ptr<SchedulerFixture>> fixtures;
+  for (uint64_t id = 1; id <= 32; ++id) {
+    fixtures.push_back(std::make_unique<SchedulerFixture>(id));
+    fixtures.back()->descriptor.native_execute =
+        +[](talos_rt_process_instance_v1 *instance) -> talos_rt_status {
+      uint64_t id = instance->descriptor->handle.id;
+      if (id == 1)
+        schedulerWaitHandle = first;
+      else if (id == 16 || id == 18)
+        schedulerWaitHandle = active;
+      else if (id == 17)
+        schedulerWaitHandle = observe;
+      else
+        schedulerWaitHandle = id < 16 ? retire : idle;
+      auto status = schedulerExecute(instance);
+      if (status == TALOS_RT_OK && id == 17 && !instance->continuation)
+        instance->action->flags |=
+            TALOS_RT_ACTION_RESUME_REGION(TALOS_RT_REGION_OBSERVED);
+      return status;
+    };
+    ASSERT_EQ(talos_rt_v1_scheduler_add_ranked(
+                  context, makeSchedulerInstance(*fixtures.back()), 0,
+                  id == 1 ? 1 : 4),
+              TALOS_RT_OK);
+  }
+  ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+  ASSERT_TRUE(schedulerOrder.empty());
+  talos_rt_native_schedule_plan plan{};
+  plan.flags = TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL;
+  context->nativeSchedulePlan = &plan;
+  context->stateValue.bind(nullptr, 0);
+  auto drainBeforeNBA = [&] {
+    ContextMutexLock lock(context);
+    NativeAOTContextScope aot(context);
+    NativeAOTMutexScope mutex(context);
+    uint32_t region = UINT32_MAX;
+    auto status = talos_rt_v1_scheduler_prepare_eval_nba_local(
+        context, TALOS_RT_REGION_NBA, &region);
+    EXPECT_EQ(region, TALOS_RT_REGION_NBA);
+    return status;
+  };
+
+  // Warm the index for the Observed waiter. Compaction moves it to an
+  // earlier slot, and leaves its old index inside the live table.
+  talos_rt_v1_scheduler_signal(context, observe, 1, TALOS_RT_SIGNAL_CHANGE);
+  ASSERT_EQ(drainBeforeNBA(), TALOS_RT_OK);
+  EXPECT_TRUE(schedulerOrder.empty());
+  ASSERT_EQ(context->scheduledProcesses.size(), 32u);
+  ASSERT_EQ(context->scheduledProcesses[16].token, 17u);
+  talos_rt_v1_scheduler_signal(context, retire, 1, TALOS_RT_SIGNAL_CHANGE);
+  ASSERT_EQ(drainBeforeNBA(), TALOS_RT_OK);
+  ASSERT_EQ(schedulerOrder.size(), 14u);
+  ASSERT_GT(context->scheduledProcesses.size(), 16u);
+  EXPECT_NE(context->scheduledProcesses[16].token, 17u);
+  schedulerOrder.clear();
+
+  // Tokens 1 and 17 share a lookup slot. IEEE 1800-2023 4.4.2 and 4.5
+  // keep the Observed activation behind NBA. Within Active, Talos orders
+  // process 1 first by rank and breaks the tie between 16 and 18 by age.
+  talos_rt_v1_scheduler_signal(context, active, 1, TALOS_RT_SIGNAL_CHANGE);
+  talos_rt_v1_scheduler_signal(context, first, 1, TALOS_RT_SIGNAL_CHANGE);
+  ASSERT_EQ(drainBeforeNBA(), TALOS_RT_OK);
+  EXPECT_EQ(schedulerOrder, (std::vector<uint64_t>{1, 16, 18}));
+  ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+  EXPECT_EQ(schedulerOrder, (std::vector<uint64_t>{1, 16, 18, 17}));
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(Scheduler, EvalNBACutRetainsCanonicalNBAs) {
   talos_rt_context *context = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);

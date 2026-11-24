@@ -1017,13 +1017,6 @@ bool talos_rt_evaluate_covergroup_managed_clock_events_unlocked(
                                      0, 0, token, 1, nullptr);
 }
 
-bool talos_rt_covergroup_strobes_pending_unlocked(
-    const talos_rt_context *context) {
-  if (!context || !context->exactEvents)
-    return false;
-  return context->exactEvents->pendingStrobeCount != 0;
-}
-
 talos_rt_status
 talos_rt_drain_covergroup_strobes_unlocked(talos_rt_context *context) {
   if (!context || !context->exactEvents)

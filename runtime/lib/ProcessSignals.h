@@ -25,8 +25,6 @@ bool talos_rt_same_clock_occurrence_wait_unlocked(
     uint64_t waiterToken, bool designWaiter);
 void talos_rt_unregister_exact_events_unlocked(talos_rt_context *context,
                                                uint64_t logicalToken);
-bool talos_rt_covergroup_strobes_pending_unlocked(
-    const talos_rt_context *context);
 talos_rt_status
 talos_rt_drain_covergroup_strobes_unlocked(talos_rt_context *context);
 

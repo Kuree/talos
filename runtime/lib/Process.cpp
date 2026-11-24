@@ -2842,6 +2842,12 @@ talos_rt_v1_scheduler_install_aot(talos_rt_context *context,
 #else
       context->nativeScheduleAVX2 = false;
 #endif
+      // The root admits the initial AOT actors one at a time. Its slot
+      // inventory lets both token maps grow once for that admission.
+      if (plan->actor_capacity > context->scheduledProcesses.size()) {
+        context->scheduledProcessIndices.reserve(plan->actor_capacity);
+        context->scheduledProcessTokens.reserve(plan->actor_capacity);
+      }
       context->nativeScheduleActors.assign(plan->actor_capacity, nullptr);
       context->nativeScheduleActorTokens.assign(plan->actor_capacity, 0);
       context->nativeScheduleActorIndices.assign(plan->actor_capacity,
@@ -4329,22 +4335,8 @@ uint32_t nextDueNBABarrierRegionUnlocked(const talos_rt_context *context,
 
 uint32_t nativeAOTContinuationRank(const ScheduledProcess &scheduled,
                                    uint32_t continuation) {
-  if (scheduled.continuationRanks.empty())
-    return scheduled.scheduleRank;
-  if (scheduled.continuationRanks.size() == 1) {
-    if (scheduled.continuationRanks.front().first == continuation)
-      return scheduled.continuationRanks.front().second;
-    return scheduled.scheduleRank;
-  }
-  auto rank = std::lower_bound(
-      scheduled.continuationRanks.begin(), scheduled.continuationRanks.end(),
-      continuation,
-      [](const std::pair<uint32_t, uint32_t> &entry, uint32_t continuation) {
-        return entry.first < continuation;
-      });
-  if (rank != scheduled.continuationRanks.end() && rank->first == continuation)
-    return rank->second;
-  return scheduled.scheduleRank;
+  return lookupNativeContinuation(scheduled.continuationRanks, continuation,
+                                  scheduled.scheduleRank);
 }
 
 void updateNativeAOTContinuationRank(ScheduledProcess &scheduled,
@@ -4685,8 +4677,11 @@ static bool coordinatorAwaitsRuntime(const talos_rt_context *context) {
 /// loop in runScheduler must perform: every queue, latch and pending flag it
 /// consults before it selects an activation, region or barrier. A new source
 /// of runtime work must be listed here too.
-static bool otherRuntimeSlotWorkPending(const talos_rt_context *context,
-                                        bool beforeNBA = false) {
+/// Inline at the interleaving and barrier checks so the fixed event region
+/// and the caller's already-tested queues simplify the admission test.
+__attribute__((always_inline)) static inline bool
+otherRuntimeSlotWorkPending(const talos_rt_context *context,
+                            bool beforeNBA = false) {
   const ReplaceableEventFeatureState *replaceable =
       talos_rt_replaceable_events(context);
   // A pre-NBA drain only runs earlier regions. The generic queue can also
@@ -4732,14 +4727,48 @@ static bool otherRuntimeSlotWorkPending(const talos_rt_context *context,
          talos_rt_generated_deferred_reports_pending(context);
 }
 
+// The same few processes wake and re-arm repeatedly at an Active cut. Keep
+// only indices across activations; a token check resolves collisions, stale
+// slots after compaction, and newly admitted processes through the token map.
+static size_t rankedProcessIndex(talos_rt_context *context, uint64_t token) {
+  auto &hints = context->nativeRankIndexHints;
+  size_t &index = hints[token % hints.size()];
+  const auto &processes = context->scheduledProcesses;
+  if (index < processes.size() && processes[index].token == token)
+    return index;
+  auto found = context->scheduledProcessIndices.find(token);
+  if (found == context->scheduledProcessIndices.end() ||
+      found->second >= processes.size() ||
+      processes[found->second].token != token)
+    return SIZE_MAX;
+  index = found->second;
+  return index;
+}
+
+static bool signalWaitAfterNBACut(const ScheduledProcess &process) {
+  return process.instance && process.started && !process.urgent &&
+         process.queuedRegion >= TALOS_RT_REGION_NBA &&
+         (process.suspendKind == TALOS_RT_SUSPEND_EDGE ||
+          process.suspendKind == TALOS_RT_SUSPEND_CHANGE);
+}
+
 // The Active/Inactive drain stops at NBA even when a signal has already
 // woken an Observed process. Its edge stays latched for the subsequent
 // Observed region. Urgent starts and waits whose readiness has side effects
 // still go through normal selection (IEEE 1800-2023 4.4.2, 4.5).
 static bool nativeSignalWaitsAfterNBACut(talos_rt_context *context) {
   const auto &candidates = context->nativePollCandidates;
-  if (candidates.empty())
+  // For small cohorts the live wait is cheaper to check than maintaining
+  // an epoch-stamped snapshot. Large Observed cohorts retain the batch proof.
+  if (candidates.size() <= context->nativeRankIndexHints.size()) {
+    for (uint64_t token : candidates) {
+      size_t index = rankedProcessIndex(context, token);
+      if (index == SIZE_MAX ||
+          !signalWaitAfterNBACut(context->scheduledProcesses[index]))
+        return false;
+    }
     return true;
+  }
   auto &previous = context->observedWaitsAtNBACut;
   bool quiescent = !context->activeNativeProcess &&
                    !context->designTaskExecuting &&
@@ -4763,10 +4792,7 @@ static bool nativeSignalWaitsAfterNBACut(talos_rt_context *context) {
         processes[found->second].token != token)
       return false;
     const auto &process = processes[found->second];
-    if (!process.instance || !process.started || process.urgent ||
-        process.queuedRegion < TALOS_RT_REGION_NBA ||
-        (process.suspendKind != TALOS_RT_SUSPEND_EDGE &&
-         process.suspendKind != TALOS_RT_SUSPEND_CHANGE))
+    if (!signalWaitAfterNBACut(process))
       return false;
     observedOnly &= process.homeRegion == TALOS_RT_REGION_OBSERVED &&
                     process.queuedRegion == TALOS_RT_REGION_OBSERVED &&
@@ -4994,12 +5020,17 @@ static bool unchangedSharedPackedNBA(const talos_rt_context *context,
 
 constexpr size_t maxLinearNativeCandidates = 16;
 
+static auto nativeRankAndSequence(const ScheduledProcess &process, bool signal) {
+  bool priority = signal && process.prioritySignal;
+  return std::pair{priority ? 0u : talos_rt_scheduler_rank(process),
+                   priority ? uint64_t{0} : process.insertionSequence};
+}
+
 static auto nativeOrderingKey(const talos_rt_context &context,
                               const ScheduledProcess &candidate, bool signal) {
-  bool priority = signal && candidate.prioritySignal;
+  auto [rank, sequence] = nativeRankAndSequence(candidate, signal);
   return std::tuple{schedulerOrderingRegion(context, candidate, signal),
-                    priority ? 0u : talos_rt_scheduler_rank(candidate),
-                    priority ? uint64_t{0} : candidate.insertionSequence};
+                    rank, sequence};
 }
 
 // A generated pre-NBA call drains only Active and Inactive (1800-2023
@@ -5020,25 +5051,25 @@ selectBeforeNBACutUnlocked(talos_rt_context *context) {
       context->nativePollCandidates.size() > maxLinearNativeCandidates ||
       !context->stateValue.shared() ||
       otherRuntimeSlotWorkPending(context, true) ||
-      talos_rt_unstarted_actor_region(context, 0) != UINT32_MAX)
+      (!context->unstartedActiveActors.empty() &&
+       talos_rt_unstarted_actor_region(context, 0) != UINT32_MAX))
     return std::nullopt;
   const auto *plan = context->nativeSchedulePlan;
-  if (plan->state_bit_count && !importNativeStatePlanesUnlocked(
+  if (plan->state_bit_count && !validNativeStatePlanesUnlocked(
                                    context, plan->state_value,
                                    plan->state_unknown, plan->state_bit_count))
     return std::nullopt;
   size_t selected = SIZE_MAX;
-  auto best =
-      std::tuple{uint32_t{TALOS_RT_REGION_NBA}, uint32_t{0}, uint64_t{0}};
+  uint32_t bestRegion = TALOS_RT_REGION_NBA;
+  bool bestSignal = false;
+  const auto &processes = context->scheduledProcesses;
   for (uint64_t token : context->nativePollCandidates) {
-    auto found = context->scheduledProcessIndices.find(token);
-    if (found == context->scheduledProcessIndices.end() ||
-        found->second >= context->scheduledProcesses.size())
+    size_t index = rankedProcessIndex(context, token);
+    if (index == SIZE_MAX)
       return std::nullopt;
-    const auto &process = context->scheduledProcesses[found->second];
-    if (!process.instance || process.token != token || !process.started ||
-        process.phase || process.postObserved || process.explicitlySuspended ||
-        process.urgent ||
+    const auto &process = processes[index];
+    if (!process.instance || !process.started || process.phase ||
+        process.postObserved || process.explicitlySuspended || process.urgent ||
         (process.suspendKind != TALOS_RT_SUSPEND_CHANGE &&
          process.suspendKind != TALOS_RT_SUSPEND_EDGE &&
          process.suspendKind != TALOS_RT_SUSPEND_NONE &&
@@ -5052,16 +5083,21 @@ selectBeforeNBACutUnlocked(talos_rt_context *context) {
       continue;
     bool signal = process.signalTriggered ||
                   (process.signalLatch && process.signalLatch->triggered);
-    auto key = nativeOrderingKey(*context, process, signal);
-    if (key < best) {
-      best = key;
-      selected = found->second;
-    }
+    // Rank and insertion sequence only break ties within the earliest
+    // runnable region. Preserve the first member on equal keys (4.4, 4.5).
+    uint32_t region = schedulerOrderingRegion(*context, process, signal);
+    if (region >= TALOS_RT_REGION_NBA || region > bestRegion ||
+        (region == bestRegion &&
+         nativeRankAndSequence(process, signal) >=
+             nativeRankAndSequence(processes[selected], bestSignal)))
+      continue;
+    bestRegion = region;
+    bestSignal = signal;
+    selected = index;
   }
   if (selected != SIZE_MAX &&
-      (std::get<0>(best) != TALOS_RT_REGION_ACTIVE ||
-       context->scheduledProcesses[selected].suspendedAOTActorSlot !=
-           UINT32_MAX))
+      (bestRegion != TALOS_RT_REGION_ACTIVE ||
+       processes[selected].suspendedAOTActorSlot != UINT32_MAX))
     return std::nullopt;
   return selected;
 }
@@ -5131,17 +5167,20 @@ executeSelectedAOT(talos_rt_context *context, size_t selectedIndex,
   talos_rt_status status = executeNativeAOTNodeUnlocked(context, slot);
   if (status != TALOS_RT_OK)
     return status;
-  auto indexed = context->scheduledProcessIndices.find(selectedToken);
-  if (indexed != context->scheduledProcessIndices.end() &&
-      indexed->second < context->scheduledProcesses.size()) {
-    const ScheduledProcess &resumed =
-        context->scheduledProcesses[indexed->second];
-    if (resumed.instance && !indexedBlocked(*context, resumed))
-      context->nativePollCandidates.insert(resumed.token);
-    else
-      context->nativePollCandidates.erase(resumed.token);
-    readmitNativeCandidate(resumed, indexed->second, wasCached);
+  // The actor may have retired or compacted the process table. Reuse the
+  // selected slot while it still names this token, and reindex otherwise.
+  if (selectedIndex >= context->scheduledProcesses.size() ||
+      context->scheduledProcesses[selectedIndex].token != selectedToken) {
+    selectedIndex = rankedProcessIndex(context, selectedToken);
+    if (selectedIndex == SIZE_MAX)
+      return TALOS_RT_OK;
   }
+  const auto &resumed = context->scheduledProcesses[selectedIndex];
+  if (resumed.instance && !indexedBlocked(*context, resumed))
+    context->nativePollCandidates.insert(resumed.token);
+  else
+    context->nativePollCandidates.erase(resumed.token);
+  readmitNativeCandidate(resumed, selectedIndex, wasCached);
   return TALOS_RT_OK;
 }
 

@@ -2840,6 +2840,9 @@ struct talos_rt_context {
   std::unordered_multimap<talos_rt_process_instance_v1 *, uint64_t>
       scheduledProcessTokens;
   talos::runtime::FlatU64Set nativePollCandidates;
+  // Index hints for the small ready sets ranked at a generated NBA cut.
+  // Compaction or retirement can move a token. Validate it on every hit.
+  std::array<size_t, 16> nativeRankIndexHints{};
   // Final procedures become candidates on entry to the final phase (9.2.3).
   talos::runtime::FlatU64Set dormantNativeFinals;
   // A repeated cut on one edge can see exactly the same parked Observed
@@ -4458,6 +4461,11 @@ inline bool talos_rt_resume_flushes_deferred_reports(uint32_t suspendKind) {
 inline bool
 talos_rt_generated_deferred_reports_pending(const talos_rt_context *context) {
   return context->generatedDeferredReports != 0;
+}
+inline bool
+talos_rt_covergroup_strobes_pending_unlocked(const talos_rt_context *context) {
+  return context && context->exactEvents &&
+         context->exactEvents->pendingStrobeCount != 0;
 }
 bool talos_rt_cancel_deferred_immediate_assertion_unlocked(
     talos_rt_context *context, uint64_t assertion, uint64_t logicalProcess = 0);

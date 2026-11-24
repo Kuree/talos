@@ -14,11 +14,13 @@
 #include "ProcessContext.h"
 #include "RuntimeInternal.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 constexpr uint64_t kNativeLogicalProcessTag =
@@ -283,6 +285,22 @@ void indexScheduledProcessDelayUnlocked(talos_rt_context *context,
 std::optional<uint64_t>
 nextScheduledProcessDelayUnlocked(talos_rt_context *context);
 void rebuildNativeSchedulerIndexUnlocked(talos_rt_context *context);
+// Both installed tables are sorted by continuation. A looping process often
+// returns to its final event control after an Active handoff (1800-2023 4.7).
+inline uint32_t lookupNativeContinuation(
+    const std::vector<std::pair<uint32_t, uint32_t>> &entries,
+    uint32_t continuation, uint32_t fallback) {
+  if (entries.empty())
+    return fallback;
+  if (entries.back().first == continuation)
+    return entries.back().second;
+  auto found = std::lower_bound(
+      entries.begin(), entries.end(), continuation,
+      [](const auto &entry, uint32_t value) { return entry.first < value; });
+  return found != entries.end() && found->first == continuation ? found->second
+                                                                : fallback;
+}
+
 uint32_t nativeAOTContinuationRank(const ScheduledProcess &scheduled,
                                    uint32_t continuation);
 void updateNativeAOTContinuationRank(ScheduledProcess &scheduled,

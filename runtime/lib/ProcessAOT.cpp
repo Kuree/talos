@@ -769,13 +769,8 @@ uint32_t findNativeAOTNodeUnlocked(const talos_rt_context *context,
                                    uint32_t actorSlot, uint32_t continuation) {
   if (actorSlot >= context->nativeScheduleActorNodes.size())
     return UINT32_MAX;
-  const auto &entries = context->nativeScheduleActorNodes[actorSlot];
-  auto found =
-      std::lower_bound(entries.begin(), entries.end(), continuation,
-                       [](const std::pair<uint32_t, uint32_t> &entry,
-                          uint32_t value) { return entry.first < value; });
-  return found != entries.end() && found->first == continuation ? found->second
-                                                                : UINT32_MAX;
+  return lookupNativeContinuation(context->nativeScheduleActorNodes[actorSlot],
+                                  continuation, UINT32_MAX);
 }
 
 bool markNativeAOTActorReadyUnlocked(talos_rt_context *context,
@@ -1397,15 +1392,19 @@ talos_rt_status executeAOTNode(talos_rt_context *context, uint32_t actorSlot,
                               &action);
   talos_rt_status status = TALOS_RT_OK;
   auto ownsStaticSignalWait = [&](uint32_t continuation) {
-    if (!canUseStaticAOTFanout(context))
+    const auto *plan = context->nativeSchedulePlan;
+    if (!plan)
       return false;
-    if ((context->nativeSchedulePlan->flags &
-         TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL) == 0)
-      return true;
-    uint32_t node = findNativeAOTNodeUnlocked(context, actorSlot, continuation);
-    return node < context->nativeScheduleNodeIngress.size() &&
-           context->nativeScheduleNodeIngress[node] <
-               context->nativeScheduleFanoutEntryCount;
+    // A continuation without an installed ingress keeps its runtime wait,
+    // regardless of whether other waits in this calendar use static fanout.
+    if (plan->flags & TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL) {
+      uint32_t node = findNativeAOTNodeUnlocked(context, actorSlot, continuation);
+      if (node >= context->nativeScheduleNodeIngress.size() ||
+          context->nativeScheduleNodeIngress[node] >=
+              context->nativeScheduleFanoutEntryCount)
+        return false;
+    }
+    return canUseStaticAOTFanout(context);
   };
   generatedActions &= tier == TALOS_RT_TIER_NATIVE;
   if (tier == TALOS_RT_TIER_BYTECODE) {
