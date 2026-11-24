@@ -240,6 +240,7 @@ struct NativeRankedGroupChunk {
   unsigned proofRegionCount = 0;
 };
 struct NativeRankedGroupPlan {
+  llvm::BitVector speculativeOwners;
   llvm::SmallVector<NativeRankedGroupChunk> chunks;
   llvm::SmallVector<schedule::GroupProofDependencyAttr> domains;
 };

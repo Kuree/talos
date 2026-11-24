@@ -62,14 +62,16 @@ connectedRankEnds(ArrayRef<const NativeRankedEvalNode *> members) {
 // neighbors in the same ingress word and external event domain. Sharing a
 // downstream consumer alone gives no evidence of common input activity.
 static SmallVector<unsigned>
-forwardRankEnds(ArrayRef<const NativeRankedEvalNode *> members) {
+forwardRankEnds(ArrayRef<const NativeRankedEvalNode *> members,
+                const llvm::BitVector &speculativeOwners) {
   SmallVector<unsigned> ends;
   DenseMap<uint32_t, unsigned> predecessors;
   unsigned begin = 0;
   for (auto [i, member] : llvm::enumerate(members)) {
     // Repeatable producers in the same external event domain can share a
     // two-state entry even when neither feeds the other directly.
-    bool shared = i && member->repeatable && members[i - 1]->repeatable &&
+    bool shared = i && speculativeOwners.test(member->owner) &&
+                  speculativeOwners.test(members[i - 1]->owner) &&
                   member->activityDomain == members[i - 1]->activityDomain &&
                   member->owner / 64 == members[i - 1]->owner / 64;
     if (i && !shared && predecessors.lookup(member->owner) <= begin) {
@@ -134,6 +136,12 @@ planNativeRankedGroups(ModuleOp module, const NativeEvalCoordinatorPlan &plan,
     });
     return safe ? cost : 0;
   };
+  result.speculativeOwners.resize(plan.fragments.size());
+  const bool canonicalTwoState = native::has<native::TwoState>(module);
+  // A repeatability proof permits extra computation whenever a peer wakes.
+  // Bound its cost in the canonical two-state sweep. Large datapaths still
+  // share the ranked helper, which tests their own ready bits before entry.
+  constexpr uint64_t maxSpeculativeBodyCost = 192;
   uint64_t budget = schedule::getMaxInlineOperations(module);
   SmallVector<NativeRankedEvalNode> members;
   uint64_t cost = 0;
@@ -352,6 +360,9 @@ planNativeRankedGroups(ModuleOp module, const NativeEvalCoordinatorPlan &plan,
     uint64_t weight = four + two + 64;
     if (weight > budget - cost)
       emit();
+    if (node.repeatable &&
+        (!canonicalTwoState || four <= maxSpeculativeBodyCost))
+      result.speculativeOwners.set(node.owner);
     members.push_back(node);
     cost += weight;
     if (plan.guardSubscriberActors && ++segmentMembers == 32) {
@@ -677,8 +688,9 @@ FailureOr<SmallVector<std::string>> materializeNativeRankedGroups(
     // helper owns entry. A candidate forwards state and readiness between
     // members, so a lone member, even a repeatable one, gets none.
     bool canonicalTwoState = native::has<native::TwoState>(module);
-    SmallVector<unsigned> ends = canonicalTwoState ? forwardRankEnds(members)
-                                                   : connectedRankEnds(members);
+    SmallVector<unsigned> ends =
+        canonicalTwoState ? forwardRankEnds(members, groups.speculativeOwners)
+                          : connectedRankEnds(members);
     // In a model already compiled in two-state, the original group already
     // predicates and inlines independent members. Only build a second body
     // when it can forward computation down an actual chain.
@@ -750,7 +762,7 @@ FailureOr<SmallVector<std::string>> materializeNativeRankedGroups(
             !canonicalTwoState || !plan.nbaTaintWordCount ||
             llvm::none_of(plan.nbaTaintMasks[owner],
                           [](uint64_t mask) { return mask != 0; });
-        if (node->repeatable && speculate && captureFree) {
+        if (groups.speculativeOwners.test(owner) && speculate && captureFree) {
           active = llvmConstant(builder, loc, builder.getI1Type(), 1);
           unconditional.push_back(owner);
           ++unconditionalMembers;
