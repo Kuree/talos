@@ -17,3 +17,25 @@ void probe(void) {
            vpi_get(vpiPacked, type), vpi_get(vpiTagged, type));
   }
 }
+
+static void printHex(const char *name) {
+  s_vpi_value value = {vpiHexStrVal, {0}};
+  vpi_get_value(vpi_handle_by_name((PLI_BYTE8 *)name, NULL), &value);
+  printf(" %s=%s", name, value.value.str);
+}
+
+// IEEE 1800-2023 7.3.1: each member of a soft packed union is right-justified,
+// and writing a member leaves the bits above it unchanged.
+void soft_layout(void) {
+  printf("soft:");
+  printHex("top.so");
+  printHex("top.so.a");
+  printHex("top.so.b");
+  s_vpi_value value = {vpiIntVal, {0}};
+  value.value.integer = 0xf;
+  vpi_put_value(vpi_handle_by_name((PLI_BYTE8 *)"top.so.a", NULL), &value,
+                NULL, vpiNoDelay);
+  printf("\nafter a=f:");
+  printHex("top.so");
+  printf("\n");
+}

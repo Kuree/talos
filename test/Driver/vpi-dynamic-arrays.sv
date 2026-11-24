@@ -5,18 +5,22 @@
 
 // Module-level dynamic arrays, queues and associative arrays build with VPI.
 // IEEE 1800-2023 37.17: vpiArrayType names the kind of array, and vpiSize
-// (detail 9) is the number of variables in the array, here the current
-// element count; an array with more than one dimension that includes such a
-// dimension reports no size yet. vpiIsMemory is TRUE for a one-dimensional
-// array (Annex K vpi_user.h). The leftmost range of a dynamic array or queue
-// is [0:n-1] for its current size (dyn [0:2] then [0:4], q [0:1], fa[1]
-// [0:3]); an associative range, and the range of an empty or unallocated
-// array (empty, q after delete, nested), is empty: size 0 and no bounds
-// (37.17 detail 6, 37.22 details 1-2). Two answers are Talos choices the LRM
-// leaves open: fa's second range, a dynamic dimension that each element sizes
-// separately, is empty, and a range handle obtained before a resize reports
-// the new size. Elements of these arrays live in a managed container and are
-// not reachable through VPI yet.
+// (detail 9) is the number of variables in the array, here the current element
+// count; an array with more than one dimension that includes such a dimension
+// reports no size yet. vpiIsMemory is TRUE for a one-dimensional array (Annex K
+// vpi_user.h). The leftmost range of a dynamic array or queue is [0:n-1] for
+// its current size (dyn [0:2] then [0:4], q [0:1], fa[1] [0:3]); an associative
+// range, and the range of an empty or unallocated array (empty, q after delete,
+// nested), is empty: size 0 and no bounds (37.17 detail 6, 37.22 details 1-2).
+// Two answers are Talos choices the LRM leaves open: fa's second range, a
+// dynamic dimension that each element sizes separately, is empty, and a range
+// handle obtained before a resize reports the new size. arr1 is 37.22 detail
+// 1's example: once sized, its first range is [0:1] and its associative range
+// is empty, and every range of its typespec is empty. A dynamic array in a
+// structure (top.s.d) or a class object (top.c.d, a name through a class handle
+// that Talos accepts as an extension) reports the same ranges. Elements of
+// these arrays live in a managed container and are not reachable through VPI
+// yet.
 module top;
   int fixed [3];
   int dyn [];
@@ -25,6 +29,12 @@ module top;
   int aa [string];
   int nested [$][2];
   int fa [2][];
+  int arr1 [][string];
+  struct { int d []; } s;
+  class C;
+    int d [];
+  endclass
+  C c = new;
   import "DPI-C" context function void probe();
   import "DPI-C" context function void resized();
   initial begin
@@ -33,6 +43,10 @@ module top;
     q.push_back(8);
     aa["k"] = 2;
     fa[1] = new[4];
+    arr1 = new[2];
+    arr1[0]["hello"] = 5;
+    s.d = new[2];
+    c.d = new[3];
     #1 probe();
     dyn = new[5];
     q.delete();
@@ -105,6 +119,14 @@ endmodule
 // CHECK-NEXT:   by_index: ok
 // CHECK-NEXT:   [1] type=vpiRegArray arraytype=2 size=4
 // CHECK-NEXT:   bounds [0:3] ranges [0:3]/4
+// CHECK-NEXT: top.arr1
+// CHECK-NEXT:   bounds [0:1] ranges [0:1]/2 []/0
+// CHECK-NEXT: top.arr1 typespec
+// CHECK-NEXT:   bounds [] ranges []/0 []/0
+// CHECK-NEXT: top.s.d
+// CHECK-NEXT:   bounds [0:1] ranges [0:1]/2
+// CHECK-NEXT: top.c.d
+// CHECK-NEXT:   bounds [0:2] ranges [0:2]/3
 // CHECK-NEXT: top.dyn size=5
 // CHECK-NEXT:   bounds [0:4] ranges [0:4]/5
 // CHECK-NEXT: top.q size=0

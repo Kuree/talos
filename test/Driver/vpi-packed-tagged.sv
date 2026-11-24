@@ -7,7 +7,8 @@
 // answer vpiPacked and vpiTagged. Only a tagged union is tagged (7.3.2); a
 // struct answers FALSE rather than vpiUndefined, which C would read as TRUE.
 // A soft union is packed and untagged (7.3.1; A.2.2.1 union [ soft | tagged ]);
-// a design with one used to stop at startup under VPI.
+// a design with one used to stop at startup under VPI. Its members are
+// right-justified, and writing one leaves the bits above it unchanged (7.3.1).
 module top;
   typedef struct { int a; byte b; } unpacked_t;
   typedef struct packed { logic [1:0] hi; logic [3:0] lo; } packed_t;
@@ -23,7 +24,11 @@ module top;
   wire tagged_net_t tn;
   soft_t so = 8'h12;
   import "DPI-C" context function void probe();
-  initial #1 probe();
+  import "DPI-C" context function void soft_layout();
+  initial begin
+    #1 probe();
+    soft_layout();
+  end
 endmodule
 
 // CHECK: top.su vpiStructVar packed=0 tagged=0 vpiStructTypespec packed=0 tagged=0
@@ -33,3 +38,5 @@ endmodule
 // CHECK-NEXT: top.sn vpiStructNet packed=1 tagged=0 vpiStructTypespec packed=1 tagged=0
 // CHECK-NEXT: top.tn vpiUnionNet packed=1 tagged=1 vpiUnionTypespec packed=1 tagged=1
 // CHECK-NEXT: top.so vpiUnionVar packed=1 tagged=0 vpiUnionTypespec packed=1 tagged=0
+// CHECK-NEXT: soft: top.so=12 top.so.a=2 top.so.b=12
+// CHECK-NEXT: after a=f: top.so=1f

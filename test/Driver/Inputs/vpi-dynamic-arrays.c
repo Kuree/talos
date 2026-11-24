@@ -61,6 +61,15 @@ static void describeContainer(const char *name, const char *elementName) {
   report("by_name");
 }
 
+// Prints the ranges of a named object, and of its typespec when asked.
+static void printNamedRanges(const char *name, int typespec) {
+  vpiHandle object = vpi_handle_by_name((PLI_BYTE8 *)name, NULL);
+  if (typespec)
+    object = vpi_handle(vpiTypespec, object);
+  printf("%s%s\n", name, typespec ? " typespec" : "");
+  printRanges(object);
+}
+
 // The first range of dyn, kept until resized() runs.
 static vpiHandle dynRange;
 
@@ -79,6 +88,10 @@ void probe(void) {
   printf("  [1] type=%s arraytype=%d size=%d\n", vpi_get_str(vpiType, second),
          vpi_get(vpiArrayType, second), vpi_get(vpiSize, second));
   printRanges(second);
+  printNamedRanges("top.arr1", 0);
+  printNamedRanges("top.arr1", 1);
+  printNamedRanges("top.s.d", 0);
+  printNamedRanges("top.c.d", 0);
 }
 
 // After the design resizes its arrays, sizes and ranges follow the new
