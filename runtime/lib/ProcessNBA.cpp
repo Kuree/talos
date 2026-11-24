@@ -4771,9 +4771,8 @@ commitWholeChangeBank(talos_rt_context *context, uint32_t index,
     uint64_t low = first * 64;
     uint64_t bits = std::min<uint64_t>(end * 64, state->bitWidth) - low;
     const uint8_t *changes = reinterpret_cast<const uint8_t *>(mask + first);
-    if (!publishStaticAOTSignalTransitionUnlocked(
-            context, nativeHandleOffset(handle, low), bits, changes, nullptr,
-            nullptr, nullptr))
+    if (!publishWholeNBAChangeUnlocked(context, root.static_state, low, bits,
+                                       changes))
       return TALOS_RT_INVALID_LIFECYCLE;
     if (++context->schedulerEpoch == 0)
       context->schedulerEpoch = 1;

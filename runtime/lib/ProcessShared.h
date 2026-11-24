@@ -416,6 +416,9 @@ private:
 size_t replayPackedFIFOPrefixUnlocked(talos_rt_context *context,
                                       uint32_t region, size_t start,
                                       bool &changed, bool &knownnessChange);
+bool publishWholeNBAChangeUnlocked(talos_rt_context *context, uint32_t staticID,
+                                   uint64_t low, uint64_t width,
+                                   const uint8_t *changed);
 bool publishStaticAOTSignalTransitionUnlocked(
     talos_rt_context *context, uint64_t stableID, uint64_t bitWidth,
     const uint8_t *changed, const uint8_t *posedge, const uint8_t *negedge,

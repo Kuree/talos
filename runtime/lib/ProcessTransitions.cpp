@@ -2004,23 +2004,17 @@ transitionEnvelope(uint64_t width, const uint8_t *changed,
           last + (64 - __builtin_clzll(lastWord))};
 }
 
+// The common walk consumes an already-resolved static object and range. A
+// whole NBA bank can name bits beyond the signed offset field of a handle.
 template <bool UseClockIngress, bool ProjectedClock = false,
-          bool UnobservedFanout = false, bool ProjectedSignal = false>
-static bool publishStaticAOTSignalTransitionUnlockedImpl(
-    talos_rt_context *context, uint64_t stableID, uint64_t bitWidth,
-    const uint8_t *changed, const uint8_t *posedge, const uint8_t *negedge,
-    uint64_t *outSequence, bool indexedExternalDeposit) {
-  if (outSequence)
-    *outSequence = 0;
-  if (!UnobservedFanout &&
-      !(indexedExternalDeposit ? canUseIndexedExternalAOTFanout(context)
-                               : canUseStaticAOTFanout(context)))
-    return false;
-  uint32_t staticID = 0;
-  int64_t staticOffset = 0;
-  if (!decodeNativeStatic(stableID, staticID, staticOffset) || staticOffset < 0)
-    return false;
-  uint64_t publishedLow = static_cast<uint64_t>(staticOffset);
+          bool UnobservedFanout = false, bool ProjectedSignal = false,
+          bool ScalarChange = false>
+static bool
+publishStaticFanoutRange(talos_rt_context *context, uint64_t stableID,
+                         uint32_t staticID, uint64_t publishedLow,
+                         uint64_t bitWidth, const uint8_t *changed,
+                         const uint8_t *posedge, const uint8_t *negedge,
+                         uint64_t *outSequence, uint64_t scalarChanged = 0) {
   if (!context->nativeScheduleFanoutEntryCount)
     return true;
   const talos_rt_static_fanout_entry *begin =
@@ -2108,6 +2102,8 @@ static bool publishStaticAOTSignalTransitionUnlockedImpl(
         !context->vpiObservationDemand &&
         !talos_rt_has_conditional_signal_waiters(context) &&
         !staticSignalObjectWatched(context, staticID)));
+  bool periodicAlias = stableID != UINT64_MAX &&
+                       context->nativePeriodicPublicationHandle == stableID;
   bool published = false;
   for (uint64_t position = lo; position != hi; ++position) {
     const auto *entry =
@@ -2123,16 +2119,6 @@ static bool publishStaticAOTSignalTransitionUnlockedImpl(
     if constexpr (ProjectedClock)
       if (!(projectedEdges & (1u << entry->edge)))
         continue;
-    uint32_t slot = entry->actor_slot;
-    // Installation validates the immutable actor, kernel and ingress-word
-    // indices. The actor bound to a slot and its armed wait remain live.
-    auto *actor = context->nativeScheduleActors[slot];
-    if (!actor)
-      continue;
-    if (context->nativePeriodicPublicationHandle == stableID &&
-        slot < context->nativePeriodicAliasContinuations.size() &&
-        context->nativePeriodicAliasContinuations[slot] == entry->continuation)
-      continue;
     if constexpr (UseClockIngress) {
       if (coalescePending &&
           (entry->reserved & ingressMask) == ingressValue) {
@@ -2143,7 +2129,20 @@ static bool publishStaticAOTSignalTransitionUnlockedImpl(
           continue;
       }
     }
-    if constexpr (!ProjectedClock) {
+    uint32_t slot = entry->actor_slot;
+    // Installation validates the immutable actor, kernel and ingress-word
+    // indices. The actor bound to a slot and its armed wait remain live.
+    auto *actor = context->nativeScheduleActors[slot];
+    if (!actor)
+      continue;
+    if (periodicAlias && slot < context->nativePeriodicAliasContinuations.size() &&
+        context->nativePeriodicAliasContinuations[slot] == entry->continuation)
+      continue;
+    if constexpr (ScalarChange) {
+      if (!((scalarChanged >> (overlapLow - publishedLow)) &
+            packedWidthMask(overlapHigh - overlapLow)))
+        continue;
+    } else if constexpr (!ProjectedClock) {
       uint64_t offset = overlapLow - publishedLow;
       uint64_t width = overlapHigh - overlapLow;
       bool matched = entry->edge == TALOS_RT_WAIT_EDGE_CHANGE
@@ -2218,6 +2217,39 @@ static bool publishStaticAOTSignalTransitionUnlockedImpl(
         std::min(context->nativeScheduleMinimumActivatedNode, node);
   }
   return true;
+}
+
+template <bool UseClockIngress, bool ProjectedClock = false,
+          bool UnobservedFanout = false, bool ProjectedSignal = false>
+static inline __attribute__((always_inline)) bool
+publishStaticAOTSignalTransitionUnlockedImpl(
+    talos_rt_context *context, uint64_t stableID, uint64_t bitWidth,
+    const uint8_t *changed, const uint8_t *posedge, const uint8_t *negedge,
+    uint64_t *outSequence, bool indexedExternalDeposit) {
+  if (outSequence)
+    *outSequence = 0;
+  if (!UnobservedFanout &&
+      !(indexedExternalDeposit ? canUseIndexedExternalAOTFanout(context)
+                               : canUseStaticAOTFanout(context)))
+    return false;
+  uint32_t id;
+  int64_t low;
+  if (!decodeNativeStatic(stableID, id, low) || low < 0)
+    return false;
+  return publishStaticFanoutRange<UseClockIngress, ProjectedClock,
+                                  UnobservedFanout, ProjectedSignal>(
+      context, stableID, id, low, bitWidth, changed, posedge, negedge,
+      outSequence);
+}
+
+static bool publishUnobservedChangeWord(talos_rt_context *context,
+                                        uint64_t handle, uint32_t id,
+                                        uint64_t low, uint64_t width,
+                                        uint64_t changed) {
+  assert(width && width <= 64);
+  return publishStaticFanoutRange<true, false, true, false, true>(
+      context, handle, id, low, width, nullptr, nullptr, nullptr, nullptr,
+      changed);
 }
 
 bool publishStaticAOTSignalTransitionUnlocked(
@@ -2873,6 +2905,28 @@ size_t replayPackedFIFOPrefixUnlocked(talos_rt_context *context,
   if (context->signalDiagnosticsEnabled)
     context->packedFIFOReplays += index - start;
   return index;
+}
+
+// The committing whole-bank caller has checked the live calendar, both
+// shared planes, the absence of observers and this root's CHANGE-only rows.
+bool publishWholeNBAChangeUnlocked(talos_rt_context *context, uint32_t id,
+                                   uint64_t low, uint64_t width,
+                                   const uint8_t *delta) {
+  // No periodic sub-handle can match an unrepresentable offset. Deliver the
+  // exact numeric range to every ordinary CHANGE row regardless of its offset.
+  uint64_t handle = low <= INT32_MAX
+                        ? talos_rt_stable_handle_encode(
+                              TALOS_RT_STABLE_HANDLE_STATIC, id, low)
+                        : UINT64_MAX;
+  if (context->nativeSchedulePlan->clock_kernel_count) {
+    if (width <= 64)
+      return publishUnobservedChangeWord(context, handle, id, low, width,
+                                         loadPackedBytes(delta, 0, width));
+    return publishStaticFanoutRange<true, false, true>(
+        context, handle, id, low, width, delta, nullptr, nullptr, nullptr);
+  }
+  return publishStaticFanoutRange<false, false, true>(
+      context, handle, id, low, width, delta, nullptr, nullptr, nullptr);
 }
 
 bool publishNativeSignalTransitionUnlocked(
@@ -4206,19 +4260,36 @@ static void schedulerStaticTransition(talos_rt_context *context,
     // feed runtime-owned waiters. Preserve the source-order canonical image
     // and notify those subscribers before the calendar can advance (9.4.2,
     // 31.9.1). Native subscribers route to idempotent generated ingress.
-    uint64_t oldZero = ~oldUnknown & ~oldValue & widthMask;
-    uint64_t oldOne = ~oldUnknown & oldValue & widthMask;
-    uint64_t newZero = ~newUnknown & ~newValue & widthMask;
-    uint64_t newOne = ~newUnknown & newValue & widthMask;
-    uint64_t posedge =
-        ((oldZero & ~newZero) | (oldUnknown & newOne)) & widthMask;
-    uint64_t negedge =
-        ((oldOne & ~newOne) | (oldUnknown & newZero)) & widthMask;
-    // The bounded values already are the scalar transition the ordinary ABI
-    // would reconstruct from byte arrays. Keep its complete publication,
-    // including occurrence callbacks, canonical-plane updates and overrides.
     ContextTransaction transaction(context);
     TALOS_RT_TRY {
+      if (lockedCalendar && !generatedIngress && plan->clock_kernel_count &&
+          staticState < context->nativeScheduleStaticStateFanoutEdges.size() &&
+          !(context->nativeScheduleStaticStateFanoutEdges[staticState] &
+            ~(1u << TALOS_RT_WAIT_EDGE_CHANGE)) &&
+          context->stateValue.shared() && context->stateUnknown.shared() &&
+          context->forceMask.empty() && context->assignMask.empty() &&
+          staticOnlyPublicationEnvironment(context) &&
+          !staticSignalObjectWatched(context, staticState) &&
+          cleanCalendarOwnsFanout<true>(context)) {
+        // Only CHANGE rows can consume this publication. The store already
+        // updated both shared planes. Use its scalar delta for the fanout walk.
+        publishUnobservedChangeWord(context, handle, staticState, lowBit,
+                                    bitWidth, changed);
+        if (++context->schedulerEpoch == 0)
+          context->schedulerEpoch = 1;
+        return;
+      }
+      uint64_t oldZero = ~oldUnknown & ~oldValue & widthMask;
+      uint64_t oldOne = ~oldUnknown & oldValue & widthMask;
+      uint64_t newZero = ~newUnknown & ~newValue & widthMask;
+      uint64_t newOne = ~newUnknown & newValue & widthMask;
+      uint64_t posedge =
+          ((oldZero & ~newZero) | (oldUnknown & newOne)) & widthMask;
+      uint64_t negedge =
+          ((oldOne & ~newOne) | (oldUnknown & newZero)) & widthMask;
+      // The bounded values already are the scalar transition the ordinary ABI
+      // would reconstruct from byte arrays. Keep its complete publication,
+      // including occurrence callbacks, canonical-plane updates and overrides.
       (void)publishNativeSignalTransitionUnlocked(
           context, handle, bitWidth,
           reinterpret_cast<const uint8_t *>(&changed),

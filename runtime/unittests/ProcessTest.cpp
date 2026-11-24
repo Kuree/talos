@@ -10337,6 +10337,34 @@ TEST(RuntimeInternals, PrivateNBABatchPreservesMasksTransientsAndFallback) {
   talos_rt_v1_context_destroy(context);
 }
 
+struct StartedOwnerRecord {
+  talos_rt_wait_record_v1 header;
+  talos_rt_wait_entry_v1 entry;
+};
+
+StartedOwnerRecord startedOwnerChangeRecord() {
+  return {{TALOS_RT_VERSION, TALOS_RT_SUSPEND_CHANGE, 0, 1, 0, 0},
+          {schedulerWaitHandle, TALOS_RT_WAIT_EDGE_CHANGE, 1}};
+}
+
+talos_rt_process_spawn_plan_v1
+startedOwnerPlan(SchedulerFixture &fixture,
+                 const talos_rt_process_start_v1 &start) {
+  return {&fixture.descriptor,
+          0,
+          nullptr,
+          nullptr,
+          nullptr,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          TALOS_RT_SPAWN_STARTED,
+          &start};
+}
+
 TEST(Scheduler, WholeChangeBankPreservesOverwrittenLanesAndColdWriters) {
   AOTTestState state;
   std::array<uint64_t, 4> values{}, unknowns{};
@@ -10350,9 +10378,15 @@ TEST(Scheduler, WholeChangeBankPreservesOverwrittenLanesAndColdWriters) {
   uint64_t ready = 0, active = 1;
   talos_rt_native_clock_kernel clock{
       1, TALOS_RT_WAIT_EDGE_POSEDGE, 0, 1, &ready, 1, 0, &active};
-  talos_rt_native_merged_fragment member{
-      0, 1, 0, 0, 0, 0, generatedCheckpointCallback};
-  auto plan = makeAOTPlan(state, 1);
+  const talos_rt_native_merged_fragment members[] = {
+      {0, 1, 0, 0, 1, 0, generatedCheckpointCallback},
+      {1, 1, 0, 1, 3, 0, generatedCheckpointCallback}};
+  const talos_rt_static_fanout_entry fanout[] = {
+      {2, 0, 1, TALOS_RT_WAIT_EDGE_CHANGE, 1, TALOS_RT_FANOUT_DIRECT, 65, 1, 0,
+       0},
+      {2, 1, 1, TALOS_RT_WAIT_EDGE_CHANGE, 3, TALOS_RT_FANOUT_DIRECT, 127, 1, 0,
+       1}};
+  auto plan = makeAOTPlan(state, 2);
   plan.flags = TALOS_RT_NATIVE_SCHEDULE_EVAL |
                TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL |
                TALOS_RT_NATIVE_SCHEDULE_STATIC_EVAL_ISLAND |
@@ -10371,8 +10405,10 @@ TEST(Scheduler, WholeChangeBankPreservesOverwrittenLanesAndColdWriters) {
   plan.nba_root_count = 1;
   plan.clock_kernels = &clock;
   plan.clock_kernel_count = 1;
-  plan.merged_fragments = &member;
-  plan.merged_fragment_count = 1;
+  plan.merged_fragments = members;
+  plan.merged_fragment_count = std::size(members);
+  plan.fanout_entries = fanout;
+  plan.fanout_entry_count = std::size(fanout);
   plan.timeslot_coordinator = clockCoordinator;
   plan.promotion_invalidate = schedulerInvalidatePromotion;
   plan.promotion_ready = schedulerPromotionReady;
@@ -10391,23 +10427,79 @@ TEST(Scheduler, WholeChangeBankPreservesOverwrittenLanesAndColdWriters) {
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
   context->signalDiagnosticsEnabled = true;
+  context->nativeStaticEvalIslandCertified = true;
+  SchedulerFixture firstOwner(47), secondOwner(48);
+  SchedulerFixture *owners[] = {&firstOwner, &secondOwner};
+  uint64_t rootHandle = talos_rt_v1_native_state_static_handle(2);
+  std::array<StartedOwnerRecord, 2> records;
+  std::array<talos_rt_process_start_v1, 2> starts;
+  for (unsigned i = 0; i != std::size(owners); ++i) {
+    owners[i]->descriptor.execution = &execution;
+    schedulerWaitHandle =
+        talos_rt_v1_native_handle_offset(rootHandle, fanout[i].low_bit);
+    records[i] = startedOwnerChangeRecord();
+    starts[i] = {
+        1, TALOS_RT_ACTION_FRAME_WAIT_RECORD, 0, 48, &records[i].header, 0, 0};
+    auto spawn = startedOwnerPlan(*owners[i], starts[i]);
+    spawn.actor_slot = i;
+    ASSERT_NE(talos_rt_v1_process_spawn(context, &spawn, nullptr), 0u);
+  }
+  {
+    ContextMutexLock lock(context);
+    constexpr talos_rt_native_schedule_node nodes[] = {{0, 0, UINT32_MAX},
+                                                       {0, 1, UINT32_MAX},
+                                                       {1, 0, UINT32_MAX},
+                                                       {1, 1, UINT32_MAX}};
+    ASSERT_EQ(
+        initializeNativeAOTNodesUnlocked(context, nodes, std::size(nodes)),
+        TALOS_RT_OK);
+    ASSERT_EQ(armStartedNativeAOTActorsUnlocked(context), TALOS_RT_OK);
+  }
   {
     NativeAOTContextScope executing(context);
     NativeAOTMutexScope locked(context);
+    ASSERT_TRUE(canUseStaticAOTFanout(context));
+    ASSERT_EQ(context->startedOwnerDiagnostics.staticWaits, 2u);
+    ASSERT_TRUE(talos_rt_transition_unconsumed_unlocked(context, rootHandle));
+    // A rewritten NBA touched bit 127 and restored the entry value. Only the
+    // second owner must wake. The scalar mask starts at the second word.
+    transients[1] = UINT64_C(1) << 63;
+    valid = TALOS_RT_NBA_WHOLE_REWRITTEN;
+    uint32_t changed = 0;
+    ASSERT_EQ(talos_rt_v1_static_nba_commit_root(context, 0,
+                                                 TALOS_RT_REGION_NBA, &changed),
+              TALOS_RT_OK);
+    EXPECT_EQ(values[1], 0u);
+    EXPECT_EQ(ready, 2u);
+    EXPECT_TRUE(changed);
+    ready = 0;
+    context->nativeScheduleClockIngressPending = false;
+
+    // A blocking scalar publication can straddle the other subscription
+    // without changing it, including on a four-state knownness transition.
+    context->nativeStaticEvalIslandCertified = false;
+    ASSERT_TRUE(cleanCalendarOwnsFanout<true>(context));
+    unknowns[1] = 2;
+    talos_rt_v1_scheduler_static_transition(context, 2, 64, 64, 0, 0, 0, 2);
+    unknowns[1] = 0;
+    EXPECT_EQ(ready, 1u);
+    ready = 0;
+    context->nativeScheduleClockIngressPending = false;
+
     // The final planes equal the barrier-entry planes. Two observed words
     // still have a transition. Padding in the final word is unrelated state.
     values[2] = 0xf0;
     next[2] = UINT64_MAX - 3;
     transients = {1, UINT64_C(1) << 63, UINT64_MAX - 3};
     valid = 2;
-    uint32_t changed = 0;
+    changed = 0;
     ASSERT_EQ(talos_rt_v1_static_nba_commit_root(context, 0,
                                                  TALOS_RT_REGION_NBA, &changed),
               TALOS_RT_OK);
     EXPECT_TRUE(changed);
     EXPECT_EQ(valid, 0u);
-    EXPECT_EQ(context->wholeChangeBankCommits, 1u);
-    EXPECT_EQ(context->wholeChangeBankRewrites, 1u);
+    EXPECT_EQ(context->wholeChangeBankCommits, 2u);
+    EXPECT_EQ(context->wholeChangeBankRewrites, 2u);
     EXPECT_EQ(values[2], 0xf0u);
 
     // A cold partial capture follows a generated capture. Another whole
@@ -10439,6 +10531,50 @@ TEST(Scheduler, WholeChangeBankPreservesOverwrittenLanesAndColdWriters) {
     EXPECT_EQ(values[2], 0xf0u);
     EXPECT_EQ(unknowns[2], 2u);
   }
+  talos_rt_v1_context_destroy(context);
+}
+
+// Fanout rows use 64-bit ranges although a selected stable handle carries
+// only a signed 32-bit offset. Exercise routing directly so this test needs
+// neither a multi-gigabit plane nor its accompanying accumulator.
+TEST(Scheduler, WholeChangeFanoutRoutesBeyondStableHandleOffset) {
+  constexpr uint64_t low = uint64_t{INT32_MAX} + 1;
+  uint64_t ready = 0;
+  const talos_rt_native_clock_kernel clock{
+      1, TALOS_RT_WAIT_EDGE_CHANGE, 0, 1, &ready, 1, 0, nullptr};
+  const talos_rt_static_fanout_entry rows[] = {
+      {1, 0, 1, TALOS_RT_WAIT_EDGE_CHANGE, 0, TALOS_RT_FANOUT_DIRECT, low + 7,
+       1, 0, 0},
+      {1, 0, 1, TALOS_RT_WAIT_EDGE_CHANGE, 0, TALOS_RT_FANOUT_DIRECT, low + 63,
+       1, 0, 1}};
+  talos_rt_native_schedule_plan plan{};
+  plan.clock_kernel_count = 1;
+  plan.clock_kernels = &clock;
+  talos_rt_process_instance_v1 actor{};
+  actor.continuation = 1;
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  context->nativeSchedulePlan = &plan;
+  context->nativeScheduleFanoutEntries = rows;
+  context->nativeScheduleFanoutEntryCount = std::size(rows);
+  context->nativeScheduleActors = {&actor};
+  context->nativeScheduleActorIndices = {0};
+  auto &process = context->scheduledProcesses.emplace_back();
+  process.instance = &actor;
+  process.started = true;
+  process.token = 1;
+  process.suspendKind = TALOS_RT_SUSPEND_CHANGE;
+  std::array<uint8_t, 9> delta{};
+  delta[7] = 0x80;
+  for (unsigned width : {64u, 65u}) {
+    EXPECT_TRUE(
+        publishWholeNBAChangeUnlocked(context, 1, low, width, delta.data()));
+    EXPECT_EQ(ready, 2u);
+    ready = 0;
+    context->nativeScheduleClockIngressPending = false;
+  }
+  context->scheduledProcesses.clear();
+  context->nativeSchedulePlan = nullptr;
   talos_rt_v1_context_destroy(context);
 }
 
@@ -15960,24 +16096,6 @@ TEST(ProcessSpawn, StartedProcessWaitsAtItsContinuationAndReplaysItsEntry) {
     EXPECT_EQ(context->startedOwnerDiagnostics.entryReplays, 1u);
     talos_rt_v1_context_destroy(context);
   }
-}
-
-struct StartedOwnerRecord {
-  talos_rt_wait_record_v1 header;
-  talos_rt_wait_entry_v1 entry;
-};
-
-StartedOwnerRecord startedOwnerChangeRecord() {
-  return {{TALOS_RT_VERSION, TALOS_RT_SUSPEND_CHANGE, 0, 1, 0, 0},
-          {schedulerWaitHandle, TALOS_RT_WAIT_EDGE_CHANGE, 1}};
-}
-
-talos_rt_process_spawn_plan_v1
-startedOwnerPlan(SchedulerFixture &fixture,
-                 const talos_rt_process_start_v1 &start) {
-  return {&fixture.descriptor, 0, nullptr, nullptr, nullptr,
-          0,                   0, 0,       0,       0,
-          0,                   TALOS_RT_SPAWN_STARTED, &start};
 }
 
 // Two-tier P1c: a virtual owner is spawned as a frameless record (its
