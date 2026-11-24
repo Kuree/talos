@@ -545,10 +545,10 @@ void lowerNativeHandleOps(ModuleOp module) {
             builder, location, fits,
             arith::CmpIOp::create(builder, location, arith::CmpIPredicate::ne,
                                   source, invalid));
-        Value tagged = arith::OrIOp::create(
-            builder, location,
-            detail::llvmConstant(builder, location, i64, *object),
-            LLVM::ZExtOp::create(builder, location, i64, field));
+        Value objectTag = detail::llvmConstant(builder, location, i64, *object);
+        Value fieldBits = LLVM::ZExtOp::create(builder, location, i64, field);
+        Value tagged =
+            arith::OrIOp::create(builder, location, objectTag, fieldBits);
         lowered =
             arith::SelectOp::create(builder, location, valid, tagged, invalid);
       } else

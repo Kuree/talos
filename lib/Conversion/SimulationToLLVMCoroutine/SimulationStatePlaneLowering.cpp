@@ -1739,9 +1739,9 @@ lowerRankedScalarTransition(schedule::NativeHandleTransitionOp op,
   auto differs = [&](Value a, Value b) {
     return arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ne, a, b);
   };
-  Value changed =
-      arith::OrIOp::create(builder, loc, differs(oldValue, newValue),
-                           differs(oldUnknown, newUnknown));
+  Value valueChanged = differs(oldValue, newValue);
+  Value unknownChanged = differs(oldUnknown, newUnknown);
+  Value changed = arith::OrIOp::create(builder, loc, valueChanged, unknownChanged);
   Block *head = op->getBlock();
   Block *next = builder.splitBlock(head, op->getIterator());
   Block *publish = builder.createBlock(next);
