@@ -1,0 +1,289 @@
+{
+  "solver": "Z3 4.13.4",
+  "compile_settings": "AArch64, two-state, plain -O3; no ThinLTO",
+  "blackparrot": {
+    "pmu": "armv8_pmuv3_1/inst_retired/u",
+    "cpu": 7,
+    "aslr": "disabled",
+    "cycle_divisor": "RTL [bench] final time / 1000",
+    "exit_code": 19,
+    "passing_marker": "[CORE0 FSH] PASS",
+    "signature": "f8aff1ce",
+    "console_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "matched_executables": {
+      "bp2": "c9ef2ceacb07915feab3330593c1c45f82ad2ea6e0ee31cf5ef02eb6fca6f55a",
+      "bp2-replay": "ee7b2efa5150cd13967dbfc2c552dd334d4dae94d674ffddd99373cdd82081a6"
+    },
+    "lowering": {
+      "same_contract": true,
+      "order_installed": [
+        "RF installed checked native order changed=55 feedback=143"
+      ],
+      "old_grouped": 4336,
+      "new_grouped": 4336,
+      "lost_grouped": 0,
+      "old_unguarded": 3103,
+      "new_unguarded": 3103,
+      "lost_unguarded": 0,
+      "lost_chains": 0,
+      "calendar_before": "0",
+      "calendar_after": "0"
+    },
+    "runs": [
+      {
+        "name": "bp2",
+        "rep": 0,
+        "cycles": 292724.0,
+        "host_instructions": 20431884624,
+        "rate": 69799.1439854607
+      },
+      {
+        "name": "bp2-replay",
+        "rep": 0,
+        "cycles": 292724.0,
+        "host_instructions": 20420606134,
+        "rate": 69760.61455159126
+      },
+      {
+        "name": "bp2-replay",
+        "rep": 1,
+        "cycles": 292724.0,
+        "host_instructions": 20420606134,
+        "rate": 69760.61455159126
+      },
+      {
+        "name": "bp2",
+        "rep": 1,
+        "cycles": 292724.0,
+        "host_instructions": 20431884634,
+        "rate": 69799.14401962257
+      },
+      {
+        "name": "bp2",
+        "rep": 2,
+        "cycles": 292724.0,
+        "host_instructions": 20431884634,
+        "rate": 69799.14401962257
+      },
+      {
+        "name": "bp2-replay",
+        "rep": 2,
+        "cycles": 292724.0,
+        "host_instructions": 20420606134,
+        "rate": 69760.61455159126
+      }
+    ]
+  },
+  "cva6_optimizer": {
+    "cpu": 7,
+    "per_query_timeout_ms": 5000,
+    "runs": [
+      {
+        "policy": "native",
+        "rep": 0,
+        "elapsed": 1.714059999678284,
+        "in_z3": 1.1856523603200912,
+        "planner": 1.6306007239036262,
+        "queries": 14,
+        "optimal": true,
+        "destinations": 109,
+        "edges": 231
+      },
+      {
+        "policy": "free-forwarding",
+        "rep": 0,
+        "elapsed": 2.8562759989872575,
+        "in_z3": 2.6706802169792354,
+        "planner": 2.7730923700146377,
+        "queries": 13,
+        "optimal": true,
+        "destinations": 109,
+        "edges": 228
+      },
+      {
+        "policy": "free-forwarding",
+        "rep": 1,
+        "elapsed": 2.8728976496495306,
+        "in_z3": 2.6883218502625823,
+        "planner": 2.791558110155165,
+        "queries": 13,
+        "optimal": true,
+        "destinations": 109,
+        "edges": 228
+      },
+      {
+        "policy": "native",
+        "rep": 1,
+        "elapsed": 1.7046522507444024,
+        "in_z3": 1.1833449085243046,
+        "planner": 1.6259449757635593,
+        "queries": 14,
+        "optimal": true,
+        "destinations": 109,
+        "edges": 231
+      },
+      {
+        "policy": "native",
+        "rep": 2,
+        "elapsed": 1.6811741730198264,
+        "in_z3": 1.1605883981101215,
+        "planner": 1.6017424510791898,
+        "queries": 14,
+        "optimal": true,
+        "destinations": 109,
+        "edges": 231
+      },
+      {
+        "policy": "free-forwarding",
+        "rep": 2,
+        "elapsed": 2.8687707288190722,
+        "in_z3": 2.6911063408479095,
+        "planner": 2.7900711009278893,
+        "queries": 13,
+        "optimal": true,
+        "destinations": 109,
+        "edges": 228
+      },
+      {
+        "policy": "free-forwarding",
+        "rep": 3,
+        "elapsed": 2.8851753077469766,
+        "in_z3": 2.701319743413478,
+        "planner": 2.8017703373916447,
+        "queries": 13,
+        "optimal": true,
+        "destinations": 109,
+        "edges": 228
+      },
+      {
+        "policy": "native",
+        "rep": 3,
+        "elapsed": 1.7230447567999363,
+        "in_z3": 1.2037869482301176,
+        "planner": 1.643556620925665,
+        "queries": 14,
+        "optimal": true,
+        "destinations": 109,
+        "edges": 231
+      },
+      {
+        "policy": "native",
+        "rep": 4,
+        "elapsed": 1.7327066422440112,
+        "in_z3": 1.213724555913359,
+        "planner": 1.6541123259812593,
+        "queries": 14,
+        "optimal": true,
+        "destinations": 109,
+        "edges": 231
+      },
+      {
+        "policy": "free-forwarding",
+        "rep": 4,
+        "elapsed": 2.8666857830248773,
+        "in_z3": 2.6706248056143522,
+        "planner": 2.7713785809464753,
+        "queries": 13,
+        "optimal": true,
+        "destinations": 109,
+        "edges": 228
+      }
+    ]
+  },
+  "cva6_strict_improvement_decisions": {
+    "cpu": 7,
+    "per_query_timeout_ms": 15000,
+    "runs": [
+      {
+        "rep": 0,
+        "policy": "native",
+        "contract_sha256": "cbe4730fb04bac2fdd22c6538498ca63e015ec57cd7391f8bc52450fc3b8d74b",
+        "lowering_sha256": "fcb4feac36e6fceed068f5a2f3629dc557e5e7423644aa86409c02153cce16f4",
+        "heuristic_backward_destinations": 109,
+        "heuristic_backward_edges": 231,
+        "strictly_better": "unsat",
+        "heuristic_witness": "sat",
+        "heuristic_optimal": true,
+        "construction_seconds": 0.0399084179662168,
+        "witness_seconds": 0.08935411414131522,
+        "decision_seconds": 1.4551729569211602,
+        "total_seconds": 1.5844354890286922
+      },
+      {
+        "rep": 0,
+        "policy": "graph-only",
+        "contract_sha256": "cbe4730fb04bac2fdd22c6538498ca63e015ec57cd7391f8bc52450fc3b8d74b",
+        "lowering_sha256": "fcb4feac36e6fceed068f5a2f3629dc557e5e7423644aa86409c02153cce16f4",
+        "heuristic_backward_destinations": 109,
+        "heuristic_backward_edges": 231,
+        "strictly_better": "unknown",
+        "heuristic_witness": "sat",
+        "heuristic_optimal": null,
+        "construction_seconds": 0.050538410898298025,
+        "witness_seconds": 1.1539156627841294,
+        "decision_seconds": 15.49934161407873,
+        "total_seconds": 16.703795687761158
+      },
+      {
+        "rep": 1,
+        "policy": "graph-only",
+        "contract_sha256": "cbe4730fb04bac2fdd22c6538498ca63e015ec57cd7391f8bc52450fc3b8d74b",
+        "lowering_sha256": "fcb4feac36e6fceed068f5a2f3629dc557e5e7423644aa86409c02153cce16f4",
+        "heuristic_backward_destinations": 109,
+        "heuristic_backward_edges": 231,
+        "strictly_better": "unknown",
+        "heuristic_witness": "sat",
+        "heuristic_optimal": null,
+        "construction_seconds": 0.05205331835895777,
+        "witness_seconds": 1.1412288709543645,
+        "decision_seconds": 15.489496409893036,
+        "total_seconds": 16.682778599206358
+      },
+      {
+        "rep": 1,
+        "policy": "native",
+        "contract_sha256": "cbe4730fb04bac2fdd22c6538498ca63e015ec57cd7391f8bc52450fc3b8d74b",
+        "lowering_sha256": "fcb4feac36e6fceed068f5a2f3629dc557e5e7423644aa86409c02153cce16f4",
+        "heuristic_backward_destinations": 109,
+        "heuristic_backward_edges": 231,
+        "strictly_better": "unsat",
+        "heuristic_witness": "sat",
+        "heuristic_optimal": true,
+        "construction_seconds": 0.03757575387135148,
+        "witness_seconds": 0.088185781147331,
+        "decision_seconds": 1.435049382969737,
+        "total_seconds": 1.5608109179884195
+      },
+      {
+        "rep": 2,
+        "policy": "native",
+        "contract_sha256": "cbe4730fb04bac2fdd22c6538498ca63e015ec57cd7391f8bc52450fc3b8d74b",
+        "lowering_sha256": "fcb4feac36e6fceed068f5a2f3629dc557e5e7423644aa86409c02153cce16f4",
+        "heuristic_backward_destinations": 109,
+        "heuristic_backward_edges": 231,
+        "strictly_better": "unsat",
+        "heuristic_witness": "sat",
+        "heuristic_optimal": true,
+        "construction_seconds": 0.037374105770140886,
+        "witness_seconds": 0.08760706335306168,
+        "decision_seconds": 1.4336161077953875,
+        "total_seconds": 1.55859727691859
+      },
+      {
+        "rep": 2,
+        "policy": "graph-only",
+        "contract_sha256": "cbe4730fb04bac2fdd22c6538498ca63e015ec57cd7391f8bc52450fc3b8d74b",
+        "lowering_sha256": "fcb4feac36e6fceed068f5a2f3629dc557e5e7423644aa86409c02153cce16f4",
+        "heuristic_backward_destinations": 109,
+        "heuristic_backward_edges": 231,
+        "strictly_better": "unknown",
+        "heuristic_witness": "sat",
+        "heuristic_optimal": null,
+        "construction_seconds": 0.05036398023366928,
+        "witness_seconds": 1.1642636628821492,
+        "decision_seconds": 15.427529958076775,
+        "total_seconds": 16.642157601192594
+      }
+    ]
+  }
+}
