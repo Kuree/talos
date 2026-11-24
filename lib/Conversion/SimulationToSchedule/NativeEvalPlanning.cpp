@@ -2,6 +2,7 @@
 
 #include "../SimulationToLLVMCoroutine/SimulationAOTPlanning.h"
 #include "../SimulationToLLVMCoroutine/SimulationToLLVMCoroutinePrivate.h"
+#include "NativeRankTrial.h"
 #include "talos/Analysis/ActivationRegionAnalysis.h"
 #include "talos/Analysis/ParallelWalk.h"
 #include "talos/Analysis/SimulationScheduleAnalysis.h"
@@ -109,15 +110,14 @@ bool rangesOverlap(schedule::ComputeEffectAttr lhs,
 /// Reads through dynamic selectors and unrepresented effects remain boundaries.
 /// Possible feedback edges are retained, including mux-dependent routes: graph
 /// shape never proves a route inactive under the current configuration.
-SmallVector<NativeRankedEvalNode>
-collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
-                   const NativeStateLayout &stateLayout,
-                   const NativeStaticFanoutPlan &fanout,
-                   ArrayRef<NativeDirectFragment> directFragments,
-                   schedule::ComputeGraphAttr graph,
-                   const NativeActivationInputs &activationInputs) {
+FailureOr<SmallVector<NativeRankedEvalNode>> collectRankedNodes(
+    ModuleOp module, const ResolvedNativeEvalPlan &plan,
+    const NativeStateLayout &stateLayout, const NativeStaticFanoutPlan &fanout,
+    ArrayRef<NativeDirectFragment> directFragments,
+    schedule::ComputeGraphAttr graph,
+    const NativeActivationInputs &activationInputs, NativeRankTrial *trial) {
   if (!graph)
-    return {};
+    return SmallVector<NativeRankedEvalNode>{};
   // A read subscriber routes a watched writer through its individual
   // publishing executor. The ranked clean variant can use the same exclusive
   // drive-range proof as direct storage when the HDL has no override.
@@ -674,7 +674,8 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
   DenseMap<uint32_t, uint32_t> dense;
   for (auto [id, node] : llvm::enumerate(result))
     dense.try_emplace(node.owner, id);
-  std::vector<std::pair<uint32_t, uint32_t>> edges;
+  analysis::NativeRankGraph rankGraph;
+  auto &edges = rankGraph.edges;
   for (auto [id, node] : llvm::enumerate(result))
     for (uint32_t target : node.successors)
       edges.emplace_back(id, dense.lookup(target));
@@ -850,9 +851,44 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
     result[id].island = root(id) < realNodeCount
                             ? root(id)
                             : realNodeCount + clockedNodes.size() + root(id);
+  rankGraph.size = result.size();
+  if (trial) {
+    llvm::sort(edges);
+    edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+    for (unsigned id = 0; id < result.size(); ++id) {
+      const auto &node = result[id];
+      auto *direct =
+          id < realNodeCount
+              ? directByWrapper.lookup(plan.mergedExecutors[node.owner])
+              : nullptr;
+      rankGraph.units.push_back(
+          {direct ? direct->wrapper : std::string{}, node.island,
+           direct && !node.boundary && !node.clocked &&
+               !direct->runtimeCheckpoint && !direct->deferred,
+           node.repeatable, !node.twoStateBody.empty(),
+           direct && direct->tier2Convergence});
+    }
+  }
   runtime::ActivationOrder order;
-  if (!runtime::ActivationOrder::build(result.size(), edges, order))
-    return {};
+  auto baseline = analysis::NativeEvalRankAnalysis::get(
+                      analysis::NativeRankStrategy::Heuristic)
+                      .analyze(rankGraph, {}, order);
+  if (!baseline)
+    return module.emitError() << llvm::toString(baseline.takeError()),
+           failure();
+  if (!trial && native::has<native::DebugTiming>(module))
+    llvm::errs() << "talos native rank: strategy=heuristic selected="
+                 << baseline->selected.first << "," << baseline->selected.second
+                 << "\n";
+  if (trial) {
+    trial->encountered = true;
+    if (trial->expected) {
+      trial->matches = *trial->expected == rankGraph;
+      if (trial->matches)
+        trial->matches = analysis::NativeEvalRankAnalysis::applyOrder(
+            order, edges, trial->selected);
+    }
+  }
   // Events from executors outside the pure graph are independent activity
   // seeds. Do not seed internal lane publications: that would split a closed
   // forward chain at every wire. Startup remains the original pending work.
@@ -1088,6 +1124,8 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
     node.activityDomain = domains.size() + cohort->second;
     ranked.push_back(std::move(node));
   }
+  if (trial && !trial->expected)
+    trial->graph = std::move(rankGraph);
   return ranked;
 }
 
@@ -1264,19 +1302,19 @@ NativeActivationInputs collectNativeActivationInputs(sim::SimDesignOp design,
   return result;
 }
 
-FailureOr<ResolvedNativeEvalPlan>
-resolveNativeEvalPlan(ModuleOp module,
-                      ArrayRef<talos_rt_native_schedule_node> executableNodes,
-                      const NativeStateLayout &stateLayout,
-                      const NativeStaticNBAPlan &staticNBAPlan,
-                      const NativeStaticFanoutPlan &staticFanoutPlan,
-                      ArrayRef<NativeDirectFragment> directFragments,
-                      const NativeEvalOwnershipPlan &evalOwnership,
-                      schedule::ComputeGraphAttr computeGraph,
-                      const NativeActivationInputs &activationInputs,
-                      ArrayRef<NativePeriodicClock> periodicClocks,
-                      ArrayRef<NativePeriodicAlias> periodicAliases) {
+FailureOr<ResolvedNativeEvalPlan> resolveNativeEvalPlan(
+    ModuleOp module, ArrayRef<talos_rt_native_schedule_node> executableNodes,
+    const NativeStateLayout &stateLayout,
+    const NativeStaticNBAPlan &staticNBAPlan,
+    const NativeStaticFanoutPlan &staticFanoutPlan,
+    ArrayRef<NativeDirectFragment> directFragments,
+    const NativeEvalOwnershipPlan &evalOwnership,
+    schedule::ComputeGraphAttr computeGraph,
+    const NativeActivationInputs &activationInputs,
+    ArrayRef<NativePeriodicClock> periodicClocks,
+    ArrayRef<NativePeriodicAlias> periodicAliases, NativeRankTrial *trial) {
   ResolvedNativeEvalPlan result;
+  result.rankTrial = trial;
   if (!staticFanoutPlan.exact)
     return result;
   result.fanoutEntries.assign(staticFanoutPlan.entries.begin(),
@@ -1660,9 +1698,12 @@ resolveNativeEvalPlan(ModuleOp module,
         result.mergedFragments.size(),
         llvm::APInt(std::max<size_t>(64, result.mergedFragments.size()), 0));
 
-  result.rankedNodes =
-      collectRankedNodes(module, result, stateLayout, staticFanoutPlan,
-                         directFragments, computeGraph, activationInputs);
+  auto rankedNodes = collectRankedNodes(module, result, stateLayout,
+                                        staticFanoutPlan, directFragments,
+                                        computeGraph, activationInputs, trial);
+  if (failed(rankedNodes))
+    return failure();
+  result.rankedNodes = std::move(*rankedNodes);
 
   // The dispatcher selects the lowest pending bit. Give it the same refined
   // dependence order as the helpers, including original-executor boundaries.

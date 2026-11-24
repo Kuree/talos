@@ -1,0 +1,11 @@
+// REQUIRES: z3
+// RUN: talos -O3 --two-state --vpi=off --native-rank=heuristic %S/eval-ranked-active-waits.sv -o %t.heuristic
+// RUN: talos -O3 --two-state --vpi=off --native-rank=z3 %S/eval-ranked-active-waits.sv -o %t.z3
+// RUN: %t.heuristic > %t.out && %t.z3 | diff -u %t.out -
+// RUN: not talos --native-rank=other %S/eval-ranked-active-waits.sv 2>&1 | FileCheck %s --check-prefix=BAD
+// BAD: unsupported native rank strategy 'other'; expected heuristic or z3
+// RUN: talos-opt %S/../Conversion/simulation-to-llvm-static-driver-components.mlir --pass-pipeline='builtin.module(convert-talos-sim-processes-to-llvm-coroutines{native-rank=z3})' -o %t.mlir
+// RUN: talos-opt %S/../Conversion/simulation-to-llvm-static-driver-components.mlir --pass-pipeline='builtin.module(convert-talos-sim-processes-to-llvm-coroutines{native-rank=heuristic})' -o %t.default.mlir
+// RUN: diff -u %t.default.mlir %t.mlir
+// RUN: talos -O3 --two-state --vpi=off --native-rank=z3 --mlir-timing -DCYCLES=20 %S/../../benchmark/scheduler/gated_scc.sv -o %t.gated 2> %t.plan && FileCheck %s --check-prefix=SOLVE < %t.plan
+// SOLVE: talos native rank: strategy=z3 heuristic=1,1 selected=1,1 solver=optimal

@@ -1207,6 +1207,19 @@ static int executeCompilation(const InputArgList &args,
                     "'; expected required or all");
     valid = false;
   }
+  StringRef rankName = args.getLastArgValue(OPT_native_rank_EQ, "heuristic");
+  auto nativeRank = talos::analysis::NativeRankStrategy::Heuristic;
+  if (rankName == "z3") {
+    nativeRank = talos::analysis::NativeRankStrategy::Z3;
+    if (!talos::analysis::hasZ3NativeRankAnalysis()) {
+      emitDriverError("native rank strategy 'z3' requires TALOS_ENABLE_Z3");
+      valid = false;
+    }
+  } else if (rankName != "heuristic") {
+    emitDriverError(Twine("unsupported native rank strategy '") + rankName +
+                    "'; expected heuristic or z3");
+    valid = false;
+  }
   StringRef nativeScheduler =
       genericSchedulerRetry
           ? StringRef("generic")
@@ -1345,6 +1358,10 @@ static int executeCompilation(const InputArgList &args,
   bool emitDPIHeader =
       action && action->getOption().matches(OPT_emit_dpi_header);
   bool native = !action || emitObject || emitLLVM;
+  if (args.hasArg(OPT_native_rank_EQ) && !native) {
+    emitDriverError("--native-rank is only valid for native code generation");
+    valid = false;
+  }
   if (native && requestedWorkers.value_or(1) != 1) {
     emitDriverError(
         "native executable generation currently requires --threads=1");
@@ -1700,6 +1717,7 @@ static int executeCompilation(const InputArgList &args,
     nativeOptions.vpi = vpiMode.str();
     nativeOptions.bytecodeScope = bytecodeScope.str();
     nativeOptions.nativeScheduler = nativeScheduler.str();
+    nativeOptions.nativeRank = nativeRank;
     nativeOptions.thinLTOCacheDir =
         args.getLastArgValue(OPT_thinlto_cache_dir_EQ).str();
     nativeOptions.bytecode = executionTier == "bytecode";

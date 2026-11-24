@@ -880,6 +880,7 @@ LogicalResult lowerToLLVM(ModuleOp module, TargetMachine &targetMachine,
                           StringRef triple, bool bytecode, StringRef vpi,
                           StringRef bytecodeScope,
                           talos::schedule::NativeSchedulerMode nativeScheduler,
+                          talos::analysis::NativeRankStrategy rankStrategy,
                           uint32_t optLevel, bool planSemanticPartitions,
                           bool timing, bool verifyEach,
                           const PassIRDumpOptions &irDump) {
@@ -1078,7 +1079,7 @@ LogicalResult lowerToLLVM(ModuleOp module, TargetMachine &targetMachine,
   if (planSemanticPartitions)
     manager.nest<talos::sim::SimDesignOp>().addPass(
         createTalosSimPlanNativePartitionsPass());
-  buildSimulationToLLVMCoroutinePipeline(manager);
+  buildSimulationToLLVMCoroutinePipeline(manager, true, true, rankStrategy);
   if (failed(manager.run(module)))
     return failure();
   return addMinimalMain(module);
@@ -1417,7 +1418,7 @@ LogicalResult emitTargetOutput(ModuleOp module,
     native::remove<native::ClosedExecutable>(module);
   if (failed(lowerToLLVM(module, *targetMachine, backend->getTriple(),
                          useBytecode, options.vpi, options.bytecodeScope,
-                         *nativeScheduler, options.optLevel,
+                         *nativeScheduler, options.nativeRank, options.optLevel,
                          backend->supportsSemanticPartitions() && !useBytecode,
                          options.timing, options.verifyEach, options.irDump)))
     return failure();

@@ -24,6 +24,7 @@ add_mlir_library(TalosSimulationAnalysis
   SteadyUnknownAnalysis.cpp
   ManagedClassLayoutAnalysis.cpp
   ManagedCollectionAnalysis.cpp
+  NativeEvalRankAnalysis.cpp
   NativeAOTAnalysis.cpp
   NativeMethodEligibilityAnalysis.cpp
   NativeWordAnalysis.cpp

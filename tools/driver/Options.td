@@ -123,6 +123,9 @@ def bytecode_scope_EQ : Joined<["--"], "bytecode-scope=">,
   Group<Compilation_Group>, MetaVarName<"<required|all>">,
   Values<"required,all">,
   HelpText<"Select retained bytecode bodies (default: required)">;
+def native_rank_EQ : Joined<["--"], "native-rank=">, Group<Compilation_Group>,
+  MetaVarName<"<heuristic|z3>">, Values<"heuristic,z3">,
+  HelpText<"Select native evaluator rank analysis (default: heuristic)">;
 def native_scheduler_EQ : Joined<["--"], "native-scheduler=">,
   Group<Compilation_Group>, MetaVarName<"<auto|generic|aot|eval>">,
   Values<"auto,generic,aot,eval">,

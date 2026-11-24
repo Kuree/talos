@@ -6,6 +6,7 @@
 #include "SimulationEvalReadySet.h"
 #include "SimulationNativeInlineCost.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
+#include "talos/Analysis/NativeEvalRankAnalysis.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleEnums.h"
@@ -385,11 +386,12 @@ planNativeRankedGroups(ModuleOp module, const NativeEvalCoordinatorPlan &plan,
   return result;
 }
 
-FailureOr<SmallVector<std::string>>
-materializeNativeRankedGroups(ModuleOp module,
-                              const NativeEvalCoordinatorPlan &plan,
-                              const NativeRankedGroupPlan &groups) {
+FailureOr<SmallVector<std::string>> materializeNativeRankedGroups(
+    ModuleOp module, const NativeEvalCoordinatorPlan &plan,
+    const NativeRankedGroupPlan &groups, analysis::NativeEvalLayout *layout) {
   SmallVector<std::string> executors(plan.fragments.size());
+  if (layout)
+    layout->runtimeCalendar = schedule::has<schedule::Field::EvalRuntimeCalendar>(module);
   if (plan.clockKernels.empty() || plan.rankedNodes.empty() ||
       (plan.writableVPI && !plan.guardSubscriberActors))
     return executors;
@@ -800,8 +802,18 @@ materializeNativeRankedGroups(ModuleOp module,
                                    after, ValueRange{});
           builder.setInsertionPointToStart(execute);
         }
+        const size_t firstUnconditional = unconditional.size();
         for (const auto *node : part)
           emitMember(node, part.size() > 1);
+        if (layout && unconditional.size() != firstUnconditional) {
+          std::vector<std::string> chain;
+          for (const auto *node : part)
+            chain.push_back(plan.fourStateExecutors[node->owner]);
+          layout->chains.insert(std::move(chain));
+          for (auto owner :
+               ArrayRef(unconditional).drop_front(firstUnconditional))
+            layout->unconditional.insert(plan.fourStateExecutors[owner]);
+        }
         if (after) {
           cf::BranchOp::create(builder, loc, after);
           candidate.getBody().push_back(after);
@@ -883,6 +895,10 @@ materializeNativeRankedGroups(ModuleOp module,
         llvm::errs() << ' ' << node.owner;
     llvm::errs() << '\n';
   }
+  if (layout)
+    for (auto [index, name] : llvm::enumerate(executors))
+      if (!name.empty())
+        layout->helpers.emplace(plan.fourStateExecutors[index], name);
   return executors;
 }
 

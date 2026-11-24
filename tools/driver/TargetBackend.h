@@ -11,6 +11,7 @@
 #define TALOS_TOOLS_DRIVER_TARGETBACKEND_H
 
 #include "mlir/Support/LogicalResult.h"
+#include "talos/Analysis/NativeEvalRankAnalysis.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
@@ -85,6 +86,8 @@ struct NativeOutputOptions {
   std::string vpi = "off";
   std::string bytecodeScope = "required";
   std::string nativeScheduler = "auto";
+  analysis::NativeRankStrategy nativeRank =
+      analysis::NativeRankStrategy::Heuristic;
   std::string thinLTOCacheDir;
   bool bytecode = false;
   // Export the standardized sv* host API only for DPI-bearing designs. This

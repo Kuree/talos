@@ -1,14 +1,17 @@
+#include "NativeRankPlanning.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Pass/PassManager.h"
+#include "talos/Analysis/NativeEvalRankAnalysis.h"
 #include "talos/Conversion/Passes.h"
 #include "talos/Conversion/SimulationToLLVMCoroutine.h"
 #include "talos/Dialect/Schedule/Transforms/Passes.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 namespace talos {
-void buildSimulationToLLVMCoroutinePipeline(mlir::OpPassManager &manager,
-                                            bool nativeWords,
-                                            bool nativeAggregates) {
+using analysis::NativeRankStrategy;
+void detail::buildNativeProcesses(mlir::OpPassManager &manager,
+                                  bool nativeWords, bool nativeAggregates,
+                                  NativeRankTrial *trial) {
   // Bytecode and the actor CFG stay canonical. Lower address selections only
   // in their borrowed invocation bodies, before native storage admission.
   manager.addPass(createPrepareSynchronousNativeTasksPass());
@@ -54,9 +57,21 @@ void buildSimulationToLLVMCoroutinePipeline(mlir::OpPassManager &manager,
   manager.addPass(createPlanNativeEvalOwnershipPass());
   manager.addPass(createAnnotateCompactNativeNBAPass());
   manager.addPass(createPlanNativeExecutableNodesPass());
-  manager.addPass(createResolveNativeEvalSchedulePass());
+  manager.addPass(trial ? createTrialResolveNativeEvalSchedulePass(*trial)
+                        : createResolveNativeEvalSchedulePass());
   manager.addPass(createAdmitNativeStartedOwnersPass());
   manager.addPass(createMaterializeNativeProcessesPass());
+}
+
+void buildSimulationToLLVMCoroutinePipeline(
+    mlir::OpPassManager &manager, bool nativeWords, bool nativeAggregates,
+    analysis::NativeRankStrategy strategy) {
+  if (strategy == NativeRankStrategy::Heuristic)
+    detail::buildNativeProcesses(manager, nativeWords, nativeAggregates);
+  else
+    manager.addPass(detail::createRankNativeProcessesPass(strategy, nativeWords,
+                                                          nativeAggregates));
+
   manager.addPass(createThinNativeGCCollectionsPass());
   manager.addPass(createLowerNativeGCCollectionsPass());
   // Clean packed lowering's output where it was produced, one function at a
@@ -84,7 +99,12 @@ void buildNativeLLVMFinalizationPipeline(mlir::OpPassManager &manager) {
   manager.addPass(createFinalizeNativeFunctionsPass());
 }
 void registerSimulationToLLVMCoroutinePipeline() {
+  detail::registerNativeRankPlanningPass();
   struct Options : mlir::PassPipelineOptions<Options> {
+    Option<NativeRankStrategy> strategy{
+        *this, "native-rank", llvm::cl::desc("Native evaluator rank analysis"),
+        detail::nativeRankStrategyValues(),
+        llvm::cl::init(NativeRankStrategy::Heuristic)};
     Option<bool> nativeWords{
         *this, "native-words",
         llvm::cl::desc("Optimize independent native word lanes"),
@@ -99,7 +119,8 @@ void registerSimulationToLLVMCoroutinePipeline() {
       "Plan, specialize, and lower native simulation processes",
       [](mlir::OpPassManager &manager, const Options &options) {
         buildSimulationToLLVMCoroutinePipeline(manager, options.nativeWords,
-                                               options.nativeAggregates);
+                                               options.nativeAggregates,
+                                               options.strategy);
       });
 }
 } // namespace talos

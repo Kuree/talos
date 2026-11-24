@@ -462,6 +462,7 @@ set_target_properties(TalosNativePartitionTests PROPERTIES
 # Exhaustive oracles for compiler analyses: each enumerates a family of small
 # programs and checks every proof against direct execution.
 add_llvm_executable(TalosAnalysisOracleTests EXCLUDE_FROM_ALL
+  Support/NativeEvalRankAnalysisTest.cpp
   Support/ActivationOracleTest.cpp
   Support/BoundedLoopOracleTest.cpp
   Support/ContextCacheTest.cpp

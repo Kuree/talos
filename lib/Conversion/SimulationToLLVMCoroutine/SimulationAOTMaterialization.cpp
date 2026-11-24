@@ -1,5 +1,6 @@
 //===- SimulationAOTMaterialization.cpp - Native AOT LLVM plan --------===//
 
+#include "../SimulationToSchedule/NativeRankTrial.h"
 #include "NativeHandleChain.h"
 #include "NativeRuntimeCalls.h"
 #include "NativeStateAccess.h"
@@ -6522,8 +6523,9 @@ FailureOr<bool> makeNativeEvalPlan(
       return failure();
   }
   emitPromotionReset(rankedPlan->domains.size());
-  auto rankedGroups =
-      materializeNativeRankedGroups(module, coordinatorPlan, *rankedPlan);
+  auto rankedGroups = materializeNativeRankedGroups(
+      module, coordinatorPlan, *rankedPlan,
+      resolvedPlan.rankTrial ? &resolvedPlan.rankTrial->layout : nullptr);
   if (failed(rankedGroups))
     return failure();
   coordinatorPlan.rankedGroupExecutors = *rankedGroups;

@@ -23,6 +23,13 @@
 #include <memory>
 #include <tuple>
 
+namespace talos::detail {
+struct NativeRankTrial;
+}
+namespace talos::analysis {
+struct NativeEvalLayout;
+}
+
 namespace mlir {
 class AnalysisManager;
 class Pass;
@@ -334,6 +341,7 @@ materializeNativeNBAStaticPublicationCalls(mlir::ModuleOp module);
 /// before LLVM CFG construction starts; emission must not infer ownership from
 /// transformed symbols or recompute graph closure.
 struct ResolvedNativeEvalPlan {
+  NativeRankTrial *rankTrial = nullptr;
   NativeEvalTransactionPlan transaction;
   llvm::SmallVector<talos_rt_static_fanout_entry> fanoutEntries;
   llvm::SmallVector<NativeEvalClockKernel> clockKernels;
@@ -478,7 +486,8 @@ mlir::FailureOr<ResolvedNativeEvalPlan> resolveNativeEvalPlan(
     schedule::ComputeGraphAttr computeGraph,
     const NativeActivationInputs &activationInputs,
     mlir::ArrayRef<NativePeriodicClock> periodicClocks,
-    mlir::ArrayRef<NativePeriodicAlias> periodicAliases);
+    mlir::ArrayRef<NativePeriodicAlias> periodicAliases,
+    NativeRankTrial *trial);
 struct NativeGroupPromotionReport {
   llvm::SmallVector<std::string> diagnostics;
   uint64_t elidedUnconditionalPublications = 0;
@@ -491,10 +500,9 @@ void lowerNativePrioritySignalPolls(mlir::ModuleOp module);
 void reuseQuietNBACuts(mlir::ModuleOp module);
 std::unique_ptr<mlir::Pass> createPromoteNativeGroupFunctionPass();
 
-mlir::FailureOr<llvm::SmallVector<std::string>>
-materializeNativeRankedGroups(mlir::ModuleOp module,
-                              const NativeEvalCoordinatorPlan &plan,
-                              const NativeRankedGroupPlan &groups);
+mlir::FailureOr<llvm::SmallVector<std::string>> materializeNativeRankedGroups(
+    mlir::ModuleOp module, const NativeEvalCoordinatorPlan &plan,
+    const NativeRankedGroupPlan &groups, analysis::NativeEvalLayout *layout);
 mlir::FailureOr<NativeRankedGroupPlan> planNativeRankedGroups(
     mlir::ModuleOp module, const NativeEvalCoordinatorPlan &plan,
     mlir::ArrayRef<llvm::SmallVector<NativePromotionRange>> ranges,

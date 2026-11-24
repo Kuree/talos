@@ -1,0 +1,4 @@
+// UNSUPPORTED: z3
+// RUN: not talos --native-rank=z3 -emit-llvm %S/eval-ranked-active-waits.sv 2>&1 | FileCheck %s
+// RUN: not talos-opt %S/../Conversion/simulation-to-llvm-static-driver-components.mlir --pass-pipeline='builtin.module(convert-talos-sim-processes-to-llvm-coroutines{native-rank=z3})' 2>&1 | FileCheck %s
+// CHECK: native rank strategy 'z3' requires TALOS_ENABLE_Z3

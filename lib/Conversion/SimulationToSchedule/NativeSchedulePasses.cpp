@@ -1,4 +1,5 @@
 #include "NativePipeline.h"
+#include "NativeRankTrial.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -2422,7 +2423,7 @@ LogicalResult NativePipelineAnalysis::planOwnership() {
   return success();
 }
 
-LogicalResult NativePipelineAnalysis::resolveEval() {
+LogicalResult NativePipelineAnalysis::resolveEval(NativeRankTrial *trial) {
   if (bytecodeOnly)
     return success();
   if (useAOT) {
@@ -2463,7 +2464,7 @@ LogicalResult NativePipelineAnalysis::resolveEval() {
           module, executableNodes, *stateLayout, staticNBAPlan,
           staticFanoutPlan, *directFragments, evalOwnership,
           threeTierPlan.sourceGraph, activationInputs, periodicClocks,
-          sourceCalendarAliases());
+          sourceCalendarAliases(), trial);
       if (failed(resolvedEval))
         return failure();
       const bool refineReadPublications =
@@ -2740,6 +2741,13 @@ class PlanNativeEvalOwnershipPass final
 class ResolveNativeEvalSchedulePass final
     : public impl::ResolveNativeEvalSchedulePassBase<
           ResolveNativeEvalSchedulePass> {
+public:
+  ResolveNativeEvalSchedulePass() = default;
+  explicit ResolveNativeEvalSchedulePass(detail::NativeRankTrial &trial)
+      : trial(&trial) {}
+
+private:
+  detail::NativeRankTrial *trial = nullptr;
   void runOnOperation() override {
     using Analysis = detail::NativePipelineAnalysis;
     auto cached = getCachedAnalysis<Analysis>();
@@ -2754,7 +2762,7 @@ class ResolveNativeEvalSchedulePass final
                                "pipeline phase ExecutableNodes");
       return signalPassFailure();
     }
-    if (failed(state.resolveEval()))
+    if (failed(state.resolveEval(trial)))
       return signalPassFailure();
     state.stage = Analysis::Stage::Resolved;
     markAnalysesPreserved<Analysis>();
@@ -2784,4 +2792,8 @@ class AdmitNativeStartedOwnersPass final
   }
 };
 } // namespace
+std::unique_ptr<mlir::Pass>
+detail::createTrialResolveNativeEvalSchedulePass(NativeRankTrial &trial) {
+  return std::make_unique<ResolveNativeEvalSchedulePass>(trial);
+}
 } // namespace talos

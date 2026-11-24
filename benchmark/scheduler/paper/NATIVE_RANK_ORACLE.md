@@ -20,45 +20,35 @@ Each instance uses the ranking graph from its matched O3 build. Native islands, 
 
 For CVA6, the lowering supplied 2,138 grouped evaluators, 303 forwarding chains, and 1,055 unconditional members. The guarded solver order reproduced the optimized baseline executable byte-for-byte in the measured worktree. The saved native graph is the input for the paper result; a different compiler revision or RTL configuration can yield a different instance.
 
-## Replay without building Talos
+## Compiler selection
 
-From the repository root, run the following command with Z3 on the path. It verifies each archived checksum, recomputes the heuristic cost from the edges, and checks the expected decisions. It also recomputes the cost of the supplied BlackParrot witness. Use `--z3 /path/to/z3` to choose the executable.
+The ordinary compiler implements both policies in C++. Use `--native-rank=heuristic` (the default) or `--native-rank=z3` with normal native code-generation flags. The following command enables timing diagnostics.
 
 ```sh
-python3 benchmark/scheduler/paper/replay.py
+talos -O3 --two-state --vpi=off --native-rank=z3 --mlir-timing design.sv -o sim
 ```
 
-The first query fixes the heuristic ranks and checks both feasibility and their reported cost. The second leaves all model-permitted ranks free and asks whether fewer destinations are possible, or whether the same destination count permits fewer edges. SAT in the first query and UNSAT in the second certify optimality. A SAT second query is a counterexample. An UNKNOWN result is inconclusive. The supplied SMT files have a 15-second solver timeout; a slower host can raise the timeout in a local copy. The recorded queries were replayed with Z3 4.13.4 and 4.15.5.
-
-To regenerate the CVA6 queries, independently of the optimizer’s cardinality search, run the following commands. Set `build_dir` to an existing configured Talos native build. The `TalosRankGraph` target is optional and uses the project’s pinned Z3 when enabled.
+The native MLIR pipeline accepts the same enum.
 
 ```sh
-build_dir=/path/to/talos-build
+talos-opt input.mlir \
+  --pass-pipeline='builtin.module(convert-talos-sim-processes-to-llvm-coroutines{native-rank=z3})'
+```
+
+The module pass `schedule-rank-native-processes{native-rank=z3}` runs the native preparation and process-materialization part of that pipeline. Both analyses consume the same activation dependencies, SCC identities and native eligibility facts. The Z3 analysis uses the compiler's linked Z3 library and a deterministic resource budget. It retains the incumbent on a tie or when search finds no verified improvement. A strict improvement triggers a second native process lowering from the same input IR. The compiler accepts it only if the graph matches and the emitted helpers, unconditional evaluations and forwarding chains retain their certificates. This repeats neither HDL elaboration nor LLVM optimization and object generation. With `--mlir-timing`, the compiler reports the heuristic and selected costs and whether the solve was bounded or proved optimal. A build configured with `TALOS_ENABLE_Z3=OFF` supports the heuristic and diagnoses an explicit request for Z3.
+
+## Replay the frozen paper queries
+
+The archives retain the original paper instances independently of later compiler changes. Extract one into a fresh directory, then invoke a standard Z3 executable on both SMT-LIB files.
+
+```sh
 work=$(mktemp -d)
 tar -xJf benchmark/scheduler/paper/cva6-2state.tar.xz -C "$work"
-cmake --build "$build_dir" --target TalosRankGraph
-python3 "$build_dir/tools/talos-rank/verify_heuristic.py" "$work/graph.contract" \
-  --lowering-log "$work/lowering.log" --output-dir "$work/recheck" --timeout-ms 15000
-cmp "$work/strictly-better.smt2" "$work/recheck/strictly-better.smt2"
+z3 "$work/heuristic-witness.smt2"
+z3 "$work/strictly-better.smt2"
 ```
 
-The optimizer is also available to generate an order, including a better candidate on instances where one exists. Verify the rebuilt lowering log with `--verify-lowering` when making an executable-performance claim.
-
-```sh
-python3 "$build_dir/tools/talos-rank/eval_rank.py" "$work/graph.contract" \
-  --lowering-log "$work/lowering.log" --output "$work/order.tsv" \
-  --summary "$work/optimization.json" --dump-smt "$work/search"
-```
-
-To reuse the measured BlackParrot order, extract `blackparrot-2state.tar.xz` and pass its `improving.order` to the probe. This preserves the exact witness even if a later time-bounded search chooses a different incumbent.
-
-For a new design, build the ordinary native Talos target and run the following command on a Ninja build with `compile_commands.json`.
-
-```sh
-python3 benchmark/scheduler/build_eval_probe.py "$build_dir"
-```
-
-Compile the design with the resulting `tools/driver/talos-eval-rank-probe`, the design’s usual flags, `--mlir-timing`, and `TALOS_EVAL_CONTRACT` pointing to an output file. Save the compiler log. To compile the solver's order, supply `TALOS_EVAL_ORDER` pointing to the generated order file and a fresh contract output path. The probe checks the graph digest before installing it. Use the ordinary driver for heuristic-only builds.
+For CVA6, the expected answers are `sat` and `unsat`. The first query fixes the heuristic ranks and checks their feasibility and cost. The second leaves every model-permitted rank free and asks whether fewer destinations are possible, or whether the same destination count permits fewer edges. A SAT second query is a counterexample. UNKNOWN is inconclusive. BlackParrot includes the archived witness for its improving order. The original queries have a 15-second timeout and were replayed with Z3 4.13.4 and 4.15.5. Each archive's manifest includes costs, expected decisions and input digests.
 
 ## What relaxing the model changed
 
@@ -69,6 +59,6 @@ On the same CVA6 instance and pinned AArch64 core, five alternating fresh optimi
 | Preserve forwarding and checkpoints | 1.19 s | 1.71 s | (109, 231) |
 | Release forwarding-chain constraints, retain checkpoint positions and native slot forms | 2.69 s | 2.87 s | (109, 228) |
 
-A separate `verify_heuristic.py --policy graph-only` ablation keeps the same graph, vertex granularity and contiguous SCC/island intervals, but releases native slot types, repeatability ordering, forwarding chains, and checkpoint positions. It asks the single global strictly-better question, rather than running the decomposed optimizer. In three alternating trials with a 15-second per-query timeout, the native better-order decision returned UNSAT every time (median 1.44 s). The graph-only decision returned UNKNOWN every time. Its timeout says nothing about whether a better order exists; the (109, 228) order from the less relaxed problem is already feasible in this larger space. This diagnostic emits SMT queries only. Eliminating a real event boundary requires its own language-semantic justification.
+A separate graph-only ablation keeps the same graph, vertex granularity and contiguous SCC/island intervals, but releases native slot types, repeatability ordering, forwarding chains, and checkpoint positions. It asks the single global strictly-better question, rather than running the decomposed optimizer. In three alternating trials with a 15-second per-query timeout, the native better-order decision returned UNSAT every time (median 1.44 s). The graph-only decision returned UNKNOWN every time. Its timeout says nothing about whether a better order exists; the (109, 228) order from the less relaxed problem is already feasible in this larger space. This diagnostic emits SMT queries only. Eliminating a real event boundary requires its own language-semantic justification.
 
 The separately executed 109-source-cut trial used runtime frames for split processes and lost grouped native evaluators in 61 processes. It cost about 730,398 host instructions per simulated cycle in the store window versus 145,002 for the native control. This is a different experiment from relaxing a scheduling constraint in Z3.

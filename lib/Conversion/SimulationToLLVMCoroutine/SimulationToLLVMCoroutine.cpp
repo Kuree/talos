@@ -5082,6 +5082,8 @@ class MaterializeNativeProcessesPass final
     }
     if (failed(state.materialize()))
       return signalPassFailure();
+    if (succeeded(state.resolvedEval))
+      state.resolvedEval->rankTrial = nullptr;
     state.stage = Analysis::Stage::Materialized;
     // Function passes may run before LLVM function preparation and end this
     // analysis; the module carries the stage instead.

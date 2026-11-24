@@ -71,7 +71,7 @@ struct NativePipelineAnalysis {
   prepareFragments(llvm::function_ref<mlir::LogicalResult()> threadStatuses);
   mlir::LogicalResult planOwnership();
   mlir::LogicalResult planExecutableNodes();
-  mlir::LogicalResult resolveEval();
+  mlir::LogicalResult resolveEval(NativeRankTrial *trial);
   /// Marks eval owners the runtime creates already waiting at their single
   /// continuation (NativeStartAdmission.cpp).
   mlir::LogicalResult admitStartedOwners();

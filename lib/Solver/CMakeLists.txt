@@ -1,5 +1,6 @@
 set(TALOS_SOLVER_SOURCES
   BitVectorProof.cpp
+  NativeRankSolver.cpp
   BooleanDNF.cpp
   RandomProgramSMT.cpp
   RandomSamplerZ3.cpp
@@ -17,7 +18,7 @@ if(TALOS_ENABLE_Z3)
     add_compile_definitions(TALOS_Z3_SINGLE_THREADED=1)
   endif()
   # Z3's public C++ header predates LLVM's suggest-override policy.
-  set_source_files_properties(BitVectorProof.cpp BooleanDNF.cpp SolverZ3.cpp PROPERTIES
+  set_source_files_properties(BitVectorProof.cpp BooleanDNF.cpp NativeRankSolver.cpp SolverZ3.cpp PROPERTIES
     COMPILE_OPTIONS "-fexceptions;-Wno-suggest-override")
   list(APPEND TALOS_SOLVER_LIBS MLIRIR MLIRSMT)
 endif()

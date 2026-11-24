@@ -3,6 +3,7 @@
 #ifndef TALOS_CONVERSION_SIMULATIONTOLLVMCOROUTINE_H
 #define TALOS_CONVERSION_SIMULATIONTOLLVMCOROUTINE_H
 
+#include "talos/Analysis/NativeEvalRankAnalysis.h"
 #include "talos/Conversion/Passes.h"
 #include "talos/Dialect/Native/NativeRuntimeEntries.h"
 
@@ -37,7 +38,8 @@ mlir::LogicalResult materializeDPIExportBridges(mlir::ModuleOp module);
 /// Append each native planning, specialization and lowering pass in ABI order.
 void buildSimulationToLLVMCoroutinePipeline(mlir::OpPassManager &manager,
                                             bool nativeWords = true,
-                                            bool nativeAggregates = true);
+                                            bool nativeAggregates = true,
+                                            analysis::NativeRankStrategy strategy = analysis::NativeRankStrategy::Heuristic);
 void registerSimulationToLLVMCoroutinePipeline();
 /// Add the native LLVM finalization stages, in order, after
 /// convert-native-function-body-to-llvm.
