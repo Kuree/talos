@@ -107,4 +107,23 @@ module {
     %member = schedule.handle.offset %proved, %index in_bounds
     llvm.return
   }
+
+  // Preserve the tagged object through a dynamic field selection. A second
+  // displacement cannot turn an overflowing first selection into a valid one.
+  // CHECK-LABEL: llvm.func @tagged_chain(
+  // CHECK: llvm.trunc
+  // CHECK: arith.cmpi eq
+  // CHECK: arith.select
+  // CHECK-NOT: llvm.call
+  // CHECK: llvm.trunc
+  // CHECK: arith.cmpi ne
+  // CHECK: arith.select
+  // CHECK-NOT: llvm.call
+  // CHECK: llvm.return
+  llvm.func @tagged_chain(%first: i64, %second: i64) -> i64 {
+    %root = arith.constant 4611686027017322496 : i64
+    %field = schedule.handle.offset %root, %first
+    %nested = schedule.handle.offset %field, %second
+    llvm.return %nested : i64
+  }
 }

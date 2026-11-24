@@ -152,7 +152,9 @@ module attributes {
 // CHECK-LABEL: llvm.func @drive_dynamic
 // CHECK-DAG: %[[Odrive_dynamic0:.*]] = llvm.mlir.constant(0 : i64) : i64
 // CHECK-DAG: %[[Wdrive_dynamic0:.*]] = llvm.mlir.constant(8 : i64) : i64
-// CHECK-DAG: llvm.call @talos_rt_v1_native_handle_offset
+// CHECK-DAG: %[[INVALID:.*]] = llvm.mlir.constant(-1 : i64) : i64
+// CHECK-DAG: %[[FIELD:.*]] = llvm.select %{{.*}}, %{{.*}}, %[[INVALID]] : i1, i64
+// CHECK-DAG: llvm.select %{{.*}}, %[[FIELD]], %[[INVALID]] : i1, i64
 // CHECK-NOT: llvm.call @talos_rt_v1_strength_resolve_kind
 // CHECK: llvm.call @talos_rt_v1_scheduler_static_transition(%{{.*}}, %{{.*}}, %[[Odrive_dynamic0]], %[[Wdrive_dynamic0]],
 // CHECK-NOT: llvm.call @talos_rt_v1_strength_resolve_kind

@@ -499,18 +499,59 @@ void lowerNativeHandleOps(ModuleOp module) {
     return;
   simplifyNativeHandleOps(module, handles);
   handles = collectNativeHandleOps(module);
+  DenseMap<Value, uint64_t> taggedObjects;
   for (Operation *op : handles) {
     OpBuilder builder(op);
     Location location = op->getLoc();
     Type i64 = builder.getI64Type();
     Value lowered;
+    Value source = isa<schedule::NativeHandleOffsetOp>(op)
+                       ? cast<schedule::NativeHandleOffsetOp>(op).getHandle()
+                       : cast<schedule::NativeHandleGuardOp>(op).getHandle();
+    std::optional<uint64_t> object;
+    if (auto it = taggedObjects.find(source); it != taggedObjects.end()) {
+      object = it->second;
+    } else if (auto bits = detail::resolveCFGConstantInteger(source)) {
+      talos_rt_stable_handle_v1 decoded;
+      if (talos_rt_stable_handle_decode(*bits, &decoded) &&
+          decoded.kind != TALOS_RT_STABLE_HANDLE_GLOBAL)
+        object = talos_rt_stable_handle_encode(decoded.kind, decoded.id, 0);
+    }
     if (auto offset = dyn_cast<schedule::NativeHandleOffsetOp>(op)) {
       // An offset proved in bounds neither carries nor borrows in the offset
       // field, so the runtime's result is the plain sum.
       if (offset.getInBounds())
         lowered = LLVM::AddOp::create(builder, location, offset.getHandle(),
                                       offset.getAmount());
-      else
+      else if (object) {
+        // A field of this object has a signed 32-bit offset. Offsetting an
+        // invalid selection stays invalid, including when the displacement
+        // would otherwise bring it back inside the object (11.5.1).
+        Type i32 = builder.getI32Type();
+        Value invalid =
+            detail::llvmConstant(builder, location, i64, UINT64_MAX);
+        Value prior = LLVM::TruncOp::create(builder, location, i32, source);
+        // Even an overflowing i64 sum wraps to within 2^31 of an i64
+        // extreme, outside the signed 32-bit range tested below.
+        Value sum = LLVM::AddOp::create(
+            builder, location,
+            LLVM::SExtOp::create(builder, location, i64, prior),
+            offset.getAmount());
+        Value field = LLVM::TruncOp::create(builder, location, i32, sum);
+        Value fits = arith::CmpIOp::create(
+            builder, location, arith::CmpIPredicate::eq, sum,
+            LLVM::SExtOp::create(builder, location, i64, field));
+        Value valid = arith::AndIOp::create(
+            builder, location, fits,
+            arith::CmpIOp::create(builder, location, arith::CmpIPredicate::ne,
+                                  source, invalid));
+        Value tagged = arith::OrIOp::create(
+            builder, location,
+            detail::llvmConstant(builder, location, i64, *object),
+            LLVM::ZExtOp::create(builder, location, i64, field));
+        lowered =
+            arith::SelectOp::create(builder, location, valid, tagged, invalid);
+      } else
         lowered =
             LLVM::CallOp::create(
                 builder, location, TypeRange{i64},
@@ -536,6 +577,8 @@ void lowerNativeHandleOps(ModuleOp module) {
       lowered = arith::SelectOp::create(builder, location, guard.getValid(),
                                         guard.getHandle(), invalid);
     }
+    if (object)
+      taggedObjects.try_emplace(lowered, *object);
     op->getResult(0).replaceAllUsesWith(lowered);
     op->erase();
   }

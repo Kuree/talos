@@ -138,7 +138,10 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     }
     // PLANE-LABEL: llvm.func @unproven_handle
     // PLANE: llvm.icmp
-    // PLANE: llvm.call @talos_rt_v1_native_handle_offset
+    // PLANE: %[[SUM:.*]] = llvm.add
+    // PLANE: %[[FIELD:.*]] = llvm.trunc %[[SUM]] : i64 to i32
+    // PLANE: %[[EXT:.*]] = llvm.sext %[[FIELD]] : i32 to i64
+    // PLANE: llvm.icmp "eq" %[[SUM]], %[[EXT]]
     // PLANE: llvm.select
     // PLANE: llvm.return
   }
