@@ -21,6 +21,7 @@
 #ifndef TALOS_RUNTIME_LIB_FLATU64TABLE_H
 #define TALOS_RUNTIME_LIB_FLATU64TABLE_H
 
+#include "ExceptionSupport.h"
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -56,7 +57,7 @@ public:
   }
 
   void reserve(size_t elements) {
-    if (elements * 4 > capacity() * 3)
+    if (elements > capacity() - capacity() / 4)
       rehash(elements);
   }
 
@@ -65,7 +66,7 @@ public:
   /// burst of erasures. Invalidates iterators; may throw bad_alloc and then
   /// changes nothing.
   void shrinkIfSparse() {
-    if (capacity() > 64 && count * 8 <= capacity())
+    if (capacity() > 64 && count <= capacity() / 8)
       rehash(count);
   }
 
@@ -111,7 +112,7 @@ protected:
       }
     }
     if (free == SIZE_MAX || (control[free] == kEmpty &&
-                             (count + erased + 1) * 4 > capacity() * 3)) {
+                             count + erased >= capacity() - capacity() / 4)) {
       rehash(count + 1);
       size_t mask = capacity() - 1;
       free = mix(key) & mask;
@@ -155,8 +156,11 @@ private:
   /// Rebuilds for `elements` live keys at a load of at most one half.
   void rehash(size_t elements) {
     size_t wanted = 16;
-    while (wanted < elements * 2)
+    while (elements > wanted / 2) {
+      if (wanted > slots.max_size() / 2)
+        talos_rt_out_of_memory();
       wanted *= 2;
+    }
     std::vector<uint8_t> oldControl(wanted, kEmpty);
     std::vector<Slot> oldSlots(wanted);
     oldControl.swap(control);

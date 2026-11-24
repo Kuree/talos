@@ -8281,6 +8281,17 @@ TEST(FlatU64Table, MatchesStandardContainers) {
   EXPECT_EQ(std::unordered_set<uint64_t>(erasing.begin(), erasing.end()), kept);
 }
 
+#if !defined(TALOS_RT_IGNORE_EXCEPTIONS) &&                                    \
+    (defined(__cpp_exceptions) || defined(_CPPUNWIND))
+TEST(FlatU64Table, OversizedReservationPreservesEntries) {
+  talos::runtime::FlatU64Map<size_t> map;
+  map.emplace(17, 42);
+  EXPECT_THROW(map.reserve(SIZE_MAX), std::bad_alloc);
+  ASSERT_EQ(map.size(), 1u);
+  EXPECT_EQ(map.find(17)->second, 42u);
+}
+#endif
+
 // Two-tier B2 Q1: the context lock re-enters inline on its owning thread and
 // still excludes every other thread until the outermost unlock.
 TEST(ContextMutex, ReentersOnOwnerAndExcludesOtherThreads) {
