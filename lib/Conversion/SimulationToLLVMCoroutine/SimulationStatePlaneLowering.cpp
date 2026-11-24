@@ -997,30 +997,23 @@ Value storeStatePlane(ConversionPatternRewriter &rewriter, Location location,
   return changed;
 }
 
-bool emitDirectDynamicPackedStore(
-    ConversionPatternRewriter &rewriter, Location location, Value handle,
-    Value value, Value unknown, const NativeStateLayout *layout,
-    bool assumeClean, bool continuous, bool twoState,
-    schedule::SourceOwnerAttr sourceOwner, const NativeStateAccessInfo *access,
-    bool nbaEquivalent) {
-  auto accessUnit = access ? access->accessUnit : std::nullopt;
-  auto inputType = dyn_cast<IntegerType>(value.getType());
-  if (!inputType || !layout || !layout->transitionHandlesExact)
-    return false;
-  auto range = resolveDirectDynamicStateRange(handle, inputType.getWidth(),
-                                              layout, access);
-  if (!range || (range->guarded && (continuous || !assumeClean)))
-    return false;
-  bool needsNotification = layout->transitionHandles.contains(range->staticID);
+// The caller has checked the root, selectors and representation before
+// emitting control flow. This helper always materializes the selected store.
+static void emitResolvedDynamicPackedStore(
+    ConversionPatternRewriter &rewriter, Location location,
+    DirectDynamicStateRange range, Value value, Value unknown,
+    const NativeStateLayout *layout, bool twoState,
+    schedule::SourceOwnerAttr sourceOwner,
+    std::optional<PackedAccessUnit> accessUnit, bool nbaEquivalent) {
+  auto inputType = cast<IntegerType>(value.getType());
+  bool needsNotification = layout->transitionHandles.contains(range.staticID);
   if (auto function = rewriter.getInsertionBlock()->getParentOp())
     if (auto roots = native::get<native::NoTransitionRoots>(function))
       needsNotification &= !llvm::is_contained(
-          roots.asArrayRef(), static_cast<int32_t>(range->staticID));
-  if (!access || access->root != range->staticID || !range->wholeOrInvalid)
-    accessUnit.reset();
-  if (range->rootWidth > 64 || accessUnit) {
+          roots.asArrayRef(), static_cast<int32_t>(range.staticID));
+  if (range.rootWidth > 64 || accessUnit) {
     Block *guardContinuation = nullptr;
-    if (range->wholeOrInvalid && !range->inBounds) {
+    if (range.wholeOrInvalid && !range.inBounds) {
       // A typed array access denotes a complete element or no storage. Emit
       // the ordinary guarded store shape: if valid, update the element. Invalid
       // indices must not cause a dummy read/modify/write or a notification.
@@ -1030,11 +1023,11 @@ bool emitDirectDynamicPackedStore(
       Block *body = rewriter.createBlock(head->getParent(),
                                          guardContinuation->getIterator());
       rewriter.setInsertionPointToEnd(head);
-      cf::CondBranchOp::create(rewriter, location, range->valid, body,
+      cf::CondBranchOp::create(rewriter, location, range.valid, body,
                                guardContinuation);
       rewriter.setInsertionPointToEnd(body);
-      range->inBounds = true;
-      range->valid = llvmConstant(rewriter, location, rewriter.getI1Type(), 1);
+      range.inBounds = true;
+      range.valid = llvmConstant(rewriter, location, rewriter.getI1Type(), 1);
     }
     // Update only the selected bits, independently of the aggregate root's
     // size. Clip partial and invalid selects exactly as LRM 11.5.1
@@ -1042,12 +1035,12 @@ bool emitDirectDynamicPackedStore(
     auto i64 = rewriter.getI64Type();
     Type pointer = LLVM::LLVMPointerType::get(rewriter.getContext());
     Value zero = llvmConstant(rewriter, location, i64, 0);
-    Value offset = range->bitOffset;
-    Value valid = range->valid, clamped = offset, lowClip = zero,
+    Value offset = range.bitOffset;
+    Value valid = range.valid, clamped = offset, lowClip = zero,
           highClip = zero;
-    if (!range->inBounds) {
+    if (!range.inBounds) {
       valid = arith::AndIOp::create(
-          rewriter, location, range->valid,
+          rewriter, location, range.valid,
           arith::AndIOp::create(
               rewriter, location,
               arith::CmpIOp::create(
@@ -1056,13 +1049,13 @@ bool emitDirectDynamicPackedStore(
                                -int64_t(inputType.getWidth()))),
               arith::CmpIOp::create(
                   rewriter, location, arith::CmpIPredicate::slt, offset,
-                  llvmConstant(rewriter, location, i64, range->rootWidth))));
+                  llvmConstant(rewriter, location, i64, range.rootWidth))));
       Value safe =
           arith::SelectOp::create(rewriter, location, valid, offset, zero);
       Value negative = arith::CmpIOp::create(
           rewriter, location, arith::CmpIPredicate::slt, safe, zero);
       Value last = llvmConstant(rewriter, location, i64,
-                                range->rootWidth - inputType.getWidth());
+                                range.rootWidth - inputType.getWidth());
       Value above = arith::CmpIOp::create(
           rewriter, location, arith::CmpIPredicate::sgt, safe, last);
       clamped = arith::SelectOp::create(
@@ -1077,7 +1070,7 @@ bool emitDirectDynamicPackedStore(
     }
     Value absolute = arith::AddIOp::create(
         rewriter, location, clamped,
-        llvmConstant(rewriter, location, i64, range->rootOffset));
+        llvmConstant(rewriter, location, i64, range.rootOffset));
     if (accessUnit)
       absolute = arith::SubIOp::create(
           rewriter, location, absolute,
@@ -1148,7 +1141,7 @@ bool emitDirectDynamicPackedStore(
         if (readOld) {
           auto load = schedule::NativeStateLoadOp::create(
               rewriter, location, spanType, statePlane, byte, 0, 1);
-          annotateCanonicalAccess(load, range->rootOffset, range->rootWidth,
+          annotateCanonicalAccess(load, range.rootOffset, range.rootWidth,
                                   width);
           old = resize(load, windowType);
         }
@@ -1165,15 +1158,15 @@ bool emitDirectDynamicPackedStore(
         auto write = schedule::NativeStateStoreOp::create(
             rewriter, location, resize(updated, spanType), statePlane, byte, 0,
             1);
-        annotateCanonicalAccess(write, range->rootOffset, range->rootWidth,
+        annotateCanonicalAccess(write, range.rootOffset, range.rootWidth,
                                 width);
         // The clipped mask preserves every bit outside the root, including
         // neighboring bits in the first and last byte. Retain that proof for
         // promotion bookkeeping even though the byte address is dynamic.
         if (statePlane == schedule::StatePlane::Unknown)
           setNativeAccessWrittenBits(write, rewriter.getDenseI64ArrayAttr(
-                                                {int64_t(range->rootOffset),
-                                                 int64_t(range->rootWidth)}));
+                                                {int64_t(range.rootOffset),
+                                                 int64_t(range.rootWidth)}));
         return std::pair<Value, Value>{
             resize(arith::ShRUIOp::create(rewriter, location, old, shift),
                    inputType),
@@ -1237,7 +1230,7 @@ bool emitDirectDynamicPackedStore(
             arith::AddIOp::create(rewriter, location, clamped,
                                   llvmConstant(rewriter, location, i64, low)),
             chunk(oldValue), chunk(oldUnknown), chunk(newValue),
-            chunk(newUnknown), rewriter.getI64IntegerAttr(range->staticID),
+            chunk(newUnknown), rewriter.getI64IntegerAttr(range.staticID),
             rewriter.getI64IntegerAttr(width), sourceOwner);
         if (nbaEquivalent)
           ::talos::schedule::set<
@@ -1249,27 +1242,27 @@ bool emitDirectDynamicPackedStore(
       cf::BranchOp::create(rewriter, location, guardContinuation);
       rewriter.setInsertionPointToStart(guardContinuation);
     }
-    return true;
+    return;
   }
   // One machine-word root permits an exact read/modify/write without a
   // runtime handle lookup. Invalid selects are no-ops; overhanging selects
   // update only their in-range bits (LRM 11.5.1).
   auto i64 = rewriter.getI64Type();
-  auto rootType = rewriter.getIntegerType(range->rootWidth);
+  auto rootType = rewriter.getIntegerType(range.rootWidth);
   Value zero = llvmConstant(rewriter, location, i64, 0);
-  Value offset = range->bitOffset;
-  Value valid = range->valid, right = zero, left = offset;
-  if (range->wholeOrInvalid && !range->inBounds) {
+  Value offset = range.bitOffset;
+  Value valid = range.valid, right = zero, left = offset;
+  if (range.wholeOrInvalid && !range.inBounds) {
     left = arith::SelectOp::create(rewriter, location, valid, offset, zero);
-  } else if (!range->inBounds) {
+  } else if (!range.inBounds) {
     Value aboveBegin = arith::CmpIOp::create(
         rewriter, location, arith::CmpIPredicate::sgt, offset,
         llvmConstant(rewriter, location, i64, -int64_t(inputType.getWidth())));
     Value belowEnd = arith::CmpIOp::create(
         rewriter, location, arith::CmpIPredicate::slt, offset,
-        llvmConstant(rewriter, location, i64, range->rootWidth));
+        llvmConstant(rewriter, location, i64, range.rootWidth));
     valid = arith::AndIOp::create(
-        rewriter, location, range->valid,
+        rewriter, location, range.valid,
         arith::AndIOp::create(rewriter, location, aboveBegin, belowEnd));
     // Sanitize before either shift, not merely before the final select.
     Value safe =
@@ -1299,8 +1292,8 @@ bool emitDirectDynamicPackedStore(
   auto load = [&](schedule::StatePlane plane) -> Value {
     return extractDirectPackedPlane(
         rewriter, location,
-        loadDirectPackedPlane(rewriter, location, plane, range->rootOffset,
-                              range->rootWidth, range->containerWidth),
+        loadDirectPackedPlane(rewriter, location, plane, range.rootOffset,
+                              range.rootWidth, range.containerWidth),
         rootType);
   };
   auto merge = [&](Value old, Value input) -> Value {
@@ -1324,23 +1317,107 @@ bool emitDirectDynamicPackedStore(
                               : load(schedule::StatePlane::Unknown);
   Value newUnknown = twoState ? oldUnknown : merge(oldUnknown, unknown);
   storeDirectPackedPlane(rewriter, location, newValue,
-                         schedule::StatePlane::Value, range->rootOffset, false,
-                         range->containerWidth);
+                         schedule::StatePlane::Value, range.rootOffset, false,
+                         range.containerWidth);
   if (!twoState)
     storeDirectPackedPlane(rewriter, location, newUnknown,
-                           schedule::StatePlane::Unknown, range->rootOffset,
-                           false, range->containerWidth);
+                           schedule::StatePlane::Unknown, range.rootOffset,
+                           false, range.containerWidth);
   if (needsNotification) {
     Value rootHandle =
         llvmConstant(rewriter, location, i64,
                      talos_rt_stable_handle_encode(
-                         TALOS_RT_STABLE_HANDLE_STATIC, range->staticID, 0));
-    notifySignal(rewriter, location, rootHandle, range->rootWidth, oldValue,
+                         TALOS_RT_STABLE_HANDLE_STATIC, range.staticID, 0));
+    notifySignal(rewriter, location, rootHandle, range.rootWidth, oldValue,
                  oldUnknown, newValue, newUnknown,
-                 DirectStaticStateRange{range->rootOffset, 0, range->staticID,
-                                        range->guarded},
+                 DirectStaticStateRange{range.rootOffset, 0, range.staticID,
+                                        range.guarded},
                  sourceOwner, nbaEquivalent);
   }
+}
+
+bool emitDirectDynamicPackedStore(
+    ConversionPatternRewriter &rewriter, Location location, Value handle,
+    Value value, Value unknown, const NativeStateLayout *layout,
+    bool assumeClean, bool continuous, bool twoState,
+    schedule::SourceOwnerAttr sourceOwner, const NativeStateAccessInfo *access,
+    bool nbaEquivalent) {
+  auto accessUnit = access ? access->accessUnit : std::nullopt;
+  auto inputType = dyn_cast<IntegerType>(value.getType());
+  if (!inputType || !layout || !layout->transitionHandlesExact)
+    return false;
+  auto range = resolveDirectDynamicStateRange(handle, inputType.getWidth(),
+                                              layout, access);
+  if (!range || (range->guarded && (continuous || !assumeClean)))
+    return false;
+  if (!access || access->root != range->staticID || !range->wholeOrInvalid)
+    accessUnit.reset();
+  emitResolvedDynamicPackedStore(rewriter, location, *range, value, unknown,
+                                 layout, twoState, sourceOwner, accessUnit,
+                                 nbaEquivalent);
+  return true;
+}
+
+// A suspended process can reload a handle from its frame even when the
+// source analysis knows the storage root. An unsigned difference from the
+// encoded base checks the root tag, ID and complete selection in one test.
+// Other handles, including overhanging selects, keep their runtime update
+// (IEEE 1800-2023 11.5.1). No waiter or driver override observes the fast
+// path, so the only effect is the in-place update of the selected bits.
+bool emitUnwatchedFrameStore(ConversionPatternRewriter &rewriter,
+                             Location location, Value handle, Value value,
+                             const NativeStateLayout *layout,
+                             const NativeStateAccessInfo *access,
+                             bool continuous) {
+  if (!layout || !layout->closedTwoStateFrameStores ||
+      !layout->transitionHandlesExact || !access ||
+      !layout->directHandles.contains(access->root) ||
+      layout->guardedHandles.contains(access->root) ||
+      layout->transitionHandles.contains(access->root))
+    return false;
+  const auto *bound = layout->findBound(access->root);
+  unsigned width = cast<IntegerType>(value.getType()).getWidth();
+  if (!bound || bound->width <= 64 || bound->width > INT32_MAX ||
+      width > bound->width)
+    return false;
+
+  auto base = llvmConstant(rewriter, location, rewriter.getI64Type(),
+                           talos_rt_stable_handle_encode(
+                               TALOS_RT_STABLE_HANDLE_STATIC, access->root, 0));
+  Value offset = arith::SubIOp::create(rewriter, location, handle, base);
+  Value last = llvmConstant(rewriter, location, rewriter.getI64Type(),
+                            bound->width - width);
+  Value valid = arith::CmpIOp::create(rewriter, location,
+                                      arith::CmpIPredicate::ule, offset, last);
+
+  Block *head = rewriter.getInsertionBlock();
+  Block *next = rewriter.splitBlock(head, rewriter.getInsertionPoint());
+  Block *direct = rewriter.createBlock(head->getParent(), next->getIterator());
+  Block *checked = rewriter.createBlock(head->getParent(), next->getIterator());
+  rewriter.setInsertionPointToEnd(head);
+  cf::CondBranchOp::create(rewriter, location, valid, direct, checked);
+  rewriter.setInsertionPointToEnd(direct);
+  // Within this branch, the root tag, ID and entire window are proven.
+  DirectDynamicStateRange range{
+      llvmConstant(rewriter, location, rewriter.getI1Type(), 1),
+      offset,
+      bound->offset,
+      0,
+      bound->width,
+      access->root,
+      false,
+      true,
+      true,
+      bound->containerWidth};
+  emitResolvedDynamicPackedStore(rewriter, location, range, value, {}, layout,
+                                 true, {}, std::nullopt, false);
+  cf::BranchOp::create(rewriter, location, next);
+  rewriter.setInsertionPointToEnd(checked);
+  schedule::NativeStateFrameStoreOp::create(rewriter, location, value, Value{},
+                                            handle, layout->bitCount,
+                                            /*fourState=*/false, continuous);
+  cf::BranchOp::create(rewriter, location, next);
+  rewriter.setInsertionPointToStart(next);
   return true;
 }
 
@@ -1622,14 +1699,88 @@ void lowerNativeHandleTransition(Operation *transition,
   transition->erase();
 }
 
-void lowerNativeHandleTransitions(ModuleOp module) {
+// A plain transition.handle is the generic, potentially clipped publication.
+// Apply the scalar ABI only to the exact in-bounds root of a certified ranked
+// frame. The unchanged check belongs here: introducing CFG before rank
+// analysis would itself change the executable preemption sites (4.6, 4.7).
+static bool
+lowerRankedScalarTransition(schedule::NativeHandleTransitionOp op,
+                            const detail::NativeStateLayout &layout) {
+  if (!layout.closedTwoStateFrameStores || !layout.transitionHandlesExact ||
+      !op || op.getSourceOwnerAttr() || op.getNbaEquivalent() ||
+      op.getWidth() > 64)
+    return false;
+  auto function = op->getParentOfType<sim::SimFuncOp>();
+  if (!function || !native::has<native::RankedSignalWriter>(function) ||
+      function.getEntryKind() != sim::EntryKind::AlwaysComb ||
+      function.getHomeRegion() != sim::EventRegion::Active ||
+      !schedule::has<schedule::Field::EvalRuntimeCalendar>(
+          op->getParentOfType<ModuleOp>()))
+    return false;
+  auto range = detail::resolveDirectStaticStateRange(op.getHandle(),
+                                                     op.getWidth(), &layout);
+  if (!range || range->guarded)
+    return false;
+  IRRewriter builder(op.getContext());
+  builder.setInsertionPoint(op);
+  Location loc = op.getLoc();
+  auto i64 = builder.getI64Type();
+  auto scalar = [&](Value plane) -> Value {
+    if (!plane)
+      return detail::llvmConstant(builder, loc, i64, 0);
+    if (plane.getType() == i64)
+      return plane;
+    return LLVM::ZExtOp::create(builder, loc, i64, plane);
+  };
+  Value oldValue = scalar(op.getOldValue()),
+        newValue = scalar(op.getNewValue());
+  Value oldUnknown = scalar(op.getOldUnknown()),
+        newUnknown = scalar(op.getNewUnknown());
+  auto differs = [&](Value a, Value b) {
+    return arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ne, a, b);
+  };
+  Value changed =
+      arith::OrIOp::create(builder, loc, differs(oldValue, newValue),
+                           differs(oldUnknown, newUnknown));
+  Block *head = op->getBlock();
+  Block *next = builder.splitBlock(head, op->getIterator());
+  Block *publish = builder.createBlock(next);
+  builder.setInsertionPointToEnd(head);
+  cf::CondBranchOp::create(builder, loc, changed, publish, next);
+  builder.setInsertionPointToEnd(publish);
+  schedule::NativeTransitionOp::create(
+      builder, loc, op.getRuntimeContext(),
+      detail::llvmConstant(builder, loc, i64, range->localOffset), oldValue,
+      oldUnknown, newValue, newUnknown,
+      builder.getI64IntegerAttr(range->staticID),
+      builder.getI64IntegerAttr(op.getWidth()), schedule::SourceOwnerAttr{});
+  cf::BranchOp::create(builder, loc, next);
+  builder.eraseOp(op);
+  return true;
+}
+
+static void lowerHandleTransitions(ModuleOp module,
+                                   const detail::NativeStateLayout *layout) {
   SmallVector<Operation *> transitions;
   module.walk([&](Operation *op) {
     if (isNativeHandleTransition(op))
       transitions.push_back(op);
   });
-  for (Operation *transition : transitions)
+  for (Operation *transition : transitions) {
+    if (layout &&
+        lowerRankedScalarTransition(
+            dyn_cast<schedule::NativeHandleTransitionOp>(transition), *layout))
+      continue;
     lowerNativeHandleTransition(transition);
+  }
+}
+
+void lowerNativeHandleTransitions(ModuleOp module) {
+  lowerHandleTransitions(module, nullptr);
+}
+void detail::lowerRankedHandleTransitions(ModuleOp module,
+                                          const NativeStateLayout &layout) {
+  lowerHandleTransitions(module, &layout);
 }
 
 } // namespace talos

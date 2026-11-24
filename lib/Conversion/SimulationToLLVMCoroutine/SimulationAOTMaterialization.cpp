@@ -2811,7 +2811,7 @@ FailureOr<bool> makeNativeEvalPlan(
     // Every handle-addressed transition of a generated body is read above.
     // The ones left are runtime calls to the rest of the plan, e.g. a ranked
     // group's closed-body test.
-    lowerNativeHandleTransitions(module);
+    lowerRankedHandleTransitions(module, stateLayout);
 
     if (native::has<native::DebugTiming>(module))
       llvm::errs() << "talos projected static publications: scalar="

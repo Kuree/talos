@@ -101,4 +101,17 @@ module {
     schedule.transition.handle %context, %handle from %old unknown %old_unknown to %new nba_equivalent {source_owner = #schedule.source_owner<codeUnit = 3 : i64, continuation = 1 : i64>} : i72
     llvm.return
   }
+  // Textual marker attributes carry no layout proof. A positive static
+  // offset can still overhang its root, so preserve generic clipping and
+  // the original publication route (11.5.1, 9.4.2).
+  // CHECK-LABEL: llvm.func @uncertified_scalar(
+  // CHECK-NOT: cf.cond_br
+  // CHECK-NOT: @talos_rt_v1_scheduler_static_transition
+  // CHECK: llvm.call @talos_rt_v1_scheduler_signal_transition
+  llvm.func @uncertified_scalar(%ctx: !llvm.ptr, %before: i8, %after: i8) {
+    %handle = llvm.mlir.constant(4611686027017322502 : i64) : i64
+    schedule.transition.handle %ctx, %handle from %before to %after {native.ranked_signal_writer} : i8
+    llvm.return
+  }
+
 }

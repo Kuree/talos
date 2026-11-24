@@ -915,6 +915,15 @@ public:
         *width <= 64 && storedValue.getType() == plane &&
         sim::getPackedScalarType(valueType)) {
       bool fourState = containsLogic(valueType) && !twoState;
+      if (!fourState && !directRange &&
+          entryKind == sim::EntryKind::AlwaysComb &&
+          function.getHomeRegion() == sim::EventRegion::Active &&
+          emitUnwatchedFrameStore(rewriter, op.getLoc(),
+                                  adaptor.getReference().front(), storedValue,
+                                  directLayout, access, continuous)) {
+        rewriter.eraseOp(op);
+        return success();
+      }
       schedule::NativeStateFrameStoreOp::create(
           rewriter, op.getLoc(), storedValue,
           fourState && adaptor.getValue().size() == 2 ? adaptor.getValue()[1]

@@ -196,6 +196,9 @@ struct NativeStateLayout : analysis::NativeStateLayoutAnalysis {
   bool transitionHandlesExact = false;
   bool directContinuous = false;
   bool retainContinuousHistory = true;
+  // A closed two-state design with no external writers or force/release
+  // can specialize frame stores while preserving source-ordered wakes.
+  bool closedTwoStateFrameStores = false;
   // A read subscriber can change the publication route of a store. With
   // no language override or sampled observer, proven static-root reads retain
   // their direct addressing proof on either route.
@@ -269,6 +272,11 @@ struct NativeStateAccessInfo {
   std::optional<PackedAccessUnit> accessUnit;
 };
 
+bool emitUnwatchedFrameStore(mlir::ConversionPatternRewriter &rewriter,
+                             mlir::Location location, mlir::Value handle,
+                             mlir::Value value, const NativeStateLayout *layout,
+                             const NativeStateAccessInfo *access,
+                             bool continuous);
 bool emitDirectDynamicPackedStore(
     mlir::ConversionPatternRewriter &rewriter, mlir::Location location,
     mlir::Value handle, mlir::Value value, mlir::Value unknown,
@@ -686,6 +694,9 @@ void notifySignal(
     std::optional<DirectStaticStateRange> directRange = std::nullopt,
     schedule::SourceOwnerAttr sourceOwner = {}, bool nbaEquivalent = false,
     llvm::function_ref<void()> storeOnChange = {});
+/// Use the compiler-owned closed state layout for eligible scalar publications.
+void lowerRankedHandleTransitions(mlir::ModuleOp module,
+                                  const NativeStateLayout &layout);
 mlir::LogicalResult
 insertAutomaticOwnerReleases(talos::sim::SimFuncOp function);
 mlir::LogicalResult

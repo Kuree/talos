@@ -2136,7 +2136,7 @@ LogicalResult NativePipelineAnalysis::materialize() {
   // on, including to the legacy plan.
   lowerNativeNBAStages(module);
   lowerNativeStateHandleAccesses(module);
-  lowerNativeHandleTransitions(module);
+  lowerRankedHandleTransitions(module, *stateLayout);
   lowerNativeHandleOps(module);
   if (useAOT && !evalScheduler &&
       failed(makeNativeAOTPlanLegacy(

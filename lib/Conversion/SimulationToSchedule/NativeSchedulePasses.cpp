@@ -9,6 +9,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "talos/Analysis/DPIEffectAnalysis.h"
 #include "talos/Analysis/LocalStorageAnalysis.h"
 #include "talos/Analysis/NativeWordAnalysis.h"
 #include "talos/Analysis/ParallelWalk.h"
@@ -284,7 +285,10 @@ LogicalResult NativePipelineAnalysis::planState() {
   // net accesses when there are no language observers/overrides. Driver
   // contributions need a whole-resolution clean guard, not a per-root guard:
   // a forced net must retain subsequent unforced driver updates for release.
+  bool hasPowerUpdates = false;
   module.walk([&](Operation *operation) {
+    hasPowerUpdates |=
+        isa<sim::SimPowerNBAOp, sim::SimPowerNBAViewOp>(operation);
     hasLanguageOverride |= isa<sim::SimOverrideOp, sim::SimDynamicOverrideOp,
                                sim::SimReleaseOverrideOp>(operation);
     hasDynamicLanguageOverride |= isa<sim::SimDynamicOverrideOp>(operation);
@@ -305,6 +309,15 @@ LogicalResult NativePipelineAnalysis::planState() {
       (vpi.requiresPublicationGuards() && !vpi.allowsWrite()))
     ::talos::schedule::set<::talos::schedule::Field::EvalPostponedObservers>(
         module, UnitAttr::get(module.getContext()));
+  if (!hasLanguageOverride && !hasPowerUpdates && vpi.hasComputeGraph() &&
+      vpi.getMode() == schedule::ComputeVPIMode::Off &&
+      native::has<native::ClosedExecutable>(module) &&
+      native::has<native::TwoState>(module) &&
+      !sim::has<sim::metadata::SnapshotPublications>(module)) {
+    analysis::DPIEffectAnalysis dpi(metadataDesign);
+    stateLayout->closedTwoStateFrameStores =
+        !dpi.anyCallMayAccessDesign() && dpi.exportsAreTransparent();
+  }
   stateLayout->directSubscriberReads =
       !vpi.allowsWrite() && vpi.requiresPublicationGuards() &&
       !hasLanguageOverride && !hasLanguageObserver &&
