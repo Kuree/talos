@@ -8281,6 +8281,39 @@ TEST(FlatU64Table, MatchesStandardContainers) {
   EXPECT_EQ(std::unordered_set<uint64_t>(erasing.begin(), erasing.end()), kept);
 }
 
+TEST(FlatU64Table, ReadySetPreservesDenseOrderAcrossBursts) {
+  talos::runtime::FlatU64Set ready;
+  ready.reserve(4096);
+  std::vector<uint64_t> order;
+  for (unsigned burst = 0; burst < 4; ++burst) {
+    for (unsigned i = 0; i < 16; ++i) {
+      uint64_t token = 16 * burst + i;
+      auto [where, inserted] = ready.insert(token);
+      ASSERT_TRUE(inserted);
+      EXPECT_EQ(*where, token);
+      order.push_back(token);
+    }
+    while (order.size() > 2) {
+      uint64_t token = order[1];
+      EXPECT_EQ(ready.erase(token), 1u);
+      EXPECT_EQ(ready.count(token), 0u);
+      order[1] = order.back();
+      order.pop_back();
+    }
+    EXPECT_EQ(std::vector<uint64_t>(ready.begin(), ready.end()), order);
+    for (uint64_t token : order) {
+      auto [where, inserted] = ready.insert(token);
+      EXPECT_FALSE(inserted);
+      EXPECT_EQ(*where, token);
+    }
+  }
+  ready.clear();
+  EXPECT_TRUE(ready.empty());
+  EXPECT_EQ(ready.erase(0), 0u);
+  EXPECT_TRUE(ready.insert(0).second);
+  EXPECT_EQ(ready.count(0), 1u);
+}
+
 #if !defined(TALOS_RT_IGNORE_EXCEPTIONS) &&                                    \
     (defined(__cpp_exceptions) || defined(_CPPUNWIND))
 TEST(FlatU64Table, OversizedReservationPreservesEntries) {

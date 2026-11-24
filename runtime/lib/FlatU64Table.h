@@ -267,9 +267,9 @@ private:
 };
 
 /// A set of 64-bit keys, kept dense for iteration: the keys sit in a vector
-/// (iteration costs the size, not the table capacity, which stays at its
-/// high-water mark after a burst of candidates) and a map gives each key's
-/// position. Erasing moves the last key into the erased position, so a set
+/// (iteration costs the size). Larger sets index each key's position;
+/// small sets search the dense keys directly. Erasing moves the last key
+/// into the erased position, so a set
 /// must not be modified while it is iterated.
 class FlatU64Set {
 public:
@@ -278,10 +278,34 @@ public:
 
   const_iterator begin() const { return items.begin(); }
   const_iterator end() const { return items.end(); }
-  size_t count(uint64_t key) const { return positions.count(key); }
+  size_t count(uint64_t key) const {
+    if (positions.empty())
+      return std::find(items.begin(), items.end(), key) != items.end();
+    return positions.count(key);
+  }
   /// Inserts `key` unless present. A failed allocation changes nothing (the
   /// runtime rolls back with erase after a caught bad_alloc).
   std::pair<const_iterator, bool> insert(uint64_t key) {
+    // Sparse Active cohorts usually consist of a few simultaneously armed
+    // processes. Search the dense iteration order directly until indexing
+    // amortizes its maintenance. Promotion preserves that order.
+    if (positions.empty()) {
+      auto found = std::find(items.begin(), items.end(), key);
+      if (found != items.end())
+        return {found, false};
+      if (items.size() < linearLimit) {
+        items.push_back(key);
+        return {items.end() - 1, true};
+      }
+      // Reuse the empty index's reservation across bursts. Populate it off
+      // to the side so a failed allocation leaves a valid linear set.
+      FlatU64Map<size_t> indexed;
+      std::swap(indexed, positions);
+      indexed.reserve(items.size() + 1);
+      for (size_t i = 0; i != items.size(); ++i)
+        indexed.emplace(items[i], i);
+      positions = std::move(indexed);
+    }
     // Room first: a present key at most grows the reservation.
     if (items.size() == items.capacity())
       items.reserve(std::max<size_t>(8, items.capacity() * 2));
@@ -291,6 +315,14 @@ public:
     return {items.begin() + found->second, inserted};
   }
   size_t erase(uint64_t key) {
+    if (positions.empty()) {
+      auto found = std::find(items.begin(), items.end(), key);
+      if (found == items.end())
+        return 0;
+      *found = items.back();
+      items.pop_back();
+      return 1;
+    }
     auto found = positions.find(key);
     if (found == positions.end())
       return 0;
@@ -301,6 +333,9 @@ public:
       positions.find(items[at])->second = at;
     }
     items.pop_back();
+    if (items.size() == linearLimit / 2)
+      for (uint64_t remaining : items)
+        positions.erase(remaining);
     return 1;
   }
 
@@ -312,10 +347,12 @@ public:
   }
   void reserve(size_t elements) {
     items.reserve(elements);
-    positions.reserve(elements);
+    if (elements > linearLimit || !positions.empty())
+      positions.reserve(elements);
   }
 
 private:
+  static constexpr size_t linearLimit = 8;
   std::vector<uint64_t> items;
   FlatU64Map<size_t> positions;
 };
